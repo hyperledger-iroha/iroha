@@ -205,7 +205,7 @@ incluye en la lista blanca proveedores maliciosos o suprime alertas.
   la integración Torii en `crates/iroha_torii/src/da/ingest.rs`, que enhebra el
   Verificaciones de huellas dactilares a través de `/v1/da/ingest`.
 - Las simulaciones de transmisión PDP/PoTR se realizan a través del arnés de transmisión de prueba en
-  `crates/sorafs_car/tests/sorafs_cli.rs`, que cubre los flujos de solicitud PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, que cubre los flujos de solicitud PoR/PDP/PoTR
   y escenarios de falla animados en el modelo de amenaza.
 - Los resultados de capacidad y remoción de reparación están disponibles en
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, mientras que el más amplio

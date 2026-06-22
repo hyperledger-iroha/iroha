@@ -222,7 +222,7 @@ DA バックフィル или клиентов; **中程度** снижает ка
   `crates/iroha_core/src/da/replay_cache.rs` (キャッシュ ロジック) と Torii
   `crates/iroha_torii/src/da/ingest.rs`、指紋チェックは `/v1/da/ingest` で行われます。
 - PDP/PoTR ストリーミング シミュレーションのプルーフ ストリーム ハーネス
-  `crates/sorafs_car/tests/sorafs_cli.rs`、PoR/PDP/PoTR リクエスト フローおよび
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`、PoR/PDP/PoTR リクエスト フローおよび
   失敗シナリオについて説明します。
 - 容量と修理ソーク数
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`、Sumeragi ソークマトリックス ×

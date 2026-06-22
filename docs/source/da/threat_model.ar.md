@@ -205,7 +205,7 @@ _آخر مراجعة: 19-01-2026 — المراجعة المجدولة التا�
   تكامل Torii في `crates/iroha_torii/src/da/ingest.rs`، والذي يربط
   فحص بصمات الأصابع من خلال `/v1/da/ingest`.
 - يتم إجراء عمليات محاكاة تدفق PDP/PoTR عبر مجموعة أدوات إثبات التدفق
-  `crates/sorafs_car/tests/sorafs_cli.rs`، يغطي تدفقات طلبات PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، يغطي تدفقات طلبات PoR/PDP/PoTR
   وسيناريوهات الفشل المتحركة في نموذج التهديد.
 - نتائج نقع القدرة والإصلاح تعيش تحتها
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`، في حين أن الأوسع

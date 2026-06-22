@@ -27,7 +27,7 @@ summary: Чеклист и ожидаемые digests для проверки к
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | Все тесты проходят; `vectors` parity test успешен. | Подтверждает, что канонические fixtures компилируются и совпадают с Rust реализацией. |
 | 2 | `ci/check_sorafs_fixtures.sh` | Скрипт завершается 0; сообщает digests manifests ниже. | Проверяет, что fixtures регенерируются чисто и подписи остаются прикреплены. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Запись для `sorafs.sf1@1.0.0` совпадает с registry descriptor (`profile_id=1`). | Гарантирует, что metadata registry остается синхронной. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | Запись для `sorafs.sf1@1.0.0` совпадает с registry descriptor (`profile_id=1`). | Гарантирует, что metadata registry остается синхронной. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Регенерация проходит без `--allow-unsigned`; файлы manifest и signature не меняются. | Дает доказательство детерминизма для chunk boundaries и manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | Сообщает отсутствие diff между TypeScript fixtures и Rust JSON. | Опциональный helper; обеспечьте паритет между runtime (script поддерживает Tooling WG). |
 

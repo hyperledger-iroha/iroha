@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. შექმენით და მოაწერეთ ხელი მანიფესტს
 
 შეფუთეთ ბლოკის გეგმა, მეტსახელები და მმართველობის ხელმოწერები მანიფესტში, გამოყენებით
-`sorafs-manifest-stub`. ქვემოთ მოყვანილი ბრძანება გვიჩვენებს ერთი ფაილის დატვირთვას; გაივლის
+`sorafs_manifest_stub`. ქვემოთ მოყვანილი ბრძანება გვიჩვენებს ერთი ფაილის დატვირთვას; გაივლის
 დირექტორია გზა ხის შესაფუთად (CLI მას ლექსიკოგრაფიულად უვლის).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

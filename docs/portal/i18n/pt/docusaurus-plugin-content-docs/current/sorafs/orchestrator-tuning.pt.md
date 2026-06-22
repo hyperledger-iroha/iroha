@@ -81,7 +81,7 @@ Para definições de campos, veja
 
 ## Referência de flags da CLI e SDK
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) e o invólucro
+`sorafs_cli fetch` (ver `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) e o invólucro
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) juntas
 a mesma superfície de configuração do orquestrador. Use os seguintes sinalizadores ao
 capturar evidências de rollout ou ao reproduzir os fixtures canônicos:

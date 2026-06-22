@@ -81,7 +81,7 @@ jobs:
 
 ## Qeydlər
 
-- `sorafs_cli` qaçışçıda mövcud olmalıdır (məsələn, bu addımlardan əvvəl `cargo install --path crates/sorafs_car --features cli`).
+- `sorafs_cli` qaçışçıda mövcud olmalıdır (məsələn, bu addımlardan əvvəl `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli`).
 - İş axını açıq şəkildə OIDC auditoriyasını təmin etməlidir (burada `sorafs`); Fulcio siyasətinizə uyğunlaşdırmaq üçün `--identity-token-audience`-i tənzimləyin.
 - Buraxılış boru kəməri idarəetmənin nəzərdən keçirilməsi üçün `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` və `artifacts/proof.json` arxivini saxlamalıdır.
 - Deterministik nümunə artefaktları `fixtures/sorafs_manifest/ci_sample`-də yaşayır; Qızıl manifestlərə, yığın planlara və ya boru kəmərini yenidən hesablamadan JSON paketinə ehtiyacınız olduqda onları testlərə köçürün.

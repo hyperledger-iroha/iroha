@@ -29,7 +29,7 @@ CLI のテストと lint/test のテストの実行
 - أرفق رابط تذكرة المعالجة (مثل `governance/tickets/SF6-SR-2026.md`) وسجّل
   セキュリティ エンジニアリング ツール ワーキング グループ。
 - حقّق من إغلاق قائمة المعالجة في المذكرة؛最高のパフォーマンスを見せてください。
-- ハーネス ハーネス (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- ハーネス ハーネス (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   ありがとうございます。
 - 評価 - 評価 - 評価 - 評価 - 評価 - 評価 - 評価 - 評価 - 評価 `--identity-token-provider` و
   `--identity-token-audience=<aud>` صريحًا حتى يُلتقط نطاق Fulcio ضمن أدلة الإصدار。
@@ -49,9 +49,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ينفذ سكربت التحققات التالية:
 
 - `cargo fmt --all -- --check` (ワークスペース)
-- `cargo clippy --locked --all-targets` `sorafs_car` (`cli`)
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   و`sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` を表示します。
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 重要な問題を解決してください。 جب أن تكون بناءات
 メインメッセージを表示チェリーピックを選択してください。

@@ -8,7 +8,7 @@ use core::{
 #[cfg(feature = "otel-exporter")]
 use std::collections::HashMap;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
@@ -62,6 +62,8 @@ pub struct Uptime(pub Duration);
 type MicropaymentSampleSink = Arc<
     dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
 >;
+
+const SORAFS_REPUTATION_SCORE_LABEL_LIMIT: usize = 100;
 
 fn current_unix_time_ms() -> u64 {
     SystemTime::now()
@@ -7691,6 +7693,54 @@ pub struct Metrics {
     pub torii_sorafs_capacity_outstanding_gib: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS accumulated GiB·hours per provider.
     pub torii_sorafs_capacity_gibhours_total: GaugeVec,
+    /// Torii SoraFS egress byte counters per provider and source.
+    pub torii_sorafs_egress_bytes: GaugeVec,
+    /// Torii SoraFS egress counter drift ratio per provider and source.
+    pub torii_sorafs_egress_drift_ratio: GaugeVec,
+    /// SoraFS Governance DAG publication attempts grouped by payload kind, result, and sink.
+    pub sorafs_governance_dag_publish_total: IntCounterVec,
+    /// SoraFS Governance DAG published bytes grouped by payload kind and sink.
+    pub sorafs_governance_dag_published_bytes_total: IntCounterVec,
+    /// SoraFS Governance DAG last successful publish timestamp grouped by payload kind and sink.
+    pub sorafs_governance_dag_last_publish_timestamp_seconds: GenericGaugeVec<AtomicU64>,
+    /// SoraFS Governance DAG publish backlog grouped by sink.
+    pub sorafs_governance_dag_backlog: GenericGaugeVec<AtomicU64>,
+    /// SoraFS Governance DAG head age in seconds grouped by sink.
+    pub sorafs_governance_dag_head_age_seconds: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS orderbook order flow counters by cluster, tier, side, and status.
+    pub torii_sorafs_orderbook_orders_total: IntCounterVec,
+    /// Torii SoraFS orderbook open depth in GiB by cluster, tier, and side.
+    pub torii_sorafs_orderbook_depth_gib: GaugeVec,
+    /// Torii SoraFS orderbook matcher lag in seconds by cluster and tier.
+    pub torii_sorafs_orderbook_match_lag_seconds: GaugeVec,
+    /// Torii SoraFS orderbook settlement backlog by cluster.
+    pub torii_sorafs_orderbook_settlement_backlog: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS orderbook oldest settlement age in seconds by cluster.
+    pub torii_sorafs_orderbook_oldest_settlement_age_seconds: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS orderbook contract/mirror divergence flag by cluster.
+    pub torii_sorafs_orderbook_contract_mirror_divergence: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS orderbook API error ratio by route.
+    pub torii_sorafs_orderbook_api_error_ratio: GaugeVec,
+    /// Torii SoraFS orderbook escrow runway in seconds by provider.
+    pub torii_sorafs_orderbook_escrow_runway_seconds: GenericGaugeVec<AtomicU64>,
+    /// SoraFS reputation ingest lag observed when a snapshot is published.
+    pub sorafs_reputation_ingest_lag_seconds: GenericGauge<AtomicU64>,
+    /// SoraFS reputation snapshot age observed when a snapshot is published.
+    pub sorafs_reputation_snapshot_age_seconds: GenericGauge<AtomicU64>,
+    /// SoraFS reputation snapshot generation time as a Unix timestamp.
+    pub sorafs_reputation_snapshot_generated_at_unix: GenericGauge<AtomicU64>,
+    /// SoraFS reputation provider count in the latest accepted snapshot.
+    pub sorafs_reputation_provider_count: GenericGauge<AtomicU64>,
+    /// SoraFS reputation providers currently below the low-score threshold.
+    pub sorafs_reputation_low_score_providers: GenericGauge<AtomicU64>,
+    /// SoraFS reputation provider scores, bounded to the top-N providers.
+    pub sorafs_reputation_score: GaugeVec,
+    /// SoraFS reputation threshold crossings by level.
+    pub sorafs_reputation_threshold_crossings_total: IntCounterVec,
+    /// SoraFS reputation provider labels currently exported by the score gauge.
+    pub sorafs_reputation_score_tracked_providers: Arc<RwLock<BTreeSet<String>>>,
+    /// SoraFS reputation low-score state from the previous accepted snapshot.
+    pub sorafs_reputation_low_score_state: Arc<RwLock<BTreeMap<String, bool>>>,
     /// Torii SoraFS fee projection (nano units) per provider.
     pub torii_sorafs_fee_projection_nanos: GaugeVec,
     /// Torii SoraFS dispute submissions labelled by result.
@@ -7707,6 +7757,12 @@ pub struct Metrics {
     pub torii_sorafs_uptime_bps: IntGaugeVec,
     /// Torii SoraFS PoR success (basis points) per provider.
     pub torii_sorafs_por_bps: IntGaugeVec,
+    /// Torii SoraFS PoR scheduler challenges grouped by result.
+    pub torii_sorafs_por_challenges_total: IntCounterVec,
+    /// Torii SoraFS PoR forced challenges emitted by the scheduler.
+    pub torii_sorafs_por_forced_challenges_total: IntCounter,
+    /// Torii SoraFS PoR duplicate samples observed while scheduling challenges.
+    pub torii_sorafs_por_sampling_duplicates_total: IntCounter,
     /// Torii SoraFS PoR ingestion backlog per manifest/provider pair.
     pub torii_sorafs_por_ingest_backlog: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS PoR ingestion failures per manifest/provider pair.
@@ -12368,6 +12424,167 @@ impl Default for Metrics {
             &["provider"],
         )
         .expect("Infallible");
+        let torii_sorafs_egress_bytes = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_egress_bytes",
+                "SoraFS egress bytes reported per provider and source",
+            ),
+            &["provider", "source"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_egress_drift_ratio = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_egress_drift_ratio",
+                "Absolute SoraFS egress counter drift ratio against billing bytes per provider and source",
+            ),
+            &["provider", "source"],
+        )
+        .expect("Infallible");
+        let sorafs_governance_dag_publish_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_governance_dag_publish_total",
+                "SoraFS Governance DAG publication attempts grouped by payload kind, result, and sink",
+            ),
+            &["payload_kind", "result", "sink"],
+        )
+        .expect("Infallible");
+        let sorafs_governance_dag_published_bytes_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_governance_dag_published_bytes_total",
+                "SoraFS Governance DAG bytes successfully published grouped by payload kind and sink",
+            ),
+            &["payload_kind", "sink"],
+        )
+        .expect("Infallible");
+        let sorafs_governance_dag_last_publish_timestamp_seconds = GenericGaugeVec::new(
+            Opts::new(
+                "sorafs_governance_dag_last_publish_timestamp_seconds",
+                "Unix timestamp of the last successful SoraFS Governance DAG publication",
+            ),
+            &["payload_kind", "sink"],
+        )
+        .expect("Infallible");
+        let sorafs_governance_dag_backlog = GenericGaugeVec::new(
+            Opts::new(
+                "sorafs_governance_dag_backlog",
+                "SoraFS Governance DAG publication backlog grouped by sink",
+            ),
+            &["sink"],
+        )
+        .expect("Infallible");
+        let sorafs_governance_dag_head_age_seconds = GenericGaugeVec::new(
+            Opts::new(
+                "sorafs_governance_dag_head_age_seconds",
+                "SoraFS Governance DAG head age in seconds grouped by sink",
+            ),
+            &["sink"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_orders_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_orders_total",
+                "SoraFS orderbook order events grouped by cluster, tier, side, and status",
+            ),
+            &["cluster", "tier", "side", "status"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_depth_gib = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_depth_gib",
+                "SoraFS orderbook open depth in GiB grouped by cluster, tier, and side",
+            ),
+            &["cluster", "tier", "side"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_match_lag_seconds = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_match_lag_seconds",
+                "SoraFS orderbook matcher lag in seconds grouped by cluster and tier",
+            ),
+            &["cluster", "tier"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_settlement_backlog = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_settlement_backlog",
+                "SoraFS orderbook streaming settlement backlog grouped by cluster",
+            ),
+            &["cluster"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_oldest_settlement_age_seconds = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_oldest_settlement_age_seconds",
+                "Oldest queued SoraFS orderbook settlement age in seconds grouped by cluster",
+            ),
+            &["cluster"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_contract_mirror_divergence = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_contract_mirror_divergence",
+                "SoraFS orderbook contract/matcher mirror divergence flag grouped by cluster",
+            ),
+            &["cluster"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_api_error_ratio = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_api_error_ratio",
+                "SoraFS orderbook API error ratio grouped by route",
+            ),
+            &["route"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_orderbook_escrow_runway_seconds = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_orderbook_escrow_runway_seconds",
+                "SoraFS orderbook settlement escrow runway in seconds grouped by provider",
+            ),
+            &["provider"],
+        )
+        .expect("Infallible");
+        let sorafs_reputation_ingest_lag_seconds = GenericGauge::new(
+            "sorafs_reputation_ingest_lag_seconds",
+            "SoraFS reputation ingest lag observed when a snapshot is accepted",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_snapshot_age_seconds = GenericGauge::new(
+            "sorafs_reputation_snapshot_age_seconds",
+            "SoraFS reputation snapshot age observed when a snapshot is accepted",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_snapshot_generated_at_unix = GenericGauge::new(
+            "sorafs_reputation_snapshot_generated_at_unix",
+            "SoraFS reputation snapshot generation time as a Unix timestamp",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_provider_count = GenericGauge::new(
+            "sorafs_reputation_provider_count",
+            "Provider count in the latest accepted SoraFS reputation snapshot",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_low_score_providers = GenericGauge::new(
+            "sorafs_reputation_low_score_providers",
+            "Providers below the low-score threshold in the latest SoraFS reputation snapshot",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_score = GaugeVec::new(
+            Opts::new(
+                "sorafs_reputation_score",
+                "SoraFS reputation provider score in basis points for the bounded top-N set",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let sorafs_reputation_threshold_crossings_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_reputation_threshold_crossings_total",
+                "SoraFS reputation low-score threshold crossings by level",
+            ),
+            &["level"],
+        )
+        .expect("Infallible");
         let torii_sorafs_fee_projection_nanos = GaugeVec::new(
             Opts::new(
                 "torii_sorafs_fee_projection_nanos",
@@ -12432,6 +12649,24 @@ impl Default for Metrics {
             &["provider"],
         )
         .expect("Infallible");
+        let torii_sorafs_por_challenges_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_por_challenges_total",
+                "SoraFS PoR scheduler challenges grouped by result",
+            ),
+            &["result"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_por_forced_challenges_total = IntCounter::new(
+            "torii_sorafs_por_forced_challenges_total",
+            "SoraFS PoR forced challenges emitted by the scheduler",
+        )
+        .expect("Infallible");
+        let torii_sorafs_por_sampling_duplicates_total = IntCounter::new(
+            "torii_sorafs_por_sampling_duplicates_total",
+            "Duplicate SoraFS PoR samples emitted by the scheduler",
+        )
+        .expect("Infallible");
         let torii_sorafs_por_ingest_backlog = GenericGaugeVec::new(
             Opts::new(
                 "torii_sorafs_por_ingest_backlog",
@@ -12448,6 +12683,57 @@ impl Default for Metrics {
             &["manifest", "provider"],
         )
         .expect("Infallible");
+        register_guarded(&registry, &torii_sorafs_admission_total);
+        register_guarded(&registry, &torii_sorafs_capacity_telemetry_rejections_total);
+        register_guarded(&registry, &torii_sorafs_capacity_declared_gib);
+        register_guarded(&registry, &torii_sorafs_capacity_effective_gib);
+        register_guarded(&registry, &torii_sorafs_capacity_utilised_gib);
+        register_guarded(&registry, &torii_sorafs_capacity_outstanding_gib);
+        register_guarded(&registry, &torii_sorafs_capacity_gibhours_total);
+        register_guarded(&registry, &torii_sorafs_egress_bytes);
+        register_guarded(&registry, &torii_sorafs_egress_drift_ratio);
+        register_guarded(&registry, &sorafs_governance_dag_publish_total);
+        register_guarded(&registry, &sorafs_governance_dag_published_bytes_total);
+        register_guarded(
+            &registry,
+            &sorafs_governance_dag_last_publish_timestamp_seconds,
+        );
+        register_guarded(&registry, &sorafs_governance_dag_backlog);
+        register_guarded(&registry, &sorafs_governance_dag_head_age_seconds);
+        register_guarded(&registry, &torii_sorafs_orderbook_orders_total);
+        register_guarded(&registry, &torii_sorafs_orderbook_depth_gib);
+        register_guarded(&registry, &torii_sorafs_orderbook_match_lag_seconds);
+        register_guarded(&registry, &torii_sorafs_orderbook_settlement_backlog);
+        register_guarded(
+            &registry,
+            &torii_sorafs_orderbook_oldest_settlement_age_seconds,
+        );
+        register_guarded(
+            &registry,
+            &torii_sorafs_orderbook_contract_mirror_divergence,
+        );
+        register_guarded(&registry, &torii_sorafs_orderbook_api_error_ratio);
+        register_guarded(&registry, &torii_sorafs_orderbook_escrow_runway_seconds);
+        register_guarded(&registry, &sorafs_reputation_ingest_lag_seconds);
+        register_guarded(&registry, &sorafs_reputation_snapshot_age_seconds);
+        register_guarded(&registry, &sorafs_reputation_snapshot_generated_at_unix);
+        register_guarded(&registry, &sorafs_reputation_provider_count);
+        register_guarded(&registry, &sorafs_reputation_low_score_providers);
+        register_guarded(&registry, &sorafs_reputation_score);
+        register_guarded(&registry, &sorafs_reputation_threshold_crossings_total);
+        register_guarded(&registry, &torii_sorafs_fee_projection_nanos);
+        register_guarded(&registry, &torii_sorafs_disputes_total);
+        register_guarded(&registry, &torii_sorafs_orders_issued_total);
+        register_guarded(&registry, &torii_sorafs_orders_completed_total);
+        register_guarded(&registry, &torii_sorafs_orders_failed_total);
+        register_guarded(&registry, &torii_sorafs_outstanding_orders);
+        register_guarded(&registry, &torii_sorafs_uptime_bps);
+        register_guarded(&registry, &torii_sorafs_por_bps);
+        register_guarded(&registry, &torii_sorafs_por_challenges_total);
+        register_guarded(&registry, &torii_sorafs_por_forced_challenges_total);
+        register_guarded(&registry, &torii_sorafs_por_sampling_duplicates_total);
+        register_guarded(&registry, &torii_sorafs_por_ingest_backlog);
+        register_guarded(&registry, &torii_sorafs_por_ingest_failures_total);
         let torii_sorafs_repair_tasks_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_repair_tasks_total",
@@ -15271,6 +15557,30 @@ impl Default for Metrics {
             torii_sorafs_capacity_utilised_gib,
             torii_sorafs_capacity_outstanding_gib,
             torii_sorafs_capacity_gibhours_total,
+            torii_sorafs_egress_bytes,
+            torii_sorafs_egress_drift_ratio,
+            sorafs_governance_dag_publish_total,
+            sorafs_governance_dag_published_bytes_total,
+            sorafs_governance_dag_last_publish_timestamp_seconds,
+            sorafs_governance_dag_backlog,
+            sorafs_governance_dag_head_age_seconds,
+            torii_sorafs_orderbook_orders_total,
+            torii_sorafs_orderbook_depth_gib,
+            torii_sorafs_orderbook_match_lag_seconds,
+            torii_sorafs_orderbook_settlement_backlog,
+            torii_sorafs_orderbook_oldest_settlement_age_seconds,
+            torii_sorafs_orderbook_contract_mirror_divergence,
+            torii_sorafs_orderbook_api_error_ratio,
+            torii_sorafs_orderbook_escrow_runway_seconds,
+            sorafs_reputation_ingest_lag_seconds,
+            sorafs_reputation_snapshot_age_seconds,
+            sorafs_reputation_snapshot_generated_at_unix,
+            sorafs_reputation_provider_count,
+            sorafs_reputation_low_score_providers,
+            sorafs_reputation_score,
+            sorafs_reputation_threshold_crossings_total,
+            sorafs_reputation_score_tracked_providers: Arc::new(RwLock::new(BTreeSet::new())),
+            sorafs_reputation_low_score_state: Arc::new(RwLock::new(BTreeMap::new())),
             torii_sorafs_fee_projection_nanos,
             torii_sorafs_disputes_total,
             torii_sorafs_orders_issued_total,
@@ -15279,6 +15589,9 @@ impl Default for Metrics {
             torii_sorafs_outstanding_orders,
             torii_sorafs_uptime_bps,
             torii_sorafs_por_bps,
+            torii_sorafs_por_challenges_total,
+            torii_sorafs_por_forced_challenges_total,
+            torii_sorafs_por_sampling_duplicates_total,
             torii_sorafs_por_ingest_backlog,
             torii_sorafs_por_ingest_failures_total,
             torii_sorafs_repair_tasks_total,
@@ -16633,6 +16946,235 @@ impl Metrics {
             .set(por);
     }
 
+    /// Record SoraFS egress counters and their drift against billing bytes.
+    pub fn record_sorafs_egress_reconciliation(
+        &self,
+        provider: &str,
+        billing_bytes: u64,
+        gateway_bytes: Option<u64>,
+        orchestrator_bytes: Option<u64>,
+    ) {
+        let billing = billing_bytes as f64;
+        self.torii_sorafs_egress_bytes
+            .with_label_values(&[provider, "billing"])
+            .set(billing);
+        self.torii_sorafs_egress_drift_ratio
+            .with_label_values(&[provider, "billing"])
+            .set(0.0);
+
+        for (source, bytes) in [
+            ("gateway", gateway_bytes),
+            ("orchestrator", orchestrator_bytes),
+        ] {
+            let Some(observed) = bytes else {
+                let _ = self
+                    .torii_sorafs_egress_bytes
+                    .remove_label_values(&[provider, source]);
+                let _ = self
+                    .torii_sorafs_egress_drift_ratio
+                    .remove_label_values(&[provider, source]);
+                continue;
+            };
+
+            let observed_value = observed as f64;
+            self.torii_sorafs_egress_bytes
+                .with_label_values(&[provider, source])
+                .set(observed_value);
+            let denominator = billing.max(1.0);
+            let drift = (observed_value - billing).abs() / denominator;
+            self.torii_sorafs_egress_drift_ratio
+                .with_label_values(&[provider, source])
+                .set(drift);
+        }
+    }
+
+    /// Record a SoraFS Governance DAG publication attempt.
+    pub fn record_sorafs_governance_dag_publish(
+        &self,
+        payload_kind: &str,
+        result: &str,
+        sink: &str,
+        bytes: u64,
+        timestamp_seconds: u64,
+    ) {
+        self.sorafs_governance_dag_publish_total
+            .with_label_values(&[payload_kind, result, sink])
+            .inc();
+        if result == "success" {
+            self.sorafs_governance_dag_published_bytes_total
+                .with_label_values(&[payload_kind, sink])
+                .inc_by(bytes);
+            self.sorafs_governance_dag_last_publish_timestamp_seconds
+                .with_label_values(&[payload_kind, sink])
+                .set(timestamp_seconds);
+        }
+    }
+
+    /// Set SoraFS Governance DAG publication backlog for a sink.
+    pub fn set_sorafs_governance_dag_backlog(&self, sink: &str, backlog: u64) {
+        self.sorafs_governance_dag_backlog
+            .with_label_values(&[sink])
+            .set(backlog);
+    }
+
+    /// Set SoraFS Governance DAG head age in seconds for a sink.
+    pub fn set_sorafs_governance_dag_head_age_seconds(&self, sink: &str, age_seconds: u64) {
+        self.sorafs_governance_dag_head_age_seconds
+            .with_label_values(&[sink])
+            .set(age_seconds);
+    }
+
+    /// Record a SoraFS orderbook order event for dashboard order-flow panels.
+    pub fn record_sorafs_orderbook_order(
+        &self,
+        cluster: &str,
+        tier: &str,
+        side: &str,
+        status: &str,
+    ) {
+        self.torii_sorafs_orderbook_orders_total
+            .with_label_values(&[cluster, tier, side, status])
+            .inc();
+    }
+
+    /// Set the current SoraFS orderbook open depth for one side of a tier.
+    pub fn set_sorafs_orderbook_depth_gib(
+        &self,
+        cluster: &str,
+        tier: &str,
+        side: &str,
+        depth_gib: f64,
+    ) {
+        self.torii_sorafs_orderbook_depth_gib
+            .with_label_values(&[cluster, tier, side])
+            .set(depth_gib.max(0.0));
+    }
+
+    /// Set SoraFS orderbook matcher lag in seconds for a tier.
+    pub fn set_sorafs_orderbook_match_lag_seconds(
+        &self,
+        cluster: &str,
+        tier: &str,
+        lag_seconds: f64,
+    ) {
+        self.torii_sorafs_orderbook_match_lag_seconds
+            .with_label_values(&[cluster, tier])
+            .set(lag_seconds.max(0.0));
+    }
+
+    /// Set SoraFS orderbook settlement backlog gauges for a cluster.
+    pub fn set_sorafs_orderbook_settlement_backlog(
+        &self,
+        cluster: &str,
+        backlog: u64,
+        oldest_age_seconds: u64,
+    ) {
+        self.torii_sorafs_orderbook_settlement_backlog
+            .with_label_values(&[cluster])
+            .set(backlog);
+        self.torii_sorafs_orderbook_oldest_settlement_age_seconds
+            .with_label_values(&[cluster])
+            .set(oldest_age_seconds);
+    }
+
+    /// Set whether a SoraFS orderbook mirror diverged from contract state.
+    pub fn set_sorafs_orderbook_contract_mirror_divergence(&self, cluster: &str, diverged: bool) {
+        self.torii_sorafs_orderbook_contract_mirror_divergence
+            .with_label_values(&[cluster])
+            .set(if diverged { 1 } else { 0 });
+    }
+
+    /// Set the SoraFS orderbook API error ratio for one route.
+    pub fn set_sorafs_orderbook_api_error_ratio(&self, route: &str, ratio: f64) {
+        self.torii_sorafs_orderbook_api_error_ratio
+            .with_label_values(&[route])
+            .set(ratio.clamp(0.0, 1.0));
+    }
+
+    /// Set SoraFS orderbook settlement escrow runway for one provider.
+    pub fn set_sorafs_orderbook_escrow_runway_seconds(&self, provider: &str, seconds: u64) {
+        self.torii_sorafs_orderbook_escrow_runway_seconds
+            .with_label_values(&[provider])
+            .set(seconds);
+    }
+
+    /// Record the latest accepted SoraFS reputation snapshot metrics.
+    pub fn record_sorafs_reputation_snapshot(
+        &self,
+        generated_at_unix: u64,
+        observed_at_unix: u64,
+        provider_scores: &[(&str, u16, bool)],
+    ) {
+        let snapshot_age = observed_at_unix.saturating_sub(generated_at_unix);
+        self.sorafs_reputation_ingest_lag_seconds.set(snapshot_age);
+        self.sorafs_reputation_snapshot_age_seconds
+            .set(snapshot_age);
+        self.sorafs_reputation_snapshot_generated_at_unix
+            .set(generated_at_unix);
+        self.sorafs_reputation_provider_count
+            .set(u64::try_from(provider_scores.len()).unwrap_or(u64::MAX));
+
+        let mut current_low_score_state = BTreeMap::new();
+        let mut low_score_providers = 0_u64;
+        for (provider_id, _, low_score) in provider_scores.iter().copied() {
+            if low_score {
+                low_score_providers = low_score_providers.saturating_add(1);
+            }
+            current_low_score_state.insert(provider_id.to_owned(), low_score);
+        }
+        self.sorafs_reputation_low_score_providers
+            .set(low_score_providers);
+
+        {
+            let mut previous_low_score_state = self
+                .sorafs_reputation_low_score_state
+                .write()
+                .expect("SoraFS reputation low-score state lock poisoned");
+            for (provider_id, low_score) in &current_low_score_state {
+                let Some(previous_low_score) = previous_low_score_state.get(provider_id) else {
+                    continue;
+                };
+                match (*previous_low_score, *low_score) {
+                    (false, true) => self
+                        .sorafs_reputation_threshold_crossings_total
+                        .with_label_values(&["low_score"])
+                        .inc(),
+                    (true, false) => self
+                        .sorafs_reputation_threshold_crossings_total
+                        .with_label_values(&["recovered"])
+                        .inc(),
+                    _ => {}
+                }
+            }
+            *previous_low_score_state = current_low_score_state;
+        }
+
+        let mut ranked_scores = provider_scores.to_vec();
+        ranked_scores.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+        let mut next_tracked = BTreeSet::new();
+        for (provider_id, score_bps, _) in ranked_scores
+            .into_iter()
+            .take(SORAFS_REPUTATION_SCORE_LABEL_LIMIT)
+        {
+            self.sorafs_reputation_score
+                .with_label_values(&[provider_id])
+                .set(f64::from(score_bps));
+            next_tracked.insert(provider_id.to_owned());
+        }
+
+        let mut tracked = self
+            .sorafs_reputation_score_tracked_providers
+            .write()
+            .expect("SoraFS reputation score label set lock poisoned");
+        let stale_providers: Vec<String> = tracked.difference(&next_tracked).cloned().collect();
+        for provider_id in stale_providers {
+            let _ = self
+                .sorafs_reputation_score
+                .remove_label_values(&[provider_id.as_str()]);
+        }
+        *tracked = next_tracked;
+    }
+
     /// Record a rejected SoraFS capacity telemetry window.
     pub fn record_sorafs_capacity_telemetry_reject(&self, provider: &str, reason: &str) {
         self.torii_sorafs_capacity_telemetry_rejections_total
@@ -16819,6 +17361,29 @@ impl Metrics {
         self.torii_sorafs_por_ingest_failures_total
             .with_label_values(&[manifest, provider])
             .set(failures_total);
+    }
+
+    /// Record a PoR challenge emitted by the scheduler.
+    pub fn record_sorafs_por_scheduler_challenge(&self, forced: bool, duplicate_samples: usize) {
+        let result = if forced { "forced" } else { "scheduled" };
+        self.torii_sorafs_por_challenges_total
+            .with_label_values(&[result])
+            .inc();
+        if forced {
+            self.torii_sorafs_por_forced_challenges_total.inc();
+        }
+        if duplicate_samples > 0 {
+            let duplicate_samples = u64::try_from(duplicate_samples).unwrap_or(u64::MAX);
+            self.torii_sorafs_por_sampling_duplicates_total
+                .inc_by(duplicate_samples);
+        }
+    }
+
+    /// Record a PoR scheduler run failure.
+    pub fn record_sorafs_por_scheduler_failure(&self) {
+        self.torii_sorafs_por_challenges_total
+            .with_label_values(&["failed"])
+            .inc();
     }
 
     /// Record the current pin registry snapshot and replication SLA aggregates.
@@ -18353,6 +18918,304 @@ mod test {
     }
 
     #[test]
+    fn records_sorafs_egress_reconciliation_metrics() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_egress_reconciliation("provider-a", 1_000, Some(1_100), Some(900));
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_egress_bytes
+                .with_label_values(&["provider-a", "billing"])
+                .get(),
+            1_000.0
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_egress_bytes
+                .with_label_values(&["provider-a", "gateway"])
+                .get(),
+            1_100.0
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_egress_bytes
+                .with_label_values(&["provider-a", "orchestrator"])
+                .get(),
+            900.0
+        );
+        assert!(
+            (metrics
+                .torii_sorafs_egress_drift_ratio
+                .with_label_values(&["provider-a", "gateway"])
+                .get()
+                - 0.1)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (metrics
+                .torii_sorafs_egress_drift_ratio
+                .with_label_values(&["provider-a", "orchestrator"])
+                .get()
+                - 0.1)
+                .abs()
+                < f64::EPSILON
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_egress_drift_ratio
+                .with_label_values(&["provider-a", "billing"])
+                .get(),
+            0.0
+        );
+        let exported = metrics.try_to_string().expect("metrics should serialize");
+        assert!(
+            exported.contains(
+                "torii_sorafs_egress_bytes{provider=\"provider-a\",source=\"gateway\"} 1100"
+            ),
+            "egress bytes should be exported: {exported}"
+        );
+        assert!(
+            exported.contains(
+                "torii_sorafs_egress_drift_ratio{provider=\"provider-a\",source=\"gateway\"} 0.1"
+            ),
+            "egress drift should be exported: {exported}"
+        );
+    }
+
+    #[test]
+    fn records_sorafs_governance_dag_publication_metrics() {
+        let metrics = Metrics::default();
+
+        metrics.record_sorafs_governance_dag_publish(
+            "deal_settlement",
+            "success",
+            "filesystem",
+            512,
+            1_800_000_000,
+        );
+        metrics.record_sorafs_governance_dag_publish(
+            "repair_audit",
+            "failure",
+            "filesystem",
+            256,
+            1_800_000_010,
+        );
+        metrics.set_sorafs_governance_dag_backlog("filesystem", 3);
+        metrics.set_sorafs_governance_dag_head_age_seconds("filesystem", 45);
+
+        assert_eq!(
+            metrics
+                .sorafs_governance_dag_publish_total
+                .with_label_values(&["deal_settlement", "success", "filesystem"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_governance_dag_publish_total
+                .with_label_values(&["repair_audit", "failure", "filesystem"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_governance_dag_published_bytes_total
+                .with_label_values(&["deal_settlement", "filesystem"])
+                .get(),
+            512
+        );
+        assert_eq!(
+            metrics
+                .sorafs_governance_dag_last_publish_timestamp_seconds
+                .with_label_values(&["deal_settlement", "filesystem"])
+                .get(),
+            1_800_000_000
+        );
+        assert_eq!(
+            metrics
+                .sorafs_governance_dag_backlog
+                .with_label_values(&["filesystem"])
+                .get(),
+            3
+        );
+        assert_eq!(
+            metrics
+                .sorafs_governance_dag_head_age_seconds
+                .with_label_values(&["filesystem"])
+                .get(),
+            45
+        );
+
+        let exported = metrics.try_to_string().expect("metrics should serialize");
+        for metric_name in [
+            "sorafs_governance_dag_publish_total",
+            "sorafs_governance_dag_published_bytes_total",
+            "sorafs_governance_dag_last_publish_timestamp_seconds",
+            "sorafs_governance_dag_backlog",
+            "sorafs_governance_dag_head_age_seconds",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing governance DAG metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_sorafs_reputation_snapshot_metrics() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_reputation_snapshot(
+            100,
+            160,
+            &[
+                ("provider-a", 9_000, false),
+                ("provider-b", 1_000, true),
+                ("provider-c", 8_000, false),
+            ],
+        );
+
+        assert_eq!(metrics.sorafs_reputation_ingest_lag_seconds.get(), 60);
+        assert_eq!(metrics.sorafs_reputation_snapshot_age_seconds.get(), 60);
+        assert_eq!(
+            metrics.sorafs_reputation_snapshot_generated_at_unix.get(),
+            100
+        );
+        assert_eq!(metrics.sorafs_reputation_provider_count.get(), 3);
+        assert_eq!(metrics.sorafs_reputation_low_score_providers.get(), 1);
+        assert_eq!(
+            metrics
+                .sorafs_reputation_threshold_crossings_total
+                .with_label_values(&["low_score"])
+                .get(),
+            0,
+            "initial snapshot seeds threshold state without false crossings"
+        );
+
+        metrics.record_sorafs_reputation_snapshot(
+            200,
+            210,
+            &[("provider-a", 1_200, true), ("provider-b", 2_000, false)],
+        );
+        assert_eq!(
+            metrics
+                .sorafs_reputation_threshold_crossings_total
+                .with_label_values(&["low_score"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_reputation_threshold_crossings_total
+                .with_label_values(&["recovered"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_reputation_score
+                .with_label_values(&["provider-a"])
+                .get(),
+            1_200.0
+        );
+        assert_eq!(
+            metrics
+                .sorafs_reputation_score_tracked_providers
+                .read()
+                .expect("tracked reputation score labels")
+                .len(),
+            2
+        );
+
+        let many_providers: Vec<(String, u16, bool)> = (0_u16..105)
+            .map(|index| (format!("provider-{index:03}"), 10_000_u16 - index, false))
+            .collect();
+        let many_provider_refs: Vec<(&str, u16, bool)> = many_providers
+            .iter()
+            .map(|(provider_id, score_bps, low_score)| {
+                (provider_id.as_str(), *score_bps, *low_score)
+            })
+            .collect();
+        metrics.record_sorafs_reputation_snapshot(300, 295, &many_provider_refs);
+        assert_eq!(
+            metrics
+                .sorafs_reputation_score_tracked_providers
+                .read()
+                .expect("tracked reputation score labels")
+                .len(),
+            SORAFS_REPUTATION_SCORE_LABEL_LIMIT
+        );
+        assert_eq!(
+            metrics.sorafs_reputation_snapshot_age_seconds.get(),
+            0,
+            "future-dated snapshots saturate observed age at zero"
+        );
+        let exported = metrics.try_to_string().expect("metrics should serialize");
+        assert!(
+            exported.contains("sorafs_reputation_provider_count 105"),
+            "reputation provider count should be exported: {exported}"
+        );
+        assert!(
+            exported.contains("sorafs_reputation_score{provider_id=\"provider-000\"} 10000"),
+            "bounded reputation score should be exported: {exported}"
+        );
+    }
+
+    #[test]
+    fn records_sorafs_por_scheduler_metrics() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_por_ingestion_backlog("provider-a", "manifest-a", 3);
+        metrics.record_sorafs_por_ingestion_failures("provider-a", "manifest-a", 2);
+        metrics.record_sorafs_por_scheduler_challenge(false, 0);
+        metrics.record_sorafs_por_scheduler_challenge(true, 4);
+        metrics.record_sorafs_por_scheduler_failure();
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_por_challenges_total
+                .with_label_values(&["scheduled"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_por_challenges_total
+                .with_label_values(&["forced"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_por_challenges_total
+                .with_label_values(&["failed"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.torii_sorafs_por_forced_challenges_total.get(), 1);
+        assert_eq!(metrics.torii_sorafs_por_sampling_duplicates_total.get(), 4);
+
+        let exported = metrics.try_to_string().expect("metrics should serialize");
+        assert!(
+            exported.contains("torii_sorafs_por_challenges_total{result=\"forced\"} 1"),
+            "forced challenge counter should be exported: {exported}"
+        );
+        assert!(
+            exported.contains("torii_sorafs_por_forced_challenges_total 1"),
+            "forced challenge total should be exported: {exported}"
+        );
+        assert!(
+            exported.contains("torii_sorafs_por_sampling_duplicates_total 4"),
+            "duplicate sample counter should be exported: {exported}"
+        );
+        assert!(
+            exported.contains(
+                "torii_sorafs_por_ingest_backlog{manifest=\"manifest-a\",provider=\"provider-a\"} 3"
+            ),
+            "PoR ingestion backlog gauge should be exported: {exported}"
+        );
+    }
+
+    #[test]
     fn records_gateway_fixture_version() {
         let metrics = Metrics::default();
         metrics.set_sorafs_gateway_fixture_version("1.0.0");
@@ -18582,6 +19445,58 @@ mod test {
             metrics.torii_sorafs_reconciliation_divergence_count.get(),
             7
         );
+    }
+
+    #[test]
+    fn records_orderbook_metrics_used_by_dashboard_and_alerts() {
+        let metrics = Metrics::default();
+
+        metrics.record_sorafs_orderbook_order("localnet", "hot", "bid", "accepted");
+        metrics.set_sorafs_orderbook_depth_gib("localnet", "hot", "bid", 42.5);
+        metrics.set_sorafs_orderbook_match_lag_seconds("localnet", "hot", 1.25);
+        metrics.set_sorafs_orderbook_settlement_backlog("localnet", 7, 120);
+        metrics.set_sorafs_orderbook_contract_mirror_divergence("localnet", true);
+        metrics.set_sorafs_orderbook_api_error_ratio("/v1/orderbook/orders", 0.03);
+        metrics.set_sorafs_orderbook_escrow_runway_seconds("provider123", 86_400);
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_orders_total
+                .with_label_values(&["localnet", "hot", "bid", "accepted"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_settlement_backlog
+                .with_label_values(&["localnet"])
+                .get(),
+            7
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_contract_mirror_divergence
+                .with_label_values(&["localnet"])
+                .get(),
+            1
+        );
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_orderbook_orders_total",
+            "torii_sorafs_orderbook_depth_gib",
+            "torii_sorafs_orderbook_match_lag_seconds",
+            "torii_sorafs_orderbook_settlement_backlog",
+            "torii_sorafs_orderbook_oldest_settlement_age_seconds",
+            "torii_sorafs_orderbook_contract_mirror_divergence",
+            "torii_sorafs_orderbook_api_error_ratio",
+            "torii_sorafs_orderbook_escrow_runway_seconds",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing orderbook metric {metric_name} from export:\n{exported}"
+            );
+        }
     }
 
     #[test]

@@ -18,7 +18,7 @@ descripción: Recorridos orientados a las superficies consolidadas `sorafs_cli`.
 :::nota Fuente canónica
 :::
 
-La superficie consolidada `sorafs_cli` (fournie par le crate `sorafs_car` con la característica `cli` activada) expone cada etapa necesaria para preparar los artefactos SoraFS. Utilice este libro de cocina para dirigirse a los flujos de trabajo actuales; Associez-le au pipeline de manifest et aux runbooks de l'orchestrateur pour le contexte opérationnel.
+La superficie consolidada `sorafs_cli` (fournie par le crate `sorafs_orchestrator`) expone cada etapa necesaria para preparar los artefactos SoraFS. Utilice este libro de cocina para dirigirse a los flujos de trabajo actuales; Associez-le au pipeline de manifest et aux runbooks de l'orchestrateur pour le contexte opérationnel.
 
 ## Empaquetar las cargas útiles
 

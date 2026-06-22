@@ -24285,6 +24285,19 @@ function buildSorafsPinRegisterPayload(record, context) {
     `${context}.submittedEpoch`,
     { allowZero: true },
   );
+  const manifestPayload = pickSorafsRegisterField(
+    record,
+    [
+      "manifest",
+      "manifestBytes",
+      "manifest_bytes",
+      "manifestB64",
+      "manifest_b64",
+      "manifestBase64",
+      "manifest_base64",
+    ],
+    `${context}.manifest`,
+  );
   const payload = {
     authority: credentials.authority,
     private_key: credentials.private_key,
@@ -24299,6 +24312,12 @@ function buildSorafsPinRegisterPayload(record, context) {
     content_length: contentLength,
     submitted_epoch: submittedEpoch,
   };
+  if (manifestPayload !== SORAFS_REGISTER_FIELD_MISSING && manifestPayload !== null) {
+    payload.manifest_b64 = normalizeRequiredBase64Payload(
+      manifestPayload,
+      `${context}.manifest`,
+    );
+  }
   const aliasObject = pickSorafsRegisterField(record, ["alias"], `${context}.alias`);
   const aliasNamespace = pickSorafsRegisterField(
     record,

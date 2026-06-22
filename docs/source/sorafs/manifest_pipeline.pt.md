@@ -53,7 +53,7 @@ um manifesto codificado em Norito adequado para pinning no registro do SoraFS.
 ### Quickstart da CLI
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 O comando imprime digests de chunks e detalhes do manifesto; quando `--manifest-out`
@@ -162,7 +162,7 @@ payload montado corresponde às expectativas do manifesto antes de escrever saí
 para smoke-tests de CI que querem garantir que o orquestrador não descartou nem reordenou
 chunks silenciosamente.
 
-Se você já tiver o relatório JSON criado por `sorafs-manifest-stub`, passe-o diretamente via
+Se você já tiver o relatório JSON criado por `sorafs_manifest_stub`, passe-o diretamente via
 `--manifest-report=docs.report.json`. A CLI de fetch reutilizará os campos embutidos
 `chunk_fetch_specs`, `payload_digest_hex` e `payload_len`, então você não precisa gerenciar
 arquivos de plano ou validação separados.

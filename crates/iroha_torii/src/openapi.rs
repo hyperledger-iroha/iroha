@@ -4242,6 +4242,124 @@ fn sorafs_paths() -> Map {
             ],
         )),
     );
+    let repair_events_query_params = vec![
+        integer_query_param(
+            "since",
+            "Return repair events with sequence greater than this cursor.",
+            Some("uint64"),
+        ),
+        integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+    ];
+    paths.insert(
+        "/v1/sorafs/audit/repair/events".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List repair events.",
+            "List local SoraFS repair task transition events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+            "#/components/schemas/JsonValue",
+            repair_events_query_params.clone(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/events/stream".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("SoraFS".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Stream repair events.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Stream local SoraFS repair task transition events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live task transitions keyed by repair status."
+                        .to_owned(),
+                ),
+            );
+            operation.insert("parameters".into(), Value::Array(repair_events_query_params.clone()));
+            let mut responses = Map::new();
+            responses.insert(
+                "200".into(),
+                event_stream_response("Server-sent repair task transition event stream."),
+            );
+            operation.insert("responses".into(), Value::Object(responses));
+            let mut methods = Map::new();
+            methods.insert("get".into(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/events/ws".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("SoraFS".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Connect to the repair event WebSocket.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Upgrade to a SoraFS repair event WebSocket. The stream emits JSON text frames with `event` set to the repair status for the optional `since`/`limit` backlog and for live task transitions; lag frames use `event = lagged`."
+                        .to_owned(),
+                ),
+            );
+            operation.insert("parameters".into(), Value::Array(repair_events_query_params));
+            let mut responses = Map::new();
+            responses.insert(
+                "101".into(),
+                Value::Object({
+                    let mut response = Map::new();
+                    response.insert(
+                        "description".into(),
+                        Value::String("WebSocket upgrade accepted.".to_owned()),
+                    );
+                    response
+                }),
+            );
+            operation.insert("responses".into(), Value::Object(responses));
+            let mut methods = Map::new();
+            methods.insert("get".into(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/pricing/config".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch appeal pricing config.",
+            "Fetch the active read-only SoraFS appeal pricing baseline used for quote calculation.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/pricing/status".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch appeal pricing readiness.",
+            "Fetch SoraFS appeal finance API readiness, including which mutating deposit, report, and settlement paths are still pending runtime escrow and ledger integration.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/pricing/quote".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Quote an appeal deposit.",
+            "Quote a deterministic SoraFS appeal deposit from class, backlog, evidence size, urgency, and panel size using the active baseline pricing config.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
     paths.insert(
         "/v1/sorafs/providers".to_owned(),
         Value::Object(json_get_operation(
@@ -12333,6 +12451,12 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/reputation/events"));
         assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
         assert!(paths.contains_key("/ws/reputation"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));

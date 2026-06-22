@@ -81,7 +81,7 @@ Antes da produção:1. **Proverьте свежесть телеметрии.** �
 
 ## Справочник флагов CLI e SDK
 
-`sorafs_cli fetch` (com `crates/sorafs_car/src/bin/sorafs_cli.rs`) e desbloqueado
+`sorafs_cli fetch` (com `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) e desbloqueado
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) usado
 одну и ту же поверхность конфигурации оркестратора. Usar bandeiras de segurança
 при сборе evidência или воспроизведении канонических luminárias:

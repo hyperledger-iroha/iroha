@@ -49,7 +49,7 @@ Prontidao do modo direto agora, включая cobertura tanto no orquestrador q
 - `direct_only_policy_rejects_soranet_only_providers` гарантирует, что `TransportPolicy::DirectOnly` будет быстрым, когда каждая реклама будет кандидатом для поддержки реле SoraNet. [crates/sorafs_orchestrator/src/lib.rs:7238]
 - `direct_only_policy_prefers_direct_transports_when_available` гарантирует, что передача Torii/QUIC будет использована, когда будет отключено, и что ретрансляторы SoraNet будут исключены из сеанса. [crates/sorafs_orchestrator/src/lib.rs:7285]
 - `direct_mode_policy_example_is_valid` фазовый анализ `docs/examples/sorafs_direct_mode_policy.json`, чтобы гарантировать, что документ будет всегда доступен для помощников. [crates/sorafs_orchestrator/src/lib.rs:7509] [docs/examples/sorafs_direct_mode_policy.json:1]
-- `fetch_command_respects_direct_transports` упражнение `sorafs_cli fetch --transport-policy=direct-only` против шлюза Torii симулядо, fornecendo um тест дыма для регулирования окружающей среды, которую фиксация транспортирует напрямую. [crates/sorafs_car/tests/sorafs_cli.rs:2733]
+- `fetch_command_respects_direct_transports` упражнение `sorafs_cli fetch --transport-policy=direct-only` против шлюза Torii симулядо, fornecendo um тест дыма для регулирования окружающей среды, которую фиксация транспортирует напрямую. [crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733]
 - `scripts/sorafs_direct_mode_smoke.sh` включает в себя команду в виде политического JSON и постоянное табло для автоматического развертывания.
 
 Ездил в люксе перед публичной публикацией:

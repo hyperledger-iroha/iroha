@@ -58,10 +58,10 @@ translator: machine-google-reviewed
      `docs/source/sorafs/proposals/`.
    - CLI сығышын индереү:
      ```bash
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - ПР-ға ҡоролма, тәҡдим, детерминизм тураһында отчет һәм реестр тапшырығыҙ

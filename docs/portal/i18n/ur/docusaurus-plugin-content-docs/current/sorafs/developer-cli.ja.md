@@ -23,7 +23,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 :::note مستند ماخذ
 :::
 
-Consolidated `sorafs_cli` surface (جو `sorafs_car` crate کے ذریعے `cli` feature کے ساتھ فراہم ہوتا ہے) SoraFS artifacts تیار کرنے کے لیے درکار ہر قدم expose کرتا ہے۔ اس cookbook کو عام workflows پر سیدھا جانے کے لیے استعمال کریں؛ operational context کے لیے اسے manifest pipeline اور orchestrator runbooks کے ساتھ pair کریں۔
+Consolidated `sorafs_cli` surface (provided by the `sorafs_orchestrator` crate) SoraFS artifacts تیار کرنے کے لیے درکار ہر قدم expose کرتا ہے۔ اس cookbook کو عام workflows پر سیدھا جانے کے لیے استعمال کریں؛ operational context کے لیے اسے manifest pipeline اور orchestrator runbooks کے ساتھ pair کریں۔
 
 ## Package payloads
 

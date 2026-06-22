@@ -2706,6 +2706,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
     },
     pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
     manifestDigestHex: manifestHex,
+    manifestBytes: Buffer.from("manifest-norito"),
     chunkDigestSha3_256Hex: chunkHex,
     contentLength: 4096,
     submittedEpoch: 42,
@@ -2718,6 +2719,7 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   assert.equal(body.authority, FIXTURE_ALICE_ID);
   assert.equal(body.chunker_profile_id, 1);
   assert.equal(body.pin_policy?.storage_class?.type, "Hot");
+  assert.equal(body.manifest_b64, Buffer.from("manifest-norito").toString("base64"));
   assert.equal(body.chunk_digest_sha3_256_hex, chunkHex);
   assert.equal(body.content_length, 4096);
   assert.equal(
@@ -2750,6 +2752,7 @@ function sorafsPinRegisterInput(overrides = {}) {
 
 test("registerSorafsPinManifest accepts snake case successor digest", async () => {
   const successorHex = "c".repeat(64);
+  const manifestB64 = Buffer.from("explicit-manifest").toString("base64");
   let captured = null;
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -2764,12 +2767,14 @@ test("registerSorafsPinManifest accepts snake case successor digest", async () =
     sorafsPinRegisterInput({
       pinPolicy: undefined,
       pin_policy: { min_replicas: 3, storage_class: "warm", retention_epoch: 72 },
+      manifest_b64: manifestB64,
       successor_of_hex: successorHex.toUpperCase(),
     }),
   );
 
   const body = JSON.parse(captured?.init?.body ?? "{}");
   assert.equal(body.pin_policy?.storage_class?.type, "Warm");
+  assert.equal(body.manifest_b64, manifestB64);
   assert.equal(body.successor_of_hex, successorHex);
 });
 
@@ -2807,6 +2812,14 @@ test("registerSorafsPinManifest rejects ambiguous request field aliases before f
         successor_of_hex: "d".repeat(64),
       }),
       pattern: /successorOfHex.*ambiguous aliases/i,
+    },
+    {
+      label: "manifest payload",
+      input: sorafsPinRegisterInput({
+        manifestB64: Buffer.from("manifest").toString("base64"),
+        manifestBytes: Buffer.from("other-manifest"),
+      }),
+      pattern: /manifest.*ambiguous aliases/i,
     },
     {
       label: "pin policy",
@@ -3070,6 +3083,32 @@ test("registerSorafsPinManifest rejects malformed manifest digest before fetch",
         submittedEpoch: 1,
       }),
     /manifestDigestHex.*32-byte hex/i,
+  );
+});
+
+test("registerSorafsPinManifest rejects malformed manifest payload before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest(
+        sorafsPinRegisterInput({
+          manifestB64: "not base64!",
+        }),
+      ),
+    /manifest.*base64/i,
+  );
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest(
+        sorafsPinRegisterInput({
+          manifestBytes: Buffer.alloc(0),
+        }),
+      ),
+    /manifest.*non-empty base64/i,
   );
 });
 

@@ -28,7 +28,7 @@ trace auditable.
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | Tous les tests passent ; le test de parité `vectors` réussit. | Confirme que les fixtures canoniques compilent et correspondent à l'implémentation Rust. |
 | 2 | `ci/check_sorafs_fixtures.sh` | Le script sort en 0 ; rapporte les digests de manifest ci-dessous. | Vérifie que les fixtures se régénèrent proprement et que les signatures restent attachées. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | L'entrée pour `sorafs.sf1@1.0.0` correspond au descriptor du registry (`profile_id=1`). | S'assure que la metadata du registry reste synchronisée. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | L'entrée pour `sorafs.sf1@1.0.0` correspond au descriptor du registry (`profile_id=1`). | S'assure que la metadata du registry reste synchronisée. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | La régénération réussit sans `--allow-unsigned` ; les fichiers de manifest et de signature restent inchangés. | Fournit une preuve de déterminisme pour les limites de chunk et les manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | Ne rapporte aucune diff entre les fixtures TypeScript et le JSON Rust. | Helper optionnel ; garantir la parité cross-runtime (script maintenu par Tooling WG). |
 

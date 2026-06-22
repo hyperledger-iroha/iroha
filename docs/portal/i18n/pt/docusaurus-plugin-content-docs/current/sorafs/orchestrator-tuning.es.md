@@ -82,7 +82,7 @@ Para definições detalhadas de campos, consulte
 
 ## Referência de flags de CLI e SDK
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) e o invólucro
+`sorafs_cli fetch` (ver `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) e o invólucro
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) compartilha la
 mesma superfície de configuração do orquestrador. Usa as seguintes bandeiras al
 capturar evidências de despliegue ou reproduzir os jogos canônicos:

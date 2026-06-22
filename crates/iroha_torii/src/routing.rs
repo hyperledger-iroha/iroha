@@ -32631,6 +32631,12 @@ pub struct RecordCapacityTelemetryDto {
     /// Logical bytes served during the window.
     #[norito(default)]
     pub egress_bytes: u64,
+    /// Gateway-observed logical bytes served during the window.
+    #[norito(default)]
+    pub gateway_egress_bytes: Option<u64>,
+    /// Orchestrator-observed logical bytes served during the window.
+    #[norito(default)]
+    pub orchestrator_egress_bytes: Option<u64>,
     /// PDP challenges issued for the window.
     #[norito(default)]
     pub pdp_challenges: u32,
@@ -34201,17 +34207,20 @@ pub async fn handle_post_sorafs_register_manifest(
         req.chunker_multihash_code,
         None,
     )
-    .map_err(manifest_validation_error)?;
+    .map_err(|err| {
+        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_chunker_invalid", err)
+    })?;
 
     let manifest_policy = manifest_policy_from_dto(&req.pin_policy);
 
-    validate_pin_policy(&manifest_policy, &manifest_constraints)
-        .map_err(manifest_validation_error)?;
+    validate_pin_policy(&manifest_policy, &manifest_constraints).map_err(|err| {
+        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_policy_invalid", err)
+    })?;
 
     let manifest_digest_bytes =
-        parse_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
+        parse_sorafs_pin_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
     let chunk_digest =
-        parse_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
+        parse_sorafs_pin_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
     validate_manifest_payload_matches_request(
         &req,
         &manifest_constraints,
@@ -34232,7 +34241,12 @@ pub async fn handle_post_sorafs_register_manifest(
     let alias_binding = if let Some(alias) = req.alias.as_ref() {
         let proof = base64::engine::general_purpose::STANDARD
             .decode(alias.proof_base64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid base64 in alias proof: {err}")))?;
+            .map_err(|err| {
+                sorafs_pin_validation_error(
+                    "sorafs_pin_alias_proof_base64_invalid",
+                    format!("invalid base64 in alias proof: {err}"),
+                )
+            })?;
         Some(
             iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
                 name: alias.name.clone(),
@@ -34245,7 +34259,7 @@ pub async fn handle_post_sorafs_register_manifest(
     };
 
     let successor_digest = if let Some(hex) = req.successor_of_hex.as_ref() {
-        let bytes = parse_hex_array::<32>(hex, "successor_of_hex")?;
+        let bytes = parse_sorafs_pin_hex_array::<32>(hex, "successor_of_hex")?;
         Some(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
             bytes,
         ))
@@ -34524,6 +34538,15 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
         "/v1/sorafs/capacity/telemetry",
     )
     .await?;
+
+    telemetry.with_metrics(|tel| {
+        tel.record_sorafs_egress_reconciliation(
+            &req.provider_id_hex,
+            req.egress_bytes,
+            req.gateway_egress_bytes,
+            req.orchestrator_egress_bytes,
+        );
+    });
 
     if sorafs_node.is_enabled() {
         let meter = sorafs_node.capacity_meter();
@@ -35200,100 +35223,109 @@ fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Er
 }
 
 #[cfg(feature = "app_api")]
-fn looks_like_signed_auditor_request(value: &json::Value) -> bool {
-    value.get("payload").is_some()
-        || value.get("signature").is_some()
-        || value.get("nonce").is_some()
-}
-
-#[cfg(feature = "app_api")]
-fn decode_signed_or_raw_repair_report_json(
+fn decode_signed_repair_report_json(
     value: &json::Value,
 ) -> Result<RepairReportSubmissionV1, norito::json::Error> {
-    if looks_like_signed_auditor_request(value) {
-        norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
-            .map(RepairReportSubmissionV1::Signed)
-    } else {
-        norito::json::from_value::<RepairReportV1>(value.clone()).map(RepairReportSubmissionV1::Raw)
-    }
+    norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
+        .map(RepairReportSubmissionV1::new)
+        .map_err(|err| {
+            norito::json::Error::Message(format!(
+                "repair report endpoint requires SignedAuditorRequestV1 envelope: {err}"
+            ))
+        })
 }
 
 #[cfg(feature = "app_api")]
-fn decode_signed_or_raw_repair_slash_json(
+fn decode_signed_repair_slash_json(
     value: &json::Value,
 ) -> Result<RepairSlashSubmissionV1, norito::json::Error> {
-    if looks_like_signed_auditor_request(value) {
-        norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
-            .map(RepairSlashSubmissionV1::Signed)
-    } else {
-        norito::json::from_value::<RepairSlashProposalV1>(value.clone())
-            .map(RepairSlashSubmissionV1::Raw)
-    }
+    norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
+        .map(RepairSlashSubmissionV1::new)
+        .map_err(|err| {
+            norito::json::Error::Message(format!(
+                "repair slash endpoint requires SignedAuditorRequestV1 envelope: {err}"
+            ))
+        })
 }
 
 #[cfg(feature = "app_api")]
-fn decode_signed_or_raw_repair_report_norito(
+fn decode_signed_repair_report_norito(
     bytes: &[u8],
 ) -> Result<RepairReportSubmissionV1, norito::Error> {
-    match norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes) {
-        Ok(envelope) => Ok(RepairReportSubmissionV1::Signed(envelope)),
-        Err(signed_err) => norito::decode_from_bytes::<RepairReportV1>(bytes)
-            .map(RepairReportSubmissionV1::Raw)
-            .map_err(|raw_err| {
-                norito::Error::Message(format!(
-                    "invalid signed auditor request ({signed_err}) or repair report ({raw_err})"
-                ))
-            }),
-    }
+    norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes)
+        .map(RepairReportSubmissionV1::new)
+        .map_err(|err| {
+            norito::Error::Message(format!(
+                "repair report endpoint requires SignedAuditorRequestV1 envelope: {err}"
+            ))
+        })
 }
 
 #[cfg(feature = "app_api")]
-fn decode_signed_or_raw_repair_slash_norito(
+fn decode_signed_repair_slash_norito(
     bytes: &[u8],
 ) -> Result<RepairSlashSubmissionV1, norito::Error> {
-    match norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes) {
-        Ok(envelope) => Ok(RepairSlashSubmissionV1::Signed(envelope)),
-        Err(signed_err) => norito::decode_from_bytes::<RepairSlashProposalV1>(bytes)
-            .map(RepairSlashSubmissionV1::Raw)
-            .map_err(|raw_err| {
-                norito::Error::Message(format!(
-                    "invalid signed auditor request ({signed_err}) or repair slash proposal ({raw_err})"
-                ))
-            }),
-    }
+    norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes)
+        .map(RepairSlashSubmissionV1::new)
+        .map_err(|err| {
+            norito::Error::Message(format!(
+                "repair slash endpoint requires SignedAuditorRequestV1 envelope: {err}"
+            ))
+        })
 }
 
 #[cfg(feature = "app_api")]
 fn validate_signed_auditor_request(
     envelope: SignedAuditorRequestV1,
 ) -> Result<SignedAuditorRequestPayloadV1, Error> {
-    envelope
-        .validate()
-        .map_err(|err| conversion_error(format!("invalid signed auditor request: {err}")))?;
+    let public_key = envelope.verify_signature().map_err(|err| {
+        conversion_error(format!("invalid signed auditor request signature: {err}"))
+    })?;
+    let parsed_account = AccountId::parse_encoded(&envelope.auditor_account).map_err(|err| {
+        conversion_error(format!(
+            "invalid signed auditor request auditor_account `{}`: expected canonical I105 account id ({err})",
+            envelope.auditor_account
+        ))
+    })?;
+    if parsed_account.canonical() != envelope.auditor_account {
+        return Err(conversion_error(format!(
+            "invalid signed auditor request auditor_account `{}`: expected canonical I105 account id",
+            envelope.auditor_account
+        )));
+    }
+    if parsed_account.account_id().try_signatory() != Some(&public_key) {
+        return Err(conversion_error(
+            "signed auditor request public key does not match auditor_account".to_string(),
+        ));
+    }
     Ok(envelope.payload)
 }
 
 /// Request body accepted by the repair report auditor endpoint.
 #[cfg(feature = "app_api")]
-pub enum RepairReportSubmissionV1 {
-    /// Legacy raw report body.
-    Raw(RepairReportV1),
+pub struct RepairReportSubmissionV1 {
     /// Signed auditor envelope wrapping a report.
-    Signed(SignedAuditorRequestV1),
+    envelope: SignedAuditorRequestV1,
 }
 
 #[cfg(feature = "app_api")]
 impl RepairReportSubmissionV1 {
+    fn new(envelope: SignedAuditorRequestV1) -> Self {
+        Self { envelope }
+    }
+
+    /// Return the signed-envelope nonce for replay accounting.
+    pub(crate) fn signed_nonce(&self) -> (&str, u64) {
+        (&self.envelope.auditor_account, self.envelope.nonce)
+    }
+
     /// Validate and unwrap the report payload.
     pub(crate) fn into_report(self) -> Result<RepairReportV1, Error> {
-        match self {
-            Self::Raw(report) => Ok(report),
-            Self::Signed(envelope) => match validate_signed_auditor_request(envelope)? {
-                SignedAuditorRequestPayloadV1::RepairReport(report) => Ok(report),
-                SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
-                    "signed auditor request payload must be `repair_report`".to_string(),
-                )),
-            },
+        match validate_signed_auditor_request(self.envelope)? {
+            SignedAuditorRequestPayloadV1::RepairReport(report) => Ok(report),
+            SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
+                "signed auditor request payload must be `repair_report`".to_string(),
+            )),
         }
     }
 }
@@ -35308,38 +35340,42 @@ impl norito::json::JsonDeserialize for RepairReportSubmissionV1 {
     }
 
     fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
-        decode_signed_or_raw_repair_report_json(value)
+        decode_signed_repair_report_json(value)
     }
 }
 
 #[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for RepairReportSubmissionV1 {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        decode_signed_or_raw_repair_report_norito(bytes)
+        decode_signed_repair_report_norito(bytes)
     }
 }
 
 /// Request body accepted by the repair slash auditor endpoint.
 #[cfg(feature = "app_api")]
-pub enum RepairSlashSubmissionV1 {
-    /// Legacy raw slash proposal body.
-    Raw(RepairSlashProposalV1),
+pub struct RepairSlashSubmissionV1 {
     /// Signed auditor envelope wrapping a slash proposal.
-    Signed(SignedAuditorRequestV1),
+    envelope: SignedAuditorRequestV1,
 }
 
 #[cfg(feature = "app_api")]
 impl RepairSlashSubmissionV1 {
+    fn new(envelope: SignedAuditorRequestV1) -> Self {
+        Self { envelope }
+    }
+
+    /// Return the signed-envelope nonce for replay accounting.
+    pub(crate) fn signed_nonce(&self) -> (&str, u64) {
+        (&self.envelope.auditor_account, self.envelope.nonce)
+    }
+
     /// Validate and unwrap the slash proposal payload.
     pub(crate) fn into_proposal(self) -> Result<RepairSlashProposalV1, Error> {
-        match self {
-            Self::Raw(proposal) => Ok(proposal),
-            Self::Signed(envelope) => match validate_signed_auditor_request(envelope)? {
-                SignedAuditorRequestPayloadV1::SlashProposal(proposal) => Ok(proposal),
-                SignedAuditorRequestPayloadV1::RepairReport(_) => Err(conversion_error(
-                    "signed auditor request payload must be `slash_proposal`".to_string(),
-                )),
-            },
+        match validate_signed_auditor_request(self.envelope)? {
+            SignedAuditorRequestPayloadV1::SlashProposal(proposal) => Ok(proposal),
+            SignedAuditorRequestPayloadV1::RepairReport(_) => Err(conversion_error(
+                "signed auditor request payload must be `slash_proposal`".to_string(),
+            )),
         }
     }
 }
@@ -35354,14 +35390,14 @@ impl norito::json::JsonDeserialize for RepairSlashSubmissionV1 {
     }
 
     fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
-        decode_signed_or_raw_repair_slash_json(value)
+        decode_signed_repair_slash_json(value)
     }
 }
 
 #[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for RepairSlashSubmissionV1 {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        decode_signed_or_raw_repair_slash_norito(bytes)
+        decode_signed_repair_slash_norito(bytes)
     }
 }
 
@@ -35371,8 +35407,18 @@ pub async fn handle_post_sorafs_repair_report(
     _telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
     report: RepairReportV1,
+    signed_nonce: (String, u64),
 ) -> Result<impl IntoResponse, Error> {
     ensure_canonical_repair_account_id(&report.auditor_account, "auditor_account")?;
+    let (auditor_account, nonce) = signed_nonce;
+    if auditor_account != report.auditor_account {
+        return Err(conversion_error(
+            "signed auditor nonce account does not match repair report auditor_account".to_string(),
+        ));
+    }
+    sorafs_node
+        .record_repair_auditor_nonce(&auditor_account, nonce)
+        .map_err(repair_scheduler_error)?;
     let record = sorafs_node
         .enqueue_repair_report(&report)
         .map_err(repair_scheduler_error)?;
@@ -35398,8 +35444,18 @@ pub async fn handle_post_sorafs_repair_slash(
     _telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
     proposal: RepairSlashProposalV1,
+    signed_nonce: (String, u64),
 ) -> Result<impl IntoResponse, Error> {
     ensure_canonical_repair_account_id(&proposal.auditor_account, "auditor_account")?;
+    let (auditor_account, nonce) = signed_nonce;
+    if auditor_account != proposal.auditor_account {
+        return Err(conversion_error(
+            "signed auditor nonce account does not match repair slash auditor_account".to_string(),
+        ));
+    }
+    sorafs_node
+        .record_repair_auditor_nonce(&auditor_account, nonce)
+        .map_err(repair_scheduler_error)?;
     let record = sorafs_node
         .submit_repair_slash_proposal(&proposal)
         .map_err(repair_scheduler_error)?;
@@ -35671,6 +35727,35 @@ fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], 
         .map_err(|_| conversion_error(format!("`{field}` must be {N} bytes (got {len})")))
 }
 
+fn parse_sorafs_pin_hex_array<const N: usize>(
+    value: &str,
+    field: &'static str,
+) -> Result<[u8; N], Error> {
+    let trimmed = value.trim_start_matches("0x");
+    let bytes = hex::decode(trimmed).map_err(|err| {
+        sorafs_pin_validation_error(
+            sorafs_pin_hex_error_code(field),
+            format!("invalid hex in `{field}` (expected {N} bytes): {err}"),
+        )
+    })?;
+    let len = bytes.len();
+    bytes.try_into().map_err(|_| {
+        sorafs_pin_validation_error(
+            sorafs_pin_hex_error_code(field),
+            format!("`{field}` must be {N} bytes (got {len})"),
+        )
+    })
+}
+
+fn sorafs_pin_hex_error_code(field: &'static str) -> &'static str {
+    match field {
+        "manifest_digest_hex" => "sorafs_pin_manifest_digest_hex_invalid",
+        "chunk_digest_sha3_256" => "sorafs_pin_chunk_digest_hex_invalid",
+        "successor_of_hex" => "sorafs_pin_successor_hex_invalid",
+        _ => "sorafs_pin_hex_invalid",
+    }
+}
+
 fn parse_hash_hex(value: &str, field: &str) -> Result<Hash, Error> {
     Hash::from_str(value).map_err(|err| conversion_error(format!("invalid {field}: {err}")))
 }
@@ -35928,9 +36013,13 @@ mod repair_query_tests {
     use axum::extract::Path;
     use axum::response::IntoResponse;
     use http_body_util::BodyExt;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use sorafs_manifest::provider_advert::SignatureAlgorithm;
     use sorafs_manifest::repair::{
-        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
-        RepairTicketId,
+        AuditorSignatureV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
+        REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1,
+        RepairSlashProposalV1, RepairTicketId, SIGNED_AUDITOR_REQUEST_VERSION_V1,
+        SignedAuditorRequestPayloadV1, SignedAuditorRequestV1,
     };
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
@@ -35943,24 +36032,118 @@ mod repair_query_tests {
         provider_id: [u8; 32],
         submitted_at_unix: u64,
     ) -> RepairReportV1 {
+        report_with_auditor(
+            ticket,
+            manifest_digest,
+            provider_id,
+            submitted_at_unix,
+            TEST_AUDITOR_I105,
+        )
+    }
+
+    fn report_with_auditor(
+        ticket: &str,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        submitted_at_unix: u64,
+        auditor_account: &str,
+    ) -> RepairReportV1 {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: TEST_AUDITOR_I105.into(),
+            auditor_account: auditor_account.into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
                 manifest_digest,
                 provider_id,
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "test".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
             notes: None,
         }
+    }
+
+    fn slash_proposal(
+        ticket: &str,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        submitted_at_unix: u64,
+    ) -> RepairSlashProposalV1 {
+        slash_proposal_with_auditor(
+            ticket,
+            manifest_digest,
+            provider_id,
+            submitted_at_unix,
+            TEST_AUDITOR_I105,
+        )
+    }
+
+    fn slash_proposal_with_auditor(
+        ticket: &str,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        submitted_at_unix: u64,
+        auditor_account: &str,
+    ) -> RepairSlashProposalV1 {
+        RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId(ticket.to_string()),
+            provider_id,
+            manifest_digest,
+            auditor_account: auditor_account.into(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix,
+            rationale: "missed repair SLA".into(),
+            approval: None,
+        }
+    }
+
+    fn checked_auditor_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked auditor fixture keypair")
+    }
+
+    fn auditor_account(key_pair: &KeyPair) -> String {
+        AccountId::new(key_pair.public_key().clone()).to_string()
+    }
+
+    fn signed_auditor_request(
+        payload: SignedAuditorRequestPayloadV1,
+        key_pair: &KeyPair,
+    ) -> SignedAuditorRequestV1 {
+        let public_key = {
+            let (algorithm, public_key) = key_pair.public_key().to_bytes();
+            assert_eq!(algorithm, Algorithm::Ed25519);
+            public_key.to_vec()
+        };
+        let auditor_account = match &payload {
+            SignedAuditorRequestPayloadV1::RepairReport(report) => report.auditor_account.clone(),
+            SignedAuditorRequestPayloadV1::SlashProposal(proposal) => {
+                proposal.auditor_account.clone()
+            }
+        };
+        let mut envelope = SignedAuditorRequestV1 {
+            version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
+            auditor_account,
+            nonce: 42,
+            payload,
+            signature: AuditorSignatureV1 {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key,
+                signature: Vec::new(),
+            },
+        };
+        let payload_bytes =
+            norito::to_bytes(&envelope.signature_payload()).expect("encode auditor payload");
+        let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)
+            .expect("sign auditor payload");
+        envelope.signature.signature = signature.payload().to_vec();
+        envelope
     }
 
     #[test]
@@ -36000,6 +36183,181 @@ mod repair_query_tests {
         assert_eq!(filters.manifest_digest, Some([0x11; 32]));
         assert_eq!(filters.provider_id, Some(provider_id));
         assert_eq!(filters.status, Some(RepairTaskStatusV1::InProgress));
+    }
+
+    #[test]
+    fn signed_repair_report_submission_json_unwraps_report() {
+        let key_pair = checked_auditor_keypair();
+        let auditor_account = auditor_account(&key_pair);
+        let report = report_with_auditor(
+            "REP-410",
+            [0x10; 32],
+            [0x22; 32],
+            1_700_000_000,
+            &auditor_account,
+        );
+        let envelope = signed_auditor_request(
+            SignedAuditorRequestPayloadV1::RepairReport(report.clone()),
+            &key_pair,
+        );
+        let json = norito::json::to_vec(&envelope).expect("encode signed report");
+        let submission: RepairReportSubmissionV1 =
+            norito::json::from_slice(&json).expect("decode signed report submission");
+        let decoded = submission.into_report().expect("unwrap signed report");
+
+        assert_eq!(decoded, report);
+    }
+
+    #[test]
+    fn raw_repair_report_submission_json_is_rejected() {
+        let report = report("REP-409", [0x09; 32], [0x21; 32], 1_699_999_900);
+        let json = norito::json::to_vec(&report).expect("encode raw repair report");
+        let err = match norito::json::from_slice::<RepairReportSubmissionV1>(&json) {
+            Ok(_) => panic!("raw repair reports must not decode as auditor submissions"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("requires SignedAuditorRequestV1 envelope"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn raw_repair_report_submission_norito_is_rejected() {
+        let report = report("REP-409N", [0x0A; 32], [0x22; 32], 1_699_999_950);
+        let bytes = norito::to_bytes(&report).expect("encode raw repair report");
+        let err =
+            match <RepairReportSubmissionV1 as crate::utils::extractors::SupportsNoritoDecode>::decode_norito(&bytes) {
+                Ok(_) => panic!("raw Norito repair reports must not decode as auditor submissions"),
+                Err(err) => err,
+            };
+
+        assert!(
+            err.to_string()
+                .contains("requires SignedAuditorRequestV1 envelope"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_repair_slash_submission_json_unwraps_proposal() {
+        let key_pair = checked_auditor_keypair();
+        let auditor_account = auditor_account(&key_pair);
+        let proposal = slash_proposal_with_auditor(
+            "REP-411",
+            [0x11; 32],
+            [0x23; 32],
+            1_700_000_100,
+            &auditor_account,
+        );
+        let envelope = signed_auditor_request(
+            SignedAuditorRequestPayloadV1::SlashProposal(proposal.clone()),
+            &key_pair,
+        );
+        let json = norito::json::to_vec(&envelope).expect("encode signed slash proposal");
+        let submission: RepairSlashSubmissionV1 =
+            norito::json::from_slice(&json).expect("decode signed slash submission");
+        let decoded = submission
+            .into_proposal()
+            .expect("unwrap signed slash proposal");
+
+        assert_eq!(decoded, proposal);
+    }
+
+    #[test]
+    fn signed_repair_report_submission_rejects_slash_payload_kind() {
+        let key_pair = checked_auditor_keypair();
+        let auditor_account = auditor_account(&key_pair);
+        let proposal = slash_proposal_with_auditor(
+            "REP-412",
+            [0x12; 32],
+            [0x24; 32],
+            1_700_000_200,
+            &auditor_account,
+        );
+        let envelope = signed_auditor_request(
+            SignedAuditorRequestPayloadV1::SlashProposal(proposal.clone()),
+            &key_pair,
+        );
+        let err = RepairReportSubmissionV1::new(envelope)
+            .into_report()
+            .expect_err("slash payload must not unwrap as a repair report");
+
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("repair_report"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn signed_repair_report_submission_rejects_bogus_signature() {
+        let key_pair = checked_auditor_keypair();
+        let auditor_account = auditor_account(&key_pair);
+        let report = report_with_auditor(
+            "REP-413",
+            [0x13; 32],
+            [0x25; 32],
+            1_700_000_300,
+            &auditor_account,
+        );
+        let mut envelope = signed_auditor_request(
+            SignedAuditorRequestPayloadV1::RepairReport(report),
+            &key_pair,
+        );
+        envelope.signature.signature.fill(0xA5);
+
+        let err = RepairReportSubmissionV1::new(envelope)
+            .into_report()
+            .expect_err("bogus auditor signature must be rejected");
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("signature verification"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn signed_repair_report_submission_rejects_key_account_mismatch() {
+        let signing_key = checked_auditor_keypair();
+        let other_account = auditor_account(&checked_auditor_keypair());
+        let report = report_with_auditor(
+            "REP-414",
+            [0x14; 32],
+            [0x26; 32],
+            1_700_000_400,
+            &other_account,
+        );
+        let envelope = signed_auditor_request(
+            SignedAuditorRequestPayloadV1::RepairReport(report),
+            &signing_key,
+        );
+
+        let err = RepairReportSubmissionV1::new(envelope)
+            .into_report()
+            .expect_err("auditor key/account mismatch must be rejected");
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("public key does not match auditor_account"),
+            "unexpected error message: {message}"
+        );
     }
 
     #[test]
@@ -36072,8 +36430,8 @@ mod repair_worker_tests {
     use iroha_crypto::{KeyPair, SignatureOf};
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        RepairCauseV1, RepairEvidenceV1, RepairTaskStateV1, RepairTicketId, RepairWorkerActionV1,
-        RepairWorkerSignaturePayloadV1,
+        RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1, RepairTaskStateV1, RepairTicketId,
+        RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
     };
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
@@ -36098,9 +36456,9 @@ mod repair_worker_tests {
                 manifest_digest,
                 provider_id,
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "test".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -36376,8 +36734,9 @@ fn validate_manifest_payload_matches_request(
 ) -> Result<()> {
     let Some(manifest_b64) = req.manifest_b64.as_ref() else {
         if constraints.require_council_signatures {
-            return Err(conversion_error(
-                "manifest_b64 is required when governance requires council signatures".to_owned(),
+            return Err(sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_required",
+                "manifest_b64 is required when governance requires council signatures",
             ));
         }
         return Ok(());
@@ -36385,22 +36744,38 @@ fn validate_manifest_payload_matches_request(
 
     let manifest_bytes = base64::engine::general_purpose::STANDARD
         .decode(manifest_b64.as_bytes())
-        .map_err(|err| conversion_error(format!("invalid base64 in manifest_b64: {err}")))?;
+        .map_err(|err| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_base64_invalid",
+                format!("invalid base64 in manifest_b64: {err}"),
+            )
+        })?;
     let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
-        conversion_error(format!("invalid Norito ManifestV1 in manifest_b64: {err}"))
+        sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_decode_failed",
+            format!("invalid Norito ManifestV1 in manifest_b64: {err}"),
+        )
     })?;
 
-    validate_manifest(&manifest, constraints).map_err(manifest_validation_error)?;
+    validate_manifest(&manifest, constraints).map_err(|err| {
+        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_payload_invalid", err)
+    })?;
 
-    let digest = manifest
-        .digest()
-        .map_err(|err| conversion_error(format!("failed to digest manifest_b64: {err}")))?;
+    let digest = manifest.digest().map_err(|err| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_digest_failed",
+            format!("failed to digest manifest_b64: {err}"),
+        )
+    })?;
     if digest.as_bytes() != expected_digest {
-        return Err(conversion_error(format!(
-            "manifest_b64 digest {} does not match manifest_digest_hex {}",
-            hex::encode(digest.as_bytes()),
-            hex::encode(expected_digest)
-        )));
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_digest_mismatch",
+            format!(
+                "manifest_b64 digest {} does not match manifest_digest_hex {}",
+                hex::encode(digest.as_bytes()),
+                hex::encode(expected_digest)
+            ),
+        ));
     }
 
     if manifest.chunking.profile_id.0 != req.chunker_profile_id
@@ -36409,24 +36784,29 @@ fn validate_manifest_payload_matches_request(
         || manifest.chunking.semver != req.chunker_semver
         || manifest.chunking.multihash_code != req.chunker_multihash_code
     {
-        return Err(conversion_error(
-            "manifest_b64 chunker descriptor does not match request chunker fields".to_owned(),
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_chunker_mismatch",
+            "manifest_b64 chunker descriptor does not match request chunker fields",
         ));
     }
 
     if manifest.content_length != req.content_length {
-        return Err(conversion_error(format!(
-            "manifest_b64 content_length {} does not match request content_length {}",
-            manifest.content_length, req.content_length
-        )));
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_content_length_mismatch",
+            format!(
+                "manifest_b64 content_length {} does not match request content_length {}",
+                manifest.content_length, req.content_length
+            ),
+        ));
     }
 
     if manifest.pin_policy.min_replicas != expected_policy.min_replicas
         || manifest.pin_policy.storage_class != expected_policy.storage_class
         || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
     {
-        return Err(conversion_error(
-            "manifest_b64 pin_policy does not match request pin_policy".to_owned(),
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_policy_mismatch",
+            "manifest_b64 pin_policy does not match request pin_policy",
         ));
     }
 
@@ -36467,8 +36847,15 @@ pub fn parse_report_iso_week(label: &str) -> Result<PorReportIsoWeek, Error> {
     Ok(cycle)
 }
 
-fn manifest_validation_error(err: ManifestValidationError) -> Error {
-    conversion_error(format!("manifest validation failed: {err}"))
+fn sorafs_pin_manifest_validation_error(code: &'static str, err: ManifestValidationError) -> Error {
+    sorafs_pin_validation_error(code, format!("manifest validation failed: {err}"))
+}
+
+fn sorafs_pin_validation_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code,
+        message: message.into(),
+    }
 }
 
 #[allow(clippy::redundant_pub_crate)]
@@ -37122,6 +37509,13 @@ mod sorafs_pin_tests {
         }
     }
 
+    fn app_validation_error(err: Error) -> (&'static str, String) {
+        match err {
+            Error::AppQueryValidation { code, message } => (code, message),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     #[test]
     fn manifest_policy_helpers_round_trip_all_storage_classes() {
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
@@ -37199,6 +37593,37 @@ mod sorafs_pin_tests {
             message.contains("chunk_digest_sha3_256") && message.contains("4 bytes"),
             "unexpected error message: {message}"
         );
+    }
+
+    #[test]
+    fn parse_sorafs_pin_hex_array_rejects_invalid_manifest_digest_with_stable_code() {
+        let err = parse_sorafs_pin_hex_array::<32>("zz", "manifest_digest_hex")
+            .expect_err("invalid hex must be rejected");
+        let (code, message) = app_validation_error(err);
+        assert_eq!(code, "sorafs_pin_manifest_digest_hex_invalid");
+        assert!(
+            message.contains("manifest_digest_hex"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sorafs_pin_validation_error_emits_stable_norito_envelope_code() {
+        let response = sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_required",
+            "manifest_b64 is required",
+        )
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let envelope =
+            norito::decode_from_bytes::<crate::ErrorEnvelope>(&bytes).expect("error envelope");
+        assert_eq!(envelope.code(), "sorafs_pin_manifest_payload_required");
+        assert_eq!(envelope.message(), "manifest_b64 is required");
     }
 
     #[tokio::test]
@@ -37301,7 +37726,8 @@ mod sorafs_pin_tests {
             }
             Err(err) => err,
         };
-        let message = conversion_message(err);
+        let (code, message) = app_validation_error(err);
+        assert_eq!(code, "sorafs_pin_manifest_payload_required");
         assert!(
             message.contains("manifest_b64 is required"),
             "unexpected error message: {message}"
@@ -37331,9 +37757,70 @@ mod sorafs_pin_tests {
             Ok(_) => panic!("manifest payload without council signatures must fail"),
             Err(err) => err,
         };
-        let message = conversion_message(err);
+        let (code, message) = app_validation_error(err);
+        assert_eq!(code, "sorafs_pin_manifest_payload_invalid");
         assert!(
             message.contains("manifest must include at least one council signature"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_rejects_manifest_digest_mismatch_with_stable_code() {
+        let manifest = default_manifest();
+        let mut req = request_from_manifest(&manifest, true);
+        req.manifest_digest_hex = hex::encode([0xEE; 32]);
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => panic!("manifest payload digest mismatch must fail"),
+            Err(err) => err,
+        };
+        let (code, message) = app_validation_error(err);
+        assert_eq!(code, "sorafs_pin_manifest_digest_mismatch");
+        assert!(
+            message.contains("does not match manifest_digest_hex"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
+        let manifest = default_manifest();
+        let mut req = request_from_manifest(&manifest, false);
+        req.alias = Some(PinAliasDto {
+            namespace: "sora".into(),
+            name: "docs".into(),
+            proof_base64: "not base64!!".into(),
+        });
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid alias proof must fail"),
+            Err(err) => err,
+        };
+        let (code, message) = app_validation_error(err);
+        assert_eq!(code, "sorafs_pin_alias_proof_base64_invalid");
+        assert!(
+            message.contains("invalid base64 in alias proof"),
             "unexpected error message: {message}"
         );
     }
@@ -38276,6 +38763,8 @@ mod sorafs_capacity_tests {
     #[cfg(feature = "app_api")]
     async fn capacity_telemetry_handler_accepts_request() {
         let (state, queue, chain_id, telemetry) = test_state_components();
+        #[cfg(feature = "telemetry")]
+        let telemetry_clone = telemetry.clone();
         let (node, _dir) = sorafs_node_with_temp_storage();
         seed_capacity_declaration(&node);
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
@@ -38296,6 +38785,8 @@ mod sorafs_capacity_tests {
             uptime_bps: 9_500,
             por_success_bps: 9_200,
             egress_bytes: 512 * 1_048_576,
+            gateway_egress_bytes: Some(512 * 1_048_576),
+            orchestrator_egress_bytes: Some(513 * 1_048_576),
             pdp_challenges: 0,
             pdp_failures: 0,
             potr_windows: 0,
@@ -38330,6 +38821,36 @@ mod sorafs_capacity_tests {
                 .and_then(norito::json::Value::as_u64),
             Some(100)
         );
+        #[cfg(feature = "telemetry")]
+        {
+            let metrics = telemetry_clone.metrics().await;
+            assert_eq!(
+                metrics
+                    .torii_sorafs_egress_bytes
+                    .with_label_values(&[provider_hex.as_str(), "billing"])
+                    .get(),
+                (512 * 1_048_576) as f64
+            );
+            assert_eq!(
+                metrics
+                    .torii_sorafs_egress_bytes
+                    .with_label_values(&[provider_hex.as_str(), "gateway"])
+                    .get(),
+                (512 * 1_048_576) as f64
+            );
+            assert_eq!(
+                metrics
+                    .torii_sorafs_egress_bytes
+                    .with_label_values(&[provider_hex.as_str(), "orchestrator"])
+                    .get(),
+                (513 * 1_048_576) as f64
+            );
+            let drift = metrics
+                .torii_sorafs_egress_drift_ratio
+                .with_label_values(&[provider_hex.as_str(), "orchestrator"])
+                .get();
+            assert!((drift - (1.0 / 512.0)).abs() < f64::EPSILON);
+        }
     }
 
     #[tokio::test]
@@ -38355,6 +38876,8 @@ mod sorafs_capacity_tests {
             uptime_bps: 8_000,
             por_success_bps: 7_500,
             egress_bytes: 0,
+            gateway_egress_bytes: None,
+            orchestrator_egress_bytes: None,
             pdp_challenges: 0,
             pdp_failures: 0,
             potr_windows: 0,

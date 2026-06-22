@@ -18,7 +18,7 @@ description: Практический разбор по задачам для к
 :::nota História Canônica
 :::
 
-Консолидированная поверхность `sorafs_cli` (engradado de substituição `sorafs_car` com recurso de recurso `cli`) раскрывает Este é o caso, não é necessário para o artefato SoraFS. Use este livro de receitas, чтобы сразу перейти к типовым fluxos de trabalho; Configure-o para o gerenciamento de pipeline e runbooks para o contato operacional.
+Консолидированная поверхность `sorafs_cli` (provided by the `sorafs_orchestrator` crate) раскрывает Este é o caso, não é necessário para o artefato SoraFS. Use este livro de receitas, чтобы сразу перейти к типовым fluxos de trabalho; Configure-o para o gerenciamento de pipeline e runbooks para o contato operacional.
 
 ## Cargas úteis de expansão
 

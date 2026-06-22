@@ -10,80 +10,84 @@ translation_last_reviewed: 2026-02-07
 id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
-description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+description: Completed status for ManifestV1 validation gating in the SF-4 Pin Registry rollout.
 translator: machine-google-reviewed
 ---
 
-:::შენიშვნა კანონიკური წყარო
+:::note Canonical Source
 :::
 
-# Pin Registry Manifest Validation Plan (SF-4 მოსამზადებელი)
+# Pin Registry Manifest Validation Status (SF-4)
 
-ეს გეგმა ასახავს `sorafs_manifest::ManifestV1` ძაფისთვის საჭირო ნაბიჯებს
-დადასტურება მომავალი პინის რეესტრის კონტრაქტში, რათა SF-4 მუშაობა შეძლოს
-დაეყრდნონ არსებულ ინსტრუმენტებს კოდირების/გაშიფვრის ლოგიკის დუბლირების გარეშე.
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-## გოლები
+## Implemented Goals
 
-1. მასპინძლის მხარის წარდგენის ბილიკები ამოწმებს მანიფესტის სტრუქტურას, ბლოკირების პროფილს და
-   მმართველობის კონვერტები წინადადებების მიღებამდე.
-2. Torii და კარიბჭის სერვისები ხელახლა იყენებენ ვალიდაციის იმავე რუტინას, რათა უზრუნველყონ
-   დეტერმინისტული ქცევა მასპინძლებს შორის.
-3. ინტეგრაციის ტესტები მოიცავს დადებით/უარყოფით შემთხვევებს აშკარა მიღებისთვის,
-   პოლიტიკის აღსრულება და შეცდომების ტელემეტრია.
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## არქიტექტურა
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### კომპონენტები
+## Shipped Components
 
-- `ManifestValidator` (ახალი მოდული `sorafs_manifest` ან `sorafs_pin` ყუთში)
-  აერთიანებს სტრუქტურულ შემოწმებებს და პოლიტიკის კარიბჭეებს.
-- Torii ავლენს gRPC საბოლოო წერტილს `SubmitManifest`, რომელიც რეკავს
-  `ManifestValidator` კონტრაქტზე გადაგზავნამდე.
-- კარიბჭის გამოტანის გზა სურვილისამებრ მოიხმარს იმავე ვალიდატორს ახლის ქეშირებისას
-  გამოიხატება რეესტრიდან.
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## დავალების დაშლა
+## Completion Matrix
 
-| ამოცანა | აღწერა | მფლობელი | სტატუსი |
-|------|-------------|-------|--------|
-| V1 API ჩონჩხი | დაამატეთ `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` `sorafs_manifest`-ს. ჩართეთ BLAKE3 დაიჯესტის გადამოწმება და ბლოკის რეესტრის ძიება. | ძირითადი ინფრა | ✅ შესრულებულია | საერთო დამხმარეები (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) ახლა ცხოვრობენ `sorafs_manifest::validation`-ში. |
-| პოლიტიკის გაყვანილობა | რუკის რეესტრის პოლიტიკის კონფიგურაცია (`min_replicas`, ვადის გასვლის ფანჯრები, ნებადართული chunker სახელურები) ვალიდაციის შეყვანებში. | მმართველობა / ძირითადი ინფრა | მომლოდინე — თვალყურის დევნება SORAFS-215 |
-| Torii ინტეგრაცია | გამოძახების ვალიდატორი Torii მანიფესტის წარდგენის გზაზე; დააბრუნეთ სტრუქტურირებული Norito შეცდომები წარუმატებლობისას. | Torii გუნდი | დაგეგმილი — თვალყურის დევნება SORAFS-216 |
-| მასპინძლის კონტრაქტის ნამუშევარი | დარწმუნდით, რომ ხელშეკრულების შესვლის წერტილი უარყოფს მანიფესტებს, რომლებიც ვერ ახერხებენ ვალიდაციის ჰეშს; მეტრიკის მრიცხველების გამოვლენა. | Smart Contract Team | ✅ შესრულებულია | `RegisterPinManifest` ახლა გამოიძახებს გაზიარებულ ვალიდატორს (`ensure_chunker_handle`/`ensure_pin_policy`) მანამ, სანამ მუტაციის მდგომარეობა და ერთეული ტესტები დაფარავს წარუმატებლობის შემთხვევებს. |
-| ტესტები | დაამატეთ ერთეულების ტესტები ვალიდატორისთვის + trybuild შემთხვევები არასწორი მანიფესტებისთვის; ინტეგრაციის ტესტები `crates/iroha_core/tests/pin_registry.rs`-ში. | QA გილდია | 🟠 მიმდინარეობს | დამადასტურებელი ერთეულის ტესტები დაეშვა ჯაჭვზე უარყოფის ტესტებთან ერთად; სრული ინტეგრაციის კომპლექტი ჯერ კიდევ მოლოდინშია. |
-| დოკუმენტები | განაახლეთ `docs/source/sorafs_architecture_rfc.md` და `migration_roadmap.md`, როგორც კი ვალიდიატორი დაეშვება; დოკუმენტი CLI გამოყენების `docs/source/sorafs/manifest_pipeline.md`. | Docs გუნდი | მომლოდინე — თვალყურის დევნება DOCS-489-ში |
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-## დამოკიდებულებები
+## Operational Notes
 
-- Pin Registry Norito სქემის დასრულება (რეფერატი: SF-4 პუნქტი საგზაო რუკაში).
-- საბჭოს მიერ ხელმოწერილი chunker რეესტრის კონვერტები (უზრუნველყოფს ვალიდატორის რუკების არსებობას
-  განმსაზღვრელი).
-- Torii ავთენტიფიკაციის გადაწყვეტილებები მანიფესტის წარდგენისთვის.
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## რისკები და შერბილებები
+## Remaining Rollout Evidence
 
-| რისკი | ზემოქმედება | შერბილება |
-|------|--------|------------|
-| განსხვავებული პოლიტიკის ინტერპრეტაცია Torii-სა და კონტრაქტს შორის | არადეტერმინისტული მიღება. | გააზიარეთ ვალიდაციის ყუთი + დაამატეთ ინტეგრაციის ტესტები, რომლებიც ადარებენ მასპინძელს და ჯაჭვურ გადაწყვეტილებებს. |
-| შესრულების რეგრესია დიდი მანიფესტებისთვის | ნელი წარდგენა | საორიენტაციო კრიტერიუმი ტვირთის მეშვეობით; განიხილეთ მანიფესტის დაიჯესტის შედეგების ქეშირება. |
-| შეცდომის შეტყობინებების drift | ოპერატორის დაბნეულობა | განსაზღვრეთ Norito შეცდომის კოდები; დააფიქსირეთ ისინი `manifest_pipeline.md`-ში. |
-
-## ქრონოლოგიის მიზნები
-
-- კვირა 1: მიწის `ManifestValidator` ჩონჩხი + ერთეული ტესტები.
-- კვირა 2: მავთულის Torii წარდგენის გზა და განაახლეთ CLI ზედაპირული ვალიდაციის შეცდომებზე.
-- კვირა 3: განახორციელეთ კონტრაქტის კაკვები, დაამატეთ ინტეგრაციის ტესტები, განაახლეთ დოკუმენტები.
-- კვირა 4: გაიარეთ რეპეტიცია მიგრაციის წიგნის ჩანაწერთან ერთად, დაარეგისტრირეთ საბჭოს ხელმოწერა.
-
-ეს გეგმა მითითებული იქნება საგზაო რუკაში, როგორც კი დაიწყება ვალიდატორის მუშაობა.
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

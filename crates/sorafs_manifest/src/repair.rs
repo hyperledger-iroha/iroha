@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -41,6 +42,8 @@ pub const REPAIR_WORKER_SIGNATURE_VERSION_V1: u8 = 1;
 
 /// Maximum length permitted for ticket identifiers and string fields.
 const MAX_STRING_BYTES: usize = 256;
+const ED25519_PUBLIC_KEY_LENGTH: usize = 32;
+const ED25519_SIGNATURE_LENGTH: usize = 64;
 
 /// Identifier assigned to a repair ticket (e.g., `REP-351`).
 #[derive(
@@ -209,6 +212,50 @@ impl RepairWorkerSignaturePayloadV1 {
     }
 }
 
+/// Proof-of-retrievability failure cause details.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairPorFailureCauseV1 {
+    /// PoR challenge identifier (BLAKE3-256 digest).
+    pub challenge_id: [u8; 32],
+    /// Number of samples that failed validation.
+    pub failed_samples: u16,
+    /// Optional digest of the offending proof, if available.
+    #[norito(default)]
+    pub proof_digest: Option<[u8; 32]>,
+}
+
+/// Latency SLA breach cause details.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairLatencySlaCauseV1 {
+    /// Observed latency in milliseconds.
+    pub observed_latency_ms: u32,
+    /// Optional digest of the PoTR receipt associated with the breach.
+    #[norito(default)]
+    pub receipt_digest: Option<[u8; 32]>,
+}
+
+/// Replica shortfall cause details.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairReplicaShortfallCauseV1 {
+    /// Estimated number of missing chunks.
+    pub missing_chunks: u32,
+}
+
+/// Manual repair cause details.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairManualCauseV1 {
+    /// Free-form description of the trigger.
+    pub reason: String,
+}
+
 /// Root cause captured by an auditor when scheduling repairs.
 #[allow(clippy::size_of_ref)]
 #[derive(
@@ -218,71 +265,44 @@ impl RepairWorkerSignaturePayloadV1 {
 pub enum RepairCauseV1 {
     /// Proof-of-retrievability failure exceeding the allowed threshold.
     #[norito(rename = "por_failure")]
-    PorFailure {
-        /// PoR challenge identifier (BLAKE3-256 digest).
-        challenge_id: [u8; 32],
-        /// Number of samples that failed validation.
-        failed_samples: u16,
-        /// Optional digest of the offending proof, if available.
-        #[norito(default)]
-        proof_digest: Option<[u8; 32]>,
-    },
+    PorFailure(RepairPorFailureCauseV1),
     /// Latency SLA breach for proof-of-time-to-retrieval sampling.
     #[norito(rename = "latency_sla")]
-    LatencySla {
-        /// Observed latency in milliseconds.
-        observed_latency_ms: u32,
-        /// Optional digest of the PoTR receipt associated with the breach.
-        #[norito(default)]
-        receipt_digest: Option<[u8; 32]>,
-    },
+    LatencySla(RepairLatencySlaCauseV1),
     /// Replica shortfall discovered during sampling.
     #[norito(rename = "replica_shortfall")]
-    ReplicaShortfall {
-        /// Estimated number of missing chunks.
-        missing_chunks: u32,
-    },
+    ReplicaShortfall(RepairReplicaShortfallCauseV1),
     /// Manually triggered remediation (operator supplied reason).
     #[norito(rename = "manual")]
-    Manual {
-        /// Free-form description of the trigger.
-        reason: String,
-    },
+    Manual(RepairManualCauseV1),
 }
 
 impl RepairCauseV1 {
     /// Validate the repair cause payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
         match self {
-            Self::PorFailure {
-                challenge_id,
-                failed_samples,
-                ..
-            } => {
-                ensure_digest(challenge_id, "challenge_id")?;
-                if *failed_samples == 0 {
+            Self::PorFailure(cause) => {
+                ensure_digest(&cause.challenge_id, "challenge_id")?;
+                if cause.failed_samples == 0 {
                     return Err(RepairValidationError::InvalidSamples);
                 }
             }
-            Self::LatencySla {
-                observed_latency_ms,
-                ..
-            } => {
-                if *observed_latency_ms == 0 {
+            Self::LatencySla(cause) => {
+                if cause.observed_latency_ms == 0 {
                     return Err(RepairValidationError::InvalidLatency);
                 }
             }
-            Self::ReplicaShortfall { missing_chunks } => {
-                if *missing_chunks == 0 {
+            Self::ReplicaShortfall(cause) => {
+                if cause.missing_chunks == 0 {
                     return Err(RepairValidationError::InvalidMissingChunks);
                 }
             }
-            Self::Manual { reason } => {
-                validate_non_empty_string(reason, "reason")?;
-                if reason.len() > MAX_STRING_BYTES {
+            Self::Manual(cause) => {
+                validate_non_empty_string(&cause.reason, "reason")?;
+                if cause.reason.len() > MAX_STRING_BYTES {
                     return Err(RepairValidationError::StringTooLong {
                         field: "reason",
-                        length: reason.len(),
+                        length: cause.reason.len(),
                         max: MAX_STRING_BYTES,
                     });
                 }
@@ -1016,6 +1036,19 @@ impl SignedAuditorRequestPayloadV1 {
     }
 }
 
+/// Canonical payload covered by a [`SignedAuditorRequestV1`] signature.
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct SignedAuditorRequestSignaturePayloadV1 {
+    /// Schema version (`SIGNED_AUDITOR_REQUEST_VERSION_V1`).
+    pub version: u8,
+    /// Auditor account submitting the request (I105 string form).
+    pub auditor_account: String,
+    /// Monotonic nonce used for replay protection.
+    pub nonce: u64,
+    /// Wrapped payload (`RepairReport` or `RepairSlashProposal`).
+    pub payload: SignedAuditorRequestPayloadV1,
+}
+
 /// Signed envelope authorising an auditor action.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -1034,6 +1067,16 @@ pub struct SignedAuditorRequestV1 {
 }
 
 impl SignedAuditorRequestV1 {
+    /// Return the canonical payload covered by the auditor signature.
+    pub fn signature_payload(&self) -> SignedAuditorRequestSignaturePayloadV1 {
+        SignedAuditorRequestSignaturePayloadV1 {
+            version: self.version,
+            auditor_account: self.auditor_account.clone(),
+            nonce: self.nonce,
+            payload: self.payload.clone(),
+        }
+    }
+
     /// Validate the signed request envelope.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
         if self.version != SIGNED_AUDITOR_REQUEST_VERSION_V1 {
@@ -1063,6 +1106,88 @@ impl SignedAuditorRequestV1 {
         self.signature.validate()?;
         Ok(())
     }
+
+    /// Verify the auditor signature against the canonical signed payload.
+    pub fn verify_signature(&self) -> Result<PublicKey, AuditorSignatureVerificationError> {
+        self.validate()?;
+        match self.signature.algorithm {
+            SignatureAlgorithm::Ed25519 => {}
+            other => {
+                return Err(AuditorSignatureVerificationError::UnsupportedAlgorithm(
+                    other,
+                ));
+            }
+        }
+
+        if self.signature.public_key.len() != ED25519_PUBLIC_KEY_LENGTH {
+            return Err(AuditorSignatureVerificationError::InvalidPublicKeyLength {
+                length: self.signature.public_key.len(),
+            });
+        }
+        if self.signature.signature.len() != ED25519_SIGNATURE_LENGTH {
+            return Err(AuditorSignatureVerificationError::InvalidSignatureLength {
+                length: self.signature.signature.len(),
+            });
+        }
+
+        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &self.signature.public_key)
+            .map_err(|err| AuditorSignatureVerificationError::InvalidPublicKey {
+                reason: err.to_string(),
+            })?;
+        let signature = Signature::from_bytes(&self.signature.signature);
+        let payload_bytes = norito::to_bytes(&self.signature_payload()).map_err(|err| {
+            AuditorSignatureVerificationError::PayloadEncoding {
+                reason: err.to_string(),
+            }
+        })?;
+        signature
+            .verify(&public_key, &payload_bytes)
+            .map_err(|err| AuditorSignatureVerificationError::Verification {
+                reason: err.to_string(),
+            })?;
+        Ok(public_key)
+    }
+}
+
+/// Errors emitted while verifying signed auditor request signatures.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum AuditorSignatureVerificationError {
+    /// Structural validation failed before signature verification.
+    #[error("invalid signed auditor request: {0}")]
+    Validation(#[from] RepairValidationError),
+    /// Signature algorithm is not supported by this validator.
+    #[error("unsupported auditor signature algorithm: {0:?}")]
+    UnsupportedAlgorithm(SignatureAlgorithm),
+    /// Ed25519 public key length is invalid.
+    #[error("auditor ed25519 public key must be 32 bytes, got {length}")]
+    InvalidPublicKeyLength {
+        /// Observed public key byte length.
+        length: usize,
+    },
+    /// Ed25519 signature length is invalid.
+    #[error("auditor ed25519 signature must be 64 bytes, got {length}")]
+    InvalidSignatureLength {
+        /// Observed signature byte length.
+        length: usize,
+    },
+    /// Public key bytes could not be parsed.
+    #[error("invalid auditor public key: {reason}")]
+    InvalidPublicKey {
+        /// Parsing failure reason.
+        reason: String,
+    },
+    /// Signature payload could not be encoded into canonical bytes.
+    #[error("failed to encode signed auditor request payload for signature verification: {reason}")]
+    PayloadEncoding {
+        /// Encoding failure reason.
+        reason: String,
+    },
+    /// Signature verification failed.
+    #[error("auditor signature verification failed: {reason}")]
+    Verification {
+        /// Verification failure reason.
+        reason: String,
+    },
 }
 
 /// Errors emitted while validating repair payloads.
@@ -1222,11 +1347,11 @@ mod tests {
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
             por_history_id: Some(42),
-            cause: RepairCauseV1::PorFailure {
+            cause: RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
                 challenge_id: [0xCC; 32],
                 failed_samples: 4,
                 proof_digest: None,
-            },
+            }),
             evidence_json: None,
             notes: Some("provider reported disk failure".into()),
         }
@@ -1251,6 +1376,14 @@ mod tests {
     fn evidence_validation_succeeds() {
         let evidence = sample_evidence();
         assert!(evidence.validate().is_ok());
+    }
+
+    #[test]
+    fn evidence_norito_roundtrips() {
+        let evidence = sample_evidence();
+        let bytes = norito::to_bytes(&evidence).expect("encode evidence");
+        let decoded: RepairEvidenceV1 = norito::decode_from_bytes(&bytes).expect("decode evidence");
+        assert_eq!(decoded, evidence);
     }
 
     #[test]
@@ -1374,6 +1507,51 @@ mod tests {
             public_key: vec![1u8; 32],
             signature: vec![2u8; 64],
         }
+    }
+
+    fn checked_auditor_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked auditor fixture keypair")
+    }
+
+    fn repair_report_with_auditor(ticket: &str, auditor_account: &str) -> RepairReportV1 {
+        RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId(ticket.into()),
+            auditor_account: auditor_account.into(),
+            submitted_at_unix: 1_704_361_600,
+            evidence: sample_evidence(),
+            notes: None,
+        }
+    }
+
+    fn signed_auditor_report(
+        key_pair: &iroha_crypto::KeyPair,
+        ticket: &str,
+    ) -> SignedAuditorRequestV1 {
+        let public_key = {
+            let (algorithm, public_key) = key_pair.public_key().to_bytes();
+            assert_eq!(algorithm, Algorithm::Ed25519);
+            public_key.to_vec()
+        };
+        let report = repair_report_with_auditor(ticket, "auditor-1");
+        let mut envelope = SignedAuditorRequestV1 {
+            version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
+            auditor_account: report.auditor_account.clone(),
+            nonce: 42,
+            payload: SignedAuditorRequestPayloadV1::RepairReport(report),
+            signature: AuditorSignatureV1 {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key,
+                signature: Vec::new(),
+            },
+        };
+        let payload_bytes =
+            norito::to_bytes(&envelope.signature_payload()).expect("encode auditor payload");
+        let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)
+            .expect("sign auditor payload");
+        envelope.signature.signature = signature.payload().to_vec();
+        envelope
     }
 
     #[test]
@@ -1515,6 +1693,75 @@ mod tests {
         assert!(matches!(
             envelope.validate(),
             Err(RepairValidationError::EnvelopeAccountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_verifies() {
+        let key_pair = checked_auditor_keypair();
+        let envelope = signed_auditor_report(&key_pair, "REP-360");
+        let public_key = envelope
+            .verify_signature()
+            .expect("signed auditor request verifies");
+
+        assert_eq!(&public_key, key_pair.public_key());
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_rejects_tampered_payload() {
+        let key_pair = checked_auditor_keypair();
+        let mut envelope = signed_auditor_report(&key_pair, "REP-361");
+        if let SignedAuditorRequestPayloadV1::RepairReport(report) = &mut envelope.payload {
+            report.notes = Some("tampered".into());
+        }
+
+        assert!(matches!(
+            envelope.verify_signature(),
+            Err(AuditorSignatureVerificationError::Verification { .. })
+        ));
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_rejects_tampered_signature() {
+        let key_pair = checked_auditor_keypair();
+        let mut envelope = signed_auditor_report(&key_pair, "REP-362");
+        envelope.signature.signature[0] ^= 0x01;
+
+        assert!(matches!(
+            envelope.verify_signature(),
+            Err(AuditorSignatureVerificationError::Verification { .. })
+        ));
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_rejects_unsupported_algorithm() {
+        let key_pair = checked_auditor_keypair();
+        let mut envelope = signed_auditor_report(&key_pair, "REP-363");
+        envelope.signature.algorithm = SignatureAlgorithm::MultiSig;
+
+        assert!(matches!(
+            envelope.verify_signature(),
+            Err(AuditorSignatureVerificationError::UnsupportedAlgorithm(
+                SignatureAlgorithm::MultiSig
+            ))
+        ));
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_rejects_invalid_lengths() {
+        let key_pair = checked_auditor_keypair();
+        let mut envelope = signed_auditor_report(&key_pair, "REP-364");
+        envelope.signature.public_key.pop();
+        assert!(matches!(
+            envelope.verify_signature(),
+            Err(AuditorSignatureVerificationError::InvalidPublicKeyLength { .. })
+        ));
+
+        let mut envelope = signed_auditor_report(&key_pair, "REP-365");
+        envelope.signature.signature.pop();
+        assert!(matches!(
+            envelope.verify_signature(),
+            Err(AuditorSignatureVerificationError::InvalidSignatureLength { .. })
         ));
     }
 

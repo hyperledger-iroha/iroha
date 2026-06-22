@@ -8,7 +8,6 @@ source_hash: 649b3ad6308653d59f80b730866f53e655196fca335c7f2d58903b50cff684bf
 source_last_modified: "2026-01-21T19:17:13.240585+00:00"
 translation_last_reviewed: 2026-02-07
 ---
-
 # SoraFS Architecture RFC (SF-1)
 
 This RFC captures the baseline architecture for **SoraFS**, the decentralized
@@ -59,16 +58,16 @@ are covered in later tasks but inherit the data formats described here.
 
 ## Chunking Profile
 
-SoraFS uses a Rabin-based content defined chunking (CDC) scheme inspired by
-FastCDC. The chunker operates with the following deterministic parameters:
+SoraFS uses a FastCDC-style gear rolling hash for content defined chunking
+(CDC). The chunker operates with the following deterministic parameters:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| Rolling polynomial | `0x3DA3358B4DC173` | Same as FastCDC default. |
+| Rolling hash | Rotate-left-by-1 plus gear-table addition | No Rabin polynomial state is used. |
 | Target size | 262,144 bytes (256 KiB) | Midpoint; governs threshold mask. |
 | Minimum size | 65,536 bytes (64 KiB) | Prevents thrashing on small files. |
 | Maximum size | 524,288 bytes (512 KiB) | Caps tail chunks. |
-| Gear table | Fixed 64 KiB table derived from SHA3-256 seed `sorafs-v1-gear`. |
+| Gear table | 256 deterministic `u64` entries derived from SHA3-256 seed `sorafs-v1-gear` plus the little-endian byte index. |
 | Break mask | `0x0000FFFF` | Adaptive mask derived from `target_size`. |
 
 Determinism requirements:
@@ -127,12 +126,12 @@ so manifests, CAR tooling, and fixtures stay aligned.
 ## Norito Manifest Schema
 
 Manifests are Norito-encoded records that tie together DAG metadata, pinning
-policies, and governance attestations. Draft schema:
+policies, and governance attestations. The implemented V1 schema is:
 
 ````norito
 struct SoraFsManifestV1 {
     version: u8,                   // Always 1 for SF-1 scope.
-    root_cid: [u8; 36],            // Multibase-decoded CID bytes (CIDv1). 
+    root_cid: [u8; 36],            // Multibase-decoded CID bytes (CIDv1).
     dag_codec: DagCodecId,         // 0x71 for dag-cbor roots, 0x0129 for dag-json, etc.
     chunking: ChunkingProfileV1,   // Captures CDC parameters + multihash codes.
     content_length: u64,           // Total bytes represented by the DAG.
@@ -397,6 +396,9 @@ and JSON envelopes on demand, and records envelope fingerprints in the CLI
 report for downstream tooling. Gateways and SDKs reuse the same helper so
 decryptors can round-trip without bespoke logic.
 
+The envelope schema is the first release (`version = 1`) and does not carry a
+legacy path: decryptors reject the old pre-release bare suite label.
+
 ## Migration Roadmap
 
 deterministic SoraFS pinning, and alias discovery in sync. Each subsection
@@ -430,7 +432,7 @@ teams can execute in parallel without blocking the rollout.
 - **M1:** CI enforces deterministic fixtures; alias proofs published in staging;
   docs tooling gains expectation flags on `sorafs_manifest_stub` (`--car-digest`,
   `--car-size`, `--root-cid`, etc.).
-  assets switch to read-only; gateways prefer registry proofs over envelopes.
+- **M2:** Assets switch to read-only; gateways prefer registry proofs over envelopes.
 - **M3:** Alias-only access enforced; observability alerts on registry parity;
 
 The change log above is mirrored in `docs/source/sorafs/migration_ledger.md` so
@@ -562,17 +564,17 @@ Operational expectations:
 
 ## Migration Plan (M0 → M3)
 
-- **M0 (Weeks 1–6):**
-  - Land reference chunker crate + Norito manifest schema in workspace.
-  - Ship `sorafs_manifest_stub` CLI plumbing that emits CAR + manifest + digest file.
-  - Stand up a single-node gateway that serves from local disk; publish docs via
+- **M0 (completed):**
+  - Completed: reference chunker profiles and the Norito manifest schema now live in the workspace.
+  - Completed: `sorafs_manifest_stub` emits CAR v2, manifest, digest, and signature artifacts for CI and release pipelines.
+  - Completed: Torii SoraFS APIs, local node storage, and the fixture-backed gateway conformance harness cover the single-node serving path.
 - **M1 (Weeks 7–12):**
-  - Deploy Pin Registry smart contract with manifest digest verification.
-  - Finalise the pin registry Norito schemas in
-    `crates/sorafs_manifest/src/pin_registry.rs` so Torii, the contract, and CLI
-    fixtures share an identical encoding.
-  - Add CLI commands (`sorafs pin propose`, `sorafs pin approve`).
-  - Record availability metrics (success/failure counters) but no incentives yet.
+  - Completed locally: fixture verification and expectation-flag tooling enforce
+    deterministic CAR, manifest, digest, and root-CID outputs.
+  - Completed locally: Pin Registry register paths enforce shared
+    chunker/policy validation via `sorafs_manifest` helpers.
+  - External rollout evidence: staging alias proofs and governance sign-off
+    remain attached to the governance archive rather than this repo.
 - **M2 (Weeks 13–20):**
   - Hook observability exporters (Prometheus + Grafana dashboards) to storage
     nodes and gateways.
@@ -595,6 +597,7 @@ RFC before SF-1 is marked complete.
 
 ## Next Steps
 
-- Circulate the migration roadmap deliverable (`docs/source/sorafs/migration_roadmap.md`) for council review and operator feedback (tracking updates in the migration ledger).
+- Keep `docs/source/sorafs/migration_roadmap.md` and the migration ledger
+  aligned as hosted rollout evidence lands.
 - Socialise the new CLI sample (`docs/source/examples/sorafs_manifest/cli_end_to_end.md`) with release engineering and expand with SDK-driven retrieval examples.
 - Harden the Torii pin-registration endpoint beyond validator wiring: keep `manifest_b64` admission and structured error labels aligned with `docs/source/sorafs/pin_registry_validation_plan.md`, and keep new SDK request builders mirroring the Rust client payload shape.

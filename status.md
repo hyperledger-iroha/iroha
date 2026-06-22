@@ -1,6 +1,2608 @@
 # Status
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
+
+## 2026-06-22 SoraFS appeal pricing Torii read-only API
+
+- Torii now exposes read-only SoraFS appeal pricing endpoints for the baseline
+  finance helper: `GET /v1/sorafs/appeals/pricing/config`, `GET
+  /v1/sorafs/appeals/pricing/status`, and `POST
+  /v1/sorafs/appeals/pricing/quote`.
+- The quote endpoint parses appeal class, backlog, evidence size, urgency, and
+  panel size, then returns the deterministic deposit and multiplier breakdown
+  from `AppealPricingConfig::baseline_v1()`.
+- The status response intentionally marks deposit, report, and settlement
+  mutation as pending runtime escrow/ledger work, and the appeal pricing plan
+  plus roadmap now reflect that split.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii appeal_pricing --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS repair per-auditor rate limit
+
+- Added config-backed per-auditor rate limiting for signed SoraFS repair
+  auditor report/slash submissions via `sorafs.repair.auditor_rate_per_sec`
+  and `sorafs.repair.auditor_burst`, with defaults of 4 requests/second and a
+  burst of 16.
+- Torii now applies the dedicated auditor limiter after signed-envelope
+  validation and before repair scheduler mutation, while retaining the existing
+  origin/perimeter limiter before decode.
+- Updated the Nexus sample config and SF-8b repair plan so the dedicated
+  per-auditor quota gap is closed locally.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/fixtures.rs crates/sorafs_node/src/config.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_config sorafs_repair_and_gc_parse_clamps_values -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p sorafs_node repair_and_gc_configs_preserve_fields -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii sorafs_repair_auditor_rate_limit_keys_by_auditor_account --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS repair local event streams
+
+- `sorafs_node` now records every local `RepairTaskEventV1` transition in a
+  process-local monotonic `RepairEvent` backlog and broadcasts live events for
+  Torii subscribers without changing the canonical repair task, audit, or
+  snapshot payloads.
+- Torii exposes rate-limited JSON polling, SSE, and WebSocket repair event
+  routes under `/v1/sorafs/audit/repair/events*`, with JSON/WebSocket frames
+  keyed by repair status and backlog replay controlled by `since`/`limit`; the
+  generated Torii OpenAPI document now advertises the same route set and cursor
+  parameters.
+- Updated the SF-8b repair plan and roadmap so the old dedicated-stream gap is
+  closed locally while live PoR/PoTR failure, repair, escalation, and
+  governance handoff evidence remains the production rollout item.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `rustfmt --edition 2024 crates/iroha_torii/src/openapi.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p sorafs_node node_handle_manages_repair_queue -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii repair --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook Torii API error-ratio metric
+
+- Torii now records a process-local cumulative
+  `torii_sorafs_orderbook_api_error_ratio` for each local orderbook route using
+  the route labels consumed by the checked-in Grafana dashboard and Prometheus
+  alert fixtures.
+- The route wrapper records both successful responses and 4xx/5xx failures,
+  including early feature-disabled, decode, authentication, authorization,
+  runtime, and JSON serialization outcomes, without changing the original HTTP
+  response.
+- Added focused coverage for the per-route error-ratio accounting helper.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_core/src/telemetry.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_core direct_sorafs_orderbook_api_error_ratio_records_without_actor --features telemetry -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook local escrow runway metric
+
+- The local SoraFS orderbook snapshot metric pass now derives provider escrow
+  runway from observed settlement receipt debit rates and remaining locked XOR,
+  publishing the `torii_sorafs_orderbook_escrow_runway_seconds` gauge for each
+  provider present in local settlement-channel state.
+- Closed providers observed in the local channel snapshot are reset to a zero
+  runway so the local mirror clears stale finite runway values once settlement
+  completes.
+- Added focused `sorafs_node` coverage for partial receipt runway emission and
+  final receipt gauge clearing.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p sorafs_node orderbook -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook local capability authorization
+
+- Generalized Torii's provider-advert capability lookup so SoraFS handlers can
+  check advertised capabilities beyond the existing chunk-range gate while
+  preserving the chunk-range test override path.
+- Torii orderbook ask submissions and known-channel settlement receipts now
+  require the channel/provider account to have an active provider advert with
+  `torii_gateway` capability when SoraFS gateway capability enforcement is
+  enabled. Bid-side demand remains unaffected.
+- Added focused Torii tests for fail-closed ask placement without an advert,
+  accepted ask placement with a signed advert for the derived local provider id,
+  and fail-closed known-channel receipt submission when capability state is
+  unknown.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so local provider-advert
+  capability authorization is marked done while contract-backed authorization,
+  contract forwarding, durable services/streams, SDK bindings, and rollout
+  evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/lib.rs crates/iroha_torii/src/sorafs/api.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook WebSocket event frame coverage
+
+- Added focused Torii coverage for `orderbook_websocket_frame(...)` so the
+  local orderbook WebSocket stream's JSON frame envelope and embedded event
+  payload fields are checked alongside the existing JSON backlog and SSE
+  replay coverage.
+- Updated the SFM-2 orderbook plan to call out local WebSocket frame-shape
+  coverage while durable contract/matcher-backed streams remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook local receipt provider authorization
+
+- Added `sorafs_node::local_orderbook_provider_id_for_owner_account(...)` so
+  the local mirror and Torii share the same deterministic provider-id
+  derivation for orderbook settlement channels.
+- Torii orderbook receipt POSTs now reject known-channel settlement receipts
+  unless the canonical request account derives to the channel provider id and
+  the embedded receipt signer is one of the verified request signers. Unknown
+  channels still flow to the existing runtime not-found path.
+- Tightened order/cancel owner parsing so `owner_account` bytes must be the
+  exact canonical `AccountId` string, not an alias or whitespace-padded
+  literal.
+- Added focused node and Torii tests for provider-id derivation and
+  known-channel receipt provider-role rejection.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so local known-channel
+  receipt provider-role authorization is marked done while capability policy
+  authorization, contract forwarding, durable services/streams, SDK bindings,
+  and rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/orderbook.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p sorafs_node orderbook -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook request-authenticated POST binding
+
+- Torii SoraFS orderbook POST handlers now require canonical `X-Iroha-*`
+  request authentication before accepting local order, cancel, or settlement
+  receipt submissions.
+- Order and cancel handlers parse `owner_account` bytes as a canonical
+  `AccountId`, require the authenticated request account to match that owner,
+  and require the embedded Ed25519 payload signer key to be one of the verified
+  request signers. Receipt submissions also require the embedded settlement
+  receipt signer to match a verified request signer.
+- Refreshed Torii orderbook tests to seed real account controllers, sign both
+  the canonical request envelope and embedded Norito payloads with those keys,
+  and added missing-auth plus payload-signer/request-signer mismatch rejection
+  coverage.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so local
+  request-authenticated POST envelope/account/signer binding is marked done
+  while capability/channel-role authorization, contract forwarding, durable
+  services/streams, SDK bindings, and rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook payload signatures
+
+- Added canonical SFM-2 orderbook signature digest and verification helpers in
+  `sorafs_manifest`. `OrderRequestV1`, `OrderCancelV1`, and
+  `SettlementReceiptV1` now have domain-separated BLAKE3 signable digests over
+  canonical Norito payloads with only the mutable signature bytes cleared, plus
+  Ed25519 verification helpers for embedded payload signatures.
+- The local `sorafs_node` orderbook mirror now verifies embedded Ed25519
+  payload signatures before admitting orders, cancellations, or settlement
+  receipts. Structural fixture validation remains separate so committed codec
+  fixtures with placeholder signature bytes still validate shape/policy.
+- Refreshed local node and Torii orderbook test fixtures to generate checked
+  signatures over the actual payloads, and added tampered signed-order
+  rejection coverage in the local runtime tests.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so embedded payload
+  signature verification is marked done while request-authenticated API
+  envelopes, account/key authorization, contract forwarding, durable streams,
+  and rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/orderbook.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_node/src/orderbook.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-signatures cargo test -j 1 -p sorafs_manifest orderbook --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-signatures cargo test -j 1 -p sorafs_node orderbook -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-signatures cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook local event streams
+
+- Added local orderbook event history and broadcast support in `sorafs_node`.
+  Successful order acceptance, owner cancellation, and settlement receipt
+  acceptance now emit sequenced `OrderbookEvent` records with affected order,
+  trade, channel, receipt, expired-order, and post-event count metadata.
+- Added `NodeHandle` replay/subscription helpers for orderbook events:
+  `orderbook_events_since(...)`, `latest_orderbook_event_sequence()`, and
+  `subscribe_orderbook_events()`.
+- Added Torii app-API event routes:
+  `GET /v1/sorafs/orderbook/events`,
+  `GET /v1/sorafs/orderbook/events/stream`, and
+  `GET /v1/sorafs/orderbook/events/ws`. The SSE and WebSocket paths replay the
+  requested backlog before live events and emit lag notifications if the local
+  broadcast buffer is overrun.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so local event history and
+  local SSE/WebSocket streams are no longer listed as missing. Durable
+  contract/matcher-backed streams, authenticated signed API envelopes,
+  downstream SDK bindings, contract reconciliation, and live rollout evidence
+  remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-streams cargo test -j 1 -p sorafs_node orderbook -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-streams cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook receipt API
+
+- Extended the local SFM-2 orderbook mirror with canonical
+  `SettlementReceiptV1` submission. The mirror now tracks accepted receipts,
+  rejects duplicate receipt ids, rejects overlapping byte ranges for the same
+  channel, applies receipts through `apply_settlement_receipt_v1`, and exposes
+  receipt state in snapshots.
+- Added `NodeHandle::submit_orderbook_receipt(...)` and refreshed local
+  orderbook metrics after receipt application so settlement backlog gauges drop
+  when channels close.
+- Added Torii app-API receipt routes:
+  `POST /v1/sorafs/orderbook/receipts` and
+  `GET /v1/sorafs/orderbook/receipts`. The book endpoint now includes
+  settlement receipt counts and receipt details.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so local receipt
+  submission is no longer listed as missing. Durable receipt daemonization,
+  governance publication, escrow custody mutation, authenticated signed API
+  envelopes, WebSocket/SSE streams, SDK bindings, contract reconciliation, and
+  live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-receipts cargo test -j 1 -p sorafs_node orderbook -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-receipts cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook local runtime API
+
+- Added a local in-memory SFM-2 orderbook mirror in `sorafs_node`. It accepts
+  canonical `OrderRequestV1` and `OrderCancelV1` payloads, assigns local
+  admission sequences, runs the deterministic `match_order_book_v1` matcher,
+  records emitted trades, opens local settlement-channel snapshots for fills,
+  and enforces owner-matched cancellation.
+- Wired local orderbook runtime metrics for order flow, open depth, matcher
+  lag, settlement backlog/oldest age, and contract/mirror divergence through
+  the existing `torii_sorafs_orderbook_*` families.
+- Added Torii app-API routes for the local mirror:
+  `POST /v1/sorafs/orderbook/orders`,
+  `POST /v1/sorafs/orderbook/cancel`,
+  `GET /v1/sorafs/orderbook/book`,
+  `GET /v1/sorafs/orderbook/trades`, and
+  `GET /v1/sorafs/orderbook/channels`.
+- Updated the SFM-2 orderbook plan and `roadmap.md` so the local runtime/API
+  surface is no longer listed as missing. The on-chain contract, durable
+  matcher, settlement receipt daemon, authenticated signed API envelopes,
+  WebSocket/SSE streams, SDK bindings, reconciliation tests, and live rollout
+  evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook cargo test -j 1 -p sorafs_node orderbook -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook cargo test -j 1 -p iroha_torii orderbook --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG local metric updates
+
+- `FilesystemGovernancePublisher` now updates the filesystem sink
+  `sorafs_governance_dag_backlog` gauge from local CAR queue pending segment
+  counts when `car-queue.json` is built or refreshed.
+- Local signed runtime DAG writes and duplicate refreshes now update the
+  filesystem sink `sorafs_governance_dag_head_age_seconds` gauge from the
+  latest runtime head timestamp, with saturating age calculation for future
+  timestamps.
+- Updated the SF-12 Governance DAG plan and `roadmap.md` so local
+  backlog/head-age metric emission is distinguished from the remaining public
+  IPFS/IPNS head, pin, and mirror metric work.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/governance.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-node-metrics cargo test -j 1 -p sorafs_node governance -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG Torii runtime API
+
+- Added read-only Torii endpoints for the local signed runtime Governance DAG
+  index: `GET /v1/sorafs/governance/dag/runtime`,
+  `/v1/sorafs/governance/dag/runtime/head`,
+  `/v1/sorafs/governance/dag/runtime/blocks/{block_cid_hex}`,
+  `/v1/sorafs/governance/dag/runtime/nodes/{node_cid_hex}`,
+  `/v1/sorafs/governance/dag/runtime/digests/{encoded_blake3_hex}`, and
+  `/v1/sorafs/governance/dag/runtime/kinds/{payload_kind}`.
+- The handlers read only the node-configured governance directory, validate the
+  `sorafs.governance_dag.runtime_signed_index.v1` schema, check block-count
+  consistency, emit ETag/cache headers, support conditional revalidation,
+  normalize lookup keys, and fail closed for malformed, unsupported, or missing
+  runtime index state.
+- Updated the SF-12 Governance DAG plan and `roadmap.md` so the local signed
+  runtime DAG is queryable through Torii. The always-on ingest/publisher
+  service boundary, IPFS/IPNS publication, RocksDB/IPLD mirror, runtime/IPFS
+  dashboard, and public rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-torii-runtime cargo test -j 1 -p iroha_torii governance_dag --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG signed runtime chain
+
+- Added config-backed local signed runtime Governance DAG assembly for
+  filesystem-published deal settlements and reputation snapshots. When
+  `sorafs.storage.governance_dag_publisher_peer_id` and
+  `sorafs.storage.governance_dag_signing_key_path` are both configured, the
+  filesystem publisher writes signed `GovernanceDagBlockV1` blocks,
+  `runtime-dag/head.to`, BLAKE3 sidecars, and
+  `sorafs.governance_dag.runtime_signed_index.v1` lookup state.
+- Added deterministic governance log-node CID derivation in
+  `sorafs_manifest`, kept duplicate publishes idempotent, and made malformed
+  runtime DAG index state fail closed.
+- Updated the SF-12 Governance DAG plan and `roadmap.md` so signed local
+  runtime block/head assembly is no longer listed as missing. The always-on
+  ingest/publisher service boundary, IPFS/IPNS publication, RocksDB/IPLD
+  mirror, runtime/IPFS dashboard, and public rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/governance.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_node/src/governance.rs crates/sorafs_node/src/config.rs crates/sorafs_node/src/lib.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/tests/fixtures.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-runtime-dag cargo test -j 1 -p sorafs_manifest governance_log_node_cid_is_stable_and_input_sensitive -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-runtime-dag cargo test -j 1 -p sorafs_node filesystem_publisher -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-runtime-dag cargo test -j 1 -p iroha_config minimal_config_snapshot -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG Torii CAR queue API
+
+- Added read-only Torii endpoints for the runtime-local Governance DAG CAR
+  segment queue: `GET /v1/sorafs/governance/dag/car-queue`,
+  `/v1/sorafs/governance/dag/car-queue/digests/{encoded_blake3_hex}`,
+  `/v1/sorafs/governance/dag/car-queue/kinds/{payload_kind}`, and
+  `/v1/sorafs/governance/dag/car-queue/archives/{car_archive_blake3_hex}`.
+- The handlers read only the node-configured governance directory, validate the
+  `sorafs.governance_dag.local_car_queue.v1` schema, emit ETag/cache headers,
+  support conditional revalidation, normalize digest/kind/archive lookups, and
+  fail closed for malformed, unsupported, or missing queue files.
+- Updated the SF-12 Governance DAG plan and `roadmap.md` so the runtime-local
+  CAR queue is visible through Torii. The always-on ingest/builder/publisher
+  services, IPFS/IPNS publication, RocksDB/IPLD mirror, runtime/IPFS dashboard,
+  and public rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-torii-api cargo test -j 1 -p iroha_torii governance_dag --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG runtime-local CAR queue
+
+- `FilesystemGovernancePublisher` now maintains a
+  `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` alongside
+  `publish-index.json`. Each filesystem-published governance artifact gets an
+  assembled CARv2 segment under `car-segments/` containing the canonical `.to`
+  payload, JSON mirror, and their BLAKE3 sidecars.
+- The queue records assembled segment status, source publish-index position,
+  payload kind, encoded digest, CAR size/digests/CID roots, chunk profile, and
+  lookup maps by digest and payload kind. Re-publishing the same artifact is
+  idempotent for both `publish-index.json` and `car-queue.json`, and malformed
+  queue state fails closed.
+- Updated the SF-12 Governance DAG plan and `roadmap.md` so local runtime CAR
+  queueing/segment assembly is no longer listed as missing. The always-on
+  ingest/builder/publisher services, IPFS/IPNS publication, RocksDB/IPLD
+  mirror, runtime/IPFS dashboard, and public rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/governance.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-node-car-queue cargo test -j 1 -p sorafs_node filesystem_publisher -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG Torii publish-index API
+
+- Added read-only Torii endpoints for the runtime-local Governance DAG
+  publication feed: `GET /v1/sorafs/governance/dag/publish-index`,
+  `/v1/sorafs/governance/dag/publish-index/digests/{encoded_blake3_hex}`,
+  and `/v1/sorafs/governance/dag/publish-index/kinds/{payload_kind}`.
+- The handlers read only the node-configured governance directory, validate the
+  `sorafs.governance_dag.local_publish_index.v1` schema, emit ETag/cache
+  headers, support conditional revalidation, normalize digest lookups, and fail
+  closed for malformed, unsupported, or missing local indexes.
+- Updated the SF-12 Governance DAG plan and `roadmap.md` so runtime-local
+  publication feeds are queryable through Torii. The always-on DAG builder, CAR
+  queue, IPFS/IPNS publisher, RocksDB/IPLD mirror, runtime/IPFS dashboard, and
+  public rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-torii-api cargo test -j 1 -p iroha_torii governance_dag --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG local publish index
+
+- Added runtime-local `publish-index.json` maintenance to
+  `FilesystemGovernancePublisher`. Successful deal settlement, repair audit,
+  repair slash, GC audit, reconciliation, and reputation snapshot publishes now
+  update a `sorafs.governance_dag.local_publish_index.v1` index with relative
+  artifact paths, encoded BLAKE3 digests, encoded lengths, payload-kind counts,
+  digest lookup maps, payload-kind lookup maps, and compact query labels.
+- The index is written atomically with its own BLAKE3 sidecar and is idempotent
+  for repeated publication of the same artifact. A malformed or unsupported
+  existing index fails closed instead of silently dropping mirror state.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so the
+  filesystem publisher has a runtime-local publication feed, while the
+  always-on DAG builder, CAR queue, IPFS/IPNS publisher, RocksDB/IPLD mirror,
+  and public rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/governance.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-node-governance-index cargo test -j 1 -p sorafs_node filesystem_publisher -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG local Torii dashboard API
+
+- Added read-only Torii endpoints for a configured local Governance DAG mirror
+  index: `GET /v1/sorafs/governance/dag/dashboard`,
+  `/v1/sorafs/governance/dag/head`,
+  `/v1/sorafs/governance/dag/blocks/{block_cid_hex}`, and
+  `/v1/sorafs/governance/dag/nodes/{node_cid_hex}`. The handlers read only the
+  node-configured governance directory, validate the
+  `sorafs.governance_dag.mirror.v1` schema, emit ETag/cache headers, support
+  conditional revalidation, and fail closed for malformed or missing mirror
+  data.
+- Added focused Torii handler coverage for dashboard/head/block/node lookup,
+  ETag 304 behavior, malformed CID rejection, and missing CID rejection over a
+  local `mirror-index.json`.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local Torii
+  dashboard/query access is no longer missing, while runtime RocksDB/IPLD,
+  IPFS/IPNS-backed live-head/public-checkpoint, runtime dashboard, and rollout
+  evidence work remains open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-torii-api cargo test -j 1 -p iroha_torii governance_dag --features app_api -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG local checkpoint recovery
+
+- Added `sorafs_cli governance dag checkpoint-recover --checkpoint <path>
+  --root <dir> --out <path> [--car <path>] [--require-sidecars]
+  [--summary-out <path>]`, which validates a local checkpoint against a
+  recovered signed block/head snapshot and optional CARv2 artifact before
+  rebuilding a local `sorafs.governance_dag.mirror.v1` mirror index.
+- Added focused Governance DAG CLI coverage proving mirror-index recovery after
+  the original mirror index is removed, plus refusal to write a recovered index
+  when the checkpoint CAR binding is tampered.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local
+  checkpoint recovery is no longer missing, while live IPFS/IPNS head
+  publication, public checkpoint publication/recovery, runtime mirror services,
+  dashboard API, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG checkpoint
+    recovery files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local checkpoint verification
+
+- Added `sorafs_cli governance dag checkpoint-verify --checkpoint <path>
+  [--root <dir>] [--car <path>] [--mirror-index <path>] [--require-sidecars]
+  [--summary-out <path>]`, which verifies a local
+  `sorafs.governance_dag.checkpoint.v1` handoff manifest by replaying signed
+  snapshot verification, checking the recorded head digest, and checking
+  optional CARv2 and mirror-index artifact length/digest records. Override
+  paths let operators validate recovered/downloaded artifacts against the same
+  checkpoint manifest.
+- Added focused Governance DAG CLI coverage proving checkpoint verification
+  accepts a generated manifest with explicit local artifact paths and rejects
+  tampered CAR artifact drift with a structured `car_archive_digest` failure.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local
+  checkpoint verification is no longer missing, while live IPFS/IPNS head
+  publication, public checkpoint publication/recovery, runtime mirror services,
+  dashboard API, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG checkpoint
+    verification files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local checkpoint metadata
+
+- Added `sorafs_cli governance dag checkpoint --root <dir> --out <path>
+  [--require-sidecars] [--head-cid <cid|hex:HEX>] [--car <path>]
+  [--mirror-index <path>] [--generated-at <unix>]`, which verifies a signed
+  local block/head snapshot before writing a
+  `sorafs.governance_dag.checkpoint.v1` handoff manifest for the signed head.
+  The manifest records head digest metadata, optional CARv2 size/digest, and an
+  optional mirror-index size/digest after checking that the mirror index
+  advertises the same head and block count.
+- Added focused Governance DAG CLI coverage for checkpoint generation with CAR
+  and mirror-index artifacts, plus unsupported mirror-index schema rejection
+  that leaves no checkpoint file behind.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local
+  checkpoint metadata packaging is no longer missing, while live IPFS/IPNS head
+  publication, public checkpoint publication/recovery, runtime mirror services,
+  dashboard API, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG checkpoint
+    files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local signed-head rebuild
+
+- Added `sorafs_cli governance dag rebuild-head --root <dir>
+  --head-out <path> --publisher-peer-id <id> (--key-hex <hex> | --key <path>)
+  [--generated-at <unix>] [--checkpoint-cid <cid|hex:HEX>] [--require-sidecars]
+  [--summary-out <path>]`, which loads existing `blocks/*.to` payloads,
+  checks sidecars, derives the single block-chain head, signs a fresh
+  `GovernanceDagHeadV1`, validates it against the block chain, and writes
+  `head.to` plus a regenerated `.to.blake3` sidecar.
+- Added focused Governance DAG CLI coverage proving deterministic head
+  regeneration from an existing signed block snapshot and refusal to write a
+  rebuilt head when the block snapshot is tampered even if the block sidecar is
+  regenerated.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local
+  signed-head rebuild is no longer missing, while live IPFS/IPNS head
+  publication, public checkpoint recovery, runtime mirror services, dashboard
+  API, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG signed-head
+    rebuild files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local mirror index
+
+- Added `sorafs_cli governance dag mirror-build --root <dir> --out <path>
+  [--require-sidecars] [--head-cid <cid|hex:HEX>]`, which first verifies a
+  signed local block/head snapshot and then writes a deterministic
+  `sorafs.governance_dag.mirror.v1` JSON index keyed by block CID and
+  governance-node CID.
+- Added `sorafs_cli governance dag mirror-query --index <path> (--head |
+  --block-cid <cid|hex:HEX> | --node-cid <cid|hex:HEX>) [--format table|json]`
+  so local operators can inspect signed snapshot heads and block records before
+  the runtime mirror service exists.
+- Added focused Governance DAG CLI coverage for mirror index generation,
+  head/block/node lookup, and structured missing-block query failure.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local mirror
+  index/query tooling is no longer missing, while the runtime RocksDB/IPLD
+  mirror datastore, IPFS/IPNS publication, live-head/rebuild commands,
+  dashboard API, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG mirror
+    files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local CAR segment emission
+
+- Extended `sorafs_cli governance dag build` with optional
+  `--car-out=PATH`, `--car-plan-out=PATH`, and
+  `--car-chunker-handle=HANDLE` support. The command now can assemble a
+  deterministic CARv2 segment from the generated `head.to`, `blocks/*.to`, and
+  `.to.blake3` sidecar payloads while keeping `manifest.json` outside the CAR
+  to avoid self-referential metadata.
+- The build manifest records a `sorafs.governance_dag.car.v1` summary with the
+  chunker profile, CAR size, CAR/archive digest, CAR CID, root CIDs, chunk
+  count, and per-file chunk ranges, and the optional chunk-plan file is emitted
+  through the existing SoraFS CAR chunk spec renderer.
+- Added focused Governance DAG CLI coverage proving CAR output and chunk-plan
+  generation for the fixture archive, including digest/size checks and the
+  expected signed snapshot file inventory.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local CARv2
+  segment emission is no longer missing, while the always-on
+  ingest/builder/publisher services, runtime CAR queueing, IPFS/IPNS
+  publication, mirror APIs, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG CAR segment
+    files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local build verification
+
+- Added `sorafs_cli governance dag verify-build --root <dir>
+  [--require-sidecars] [--head-cid <cid|hex:HEX>]`, which validates local
+  builder output roots by decoding `head.to` and `blocks/*.to`, checking
+  `.to.blake3` sidecars, enforcing an optional expected head CID, and replaying
+  `validate_governance_dag_head_against_chain_v1` over the decoded block chain.
+- Extended the Governance DAG CLI tests with a generated snapshot acceptance
+  path and a tampered-block rejection path whose sidecar is regenerated, so the
+  block/head validator must catch the CID/signature drift rather than only
+  detecting sidecar mismatch.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local
+  signed block/head snapshot verification is no longer missing, while the
+  always-on ingest/builder/publisher services, CAR segment assembly, IPFS/IPNS
+  publication, mirror APIs, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG verifier
+    files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG local block/head builder
+
+- Added `sorafs_cli governance dag build --root <dir> --out <dir>
+  --publisher-peer-id <id> (--key-hex <hex> | --key <path>)`, which consumes a
+  validated local governance-node archive, orders nodes deterministically by
+  timestamp/CID/path, writes signed `GovernanceDagBlockV1` block files, writes
+  a signed `GovernanceDagHeadV1`, regenerates `.to.blake3` sidecars, and emits
+  a `sorafs.governance_dag.build.v1` manifest.
+- Runtime Ed25519 seed material is accepted only through command-line/file
+  inputs and is not persisted into the generated manifest; the manifest records
+  the publisher public key, block CIDs, source node paths, and BLAKE3 digests.
+- Updated the SF-12 Governance DAG plan copies and `roadmap.md` so local
+  signed block/head snapshot building is no longer missing, while the always-on
+  ingest/builder/publisher services, CAR segment assembly, IPFS/IPNS
+  publication, mirror APIs, and live rollout evidence remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-builder cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG builder
+    files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG reference validation
+
+- Wired the SF-11 reference validator to `GovernanceDagBlockV1` and signed
+  `GovernanceDagHeadV1` chains with stable `ValidationOutcomeV1` results,
+  including block CID mismatch, block structure/signature, chain topology, head
+  structure/signature, and head block-count error codes.
+- Extended `sorafs-validate governance` with `--block <path> [--cid
+  <block-cid|hex:HEX>]` for single-block validation and `--head <path> --block
+  <path>...` for signed head-chain validation while keeping `--node` behavior
+  unchanged.
+- Updated the SF-11 reference SDK plan, SF-12 Governance DAG plan, localized
+  mirrors, portal error catalogue, and `roadmap.md` so block/head validation is
+  no longer documented as missing from the local reference path.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-ref cargo test -j 1 -p sorafs_manifest --bin sorafs-validate governance -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-ref cargo test -j 1 -p sorafs_manifest governance_dag --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-ref cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli governance_dag -- --nocapture`
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs docs/source/sorafs_reference_sdk_plan*.md docs/source/sorafs_governance_dag_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched Governance DAG reference
+    validation files and docs (no matches).
+
+## 2026-06-22 SoraFS Governance DAG block/head format
+
+- Added the public SF-12 `GovernanceDagBlockV1` and `GovernanceDagHeadV1`
+  schemas in `sorafs_manifest`, including deterministic BLAKE3-256 block CID
+  derivation over canonical Norito payloads, stable block/head signing payloads
+  that exclude their signatures, Ed25519/ML-DSA signature verification reuse,
+  parent-chain validation, and signed-head-to-chain binding checks.
+- Exported the block/head types and validation helpers from `sorafs_manifest`
+  so future builder, publisher, mirror, and operator surfaces can use the same
+  canonical local format.
+- Updated the SF-12 Governance DAG plan, localized mirrors, and `roadmap.md` so
+  the public block/head format is no longer tracked as missing; runtime
+  ingest/builder/publisher services, CAR segment assembly, IPFS/IPNS
+  publication, mirror APIs, live-head/rebuild commands, and rollout evidence
+  remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/governance.rs crates/sorafs_manifest/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-block cargo test -j 1 -p sorafs_manifest governance --lib -- --nocapture`
+
+## 2026-06-22 SoraFS Governance DAG local operator CLI
+
+- Added `sorafs_cli governance dag list`, `show`, `verify`, and `export` for
+  local pre-IPFS Governance DAG archives. The commands recursively inventory
+  `.to` artifacts, check `.to.blake3` sidecars, identify
+  `GovernanceLogNodeV1` payloads, run the SF-11
+  `validate_governance_log_node_bytes` reference verdict, enforce optional
+  expected-head and parent-linkage checks, and export normalized local
+  verification snapshots with regenerated sidecars and a `manifest.json`.
+- Updated the SF-12 Governance DAG plan, localized mirrors, and `roadmap.md` so
+  the local archive operator surface is no longer tracked as missing, while
+  live IPFS/IPNS head, mirror, rebuild, dashboard API, publisher-service, and
+  rollout-evidence work remain open.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-dag cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli governance_dag --features cli-orchestrator -- --nocapture`
+
+## 2026-06-22 SoraFS reference release archive determinism
+
+- Replaced the `sorafs-validate` release packager's system `tar -czf` path with
+  a Python tar/gzip writer that sorts staged entries and fixes uid/gid,
+  uname/gname, file modes, and mtime so identical staged inputs reproduce the
+  same archive hash across runs.
+- Kept the packaged `include/sorafs_reference.h` header and its manifest digest
+  in the normalized archive path.
+- Updated SF-11 release/reference docs, localized mirrors, and `roadmap.md` to
+  describe deterministic archive metadata normalization.
+- Validation passed:
+  - `bash -n scripts/package_sorafs_validate_release.sh ci/check_sorafs_cli_release.sh ci/check_sorafs_reference_ffi_header.sh`
+  - Two `scripts/package_sorafs_validate_release.sh --binary <tmp>/sorafs-validate --out-dir <tmp>/out-{a,b} --target deterministic-target --version deterministic-version --skip-smoke` runs produced identical archive SHA256 values.
+  - Manifest assertions confirmed `archive_sha256`, `ffi_header`,
+    `ffi_header_sha256`, staged header existence, and staged-file digest parity.
+  - `ci/check_sorafs_reference_ffi_header.sh`
+  - `git diff --check -- scripts/package_sorafs_validate_release.sh ci/check_sorafs_cli_release.sh ci/check_sorafs_reference_ffi_header.sh docs/source/sorafs_release_pipeline_plan*.md docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS reference release header packaging
+
+- Updated `scripts/package_sorafs_validate_release.sh` so every
+  `sorafs-validate` release archive stages the checked C FFI header at
+  `include/sorafs_reference.h`.
+- Extended the release manifest with `ffi_header`, `ffi_header_sha256`, and a
+  staged-file digest entry for the header so downstream SDK bindings can verify
+  they are built against the same ABI shipped with the validator binary.
+- Wired `ci/check_sorafs_cli_release.sh` to syntax-check and run
+  `ci/check_sorafs_reference_ffi_header.sh` before the heavier SoraFS Clippy and
+  test lanes.
+- Updated the SF-11 reference SDK and release-pipeline docs, localized mirrors,
+  and `roadmap.md` to describe the packaged header contract.
+- Validation passed:
+  - `bash -n scripts/package_sorafs_validate_release.sh ci/check_sorafs_cli_release.sh ci/check_sorafs_reference_ffi_header.sh`
+  - `ci/check_sorafs_reference_ffi_header.sh`
+  - `scripts/package_sorafs_validate_release.sh --binary <tmp>/sorafs-validate --out-dir <tmp>/out --target header-test-target --version header-test-version --skip-smoke` plus manifest assertions for `ffi_header`, `ffi_header_sha256`, staged header existence, and staged-file digest parity.
+  - `git diff --check -- scripts/package_sorafs_validate_release.sh ci/check_sorafs_cli_release.sh docs/source/sorafs_release_pipeline_plan*.md docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS reference FFI header contract
+
+- Added `crates/sorafs_manifest/include/sorafs_reference.h` as the public C
+  binding contract for the SF-11 `reference_ffi` surface, including selector
+  constants, buffer/payload structs, and all provider, admission, orderbook,
+  PoR, PDP, PoTR, repair, governance, and bundle validators.
+- Added `ci/check_sorafs_reference_ffi_header.sh` to compare Rust FFI exports
+  and selector constants against the checked header, verify exact signatures,
+  and syntax-check the header as C/C++ when local compilers are available.
+- Updated the SF-11 reference SDK docs, localized mirrors, and `roadmap.md` so
+  downstream SDK binding work has a stable local C ABI contract instead of an
+  implicit Rust-only surface.
+- Validation passed:
+  - `bash -n ci/check_sorafs_reference_ffi_header.sh`
+  - `ci/check_sorafs_reference_ffi_header.sh`
+  - `ci/check_sorafs_reference_ffi_header.sh --negative-control-missing-header`
+  - `ci/check_sorafs_reference_ffi_header.sh --negative-control-bad-signature`
+  - `ci/check_sorafs_reference_ffi_header.sh --negative-control-constant-drift`
+  - `ci/check_sorafs_reference_ffi_header.sh --negative-control-missing-rust-export`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pdp-ffi cargo test -j 1 -p sorafs_manifest reference_ffi --lib -- --nocapture`
+  - `git diff --check -- crates/sorafs_manifest/include/sorafs_reference.h ci/check_sorafs_reference_ffi_header.sh docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS PDP reference FFI
+
+- Exported the combined PDP reference helper and routed `sorafs-validate pdp`
+  through it so Rust API, CLI, and FFI callers share the same
+  commitment/challenge/proof binding logic.
+- Added PDP C ABI validators for commitment, challenge, proof,
+  commitment/challenge, challenge/proof, and full commitment/challenge/proof
+  validation, plus PDP bundle kind selectors for fixture arrays.
+- Updated the SF-11 reference SDK docs, localized mirrors, portal error
+  catalogue, and `roadmap.md` to list PDP FFI functions, bundle selectors, and
+  the stable `SFS-PDP-*` / `SFS-SIG-008` outcome codes.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/tests/pdp_fixtures.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pdp-ffi cargo test -j 1 -p sorafs_manifest reference_ffi --lib -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pdp-ffi cargo test -j 1 -p sorafs_manifest --test pdp_fixtures -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pdp-ffi cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli pdp -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pdp-ffi cargo test -j 1 -p sorafs_manifest --bin sorafs-validate pdp -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-pdp-ffi cargo test -j 1 -p sorafs_manifest --lib validate_fixture_bundle_payloads -- --nocapture`
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/tests/pdp_fixtures.rs docs/source/sorafs_reference_sdk_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS PDP fixture bundle and validator
+
+- Added `sorafs_manifest` reference validation for PDP commitments,
+  challenges, and proofs, including commitment/challenge binding and
+  challenge/proof checks for manifest digest, provider id, epoch id, challenge
+  id, response deadline, segment coverage, and hot-leaf coverage.
+- Added `sorafs-validate pdp` plus bundle discovery for
+  `fixtures/sorafs_manifest/pdp/*.to`, so clean-checkout bundle validation now
+  includes PDP commitment/challenge/proof payloads.
+- Added deterministic `generate_pdp_fixtures` output under
+  `fixtures/sorafs_manifest/pdp/`, including canonical `.to`/JSON
+  commitment/challenge/proof fixtures and negative duplicate-hot-leaf and
+  missing-signature fixtures.
+- Updated PDP/proof-streaming docs and fixture README text so the local fixture
+  and validator slice is marked complete while provider transport, live
+  signature/inclusion verification, Governance DAG archival, repair handoff,
+  SDK parity, and Torii PDP enablement remain production gates.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/bin/generate_pdp_fixtures.rs crates/sorafs_manifest/tests/pdp_fixtures.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs`
+  - `cargo run -p sorafs_manifest --bin generate_pdp_fixtures`
+  - `cargo test -p sorafs_manifest --test pdp -- --nocapture`
+  - `cargo test -p sorafs_manifest --test pdp_fixtures -- --nocapture`
+  - `cargo test -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+  - `cargo test -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+  - `cargo test -p sorafs_manifest --lib validate_fixture_bundle_payloads -- --nocapture`
+  - Stale PDP fixture-missing wording scan across docs, fixtures, roadmap, and
+    status files
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/bin/generate_pdp_fixtures.rs crates/sorafs_manifest/tests/pdp_fixtures.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs fixtures/sorafs_manifest/pdp fixtures/sorafs_manifest/replication_order/README.md docs/source/sorafs_pdp_plan*.md docs/source/sorafs_proof_streaming_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS Governance DAG publication observability
+
+- Added `sorafs_governance_dag_*` Prometheus metric families to
+  `iroha_telemetry::metrics::Metrics` for publication attempts, published
+  bytes, last successful publish timestamp, backlog, and head age.
+- Wired `crates/sorafs_node` filesystem governance publication for settlement,
+  repair, GC, reconciliation, and reputation evidence to record local
+  publication success/failure when the process metrics registry is installed.
+- Added `dashboards/grafana/sorafs_governance_dag.json` plus
+  `dashboards/alerts/sorafs_governance_dag_rules.yml` and its alert-test
+  fixture for SF-12 publication failures, backlog, stale head, and missing
+  recent successful publication.
+- Updated SF-12 governance DAG, SoraFS observability, telemetry, portal, and
+  roadmap docs so local publication observability is distinguished from the
+  still-missing IPFS/IPNS public-head publisher, mirror, operator CLI, and live
+  rollout evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_telemetry/src/metrics.rs crates/sorafs_node/src/governance.rs`
+  - `cargo test -p iroha_telemetry records_sorafs_governance_dag_publication_metrics -- --nocapture`
+  - `cargo test -p sorafs_node filesystem_publisher_writes_settlement_files -- --nocapture`
+  - `python3 -m json.tool dashboards/grafana/sorafs_governance_dag.json >/dev/null`
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_governance_dag_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_governance_dag_rules.test.yml")'`
+- Not run: `promtool test rules dashboards/alerts/tests/sorafs_governance_dag_rules.test.yml` because `promtool` is not installed in this environment.
+
+## 2026-06-22 SoraFS reference validator release manifest hardening
+
+- Extended `scripts/package_sorafs_validate_release.sh` so per-target
+  `sorafs-validate` manifests record staged binary/help/smoke-output SHA256
+  digests in addition to binary and archive hashes.
+- Added manifest SHA256 sidecar emission and optional detached manifest
+  signing/verification through `--manifest-signing-key`, `--manifest-public-key`,
+  and `--manifest-signature-out`.
+- Updated SF-11 reference SDK and release-pipeline docs plus `roadmap.md` so
+  local release packaging support is distinct from the remaining governed
+  publication and live operator evidence gates.
+- Validation passed:
+  - `bash -n scripts/package_sorafs_validate_release.sh ci/check_sorafs_cli_release.sh`
+  - `scripts/package_sorafs_validate_release.sh --binary <tmp>/sorafs-validate --out-dir <tmp>/out --target test-target --version test-version --skip-smoke` plus manifest JSON/sidecar assertions
+  - `scripts/package_sorafs_validate_release.sh --binary <tmp>/sorafs-validate --out-dir <tmp>/out --target signed-target --version signed-version --skip-smoke --manifest-signing-key <tmp>/release.key --manifest-public-key <tmp>/release.pub` plus `openssl dgst -sha256 -verify ...`
+
+## 2026-06-22 SoraFS orderbook telemetry handles
+
+- Added `torii_sorafs_orderbook_*` Prometheus metric families to
+  `iroha_telemetry::metrics::Metrics` for order flow, depth, matcher lag,
+  settlement backlog, oldest settlement age, contract/mirror divergence, API
+  error ratio, and escrow runway.
+- Added helper methods so future matcher, API, contract reconciliation, and
+  settlement services can emit those metrics with the same label schema used by
+  the checked-in dashboard and alert rules.
+- Updated SFM-2 orderbook, observability, and roadmap docs so metric handles are
+  distinguished from the still-missing live runtime service emission and rollout
+  evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_telemetry/src/metrics.rs`
+  - `cargo test -p iroha_telemetry records_orderbook_metrics_used_by_dashboard_and_alerts -- --nocapture`
+
+## 2026-06-22 SoraFS orderbook deterministic mechanics
+
+- Added deterministic `sorafs_manifest::orderbook` helpers for one-pair
+  maker/taker matching, full-book snapshot price-time matching, gross value and
+  escrow calculation, settlement-channel opening, and settlement receipt
+  application.
+- Extended orderbook errors and reference error-code/category mapping for
+  expired orders, same-side/tier/price-crossing failures, channel binding
+  failures, duplicate book-snapshot entries, receipt coverage failures, and
+  escrow insufficiency.
+- Exported the helper surface from `sorafs_manifest` and added unit coverage for
+  matching, full-book price-time priority, partial fills, expired-order
+  filtering, duplicate snapshot guards, fee calculation, deterministic escrow
+  locking, full receipt-driven channel closure, and channel mismatch rejection.
+- Updated SFM-2 docs, reference-SDK docs, localized mirrors, and `roadmap.md` so
+  the completed pure helper layer is distinct from the remaining contract,
+  runtime matcher service, settlement daemon, signed API, and live rollout work.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/orderbook.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs`
+  - `cargo test -p sorafs_manifest orderbook --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest validate_orderbook --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest --test orderbook_fixtures -- --nocapture`
+  - Stale final-spec/checklist scan across
+    `docs/source/sorafs_orderbook_plan*.md` and
+    `docs/source/sorafs_reference_sdk_plan*.md`
+  - `git diff --check -- crates/sorafs_manifest/src/orderbook.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs docs/source/sorafs_orderbook_plan*.md docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS orderbook observability fixtures
+
+- Added `dashboards/grafana/sorafs_orderbook_observability.json` as the target
+  SFM-2 orderbook dashboard for future order flow, depth, matching lag,
+  settlement backlog, API error ratio, escrow runway, and contract/mirror
+  divergence metrics.
+- Added `dashboards/alerts/sorafs_orderbook_rules.yml` plus
+  `dashboards/alerts/tests/sorafs_orderbook_rules.test.yml` for matching lag,
+  settlement backlog, contract/matcher divergence, API error ratio, and escrow
+  runway alert coverage.
+- Updated the SoraFS orderbook and observability plans, localized mirrors,
+  telemetry README, and roadmap so dashboard/alert fixtures are shipped while
+  runtime orderbook metric emission and live alert routing remain rollout work.
+- Validation passed:
+  - `python3 -m json.tool dashboards/grafana/sorafs_orderbook_observability.json >/dev/null`
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_orderbook_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_orderbook_rules.test.yml")'`
+  - Stale orderbook observability wording scan across
+    `docs/source/sorafs_orderbook_plan*.md`,
+    `docs/source/sorafs_observability_plan*.md`,
+    `scripts/telemetry/README.md`, and `roadmap.md`
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs fixtures/sorafs_manifest/orderbook/README.md dashboards/alerts/sorafs_orderbook_rules.yml dashboards/alerts/tests/sorafs_orderbook_rules.test.yml dashboards/grafana/sorafs_orderbook_observability.json docs/source/sorafs_orderbook_plan*.md docs/source/sorafs_proto_plan*.md docs/source/sorafs_reference_sdk_plan*.md docs/source/sorafs_observability_plan*.md scripts/telemetry/README.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+- Not run: `promtool test rules dashboards/alerts/tests/sorafs_orderbook_rules.test.yml`
+  because `promtool` is not installed in this environment.
+
+## 2026-06-22 SoraFS orderbook bundle validation
+
+- Extended fixture-directory bundle validation to accept orderbook order,
+  cancel, trade, settlement-channel, and settlement-receipt Norito payloads
+  without changing the existing manifest/provider cross-link quorum.
+- Added `sorafs-validate bundle` discovery for
+  `fixtures/sorafs_manifest/orderbook/*.to` and structured CLI assertions that
+  committed orderbook fixtures are included in bundle outcomes.
+- Added orderbook bundle selectors to the reference FFI C ABI and covered bundle
+  validation with an orderbook settlement receipt payload.
+- Updated SoraFS orderbook, wire-format, reference-SDK, fixture, and roadmap
+  docs so release smoke guidance reflects orderbook bundle validation.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs`
+  - `cargo test -p sorafs_manifest validate_fixture_bundle --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest reference_ffi --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest --test sorafs_validate_cli bundle -- --nocapture`
+  - `cargo test -p sorafs_manifest --bin sorafs-validate bundle -- --nocapture`
+  - Stale final-spec/checklist scan across
+    `docs/source/sorafs_orderbook_plan*.md`,
+    `docs/source/sorafs_proto_plan*.md`, and
+    `docs/source/sorafs_reference_sdk_plan*.md`
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs fixtures/sorafs_manifest/orderbook/README.md docs/source/sorafs_orderbook_plan*.md docs/source/sorafs_proto_plan*.md docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS orderbook FFI and fixtures
+
+- Added `sorafs_reference_validate_orderbook_json` plus
+  `SORAFS_REFERENCE_ORDERBOOK_KIND_*` selectors to the reference FFI C ABI,
+  with tests for successful orderbook validation and unsupported selector
+  rejection.
+- Added `generate_orderbook_fixtures` and committed deterministic
+  `fixtures/sorafs_manifest/orderbook/` Norito/JSON fixtures for order
+  requests, cancellations, trade events, settlement channels, and settlement
+  receipts.
+- Added orderbook fixture round-trip tests, a `sorafs-validate orderbook`
+  committed-fixture CLI smoke test, and cookbook coverage for orderbook
+  settlement receipt validation.
+- Updated SoraFS orderbook/proto/reference-SDK docs and `roadmap.md` so
+  remaining SFM-2 gaps now focus on contract/runtime, matcher, settlement
+  daemon, signed APIs, downstream SDK bindings, dashboards, alerts,
+  reconciliation tests, and staged/live evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/bin/generate_orderbook_fixtures.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/tests/orderbook_fixtures.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs`
+  - `cargo run -p sorafs_manifest --bin generate_orderbook_fixtures`
+  - `cargo test -p sorafs_manifest --test orderbook_fixtures -- --nocapture`
+  - `cargo test -p sorafs_manifest reference_ffi --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest --test sorafs_validate_cli orderbook -- --nocapture`
+  - `cargo test -p sorafs_manifest --bin sorafs-validate orderbook -- --nocapture`
+  - `bash -n docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh`
+
+## 2026-06-22 SoraFS orderbook reference validator
+
+- Added `validate_orderbook_payload_bytes` and
+  `OrderbookValidationPayloadKindV1` to the SoraFS reference validator, with
+  stable `ValidationOutcomeV1` mappings for orderbook structural,
+  settlement-accounting, policy, signature, and Norito decode failures.
+- Added the `sorafs-validate orderbook` CLI command with `--kind <payload-kind>
+  --input <path>` support and aliases for order requests, cancellations, trade
+  events, settlement channels, and settlement receipts.
+- Updated the SoraFS orderbook, proto, and reference-SDK docs, portal
+  reference-SDK error codes, and `roadmap.md` so remaining SFM-2 work is scoped
+  to runtime/contract, matcher, settlement service, signed APIs, reference
+  FFI/SDK bindings, fixtures, dashboards, alerts, reconciliation tests, and
+  staged/live evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/orderbook.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/lib.rs`
+  - `cargo test -p sorafs_manifest validate_orderbook --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest orderbook --lib -- --nocapture`
+  - `cargo test -p sorafs_manifest --bin sorafs-validate orderbook -- --nocapture`
+  - Stale final-spec/checklist scan across `docs/source/sorafs*_plan*.md`
+  - `git diff --check -- crates/sorafs_manifest/src/orderbook.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/lib.rs docs/source/sorafs_orderbook_plan*.md docs/source/sorafs_proto_plan*.md docs/source/sorafs_reference_sdk_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS orderbook payload foundation
+
+- Added `crates/sorafs_manifest/src/orderbook.rs` with versioned Norito payloads
+  and validators for `OrderRequestV1`, `OrderCancelV1`, `TradeEventV1`,
+  `SettlementChannelV1`, `SettlementReceiptV1`, byte ranges, order tiers/sides,
+  cancel reasons, channel statuses, and orderbook signature material.
+- Exported the new SFM-2 payloads from `sorafs_manifest`, updated the SoraFS
+  orderbook and proto/schema docs plus `roadmap.md`, and kept the remaining
+  SFM-2 gaps scoped to matcher/contract/runtime APIs, SDK/reference validators,
+  fixtures, dashboards, alerts, reconciliation tests, and staged/live evidence.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/sorafs_manifest/src/orderbook.rs crates/sorafs_manifest/src/lib.rs`
+  - `cargo test -p sorafs_manifest orderbook --lib -- --nocapture`
+
+## 2026-06-22 SoraFS economics/governance plan status refresh
+
+- Refreshed `docs/source/sorafs_reserve_rent_plan*.md` so SFM-6 documents the
+  shipped `ReservePolicyV1`/quote/ledger helpers, `cargo xtask
+  sorafs-reserve-matrix`, reserve ledger digest workflow, dashboards, alerts,
+  and the remaining reserve lifecycle service/API/credit-line rollout gates.
+- Reframed `docs/source/sorafs_orderbook_plan*.md` and
+  `docs/source/sorafs_hedging_plan*.md` as target architectures with explicit
+  current gaps, rather than completed implementations; both now call out the
+  absence of the orderbook/matcher/settlement stack and hedging/billing service
+  surfaces in this checkout.
+- Refreshed `docs/source/sorafs_governance_dag_plan*.md` so SF-12 reflects the
+  implemented `GovernanceLogNodeV1` schema, Ed25519/ML-DSA signature
+  verification, `sorafs-validate governance` tooling, local filesystem
+  publishers, PoR publication hooks, Taikai cache bundle, and the remaining
+  IPFS/IPNS DAG pipeline gates.
+- Updated `roadmap.md` with the current SoraFS economics/governance gap map so
+  SFM-2, SFM-5, SFM-6, and SF-12 outstanding work stays visible without
+  reopening completed reserve/governance foundations.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_reserve_rent_plan*.md docs/source/sorafs_orderbook_plan*.md docs/source/sorafs_hedging_plan*.md docs/source/sorafs_governance_dag_plan*.md roadmap.md status.md`
+  - Stale final-spec/checklist scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS repair automation status refresh
+
+- Refreshed `docs/source/sorafs_repair_plan*.md` so SF-8b documents the shipped
+  `sorafs_node` repair scheduler/state snapshot, local and orchestrator-backed
+  rehydration paths, GC protection, Torii signed auditor report/slash endpoints,
+  worker claim/heartbeat/complete/fail routes, status listings, auditor nonce
+  replay protection, worker permission checks, `iroha sorafs repair|gc` CLI
+  commands, and `sorafs-validate repair` fixture validation.
+- Removed stale claims for a `proof_stream::Verifier` repair path, OIDC
+  envelope injection, dedicated repair auditor rate-limit config, repair event
+  WebSocket stream, and the old `iroha app sorafs repair|gc` command prefix.
+- Clarified the remaining SF-8b gate as live operator evidence for PoR/PoTR
+  failure, repair, escalation, and governance handoff with the deployed auditor
+  roster and SF-9 coordinator.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_repair_plan*.md`
+  - Stale SF-8b final-spec/checklist, retired verifier/auth/WebSocket/rate-limit,
+    and old CLI-prefix scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS PoR status documentation refresh
+
+- Refreshed `docs/source/sorafs_por_plan*.md` so SF-9a documents the shipped
+  `PorCoordinatorRuntime`, Torii startup wiring, Norito snapshot persistence,
+  capacity PoR submission routes, status/export/report/ingestion endpoints,
+  scheduler and ingestion telemetry, dashboard/alert fixtures, fixture
+  generator, and `sorafs-validate por` validator without claiming external
+  drand/VRF/auditor rollout evidence is complete.
+- Refreshed `docs/source/sorafs_por_validator_plan*.md` so SF-9b reflects the
+  implemented `sorafs_cli por status|export|report` commands, manual-trigger
+  request construction gap, actual Torii routes, current Norito payload fields,
+  and the remaining proof-bundle/offline replay and live audit evidence gates.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_por_plan*.md docs/source/sorafs_por_validator_plan*.md`
+  - Stale SF-9 final-spec/checklist, retired command/route, and old schema-field
+    scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS SF-11 reference SDK status refresh
+
+- Refreshed `docs/source/sorafs_reference_sdk_plan*.md` so SF-11 is framed as
+  implemented local reference validation plus remaining release evidence, not a
+  final future specification.
+- Replaced stale planned surfaces with the actual `sorafs_manifest::reference`
+  validation APIs, `reference_ffi` C ABI, `sorafs-validate` commands,
+  `soranet_trustless_verifier --validation-outcome`, cookbook fixtures, portal
+  error catalogue, and packaging helper.
+- Clarified remaining production gates as signed per-target release artifacts,
+  downstream binding packages, and archived live operator smoke evidence.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_reference_sdk_plan*.md`
+  - Stale SF-11 final-spec/checklist/planned-surface wording scan across the
+    refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS proto/schema reference status refresh
+
+- Refreshed `docs/source/sorafs_proto_plan*.md` so SF-10 now documents the
+  implemented canonical `sorafs_manifest` Norito payload modules, committed
+  fixture directories, `sorafs-validate` validator/signing commands, and
+  reference FFI validation surface instead of a separate future `sora-proto`
+  specification.
+- Replaced retired fixture workflow references with the active
+  `provider_admission_fixtures`, `sorafs_manifest_stub capacity
+  replication-order`, and `generate_por_fixtures` commands, and removed the
+  stale extra CI sample bundle claim.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_proto_plan*.md`
+  - Stale SF-10 "final specification"/"completes"/unchecked checklist and
+    retired generator-name scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS reputation plan status refresh
+
+- Refreshed `docs/source/sorafs_reputation_plan*.md` so SFM-3 no longer frames
+  the page as a final future specification while the local V1 implementation is
+  already present.
+- Clarified that the completed local foundations include canonical reputation
+  schemas, fixed-point scoring, trust-edge iteration, degradation flags, Merkle
+  proofs, Governance DAG payload validation, Torii latest/provider/snapshot/
+  weights/events/SSE/WebSocket surfaces, CLI helpers, SDK convenience clients,
+  scheduler `reputation_score_bps` consumption, and dashboard/alert assets.
+- Documented the remaining production gates as live ingest/publisher deployment,
+  governance-approved production snapshots, archived proof replay evidence, and
+  stale-snapshot/rollback rehearsals before routing or incentives rely on scores.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_reputation_plan*.md`
+  - Stale SFM-3 "final specification"/"completes"/unchecked checklist wording
+    scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS gateway compliance status refresh
+
+- Refreshed `docs/source/sorafs_gateway_compliance_plan*.md` so SFM-4 now
+  documents the shipped `GatewayDenylist`, `GatewayPolicy`, GAR policy payloads,
+  `GarEnforcementReceiptV1`, `SFGT` proof-token helpers, honey-audit probing,
+  and `cargo xtask sorafs-gateway denylist pack|diff|verify` tooling without
+  claiming that the central compliance controller, moderation toggle API,
+  appeal override service, or SFM-4c transparency ledger are shipped.
+- Clarified current fail-closed enforcement semantics for manifest envelopes,
+  provider admission, denylist/perceptual hits, CDN/GAR policy, moderation
+  slugs, geofences, legal holds, and rate limits.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_compliance_plan*.md`
+  - Stale SFM-4 "final specification"/"completes"/unchecked checklist wording
+    scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS POP and transparency status refresh
+
+- Refreshed `docs/source/sorafs_pop_credentials_plan*.md` so SFM-4b1 now
+  distinguishes the existing policy-jury sortition foundations from the
+  unshipped PoP enrollment portal, issuer, registry, juror client, ZK proof
+  generator, verifier service, and `sorafs pop` CLI surface.
+- Refreshed `docs/source/sorafs_transparency_plan*.md` so SFM-4c documents the
+  shipped `GarEnforcementReceiptV1`, GAR policy payloads, honey-audit evidence,
+  moderation dashboards, and SoraNet privacy metrics without claiming that the
+  SoraFS transparency ledger builder, proof API, receipt explorer, or DP
+  moderation aggregate publisher are shipped.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_pop_credentials_plan*.md docs/source/sorafs_transparency_plan*.md`
+  - Stale SFM-4b1/SFM-4c "final specification"/"completes"/unchecked checklist
+    wording scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS moderation appeal/panel status refresh
+
+- Refreshed `docs/source/sorafs_appeal_pricing_plan*.md` so SFM-4b2 documents
+  the shipped `AppealPricingConfig`, `AppealSettlementConfig`, and
+  `sorafs_cli appeal quote|settle|disburse` surfaces without claiming that the
+  pricing daemon, Torii appeal APIs, escrow contract, settlement processor, or
+  DAG report publisher are shipped.
+- Refreshed `docs/source/sorafs_moderation_panel_plan*.md`,
+  `docs/source/sorafs_evidence_viewer_plan*.md`, and
+  `docs/source/sorafs_commit_reveal_plan*.md` to distinguish the implemented
+  appeal-finance, honey-audit, Taikai viewer, and policy-jury data-model
+  foundations from the remaining moderation panel, evidence viewer, and
+  SoraFS juror voting services.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_appeal_pricing_plan*.md docs/source/sorafs_moderation_panel_plan*.md docs/source/sorafs_evidence_viewer_plan*.md docs/source/sorafs_commit_reveal_plan*.md`
+  - Stale SFM-4b/SFM-4b2/SFM-4b3/SFM-4b4 "final specification"/"completes"/
+    unchecked checklist wording scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS AI pre-screen status refresh
+
+- Refreshed `docs/source/sorafs_ai_prescreen_plan*.md` so SFM-4a documents the
+  shipped moderation reproducibility/corpus validators, honey-audit CLI, GAR
+  moderation policy plumbing, CID lookup reporting, calibration fixtures, and
+  moderation dashboards without claiming the production AI runner, quarantine
+  queue, review panel, or release workflow services are shipped.
+- Clarified that `list-quarantine`, `review`, and `release` remain unshipped
+  until the moderation panel and quarantine state service exist.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_ai_prescreen_plan*.md docs/source/sorafs_pdp_plan*.md`
+  - Stale SFM-4a/SF-13 "final specification"/"completes"/unchecked checklist
+    wording scan across the refreshed mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS PDP plan status refresh
+
+- Refreshed `docs/source/sorafs_pdp_plan*.md` so SF-13 documents the
+  implemented `sorafs_manifest::pdp` schemas, structural validators,
+  chunk-store commitment roots, PDP request labels, and reserved telemetry
+  surfaces without claiming the provider proof protocol is production-ready.
+- Clarified that embedded Torii proof streaming remains fail-closed for
+  `proof_kind=pdp` until signed provider proof generation/verification,
+  governance archival, repair handoff, OpenAPI updates, and operator CLI
+  commands land.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_pdp_plan*.md`
+  - Stale SF-13 "final specification"/"to live in"/fully implemented checklist
+    wording scan across the refreshed PDP mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS fixture command and metering comment cleanup
+
+- Updated the storage-capacity marketplace source/portal mirrors and
+  replication-order fixture README to use the active `sorafs_car`
+  `sorafs_manifest_stub capacity replication-order --spec ...` regeneration
+  command instead of the retired `sorafs_manifest` fixture command.
+- Refreshed the `sorafs_node` metering module documentation so real uptime,
+  PoR/PDP/PoTR, and egress counters are no longer described as placeholders.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/storage_capacity_marketplace*.md docs/portal/docs/sorafs/storage-capacity-marketplace*.md fixtures/sorafs_manifest/replication_order/README.md crates/sorafs_node/src/metering.rs`
+  - Retired replication-order command and stale metering-placeholder wording
+    scan across the refreshed paths
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS mock-provider and indexer status refresh
+
+- Refreshed `docs/source/sorafs_mock_provider_plan*.md` to document the
+  implemented SF-6c deterministic multi-provider fixture harness
+  (`MultiPeerFixture`, `sorafs_car::local_fetch`,
+  `fixtures/sorafs_orchestrator/`, and Rust/SDK parity tests) instead of a
+  draft daemon/control-plane plan.
+- Refreshed `docs/source/sorafs_indexer_plan*.md` to separate the implemented
+  Torii provider-advert discovery baseline (`/v1/sorafs/providers/advert`,
+  `/v1/sorafs/providers`, TTL pruning, capability validation, and telemetry)
+  from the future IPNI-compatible `/routing/v1/*` delegated-routing service.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_mock_provider_plan*.md docs/source/sorafs_indexer_plan*.md status.md`
+  - Stale draft/nonexistent mock-provider/indexer wording scan across the
+    refreshed source mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS proof and pricing status refresh
+
+- Refreshed `docs/source/sorafs_potr_plan*.md`,
+  `docs/source/sorafs_proof_streaming_plan*.md`, and
+  `docs/source/sorafs_pricing_plan*.md` so shipped PoTR receipt
+  capture/replay, proof-streaming telemetry, CLI evidence capture, pricing
+  schedule, provider-credit, collateral, and egress accounting are documented
+  as implemented local surfaces rather than draft plans.
+- Clarified that remaining proof/pricing work is live rollout evidence, PDP
+  provider-protocol work, PQ provider-signature key distribution, or governed
+  UI/API rollout rather than missing local wiring.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_potr_plan*.md docs/source/sorafs_proof_streaming_plan*.md docs/source/sorafs_pricing_plan*.md status.md`
+  - Stale draft/outdated PoTR/proof/pricing wording scan across the refreshed
+    source mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS fixture and normative command refresh
+
+- Refreshed `docs/source/sorafs_gateway_fixtures*.md` so the completed gateway
+  fixture checklist is no longer labelled as pending.
+- Updated `docs/source/sorafs/normative_parameters*.md` to use the active
+  `sorafs_car` `sorafs_manifest_stub capacity replication-order --spec ...`
+  command instead of the retired `sorafs_manifest` fixture generator.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_fixtures*.md docs/source/sorafs/normative_parameters*.md status.md`
+  - Stale pending-heading and retired replication fixture command scan across
+    the refreshed pages
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS portal pin-registry validation refresh
+
+- Refreshed `docs/portal/docs/sorafs/pin-registry-validation-plan*.md` from
+  the completed source status page so the portal no longer presents SF-4
+  manifest validation as forthcoming, pending, or in-progress.
+- Validation passed:
+  - `git diff --check -- docs/portal/docs/sorafs/pin-registry-validation-plan*.md`
+  - Stale pending/in-progress validation-plan wording scan across portal
+    mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS gateway DNS runbook evidence refresh
+
+- Refreshed `docs/source/sorafs_gateway_dns_design_runbook*.md` and portal
+  `gateway-dns-runbook*.md` mirrors so the 2025-03-03 evidence snapshot no
+  longer advertises a pending PDF upload or generic outstanding TODOs.
+- Clarified that the markdown minutes hash and bundle manifest are the
+  repo-local evidence when rendered PDF artefacts live only in the governance
+  bucket.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_dns_design_runbook*.md docs/portal/docs/sorafs/gateway-dns-runbook*.md`
+  - Stale pending-PDF/TODO wording scan across source and portal mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS portal priority snapshot refresh
+
+- Rebuilt `docs/portal/docs/sorafs/priority-snapshot-2025-03*.md` from the
+  refreshed source snapshot so the portal no longer presents the March steering
+  hand-off as beta, awaiting ACKs, or blocked on local SF-3/SF-9 implementation.
+- Validation passed:
+  - `git diff --check -- docs/portal/docs/sorafs/priority-snapshot-2025-03*.md`
+  - Stale beta/pending-ACK wording scan across the portal priority snapshot
+    mirrors
+
+## 2026-06-22 SoraFS node storage docs refresh
+
+- Refreshed `docs/source/sorafs/sorafs_node_storage*.md` and portal
+  `node-storage*.md` mirrors so the storage page is no longer a draft and no
+  longer describes Torii HTTP parity, completion hooks, or metrics export as
+  future work.
+- Clarified that outstanding storage work is hosted rollout evidence,
+  governance policy tuning, and SDK management ergonomics rather than missing
+  local node/gateway plumbing.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/sorafs_node_storage*.md docs/portal/docs/sorafs/node-storage*.md status.md`
+  - Stale node-storage wording scan across source and portal mirrors
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS admission and capacity status refresh
+
+- Refreshed `docs/source/sorafs/provider_admission_policy*.md` and portal
+  mirrors so SF-2b is documented as an implemented admission, renewal,
+  revocation, and observability surface rather than a draft/in-progress policy.
+- Refreshed `docs/source/sorafs/storage_capacity_marketplace*.md` and portal
+  mirrors so SF-2c separates implemented schemas, Torii/node capacity
+  endpoints, dispute/metering tooling, and dashboards from hosted production
+  settlement evidence.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/provider_admission_policy*.md docs/source/sorafs/storage_capacity_marketplace*.md docs/portal/docs/sorafs/provider-admission-policy*.md docs/portal/docs/sorafs/storage-capacity-marketplace*.md status.md`
+  - Stale draft/in-progress/old command-path scan across the refreshed
+    admission and capacity docs
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS migration ledger status refresh
+
+- Refreshed `docs/source/sorafs/migration_ledger*.md`,
+  `docs/source/sorafs/migration_roadmap*.md`,
+  `docs/source/sorafs_architecture_rfc*.md`, and the portal migration
+  ledger/roadmap mirrors so M1 is no longer marked pending after local fixture
+  and expectation-flag controls landed.
+- Split local implementation status from external rollout evidence: staging
+  alias proofs and governance sign-off remain governance-archive evidence,
+  while repo-local CI/checklist controls are documented as implemented.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/migration_ledger*.md docs/source/sorafs/migration_roadmap*.md docs/source/sorafs_architecture_rfc*.md docs/portal/docs/sorafs/migration-ledger*.md docs/portal/docs/sorafs/migration-roadmap*.md`
+  - Stale migration wording scan across the refreshed source and portal docs
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS gateway/profile rollout status refresh
+
+- Refreshed `docs/source/sorafs_gateway_profile*.md` so the trustless gateway
+  profile is documented as the implemented SF-5a baseline validated by local
+  conformance, load, and self-certification tooling rather than a draft.
+- Updated the archived gateway/DNS agenda, GAR telemetry snapshot, March
+  priority snapshot, SoraFS node plan mirrors, and portal node-plan page to
+  distinguish shipped local SF-3/SF-5a/SF-9 surfaces from hosted rollout
+  evidence, TLS self-cert evidence, and governance archive follow-ups.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_profile*.md docs/source/sorafs_gateway_dns_design_agenda*.md docs/source/sorafs_gateway_dns_design_gar_telemetry*.md docs/source/sorafs/priority_snapshot_2025-03*.md docs/source/sorafs/sorafs_node_plan*.md docs/portal/docs/sorafs/node-plan.md`
+  - Stale wording scan across the refreshed docs for retired draft, planned
+    TLS rotation, pending ACK, and remaining PoR-integration wording
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS gateway conformance status refresh
+
+- Refreshed `docs/source/sorafs_gateway_conformance*.md` so the SF-5a
+  conformance harness is documented as implemented local replay/load/signing
+  coverage rather than a proposed plan.
+- Updated `docs/source/sorafs_gateway_conformance_backlog*.md` into a status
+  record that separates shipped local harness, fixture verification, CI gate,
+  dashboard, and attestation work from live rollout evidence such as hosted
+  fixture publication and staging hardware runs.
+- Corrected conformance docs to use the current
+  `cargo test --locked -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`
+  command and the actual `sorafs_gateway_report.json` /
+  `sorafs_gateway_attestation.{to,txt}` artifact names.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_conformance*.md`
+  - Stale conformance-plan wording scan across
+    `docs/source/sorafs_gateway_conformance*.md`
+
+## 2026-06-22 SoraFS gateway self-cert command refresh
+
+- Made `scripts/sorafs_gateway_self_cert.sh` executable and added a
+  `cargo run -p xtask --bin xtask -- ...` fallback for hosts that do not have
+  the `cargo xtask` shim installed.
+- Refreshed the TLS/ECH guide, gateway/DNS outcome brief, minutes, and language
+  mirrors so operators use the real self-cert wrapper instead of the retired
+  `cargo xtask sorafs-self-cert --check-tls` command, and removed nonexistent
+  `--cert`/`--ech-config` examples.
+- Corrected the self-cert guide to use
+  `cargo xtask sorafs-gateway-attest --verify <attestation.to>` and the actual
+  `sorafs_gateway_report.json` output name.
+- Validation passed:
+  - `bash -n scripts/sorafs_gateway_self_cert.sh`
+  - `scripts/sorafs_gateway_self_cert.sh --help`
+  - `bash scripts/sorafs_gateway_self_cert.sh --help`
+  - `cargo run -p xtask --bin xtask -- --help`
+    (built successfully in 15m 51s and listed `sorafs-gateway-attest`)
+  - `git diff --check -- scripts/sorafs_gateway_self_cert.sh docs/source/sorafs_gateway_dns_design_pre_read*.md docs/source/sorafs_gateway_dns_design_minutes.md docs/source/sorafs_gateway_tls_automation*.md docs/source/sorafs_gateway_self_cert*.md`
+  - Stale self-cert command scan across `docs`, `scripts`, `ci`, `.github`,
+    `xtask`, and `crates` for `sorafs-self-cert`, `check-tls`, and
+    `sorafs-verify-attestation` (no matches)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS gateway self-cert frontmatter refresh
+
+- Restored the missing opening frontmatter delimiter in
+  `docs/source/sorafs_gateway_self_cert.md`.
+- Resynced the self-cert language mirrors so they keep only their translation
+  metadata frontmatter and no longer embed the source page's title/summary block
+  as body text.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_self_cert*.md`
+  - Frontmatter shape scan for `docs/source/sorafs_gateway_self_cert*.md`.
+
+## 2026-06-22 SoraFS gateway refusal guidance refresh
+
+- Refreshed the SF-5c gateway refusal guidance and mirrors so the self-cert kit
+  is no longer described as a draft and the GREASE row points at the current
+  policy surface.
+- Updated the replay harness command in the proof-validation playbook to the
+  checked-in `integration_tests --test nexus_and_streaming
+  sorafs_gateway_conformance` target.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_refusal_guidance*.md`
+  - Stale refusal-guidance scan for draft wording and the retired gateway
+    conformance command.
+
+## 2026-06-22 SoraFS gateway DNS agenda/attendance archive refresh
+
+- Converted the gateway/DNS kickoff agenda into an archive that points to the
+  completed minutes and outcome brief instead of presenting the 2025-03-03
+  session as upcoming work.
+- Refreshed the attendance tracker and language mirrors so follow-up actions,
+  shared notes, RSVP status, and owner notes are recorded as completed and link
+  to `docs/source/sorafs_gateway_dns_design_minutes.md`.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_dns_design_agenda*.md docs/source/sorafs_gateway_dns_design_attendance*.md`
+  - Stale agenda/attendance scan for shared-note stubs, future-session wording,
+    and post-meeting template text.
+
+## 2026-06-22 SoraFS CLI release target refresh
+
+- Corrected release and gateway self-cert wrappers so they build
+  `sorafs_cli` from the `sorafs_orchestrator` Cargo target instead of the
+  helper-focused `sorafs_car --features cli` target.
+- Updated the SoraFS CLI release gate to clippy/test the
+  `sorafs_orchestrator` CLI target explicitly while preserving the existing
+  `sorafs_car` helper-crate checks.
+- Refreshed source, portal, release, security-review, deployment, CI, and env
+  inventory docs so `sorafs_cli` provenance, cargo install/run examples, and
+  proof-stream parity commands point at the current workspace paths.
+- Validation passed:
+  - `bash -n scripts/release_sorafs_cli.sh scripts/sorafs_gateway_self_cert.sh ci/check_sorafs_cli_release.sh`
+  - `git diff --check -- scripts/release_sorafs_cli.sh scripts/sorafs_gateway_self_cert.sh ci/check_sorafs_cli_release.sh docs/source/sorafs/developer docs/source/sorafs/reports docs/portal/docs/sorafs docs/portal/docs/devportal docs/examples docs/source/agents/env_var_inventory.json docs/source/agents/env_var_inventory.md status.md`
+  - `git diff --check -- docs/portal/i18n docs/source/agents docs/source/sorafs docs/source/sorafs_*.md docs/examples status.md`
+  - Stale CLI-target scan across `scripts`, `ci`, `docs/source`,
+    `docs/portal`, `docs/examples`, `roadmap.md`, and `status.md`.
+  - `CARGO_INCREMENTAL=0 cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`
+
+## 2026-06-22 SoraFS gateway DNS kickoff close-out docs
+
+- Converted the gateway/DNS kickoff pre-read into an outcome brief so the page
+  reflects the completed 2025-03-03 session, delivered SF-5b TLS/ECH hand-off,
+  SoraDNS `xtask` automation, GAR enforcement decisions, and SF-5a conformance
+  evidence expectations instead of future meeting logistics.
+- Added the missing `docs/source/sorafs_gateway_dns_design_minutes.md` decision
+  record referenced by the attendance tracker and runbook, including owners,
+  close-out actions, evidence links, and live-rollout follow-ups.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_dns_design_pre_read*.md docs/source/sorafs_gateway_dns_design_minutes.md status.md`
+  - Stale gateway/DNS kickoff scan for pre-meeting MVP/ECH wording and the
+    missing minutes path.
+
+## 2026-06-22 SoraFS command surface docs sweep
+
+- Refreshed alias-cache policy docs so the smoke guidance points at the
+  checked-in `cargo xtask sorafs-pin-fixtures` fixture generator, current Torii
+  alias-cache tests, JSON/cache headers, and `torii_sorafs_alias_cache_*`
+  telemetry instead of nonexistent alias fixture scripts and Buildkite job names.
+- Updated node client protocol, portal chunker registry/profile, SF-1 report,
+  and gateway refusal guidance copies so provider advert, chunk-store,
+  provider-admission, manifest submission, and signature validation examples use
+  the binaries that exist in this workspace.
+- Corrected `sorafs_car` README, Rustdoc, and binary `usage()` strings so
+  `sorafs_manifest_stub`, `sorafs_manifest_chunk_store`, and
+  `sorafs_provider_advert_stub` help/copy-paste surfaces use the real Cargo
+  binary names.
+- Refreshed AI pre-screening/quarantine operator-tooling docs so they point at
+  the implemented `sorafs_cli moderation validate-repro`, `validate-corpus`, and
+  `honey-audit` surfaces and leave queue operations for the SFM-4b/operator
+  panel instead of presenting unimplemented `sorafs moderation` commands.
+- Validation passed:
+  - Stale command scan across SoraFS source/project-tracker/portal docs for the
+    retired alias fixture, provider advert, manifest-stub, chunk-store, and
+    `sorafs-manifest` command spellings.
+  - `cargo test -p sorafs_car --bin sorafs_manifest_stub usage_uses_cargo_binary_name -- --nocapture`
+  - `cargo test -p sorafs_car --bin sorafs_provider_advert_stub usage_uses_cargo_binary_name -- --nocapture`
+
+## 2026-06-22 SoraFS manifest stub command refresh
+
+- Updated SoraFS source and portal docs so manifest-stub examples use the
+  current `cargo run -p sorafs_car --bin sorafs_manifest_stub` invocation rather
+  than the retired `sorafs_manifest` package or hyphenated
+  `sorafs-manifest-stub` binary spelling.
+- Covered manifest pipeline, migration roadmap, developer overview, provider
+  admission, chunker registry/profile, quickstart, and portal mirror pages so
+  operator copy/paste examples now point at the checked-in binary.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs docs/source/sorafs_*.md docs/source/project_tracker/sorafs_*.md docs/portal/docs/sorafs status.md`
+  - Stale manifest-stub command scan across SoraFS source and portal docs
+
+## 2026-06-22 SoraFS chunk-range smoketest docs refresh
+
+- Updated `docs/source/sorafs_chunk_range_smoketest*.md` so the page no longer
+  calls itself a draft and no longer references a nonexistent
+  `ci/sorafs-chunk-range-smoketest` Buildkite merge gate.
+- Replaced the stale CI integration section with the focused validation lanes
+  that match this checkout: `cargo test -p sorafs_node --test gateway`,
+  `cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`,
+  and `cargo test -p sorafs_car --bin sorafs_fetch` for fetch capability
+  changes.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_chunk_range_smoketest*.md status.md`
+  - Stale chunk-range smoketest wording scan across
+    `docs/source/sorafs_chunk_range_smoketest*.md`
+
+## 2026-06-22 SoraFS chaos plan title refresh
+
+- Updated `docs/source/sorafs_chaos_plan*.md` so the chaos drill and incident
+  playbook page no longer advertises itself as a draft after the drill-log,
+  gateway-probe, communication, governance, and TLS/ECH integration hooks landed.
+- Kept the transparency metric wording as plan language because the exact
+  `sorafs_chaos_drill_duration_seconds` and `sorafs_gar_incidents_total`
+  counters are not present in the current telemetry implementation.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_chaos_plan*.md status.md`
+  - Stale chaos-plan title scan across `docs/source/sorafs_chaos_plan*.md`
+
+## 2026-06-22 SoraFS architecture RFC status refresh
+
+- Updated `docs/source/sorafs_architecture_rfc*.md` so the manifest schema is
+  documented as the implemented V1 schema instead of a draft.
+- Recast the M0 migration section as completed work covering the reference
+  chunker profiles, Norito manifest schema, `sorafs_manifest_stub` CAR/manifest
+  artifacts, local node storage, Torii SoraFS APIs, and fixture-backed gateway
+  conformance harness.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_architecture_rfc*.md status.md`
+  - Stale architecture RFC wording scan across
+    `docs/source/sorafs_architecture_rfc*.md`
+
+## 2026-06-22 SoraFS pin registry validation plan refresh
+
+- Updated `docs/source/sorafs/pin_registry_validation_plan*.md` so the SF-4
+  validation page no longer describes the shared validator, Torii integration,
+  contract hook, tests, or docs as forthcoming work.
+- Recast the page around the implemented `sorafs_manifest::validation` helpers,
+  `/v1/sorafs/pin/register` validation behavior, `RegisterPinManifest`
+  enforcement, stable `sorafs_pin_*` labels, and remaining rollout evidence.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/pin_registry_validation_plan*.md docs/source/sorafs/chunker_profile_authoring*.md docs/source/sorafs/chunker_registry*.md crates/sorafs_manifest/README.md status.md`
+  - Stale pin-registry validation wording scan across
+    `docs/source/sorafs/pin_registry_validation_plan*.md`
+
+## 2026-06-22 SoraFS chunker registry/profile docs refresh
+
+- Updated `docs/source/sorafs/chunker_profile_authoring*.md` so `profile_id`
+  guidance matches the charter validator: IDs are positive and monotonically
+  increasing, assigned in `crates/sorafs_manifest/src/chunker_registry.rs`, and
+  never reused.
+- Refreshed `docs/source/sorafs/chunker_registry*.md` and
+  `docs/source/sorafs/chunker_registry_rollout_checklist*.md` so the registry
+  reference lists the implemented `sf1` and `sf2` descriptors, uses the real
+  `sorafs_car` package for the chunk-store/stub CLIs, and no longer tells
+  consumers to guess layouts from unknown profile IDs.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/chunker_profile_authoring*.md docs/source/sorafs/chunker_registry*.md crates/sorafs_manifest/README.md status.md`
+  - Stale chunker registry/profile wording scan across the touched docs
+
+## 2026-06-22 SoraFS gateway load-test plan refresh
+
+- Updated `docs/source/sorafs_gateway_load_tests*.md` so the SF-5a load-test
+  plan matches the implemented fixture-backed deterministic harness instead of
+  describing a pending Tokio worker pool or a live 10-minute HTTP/3 load run.
+- Corrected the documented CI target to
+  `cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`
+  via `ci/check_sorafs_gateway_conformance.sh`, and scoped HTTP/3 load coverage
+  to a future gateway transport follow-up because no committed SoraFS HTTP/3
+  gateway endpoint exists in this checkout.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_gateway_load_tests*.md status.md`
+  - Stale gateway load-test wording scan across
+    `docs/source/sorafs_gateway_load_tests*.md`
+
+## 2026-06-22 SoraFS release pipeline plan refresh
+
+- Updated `docs/source/sorafs_release_pipeline_plan*.md` so the SF-6 release
+  pipeline page no longer describes SDK companion CI as future work or claims
+  uncommitted release infrastructure is already present.
+- Documented the implemented release and SDK guard surfaces:
+  `.github/workflows/pr_sorafs_pin_register_sdk.yml`,
+  `ci/check_sorafs_cli_release.sh`,
+  `ci/check_sorafs_pin_register_sdk_guard.sh`, the per-SDK pin-register guard
+  scripts, `ci/sdk_sorafs_orchestrator.sh`, and the
+  `docs/examples/sorafs_ci.md` GitHub Actions template for a future committed
+  CLI release workflow.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_release_pipeline_plan*.md status.md`
+  - Stale release-pipeline wording scan across
+    `docs/source/sorafs_release_pipeline_plan*.md`
+
+## 2026-06-22 SoraFS proof-streaming developer docs refresh
+
+- Updated `docs/source/sorafs/developer/cli*.md`,
+  `docs/source/sorafs/developer/deployment*.md`, and
+  `docs/source/sorafs_proof_streaming_plan*.md` so PoTR is documented as a
+  current local proof-stream capability (`--proof-kind=potr` with
+  `--deadline-ms`) rather than a future SF-14 CLI path.
+- Clarified that PDP remains the SF-13-gated proof kind: the CLI can construct
+  schema-compatible PDP requests, while current gateways reject them until the
+  provider protocol and CDC commitment support lands.
+- Refreshed the deployment next steps to use the implemented
+  `sorafs_car::multi_fetch` / `sorafs_orchestrator` multi-source automation
+  instead of waiting for SF-6b to land.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/developer/cli*.md docs/source/sorafs/developer/deployment*.md docs/source/sorafs_proof_streaming_plan*.md status.md`
+  - Stale proof-streaming developer-doc wording scan across the touched files
+
+## 2026-06-22 SoraFS SF-4 pin registry plan refresh
+
+- Updated `docs/source/sorafs/pin_registry_plan*.md` so the SF-4 plan reflects
+  the implemented Norito schema, ISI entry points, `BindManifestAlias`,
+  multi-hop successor-chain cycle rejection, replication order bookkeeping,
+  attested Torii listing endpoints, CLI wrappers, fixture guard, and local test
+  coverage.
+- Updated `docs/source/project_tracker/sorafs_pin_registry_tracker*.md` to move
+  local contract, governance-envelope, alias/retention, fixture, and operator
+  guide rows out of stale `Planned`/`In progress` status. Remaining SF-4 work is
+  now described as rollout evidence and governance archive handoff.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/pin_registry_plan*.md docs/source/project_tracker/sorafs_pin_registry_tracker*.md status.md`
+  - Stale SF-4 pin-registry wording scan across the touched plan and tracker
+    copies
+
+## 2026-06-22 SoraFS node-storage status wording refresh
+
+- Updated `docs/source/sorafs/sorafs_node_storage*.md` so the page no longer
+  describes storage ingestion, capacity completion, telemetry export, or the
+  implementation itself as future work.
+- Clarified that capacity completion should run after the implemented
+  `NodeHandle::ingest_manifest`, `sorafs-node ingest`, or
+  `sorafs_cli storage prepare`/`storage pin` ingestion paths succeed.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs/sorafs_node_storage*.md status.md`
+  - Stale node-storage wording scan across
+    `docs/source/sorafs/sorafs_node_storage*.md`
+
+## 2026-06-22 SoraFS proof-streaming status wording refresh
+
+- Updated `docs/source/sorafs_proof_streaming*.md` so the introduction matches
+  the current implementation: `sorafs_cli proof stream` already accepts
+  `--proof-kind=pdp` for schema-compatible request construction, while Torii
+  gateways intentionally reject `proof_kind=pdp` until SF-13 provider protocol
+  support lands.
+- Reworded metric and dashboard text from planned/exporter-future language to
+  the implemented Prometheus metric contract.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_proof_streaming*.md`
+  - Stale proof-streaming wording scan across
+    `docs/source/sorafs_proof_streaming*.md`
+
+## 2026-06-22 SoraFS SF-6 CLI/SDK plan refresh
+
+- Updated `docs/source/sorafs_cli_sdk_plan*.md` from the early draft command
+  names to the implemented local surfaces: `sorafs_cli`, `sorafs-validate`,
+  `soranet_trustless_verifier --validation-outcome`, release scripts, gateway
+  self-cert tooling, and SDK parity guards.
+- Clarified that Go module/public package publication is release packaging that
+  should consume the committed fixtures and Norito schemas when cut, rather than
+  a missing local command surface.
+- Updated `docs/source/sorafs_ci_templates*.md` so gateway smoke guidance points
+  at the implemented `ci/check_sorafs_gateway_conformance.sh` and
+  `ci/check_sorafs_gateway_probe.sh` paths instead of waiting for SF-5d
+  fixtures.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_cli_sdk_plan*.md docs/source/sorafs_ci_templates*.md`
+  - Stale SF-6 CLI/SDK wording scan across
+    `docs/source/sorafs_cli_sdk_plan*.md` and
+    `docs/source/sorafs_ci_templates*.md`
+
+## 2026-06-22 SoraFS SF-11 reference SDK plan wording refresh
+
+- Updated `docs/source/sorafs_reference_sdk_plan*.md` so the CLI table no
+  longer labels implemented or release-wrapper-only reference validator pieces
+  as local `Planned` work.
+- Clarified that manifest/CAR replay is implemented through
+  `soranet_trustless_verifier --validation-outcome`, PoTR receipt fixtures are
+  covered by bundle validation, external admission keyset selection is a signed
+  deployment-policy concern, and governed policy overrides belong to release
+  wrappers rather than ad hoc CLI flags.
+- Corrected the provider advert TTL summary to match the current validator:
+  adverts must have non-zero TTLs capped at 24 hours.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_reference_sdk_plan*.md status.md`
+  - Stale SF-11 planned-work wording scan across
+    `docs/source/sorafs_reference_sdk_plan*.md`
+
+## 2026-06-22 SoraFS gateway conformance CI/dashboard wiring
+
+- Corrected `ci/check_sorafs_gateway_conformance.sh` so the local gate runs the
+  actual `nexus_and_streaming` integration test target with the
+  `sorafs_gateway_conformance` filter.
+- Added `dashboards/grafana/sorafs_gateway_conformance.json` with Grafana panels
+  for fixture metadata, deterministic refusals, active concurrency, replay/load
+  latency, served bytes, and refusal breakdowns.
+- Updated `docs/source/sorafs_gateway_conformance_backlog*.md` so SF-5a CI and
+  dashboard work no longer reference phantom paths or planned mock-ups; hosted
+  nightly wrapping and live GovOps embedding remain deployment evidence.
+- Validation passed:
+  - `bash -n ci/check_sorafs_gateway_conformance.sh`
+  - `python3 -m json.tool dashboards/grafana/sorafs_gateway_conformance.json`
+  - `git diff --check -- ci/check_sorafs_gateway_conformance.sh dashboards/grafana/sorafs_gateway_conformance.json docs/source/sorafs_gateway_conformance_backlog*.md status.md`
+  - Stale gateway conformance backlog wording scan across
+    `docs/source/sorafs_gateway_conformance_backlog*.md`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-gateway-ci CARGO_NET_OFFLINE=false ci/check_sorafs_gateway_conformance.sh`
+    (`7` passed)
+
+## 2026-06-22 SoraFS chunk-range smoketest cache profile
+
+- Added `sorafs_cli fetch --profile=hot|warm|cold`; `hot` is accepted as a
+  warm-cache alias, and the fetch summary now records `cache_profile` and
+  `cache_state` labels for CI threshold selection.
+- Extended the gateway fetch CLI test to assert the new cold-cache metadata in
+  both stdout and `--json-out` summaries.
+- Updated `docs/source/sorafs_chunk_range_smoketest*.md` so cold-cache
+  validation uses `--profile=cold` and multi-gateway validation uses the
+  already implemented repeated-provider scheduling path instead of waiting for
+  an orchestrator MVP.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-cli-profile cargo test -j 1 -p sorafs_orchestrator --test sorafs_cli fetch_command_streams_payload_via_gateway -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/sorafs_orchestrator/src/bin/sorafs_cli.rs crates/sorafs_orchestrator/tests/sorafs_cli.rs docs/source/sorafs_chunk_range_smoketest*.md status.md`
+  - Stale chunk-range smoketest wording scan across
+    `docs/source/sorafs_chunk_range_smoketest*.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS repair plan implementation status refresh
+
+- Updated `docs/source/sorafs_repair_plan*.md` so the SF-8b closing section
+  no longer lists implemented local work as outstanding. The plan now names
+  the shipped `sorafs_node::repair` scheduler/store/worker/watchdog coverage,
+  Torii signed auditor repair/slash submission paths, nonce replay protection,
+  PoR failure binding, and local schema/API/worker tests.
+- Remaining repair work is scoped to live operator evidence for production PoR
+  failure, repair, and governance handoff runs once the deployed auditor roster
+  and SF-9 coordinator publish their runbooks.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_repair_plan*.md`
+  - Stale repair remaining-work wording scan across
+    `docs/source/sorafs_repair_plan*.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS proof-streaming PDP CLI wording refresh
+
+- Updated `docs/source/sorafs_proof_streaming*.md` so the PDP roadmap note
+  matches the current split: `sorafs_cli proof stream` already accepts
+  `--proof-kind=pdp` for schema-compatible request construction, while Torii
+  gateways still reject `proof_kind=pdp` until SF-13 provider protocol and CDC
+  commitment support lands.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_proof_streaming*.md`
+  - Stale `CLI will add \`proof_kind=pdp\`` wording scan across
+    `docs/source/sorafs_proof_streaming*.md`
+
+## 2026-06-22 SoraFS CLI roadmap documentation refresh
+
+- Updated the SoraFS CLI roadmap section, including localized source copies,
+  so it reflects the implemented local command set: manifest scaffolding,
+  governance proposal export, keyless manifest signing, signature bundle
+  verification, gateway fetch authorization, PoR trigger/export/report flows,
+  and PoTR proof streaming.
+- Remaining CLI work is now scoped to signed reproducible release distribution
+  and live-network governance evidence/runbook capture instead of shipped local
+  command implementation.
+- Validation passed:
+  - `git diff --check -- docs/source/sorafs_cli*.md`
+  - Stale CLI roadmap wording scan across `docs/source/sorafs_cli*.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-22 SoraFS proof-stream request documentation cleanup
+
+- Updated `ProofStreamKind::Pdp` and `ProofStreamKind::Potr` docs so the
+  request schema no longer labels those shipped variants as deferred.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest proof_stream --lib -- --nocapture`
+    (`5` passed)
+
+## 2026-06-22 SoraFS gateway conformance attestation verifier
+
+- Added `verify_attestation_envelope` to
+  `integration_tests::sorafs_gateway_conformance`; it parses the Norito JSON
+  attestation envelope, canonicalizes the embedded report, recomputes the
+  BLAKE3 digest, validates canonical-hex or i105 signer account literals, and
+  verifies the declared Ed25519 signature.
+- `cargo xtask sorafs-gateway-attest --verify <attestation.to>` now exposes the
+  verifier for operator/release evidence checks without adding a new workspace
+  crate or a second attestation format.
+- Updated SoraFS gateway conformance docs/backlogs, including translated source
+  copies, away from the planned standalone verifier wording and toward the
+  implemented `xtask` command.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-gateway-attest cargo test -j 1 -p integration_tests --test nexus_and_streaming attestation -- --nocapture`
+    (`2` passed after fixing signer-account parsing)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-gateway-attest cargo test -j 1 -p xtask sorafs_gateway_attest -- --nocapture`
+    (`2` parser tests passed; other xtask test binaries had no matching tests)
+
+## 2026-06-22 SoraFS SF-11 admission renewal/revocation FFI
+
+- Added `sorafs_reference_validate_provider_admission_renewal_json` and
+  `sorafs_reference_validate_provider_admission_revocation_json` to the
+  `reference_ffi` C ABI facade so SDK bindings can validate governed admission
+  renewals and revocations without linking Rust-native APIs.
+- The new FFI entry points return the same `ValidationOutcomeV1` Norito JSON
+  buffers as the existing reference validators and preserve `SFS-FFI-001`
+  handling for null non-empty pointer inputs.
+- Updated the SF-11 reference SDK FFI surface docs and `roadmap.md` to list the
+  admission renewal/revocation C ABI coverage.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest ffi_provider_admission --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest reference_ffi --lib -- --nocapture`
+    (`8` passed)
+
+## 2026-06-22 SoraFS SF-11 admission renewal/revocation validation
+
+- Added `validate_provider_admission_renewal_bytes` and
+  `validate_provider_admission_revocation_bytes` to the SF-11 reference outcome
+  surface and re-exported them from `sorafs_manifest`.
+- `sorafs-validate admission` now accepts `--renewal <file>` or
+  `--revocation <file>` alongside `--input`/`--envelope`, validating governed
+  renewals against the previous envelope and governed revocations against the
+  envelope digest and council signatures.
+- Extended the reference SDK cookbook runner to emit
+  `admission-renewal.json` and `admission-revocation.json` outcomes from the
+  committed provider-admission fixtures.
+- Updated the SF-11 reference SDK plan copies and `roadmap.md` so admission
+  renewal/revocation validation is no longer listed as outstanding; external
+  governance keyset policy remains the planned admission-policy extension.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest admission --lib -- --nocapture`
+    (`30` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli admission -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest --bin sorafs-validate admission_args -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh --out /tmp/iroha-sorafs-reference-sdk-cookbook-out`
+  - `cargo fmt --all -- --check`
+  - `bash -n docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh`
+  - `git diff --check -- crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/src/bin/generate_por_fixtures.rs crates/sorafs_manifest/tests/por_fixtures.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs fixtures/sorafs_manifest/potr fixtures/sorafs_manifest/repair docs/examples/sorafs_reference_sdk docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 admission renewal/revocation and cookbook wording scan across
+    touched docs (no matches)
+
+## 2026-06-22 SoraFS SF-11 reference cookbook fixtures
+
+- The PoR fixture generator now also emits deterministic PoTR receipt and
+  repair task payloads under `fixtures/sorafs_manifest/potr/` and
+  `fixtures/sorafs_manifest/repair/`, with readable JSON summaries and fixture
+  READMEs.
+- `fixtures/sorafs_manifest` bundle validation now exercises committed PoTR and
+  repair artifacts from a clean checkout, not only test-generated receipt/task
+  values.
+- Added `docs/examples/sorafs_reference_sdk/` with a runnable cookbook script
+  that validates advert, admission, order, signed order, PoR, PoTR, repair,
+  governance, bundle, and manifest/CAR replay scenarios and writes one
+  `ValidationOutcomeV1` JSON file per scenario.
+- Updated the SF-11 reference SDK plan copies and `roadmap.md` so the cookbook
+  and committed PoTR/repair sample payloads are no longer listed as future work;
+  remaining SF-11 work is live release evidence.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo run -j 1 -p sorafs_manifest --bin generate_por_fixtures`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh --out /tmp/iroha-sorafs-reference-sdk-cookbook-out`
+  - Deterministic fixture regeneration check: run
+    `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo run -q -j 1 -p sorafs_manifest --bin generate_por_fixtures` twice and diff SHA-256 sums for `fixtures/sorafs_manifest/potr/receipt_v1.to`, `fixtures/sorafs_manifest/potr/receipt_v1.json`, `fixtures/sorafs_manifest/repair/task_v1.to`, `fixtures/sorafs_manifest/repair/task_v1.json`, `fixtures/sorafs_manifest/governance/node_v1.to`, and `fixtures/sorafs_manifest/governance/node_v1.json`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest --test por_fixtures -- --nocapture`
+    (`6` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference-cookbook cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`21` passed)
+  - `cargo fmt --all -- --check`
+  - `bash -n docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh`
+  - `git diff --check -- crates/sorafs_manifest/src/bin/generate_por_fixtures.rs crates/sorafs_manifest/tests/por_fixtures.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs fixtures/sorafs_manifest/potr fixtures/sorafs_manifest/repair docs/examples/sorafs_reference_sdk docs/source/sorafs_reference_sdk_plan*.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 cookbook wording scan across touched docs (no matches)
+
+## 2026-06-22 SoraFS SF-11 governance ML-DSA verification
+
+- `GovernanceLogNodeV1::verify_publisher_signature` now verifies both
+  Ed25519 and Dilithium3/ML-DSA publisher signatures over the same canonical
+  governance node signing payload.
+- `validate_governance_log_node_bytes` now checks every advertised governance
+  publisher signature algorithm and maps malformed keys, malformed signatures,
+  and verification failures to `SFS-SIG-005`.
+- Regenerated `fixtures/sorafs_manifest/governance/node_v1.to` and
+  `node_v1.json` with a deterministic Dilithium3/ML-DSA publisher signature,
+  and the fixture test now verifies that signature instead of only checking
+  structural decoding.
+- The fixture generator now uses the existing `soranet_pq` deterministic
+  ChaCha20 ML-DSA signing helpers for governance fixtures, so repeated fixture
+  generation produces byte-identical `node_v1` outputs.
+- Updated the SF-11 reference SDK plan copies, portal error catalogue,
+  governance fixture README, and `roadmap.md` so non-Ed25519 governance
+  verification is no longer listed as outstanding; remaining SF-11 work is live
+  release evidence.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo run -j 1 -p sorafs_manifest --bin generate_por_fixtures`
+  - Deterministic fixture regeneration check: run
+    `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo run -j 1 -p sorafs_manifest --bin generate_por_fixtures` twice and diff SHA-256 sums for `fixtures/sorafs_manifest/governance/node_v1.to` and `node_v1.json`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest governance --lib -- --nocapture`
+    (`15` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --test por_fixtures governance_node_fixture_wraps_por_proof -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli sorafs_validate_governance_accepts_committed_fixture -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli sorafs_validate_sign_governance_writes_valid_signed_norito -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --bin sorafs-validate sign_governance_log_node_replaces_signature_with_verified_ed25519_signature -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --lib -- --nocapture`
+    (`285` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`19` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --test por_fixtures -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-governance-mldsa cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`28` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/sorafs_manifest/Cargo.toml crates/sorafs_manifest/src/governance.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/bin/generate_por_fixtures.rs crates/sorafs_manifest/tests/por_fixtures.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs fixtures/sorafs_manifest/governance/README.md fixtures/sorafs_manifest/governance/node_v1.json docs/source/sorafs_reference_sdk_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 governance Ed25519-only wording scan across the touched code
+    and docs (no matches)
+
+## 2026-06-22 SoraFS SF-11 manifest/CAR replay outcomes
+
+- Added `sorafs_car::reference` with `validate_manifest_car_replay` and
+  `validate_manifest_car_replay_bytes`, keeping CAR parsing in `sorafs_car`
+  while returning the same `ValidationOutcomeV1` contract used by the SF-11
+  reference validators.
+- Manifest/CAR replay now validates decoded `ManifestV1` policy, declared CAR
+  digest and size, content length, root CID, chunk profile, chunk digests,
+  payload digest, chunk plan, and PoR root. It maps decode failures to
+  `SFS-NORITO-001`, manifest policy failures to existing `SFS-VAL-*` codes or
+  `SFS-POL-006`, and CAR replay failures to `SFS-CAR-*`.
+- Added `soranet_trustless_verifier --validation-outcome` with optional
+  `--generated-at`, `--json-out`, and `--quiet`, so gateway manifest/CAR
+  fixture checks can emit reference validation JSON and exit with code `2` for
+  rejected payloads. The CLI rejects `--validation-outcome --pin-record`
+  explicitly because pin-record validation remains part of summary mode.
+- Updated the SF-11 reference SDK plan copies, portal error catalogue, and
+  `roadmap.md` so manifest/CAR replay is no longer listed as outstanding;
+  remaining SF-11 work is live release evidence.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-car-replay cargo test -j 1 -p sorafs_car --features manifest reference --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-car-replay cargo test -j 1 -p sorafs_car --features cli --test trustless_verifier trustless_verifier_emits_reference_validation_outcome -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-car-replay cargo test -j 1 -p sorafs_car --features cli --test trustless_verifier -- --nocapture`
+    (`3` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-car-replay cargo test -j 1 -p sorafs_car --features manifest --lib -- --nocapture`
+    (`99` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/sorafs_car/src/reference.rs crates/sorafs_car/src/lib.rs crates/sorafs_car/src/bin/soranet_trustless_verifier.rs crates/sorafs_car/tests/trustless_verifier.rs docs/source/sorafs_reference_sdk_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - Direct trailing-whitespace scan across the touched manifest/CAR replay
+    files and docs, including the untracked new `crates/sorafs_car/src/reference.rs`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 manifest/CAR replay wording scan across the touched docs
+    (no matches)
+  - Anchored conflict-marker scan across the touched manifest/CAR replay files
+    and docs (no matches)
+
+## 2026-06-22 SoraFS SF-11 signed replication orders
+
+- Added `SignedReplicationOrderV1` and `ReplicationOrderSignatureV1`, with
+  Ed25519 verification over canonical Norito signing bytes that include the
+  `sorafs.replication_order.signature.v1` domain string and exclude the
+  attached signature.
+- `validate_signed_replication_order_bytes` and
+  `sorafs_reference_validate_signed_replication_order_json` now validate signed
+  replication-order envelopes and map malformed or failed signatures to
+  `SFS-SIG-006`.
+- Added `sorafs-validate order --signed-order <path>` and
+  `sorafs-validate sign --kind order`, which sign bare `ReplicationOrderV1`
+  payloads with runtime-only Ed25519 seeds, validate the signed Norito envelope
+  before writing, and emit the same `ValidationOutcomeV1` contract as the other
+  SF-11 validators.
+- Updated the SF-11 reference SDK plan copies, portal error catalogue, and
+  `roadmap.md` so replication-order signing is no longer listed as outstanding;
+  the subsequent manifest/CAR replay slice closes local replay outcome
+  coverage.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest signed_replication_order --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --lib -- --nocapture`
+    (`282` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --bin sorafs-validate sign_replication_order_returns_verified_ed25519_envelope -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli sorafs_validate_sign_order_writes_valid_signed_norito -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`28` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`19` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest reference_ffi --lib -- --nocapture`
+    (`6` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/sorafs_manifest/src/capacity.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/reference_ffi.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs docs/source/sorafs_reference_sdk_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 order-signing wording scan across the touched code and docs
+    (no matches)
+  - Anchored conflict-marker scan across the touched order-signing files and
+    docs (no matches)
+
+## 2026-06-22 SoraFS SF-11 governance signing
+
+- Added canonical `GovernanceLogNodeV1` signing bytes that exclude
+  `publisher_signature`, plus Ed25519 publisher signature verification for
+  governance log nodes.
+- `validate_governance_log_node_bytes` now verifies Ed25519 publisher
+  signatures when present and maps malformed or failed governance publisher
+  signatures to `SFS-SIG-005`; the governance ML-DSA verification slice above
+  extends this to Dilithium3/ML-DSA.
+- Added `sorafs-validate sign --kind governance`, which decodes Norito
+  `GovernanceLogNodeV1`, signs canonical node bytes with a runtime-only
+  Ed25519 seed from `--key-hex` or `--key`, validates the signed node before
+  writing, and emits the same `ValidationOutcomeV1` contract as the validator.
+- Updated the SF-11 reference SDK plan copies, portal error catalogue, and
+  `roadmap.md` so governance Ed25519 signing is no longer listed as
+  outstanding; the subsequent signed-order slice closes replication-order
+  signing coverage.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest governance --lib -- --nocapture`
+    (`12` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --bin sorafs-validate sign_governance_log_node_replaces_signature_with_verified_ed25519_signature -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli sorafs_validate_sign_governance_writes_valid_signed_norito -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`25` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-sf11-signing cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`18` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/sorafs_manifest/src/governance.rs crates/sorafs_manifest/src/reference.rs crates/sorafs_manifest/src/lib.rs crates/sorafs_manifest/src/bin/sorafs-validate.rs crates/sorafs_manifest/tests/sorafs_validate_cli.rs docs/source/sorafs_reference_sdk_plan*.md docs/portal/docs/sorafs/reference-sdk/errors.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 governance-signing wording scan across the reference SDK plan
+    copies, `roadmap.md`, `status.md`, and portal error catalogue matched only
+    historical scan-command text already recorded in `status.md`.
+  - Anchored conflict-marker scan across the touched governance signing files
+    and docs (no matches).
+
+## 2026-06-22 SoraFS PoR scheduler observability
+
+- Registered the existing SoraFS capacity, egress, reputation, and PoR ingestion
+  metrics with the Prometheus registry so serialized telemetry includes the
+  metrics used by SoraFS dashboards and alerts.
+- Added PoR scheduler counters for scheduled/forced/failed challenge ticks,
+  forced challenges, and duplicate samples; Torii threads its existing telemetry
+  handle into `PorCoordinatorRuntime` while keeping the runtime constructor
+  default-disabled for tests and embeddings.
+- Extended `dashboards/grafana/sorafs_gateway_observability.json` with PoR
+  scheduler/forced-challenge/ingestion panels and added
+  `dashboards/alerts/sorafs_por_rules.yml` with promtool fixtures.
+- Updated the SF-9 PoR plan copies and `roadmap.md` so local runtime wiring,
+  config, metrics, dashboard, and alerts are no longer listed as missing;
+  remaining SF-9 work is live drand/VRF/auditor rollout evidence.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-por-observability cargo test -j 1 -p iroha_telemetry records_sorafs -- --nocapture`
+    (`6` focused SoraFS telemetry tests passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-por-observability cargo test -j 1 -p iroha_telemetry records_sorafs_por_scheduler_metrics -- --nocapture`
+    (`1` passed after the checked duplicate-sample counter conversion)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-por-observability cargo test -j 1 -p iroha_torii runtime_emits_governance_challenge_with_vrf --lib --features app_api,telemetry -- --nocapture`
+    (`1` passed)
+  - `jq empty dashboards/grafana/sorafs_gateway_observability.json`
+  - Ruby YAML parse for `dashboards/alerts/sorafs_por_rules.yml` and
+    `dashboards/alerts/tests/sorafs_por_rules.test.yml`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-9 wording scan across PoR plan copies, `roadmap.md`, and
+    `status.md` (no matches)
+  - Anchored conflict-marker scan across the touched PoR telemetry, Torii,
+    dashboard, alert, docs, status, and roadmap files (no matches)
+  - `promtool` was not installed in this environment, so the promtool rule
+    fixture was not executed locally.
+
+## 2026-06-22 SoraFS reputation publisher observability
+
+- Torii now records SoraFS reputation publisher health after accepting a
+  validated `ReputationSnapshotV1`: ingest lag, snapshot age, generated-at Unix
+  timestamp, provider count, low-score provider count, bounded top-provider
+  score gauges, and low-score threshold-crossing counters.
+- Added `dashboards/grafana/sorafs_reputation_health.json` and
+  `dashboards/alerts/sorafs_reputation_rules.yml` with fixture coverage for
+  high ingest lag, stale snapshots, low-score providers, and low-score
+  threshold crossings.
+- Updated the reputation operator guide, SFM-3 plan copies, and `roadmap.md` so
+  deployed ingest/publisher live rollout evidence remains outstanding, while
+  local publisher metrics, dashboard, and alert wiring are no longer listed as
+  missing.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reputation-metrics cargo test -j 1 -p iroha_telemetry records_sorafs_reputation_snapshot_metrics -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reputation-metrics cargo test -j 1 -p iroha_torii reputation_snapshot_publish_latest_and_provider_proof_round_trip --lib --features app_api,telemetry -- --nocapture`
+    (`1` passed)
+  - `jq empty dashboards/grafana/sorafs_reputation_health.json`
+  - Ruby YAML parse for `dashboards/alerts/sorafs_reputation_rules.yml` and
+    `dashboards/alerts/tests/sorafs_reputation_rules.test.yml`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Anchored conflict-marker scan across the touched reputation telemetry,
+    Torii, dashboard, alert, docs, status, and roadmap files (no matches)
+  - `promtool` was not installed in this environment, so the promtool rule
+    fixture was not executed locally.
+
+## 2026-06-22 SoraFS egress reconciliation metrics and alerts
+
+- Added optional `gateway_egress_bytes` and `orchestrator_egress_bytes` fields
+  to the capacity telemetry request. `egress_bytes` remains the authoritative
+  billing source; the new fields are reconciliation-only observer counters.
+- Torii now exports `torii_sorafs_egress_bytes` and
+  `torii_sorafs_egress_drift_ratio` for billing, gateway, and orchestrator
+  sources after accepted capacity telemetry submissions.
+- Extended `dashboards/grafana/sorafs_capacity_health.json` with egress byte
+  and drift panels, and added the `SoraFSEgressCounterDrift` Prometheus alert
+  with promtool coverage for sustained gateway/orchestrator drift above 10%.
+- Updated the pricing, capacity marketplace, capacity reconciliation, and
+  observability docs so SF-8 no longer lists gateway/orchestrator byte-counter
+  reconciliation as outstanding local production work.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-egress-reconcile cargo test -j 1 -p iroha_telemetry records_sorafs_egress_reconciliation_metrics -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-egress-reconcile cargo test -j 1 -p iroha_torii capacity_telemetry_handler_accepts_request --lib --features app_api,telemetry -- --nocapture`
+    (`1` passed)
+  - `jq empty dashboards/grafana/sorafs_capacity_health.json`
+  - Ruby YAML parse for `dashboards/alerts/sorafs_capacity_rules.yml` and
+    `dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-8 pricing follow-up wording scan across `docs/source/sorafs_pricing*.md`,
+    `roadmap.md`, and `status.md` (no matches)
+  - Repair-auth raw-body compatibility wording scan across Torii, `roadmap.md`,
+    `status.md`, and `docs/source/sorafs_repair_plan*.md` (no stale matches)
+  - Exact conflict-marker scan across the touched SoraFS pricing, repair,
+    telemetry, dashboard, and status/roadmap files (no matches)
+  - `promtool` and Docker were not installed in this environment, so the
+    promtool rule fixture was not executed locally.
+
+## 2026-06-22 SoraFS repair auditor raw-body deprecation
+
+- Torii repair auditor report/slash submissions now require JSON or Norito
+  `SignedAuditorRequestV1` envelopes. Legacy unsigned `RepairReportV1` and
+  `RepairSlashProposalV1` request bodies no longer fall back into the scheduler
+  path.
+- Tightened the lower-level repair report/slash handlers so scheduler mutation
+  requires a signed-auditor nonce tuple, preserving persistent per-auditor replay
+  accounting for every accepted auditor submission.
+- Updated the repair endpoint contract tests to assert that raw report bodies
+  return `400 Bad Request`, then queue repair tickets through signed envelopes.
+  The routing unit suite now covers raw JSON and raw Norito rejection directly.
+- Updated the repair API plan, localized plan copies, and `roadmap.md` so
+  repair-auth raw-body deprecation is no longer listed as pending local
+  production-hardening work.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-repair-deprecate cargo test -j 1 -p iroha_torii repair_query_tests --lib --features app_api -- --nocapture`
+    (`10` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-repair-deprecate cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs sorafs_repair --features app_api -- --nocapture`
+    (`3` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale repair-auth compatibility wording scan across Torii, `roadmap.md`,
+    `status.md`, and `docs/source/sorafs_repair_plan*.md`
+    (no matches)
+  - Exact conflict-marker scan across the touched repair-auth files
+    (no matches)
+
+## 2026-06-22 SoraFS SF-11 fixture bundle, governance, FFI, signing, and packaging
+
+- Added `validate_fixture_bundle_payloads` and `sorafs-validate bundle
+  --bundle <dir>` for SF-11 fixture-directory cross-link validation. The bundle
+  validator discovers the known SoraFS fixture payload names, validates each
+  Norito payload with the existing advert/admission/order/PoR/PoTR/repair
+  validators, replays PoR challenge/proof pair binding, enforces one manifest
+  digest across manifest-bearing artifacts, verifies provider-admission
+  provider consistency, and checks manifest-bearing provider ids against
+  replication-order assignments.
+- Added `validate_governance_log_node_bytes` and `sorafs-validate governance
+  --node <path>` for SF-11 governance log node validation. The command validates
+  `GovernanceLogNodeV1` structure, embedded payload policy, publisher metadata,
+  publisher signature material, Ed25519 and Dilithium3/ML-DSA publisher
+  signatures, and optional exact node-CID binding via `--cid <node-cid>`.
+- Added `reference_ffi`, a C ABI facade for SDK bindings. It returns
+  `ValidationOutcomeV1` as Norito JSON buffers for provider advert, admission,
+  replication order, signed replication order, PoR, PoTR, repair, governance,
+  and fixture bundle validators, exports selector constants for
+  repair/bundle/profile arguments, and provides `sorafs_reference_free_buffer`
+  for caller-owned cleanup.
+- Added `sorafs-validate sign --kind advert`, later extended with
+  `sorafs-validate sign --kind order` and `sorafs-validate sign --kind
+  governance`, which decode Norito `ProviderAdvertV1`, `ReplicationOrderV1`, or
+  `GovernanceLogNodeV1`, sign canonical payload bytes with Ed25519 seeds
+  supplied via runtime-only `--key-hex` or `--key`, write signed Norito output
+  only after validation succeeds, and emit the same `ValidationOutcomeV1`
+  contract.
+- Added `scripts/package_sorafs_validate_release.sh` for static release
+  packaging. The helper builds or accepts a prebuilt `sorafs-validate`, runs
+  committed-fixture smoke checks, stages a tarball under
+  `dist/sorafs-validate-release/`, writes binary/archive SHA256 files plus a
+  manifest, and keeps generated `dist/*` artifacts untracked. The existing
+  SoraFS release guard now syntax-checks this helper alongside
+  `scripts/release_sorafs_cli.sh`.
+- Added stable bundle outcome codes `SFS-BND-001` (bundle payload/too-few
+  artifacts), `SFS-BND-002` (manifest digest mismatch), and `SFS-BND-003`
+  (provider mismatch), plus governance codes `SFS-GOV-001` (node or embedded
+  payload validation), `SFS-GOV-003` (node-CID mismatch), and `SFS-SIG-005`
+  (publisher signature material), plus FFI codes `SFS-FFI-001` (invalid ABI
+  argument) and `SFS-FFI-002` (FFI panic/rendering fault), and documented them
+  in the portal reference SDK error catalogue.
+- Updated the SF-11 reference SDK plan, localized plan copies, and `roadmap.md`
+  so fixture-directory cross-link checks, governance validation, FFI,
+  provider-advert signing, and governance Ed25519 signing are no longer listed
+  as outstanding; the subsequent signed-order slice closes replication-order
+  signing coverage.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ffi cargo test -j 1 -p sorafs_manifest validate_fixture_bundle_payloads --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ffi cargo test -j 1 -p sorafs_manifest validate_governance_log_node_bytes --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ffi cargo test -j 1 -p sorafs_manifest reference_ffi --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ffi cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`24` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-ffi cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`17` passed)
+  - `bash -n scripts/package_sorafs_validate_release.sh ci/check_sorafs_cli_release.sh scripts/release_sorafs_cli.sh`
+  - `scripts/package_sorafs_validate_release.sh --binary /tmp/iroha-codex-sorafs-ffi/debug/sorafs-validate --out-dir /tmp/iroha-codex-sorafs-validate-package --version codex-test --target codex-host`
+    (created archive, manifest, and SHA256 files under `/tmp`; fixture smoke
+    checks passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale SF-11 command-slice wording scan across `roadmap.md`, `status.md`,
+    `docs/source/sorafs_reference_sdk_plan*.md`, and the portal error catalogue
+    (no matches for the retired pending-work wording)
+  - Exact conflict-marker scan across the touched SF-11 files (no matches)
+
+## 2026-06-21 SoraFS repair auditor nonce replay guard
+
+- Added persistent per-auditor monotonic nonce tracking to the SoraFS repair
+  store snapshot. The store persists the highest accepted signed-auditor nonce
+  per canonical auditor account and rejects equal or lower nonces after restart.
+- Torii signed repair report and slash endpoints now carry the validated
+  `SignedAuditorRequestV1` account/nonce through submission unwrapping, reject
+  stale or replayed signed nonces before scheduler mutation. This entry predates
+  the 2026-06-22 signed-envelope-only enforcement above.
+- Updated the repair API plan and `roadmap.md` so persistent nonce replay
+  rejection is no longer listed as pending repair-auth work.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-repair-nonce CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_node repair --lib -- --nocapture`
+    (`51` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-repair-nonce CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii repair_query_tests --lib --features app_api -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-repair-nonce CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs sorafs_repair --features app_api -- --nocapture`
+    (`3` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+  - Stale repair-auth wording scan across `roadmap.md`, `status.md`, and
+    `docs/source/sorafs_repair_plan*.md`
+    (no matches)
+
+## 2026-06-21 SoraFS auditor signature verification hardening
+
+- Added canonical `SignedAuditorRequestSignaturePayloadV1` signing bytes and
+  `SignedAuditorRequestV1::verify_signature()` so signed repair reports and slash
+  proposals verify Ed25519 signatures before Torii unwraps them.
+- Torii now rejects signed auditor envelopes when the signature is bogus, the
+  algorithm is unsupported, or the verified public key does not match the
+  canonical auditor account. This entry predates the signed-envelope-only
+  enforcement above; persistent nonce replay storage is covered by the follow-up
+  repair auditor nonce guard entry.
+- Updated the two `nexus_and_streaming` SoraFS pin registration helpers to pass
+  `manifest_bytes: None` with the current `SorafsPinRegisterArgs` shape.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-auditor-fix CARGO_INCREMENTAL=0 cargo test -p sorafs_manifest signed_auditor -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-auditor-fix CARGO_INCREMENTAL=0 cargo test -p iroha_torii repair_query_tests --features app_api -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-auditor-fix CARGO_INCREMENTAL=0 cargo test -p iroha_torii --test torii_nexus_sorafs --features app_api sorafs_repair_endpoints -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-auditor-fix CARGO_INCREMENTAL=0 cargo test -p integration_tests --test nexus_and_streaming --no-run`
+  - `cargo fmt --all -- --check`
+
+## 2026-06-21 SoraFS SF-11 reference validator repair slice
+
+- Added `validate_repair_payload_bytes` to `sorafs_manifest` so SF-11 tooling
+  validates Norito repair evidence, reports, task records, slash proposals,
+  escalation policy/approval payloads, signed auditor requests, worker action
+  payloads, task events, and repair audit events through the canonical repair
+  validators. Signed auditor requests now run Ed25519 verification over the
+  canonical signed payload.
+- Added `sorafs-validate repair --kind <payload-kind> --input <path>` plus
+  aliases such as `--task`, `--evidence`, `--report`,
+  `--signed-auditor-request`, `--worker-signature`, `--event`, and
+  `--audit-event`, with the existing `--format table|json|yaml`,
+  `--telemetry-out`, and deterministic `--generated-at` behavior.
+- Reworked `RepairCauseV1` to use explicit newtype detail structs for PoR
+  failure, latency SLA, replica shortfall, and manual causes. This keeps the
+  observable cause data unchanged while making header-wrapped Norito
+  `RepairEvidenceV1` and signed auditor request payloads roundtrip through the
+  canonical decoder.
+- Extended the reference SDK error catalogue with `SFS-REP-001`,
+  `SFS-REP-002`, `SFS-POL-005`, `SFS-GOV-002`, and `SFS-SIG-004`, then updated
+  `docs/source/sorafs_reference_sdk_plan*.md`, the portal error catalogue, and
+  `roadmap.md` so the remaining SF-11 command list no longer includes repair.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest validate_repair_payload_bytes -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest evidence_norito_roundtrips -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reference::tests -- --nocapture`
+    (`39` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest repair::tests -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_node repair --lib -- --nocapture`
+    (`50` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs sorafs_repair -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sorafs_repair --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii repair_worker --lib -- --nocapture`
+    (`6` passed)
+  - `cargo fmt --all -- --check`
+  - `node --check docs/portal/sidebars.js`
+  - `rg -n 'specification only|not yet implemented|Built using|policy <file> overrides defaults|admission/order|Remaining SF-11 work|commands \(repair|repair/governance|commands \(PoTR|commands \(PoR/PoTR|advert-only|advert only|repair evidence missing' docs/source/sorafs_reference_sdk_plan*.md roadmap.md docs/portal/docs/sorafs/reference-sdk/errors.md`
+    (no matches)
+  - `rg -n 'RepairCauseV1::(PorFailure|LatencySla|ReplicaShortfall|Manual) \{' crates integration_tests`
+    (no matches)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` across the touched SF-11
+    validator files, repair model files, and docs (no matches)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-21 SoraFS SF-11 reference validator PoTR slice
+
+- Added `validate_potr_receipt_bytes` to `sorafs_manifest` so SF-11 tooling
+  validates Norito `PotrReceiptV1` payloads through the canonical receipt
+  validator, including latency/deadline consistency, timestamp ordering, range
+  bounds, detached receipt signatures, and optional expected tier matching.
+- Added `sorafs-validate potr --receipt <path>` with optional
+  `--profile hot|warm|archive|cold` plus the same `--format table|json|yaml`,
+  `--telemetry-out`, and deterministic `--generated-at` behavior as the other
+  reference validator commands.
+- Extended the reference SDK error catalogue with `SFS-POTR-001`,
+  `SFS-POTR-002`, `SFS-SIG-003`, and `SFS-VAL-010`, then updated
+  `docs/source/sorafs_reference_sdk_plan*.md` and `roadmap.md` so the remaining
+  SF-11 command list no longer includes PoTR.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest validate_potr_receipt_bytes -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reference::tests -- --nocapture`
+    (`34` passed)
+  - `cargo fmt --all -- --check`
+  - `node --check docs/portal/sidebars.js`
+  - `rg -n 'specification only|not yet implemented|Built using|policy <file> overrides defaults|admission/order|Remaining SF-11 work|commands \(PoTR|commands \(PoR/PoTR|advert-only|advert only' docs/source/sorafs_reference_sdk_plan*.md roadmap.md`
+    (no matches)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` across the touched SF-11
+    validator files and docs (no matches)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-21 SoraFS SF-11 reference validator PoR slice
+
+- Added `validate_por_challenge_proof_bytes` to `sorafs_manifest` so SF-11
+  tooling validates Norito `PorChallengeV1` and `PorProofV1` payloads through
+  the canonical typed validators, then checks challenge/manifest/provider
+  binding, proof deadline policy, and sample coverage.
+- Added `sorafs-validate por --challenge <path> --proof <path>` with the same
+  `--format table|json|yaml`, `--telemetry-out`, and deterministic
+  `--generated-at` behavior as the other reference validator commands.
+- Extended the reference SDK error catalogue with `SFS-POR-001`,
+  `SFS-POR-003`, `SFS-VAL-008`, and `SFS-VAL-009`, added `SFS-POL-002` to the
+  implemented portal catalogue, then updated
+  `docs/source/sorafs_reference_sdk_plan*.md` and `roadmap.md` so the remaining
+  SF-11 command list no longer includes PoR.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest validate_por_challenge_proof_bytes -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reference::tests -- --nocapture`
+    (`28` passed)
+  - `cargo fmt --all -- --check`
+  - `node --check docs/portal/sidebars.js`
+  - `rg -n 'specification only|not yet implemented|Built using|policy <file> overrides defaults|admission/order|Remaining SF-11 work|commands \(PoR/PoTR|advert-only|advert only' docs/source/sorafs_reference_sdk_plan*.md roadmap.md`
+    (no matches)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` across the touched SF-11
+    validator files and docs (no matches)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-21 SoraFS SF-11 reference validator admission slice
+
+- Added `validate_provider_admission_envelope_bytes` to `sorafs_manifest` so
+  SF-11 tooling validates Norito `ProviderAdmissionEnvelopeV1` payloads through
+  the canonical `verify_envelope` path, including structural checks, digest
+  bindings, retention policy, and council Ed25519 signature verification.
+- Added `sorafs-validate admission --input <path>` with `--envelope <path>` as
+  an alias plus the same `--format table|json|yaml`, `--telemetry-out`, and
+  deterministic `--generated-at` behavior as the other reference validator
+  commands.
+- Extended the reference SDK error catalogue with `SFS-SIG-002`,
+  `SFS-VAL-006`, `SFS-VAL-007`, and `SFS-POL-004`, then updated
+  `docs/source/sorafs_reference_sdk_plan*.md` and `roadmap.md` so the remaining
+  SF-11 command list no longer includes provider admission.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest validate_provider_admission_envelope_bytes -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`9` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reference::tests -- --nocapture`
+    (`21` passed)
+  - `cargo fmt --all -- --check`
+  - `node --check docs/portal/sidebars.js`
+  - `rg -n 'specification only|not yet implemented|Built using|policy <file> overrides defaults|admission/order|Remaining SF-11 work|advert-only|advert only' docs/source/sorafs_reference_sdk_plan*.md roadmap.md`
+    (no matches)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` across the touched SF-11
+    validator files and docs (no matches)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-21 SoraFS SF-11 reference validator order slice
+
+- Added `validate_replication_order_bytes` to `sorafs_manifest` so SF-11
+  tooling validates Norito `ReplicationOrderV1` payloads through the canonical
+  replication-order `validate()` path and emits stable `ValidationOutcomeV1`
+  records.
+- Added `sorafs-validate order --order <path>` with the same
+  `--format table|json|yaml`, `--telemetry-out`, and deterministic
+  `--generated-at` behavior as the advert validator. `--input <path>` is kept
+  as a compatibility alias for order payloads.
+- Extended the reference SDK error catalogue with `SFS-VAL-001`,
+  `SFS-VAL-005`, and `SFS-POL-003`, then updated
+  `docs/source/sorafs_reference_sdk_plan*.md` and `roadmap.md` so the remaining
+  SF-11 command list no longer includes replication orders.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest validate_replication_order_bytes -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reference::tests -- --nocapture`
+    (`14` passed)
+  - `cargo fmt --all -- --check`
+  - `node --check docs/portal/sidebars.js`
+  - `rg -n 'specification only|not yet implemented|Built using|policy <file> overrides defaults|admission/order|advert-only|advert only' docs/source/sorafs_reference_sdk_plan*.md roadmap.md`
+    (no matches)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` across the touched SF-11
+    validator files and docs (no matches)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-21 SoraFS SF-11 reference validator advert slice
+
+- Added reusable provider-advert Ed25519 signature verification to
+  `sorafs_manifest::ProviderAdvertV1`, covering canonical Norito body bytes and
+  stable malformed-key/signature errors.
+- Added the first SF-11 reference validator API in `sorafs_manifest`:
+  `ValidationOutcomeV1`, `ValidationContextFieldV1`, `ValidationInputV1`, and
+  `validate_provider_advert_bytes`. The advert validator emits stable
+  `SFS-OK-000`, `SFS-NORITO-001`, `SFS-POL-001`, `SFS-SIG-001`,
+  `SFS-VAL-002`, `SFS-VAL-003`, and `SFS-VAL-004` outcomes with telemetry tags
+  and structured context.
+- Added the dependency-free `sorafs-validate advert` binary target under
+  `sorafs_manifest`. It supports `--format table|json|yaml`,
+  `--telemetry-out`, deterministic `--now`/`--generated-at` test hooks, and the
+  SF-11 exit-code contract for success, validation, I/O, configuration, and
+  internal errors.
+- Added the portal error catalogue at
+  `docs/portal/docs/sorafs/reference-sdk/errors.md`, wired it into the portal
+  sidebar, and updated `docs/source/sorafs_reference_sdk_plan*.md` plus
+  `roadmap.md` to replace the stale "specification only" wording with the
+  implemented advert-validator slice and remaining SF-11 scope.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest validate_provider_advert_bytes -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --bin sorafs-validate -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest verify_signature_ -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest --test sorafs_validate_cli -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-reference CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reference::tests -- --nocapture`
+    (`8` passed)
+  - `cargo fmt --all -- --check`
+  - `node --check docs/portal/sidebars.js`
+  - `rg -n 'specification only|not yet implemented|Built using|policy <file> overrides defaults' docs/source/sorafs_reference_sdk_plan*.md`
+    (no matches)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+
+## 2026-06-21 SoraFS repair signed auditor submissions
+
+- Added JSON support for `SignedAuditorRequestV1` and its auditor signature
+  envelope, including stable `SignatureAlgorithm` JSON label parsing for
+  `ed25519` and `multi-sig`.
+- Torii `POST /v1/sorafs/audit/repair/report` and `/slash` now accept JSON or
+  Norito `SignedAuditorRequestV1` bodies, validate envelope version, non-zero
+  nonce, auditor-account match, payload kind, Ed25519 signature over the
+  canonical signed payload, and signer key binding to the canonical auditor
+  account, then unwrap the expected `RepairReportV1` or
+  `RepairSlashProposalV1` before calling the existing repair scheduler path.
+  This older entry predates the 2026-06-22 raw-body deprecation; current Torii
+  requires signed envelopes and rejects legacy raw request bodies.
+- Updated `docs/source/sorafs_repair_plan*.md` to replace the stale "signed
+  envelope not wired" wording and to make the remaining replay enforcement work
+  explicit.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --lib --features app_api signed_repair_ -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs --features app_api sorafs_repair_worker_endpoints_drive_state -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest signed_auditor_request_json_roundtrip_succeeds -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest signature_algorithm_json_deserializes_stable_labels -- --nocapture`
+    (`1` passed)
 
 ## 2026-06-21 SoraFS pricing egress accounting documentation
 
@@ -40,10 +2642,37 @@ Last updated: 2026-06-21
   Soracloud publication paths now pass their manifest bytes through the shared
   client builder, and Torii coverage accepts both canonical and legacy Norito
   encodings.
+- Updated the Python `ToriiClient.register_sorafs_pin_manifest` request
+  normalizer so callers can pass `manifest_b64`/`manifestB64` or raw
+  `manifest_bytes`/`manifestBytes`; the client forwards canonical
+  `manifest_b64`, rejects duplicate manifest payload aliases, and rejects empty
+  or malformed base64 before making the HTTP request.
+- Updated the JavaScript `registerSorafsPinManifest` request builder and
+  TypeScript declarations so callers can pass `manifest`, `manifestBytes`, or
+  `manifest_b64`/`manifestB64` aliases; the SDK forwards canonical
+  `manifest_b64` and rejects duplicate or malformed manifest payload aliases
+  before `fetch`.
+- Updated the C# `RegisterSoraFsPinManifestAsync` request model and normalizer
+  so callers can pass `ManifestBase64` or raw `ManifestBytes`; the SDK forwards
+  canonical `manifest_b64` and rejects duplicate, empty, or malformed manifest
+  payload inputs before submitting.
+- Updated the Swift `registerSoraFsPinManifest` request model and wire encoder
+  so callers can pass `manifestBase64` or raw `manifestBytes`; the SDK forwards
+  canonical `manifest_b64` and rejects duplicate, empty, or malformed manifest
+  payload inputs before submitting.
+- Extended the SoraFS pin-register SDK guard and its JavaScript meta-test so
+  JavaScript, Python, Swift, and C# manifest payload fields, canonical
+  `manifest_b64` forwarding, and malformed-payload coverage cannot drift
+  silently.
 - Updated OpenAPI, manifest-pipeline, migration-roadmap, architecture, CLI,
   SF-4 plan, status, and roadmap docs so SORAFS-215/SORAFS-216 are recorded as
-  validator-wiring complete and the remaining work is endpoint error-label and
-  non-Rust SDK request-builder parity.
+  validator-wiring complete and SDK request-builder parity is guarded.
+- Torii pin-register validation failures now return stable `sorafs_pin_*`
+  `AppQueryValidation` envelope codes for hex parsing, alias proof decoding,
+  manifest payload base64/Norito decoding, manifest governance validation, and
+  digest/chunker/content-length/pin-policy mismatches.
+- Updated `docs/source/sorafs/pin_registry_validation_plan*.md` so the Torii
+  integration row records structured endpoint error labels as complete.
 - Validation passed:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest enforces_pin_policy_ceiling_retention_and_storage_class -- --nocapture`
     (`1` passed)
@@ -53,12 +2682,38 @@ Last updated: 2026-06-21
     (`1` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --lib --features app_api register_manifest_handler_ -- --nocapture`
     (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --lib --features app_api sorafs_pin -- --nocapture`
+    (`14` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs --features app_api sorafs_pin_register_route_accepts_manifest -- --nocapture`
     (`1` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha build_register_manifest_payload_ -- --nocapture`
     (`4` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli mock_http_server_helpers_track_sorafs_pin_registration_digest -- --nocapture`
     (`3` matching binary targets passed)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/src/iroha_python/client.py python/iroha_python/tests/client_sorafs_pin_register_test.py`
+  - `npm run build:dist` (from `javascript/iroha_js`)
+  - `node --check src/toriiClient.js` (from `javascript/iroha_js`)
+  - `node --check dist/toriiClient.js` (from `javascript/iroha_js`)
+  - `node --test --test-name-pattern registerSorafsPinManifest test/toriiClient.test.js`
+    (`23` passed)
+  - `bash -n ci/check_sorafs_pin_register_sdk_guard.sh`
+  - `bash ci/check_sorafs_pin_register_sdk_guard.sh`
+  - `node --check test/sorafsPinRegisterSdkGuard.test.js` (from `javascript/iroha_js`)
+  - `node --test --test-name-pattern "SoraFS pin-register SDK guard" test/sorafsPinRegisterSdkGuard.test.js`
+    (`2` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no lockfile changes)
+- Validation blocked:
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src python3 -m pytest -q python/iroha_python/tests/client_sorafs_pin_register_test.py`
+    cannot collect on this host because the available Apple Python is 3.9 and
+    the SDK imports `typing.TypeAlias`, which requires Python 3.10+.
+  - Focused C# `ToriiClientTests` could not run because `dotnet` is not
+    installed on this host (`zsh:1: command not found: dotnet`).
+  - `swift test --filter ToriiClientTests/testRegisterSoraFsPinManifest`
+    could not start because `IrohaSwift/Package.swift` requires
+    `dist/NoritoBridge.xcframework`, which is not materialized on this host.
 
 ## 2026-06-21 SoraFS SF-2d provider advert integration status docs
 

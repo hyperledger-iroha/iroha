@@ -201,7 +201,7 @@ whitelists malicious providers, or suppresses alerts.
   the Torii integration in `crates/iroha_torii/src/da/ingest.rs`, which threads the
   fingerprint checks through `/v1/da/ingest`.
 - PDP/PoTR streaming simulations are exercised via the proof-stream harness in
-  `crates/sorafs_car/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
   and failure scenarios animated in the threat model.
 - Capacity and repair soak results live under
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, while the broader

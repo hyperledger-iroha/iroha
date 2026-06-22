@@ -82,7 +82,7 @@ Pour des définitions de champs détaillées, voir
 
 ## Référence des flags CLI et SDK
 
-`sorafs_cli fetch` (voir `crates/sorafs_car/src/bin/sorafs_cli.rs`) et le wrapper
+`sorafs_cli fetch` (voir `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) et le wrapper
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) partage la même
 surface de configuration de l’orchestrateur. Utilisez les drapeaux suivants lors de la
 capture de preuves de déploiement ou pour rejouer les luminaires canoniques :

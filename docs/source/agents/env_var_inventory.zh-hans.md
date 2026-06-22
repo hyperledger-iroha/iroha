@@ -77,7 +77,7 @@ _最后通过 `python3 scripts/inventory_env_toggles.py --json docs/source/agent
 
 ## CARGO_BIN_EXE_sorafs_cli（测试：1）
 
-- 测试：板条箱/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- 测试：板条箱/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_fetch（测试：1）
 
@@ -85,7 +85,7 @@ _最后通过 `python3 scripts/inventory_env_toggles.py --json docs/source/agent
 
 ## CARGO_BIN_EXE_taikai_car（测试：1）
 
-- 测试：板条箱/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- 测试：板条箱/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## CARGO_BIN_NAME（产品：3）
 

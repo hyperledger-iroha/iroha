@@ -30,7 +30,7 @@ Puerta de lanzamiento técnico چلانے سے پہلے تازہ ترین captur
 - Enlace del ticket de remediación (مثلاً `governance/tickets/SF6-SR-2026.md`) منسلک کریں اور
   Ingeniería de seguridad اور Grupo de trabajo de herramientas کے aprobadores de aprobación نوٹ کریں۔
 - تصدیق کریں کہ memo کی lista de verificación de remediación بند ہے؛ liberación de elementos no resueltos کو bloque کرتے ہیں۔
-- Registros de arnés de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) کو
+- Registros de arnés de paridad (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`) کو
   paquete de manifiesto کے ساتھ subir کرنے کے لیے تیار رہیں۔
 - یہ بھی تصدیق کریں کہ comando de firma میں `--identity-token-provider` کے ساتھ
   واضح `--identity-token-audience=<aud>` شامل ہو تاکہ Fulcio alcance evidencia de liberación میں captura ہو۔
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 یہ script درج ذیل afirmaciones کرتا ہے:
 
 - `cargo fmt --all -- --check` (espacio de trabajo)
-- `cargo clippy --locked --all-targets` `sorafs_car` کے لیے (característica `cli` کے ساتھ),
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` انہی cajas کے لیے
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 اگر کوئی قدم fallar ہو تو etiquetado سے پہلے regresión درست کریں۔ Versiones de lanzamiento کو principal
 کے ساتھ continuo رہنا چاہیے؛ liberar ramas میں corrige la selección de cereza نہ کریں۔ puerta

@@ -1394,6 +1394,14 @@ def _normalize_sorafs_pin_register_request(
         "chunk_digest",
         "chunkDigest",
     )
+    manifest_b64_value = _first_present(
+        request,
+        "manifest_b64",
+        "manifestB64",
+        "manifest_base64",
+        "manifestBase64",
+    )
+    manifest_bytes_value = _first_present(request, "manifest_bytes", "manifestBytes")
     content_length_value = _first_present(request, "content_length", "contentLength")
     submitted_epoch_value = _first_present(request, "submitted_epoch", "submittedEpoch")
     if manifest_digest_value is _MISSING:
@@ -1449,6 +1457,18 @@ def _normalize_sorafs_pin_register_request(
             allow_zero=True,
         ),
     }
+    if manifest_b64_value is not _MISSING and manifest_bytes_value is not _MISSING:
+        raise TypeError(f"{context} accepts only one of manifest_b64 or manifest_bytes")
+    if manifest_b64_value is not _MISSING:
+        payload["manifest_b64"] = _normalize_required_base64_payload(
+            manifest_b64_value,
+            f"{context}.manifest_b64",
+        )
+    elif manifest_bytes_value is not _MISSING:
+        payload["manifest_b64"] = _normalize_required_base64_payload(
+            manifest_bytes_value,
+            f"{context}.manifest_bytes",
+        )
 
     alias_value = _first_present(request, "alias")
     alias_namespace = _first_present(request, "alias_namespace", "aliasNamespace")

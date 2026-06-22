@@ -57,7 +57,7 @@ description: معرفات الملفات والمعلمات وخطة التفا�
 لفحص السجل من الأدوات، شغّل CLI المساعد:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -105,7 +105,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 لفحص شاهد PoR محدد، قدم مؤشرات chunk/segment/leaf واحفظ البرهان على القرص إذا رغبت:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -117,7 +117,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 المسجلة) يمكن لصقها في `chunker_registry_data.rs` عند ترقية ملف افتراضي جديد:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -129,7 +129,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 `--por-proof-verify` (تضيف CLI الحقل `"por_proof_verified": true` عندما يتطابق الشاهد مع الجذر المحسوب):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -138,7 +138,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 الطلبات الأوراق المتاحة:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -148,7 +148,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

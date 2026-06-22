@@ -3,8 +3,8 @@
 //! This module provides a lightweight accumulator that tracks replication
 //! activity for the currently active provider declaration. The intent is to
 //! surface deterministic counters (GiB reserved, GiB released, order counts,
-//! uptime/PoR placeholders) that higher layers can translate into Norito
-//! telemetry payloads and fee accrual reports.
+//! uptime, PoR/PDP/PoTR health, and egress totals) that higher layers can
+//! translate into Norito telemetry payloads and fee accrual reports.
 
 use std::{
     collections::HashMap,

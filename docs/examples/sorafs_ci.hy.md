@@ -81,7 +81,7 @@ jobs:
 
 ## Նշումներ
 
-- `sorafs_cli`-ը պետք է հասանելի լինի վազորդի վրա (օրինակ՝ `cargo install --path crates/sorafs_car --features cli` նախքան այս քայլերը):
+- `sorafs_cli`-ը պետք է հասանելի լինի վազորդի վրա (օրինակ՝ `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` նախքան այս քայլերը):
 - Աշխատանքային հոսքը պետք է ապահովի հստակ OIDC լսարան (այստեղ `sorafs`); հարմարեցրեք `--identity-token-audience`՝ ձեր Fulcio քաղաքականությանը համապատասխանելու համար:
 - Թողարկման խողովակաշարը պետք է արխիվացնի `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` և `artifacts/proof.json` կառավարման վերանայման համար:
 - Որոշիչ նմուշային արտեֆակտներ ապրում են `fixtures/sorafs_manifest/ci_sample`-ում; պատճենեք դրանք թեստերի մեջ, երբ ձեզ անհրաժեշտ են ոսկե մանիֆեստներ, կտոր պլաններ կամ փաթեթավորեք JSON՝ առանց խողովակաշարը վերահաշվարկելու:

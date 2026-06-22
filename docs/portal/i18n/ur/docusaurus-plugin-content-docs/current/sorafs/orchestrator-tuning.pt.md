@@ -81,7 +81,7 @@ ID: آرکسٹریٹر ٹوننگ
 
 ## سی ایل آئی اور ایس ڈی کے جھنڈوں کا حوالہ
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` دیکھیں) اور ریپر
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` دیکھیں) اور ریپر
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) شیئر کریں
 ایک ہی آرکیسٹریٹر کنفیگریشن سطح۔ مندرجہ ذیل جھنڈوں کا استعمال کریں
 رول آؤٹ شواہد پر قبضہ کرنا یا کیننیکل فکسچر کو دوبارہ چلاتے وقت:

@@ -29,7 +29,7 @@ summary: نفّذ بوابة إصدار CLI/SDK، وطبّق سياسة الإص
 - أرفق رابط تذكرة المعالجة (مثل `governance/tickets/SF6-SR-2026.md`) وسجّل
   מידע על הנדסת אבטחה וקבוצת עבודה של כלי עבודה.
 - تحقّق من إغلاق قائمة المعالجة في المذكرة؛ العناصر غير المحسومة تحظر الإصدار.
-- استعد لرفع سجلات harness التكافؤ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- استعد لرفع سجلات harness التكافؤ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   بجانب حزمة المانيفست.
 - تأكد أن أمر التوقيع الذي ستنفذه يتضمن `--identity-token-provider` و
   `--identity-token-audience=<aud>` صريحًا حتى يُلتقط نطاق Fulcio ضمن أدلة الإصدار.
@@ -49,9 +49,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ينفذ السكربت التحققات التالية:
 
 - `cargo fmt --all -- --check` (סביבת עבודה)
-- `cargo clippy --locked --all-targets` لحزمة `sorafs_car` (مع ميزة `cli`)،
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   ו-`sorafs_manifest` ו-`sorafs_chunker`
-- `cargo test --locked --all-targets` لتلك الحزم نفسها
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 إذا فشل أيٌّ من الخطوات، أصلح التراجع قبل وضع الوسم. يجب أن تكون بناءات
 الإصدار متصلة بـ main؛ لا تقم بعمل cherry-pick لإصلاحات ضمن فروع الإصدار.

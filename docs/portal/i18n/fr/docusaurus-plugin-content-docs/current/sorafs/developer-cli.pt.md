@@ -19,7 +19,7 @@ description : Guia focado em tarefas da superficie consolidada de `sorafs_cli`.
 Cette page espelha `docs/source/sorafs/developer/cli.md`. Mantenha ambas comme copies synchronisées.
 :::
 
-La surface consolidée `sorafs_cli` (fornecida pelo crate `sorafs_car` com o recurso `cli` habilité) expose toute l'étape nécessaire pour préparer les artefatos da SoraFS. Utilisez ce livre de recettes directement sur les flux de travail communs ; combinez le pipeline de manifeste et les runbooks de l'explorateur pour le contexte opérationnel.
+La surface consolidée `sorafs_cli` (provided by the `sorafs_orchestrator` crate) expose toute l'étape nécessaire pour préparer les artefatos da SoraFS. Utilisez ce livre de recettes directement sur les flux de travail communs ; combinez le pipeline de manifeste et les runbooks de l'explorateur pour le contexte opérationnel.
 
 ## Charges utiles Empacotar
 

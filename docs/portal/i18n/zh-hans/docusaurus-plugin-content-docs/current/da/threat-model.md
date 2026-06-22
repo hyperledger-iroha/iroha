@@ -219,7 +219,7 @@ blob 会耗尽资源或走私无效元数据。
   Torii 集成在 `crates/iroha_torii/src/da/ingest.rs` 中，该线程
   通过 `/v1/da/ingest` 进行指纹检查。
 - PDP/PoTR 流模拟通过验证流工具进行
-  `crates/sorafs_car/tests/sorafs_cli.rs`，涵盖 PoR/PDP/PoTR 请求流程
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`，涵盖 PoR/PDP/PoTR 请求流程
   以及威胁模型中动画的故障场景。
 - 容量和修复浸泡结果如下
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`，而更广泛的

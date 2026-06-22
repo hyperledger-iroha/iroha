@@ -81,7 +81,7 @@ Pour les définitions détaillées des champs, voyez
 
 ## Référence des drapeaux de la CLI et du SDK
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) et wrapper
+`sorafs_cli fetch` (ver `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) et wrapper
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) compartimentham
 la même superficie de configuration de l'orchestre. Utiliser les drapeaux suivants entre autres
 capturer des preuves de déploiement ou de reproduction des luminaires canoniques :

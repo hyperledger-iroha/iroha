@@ -225,7 +225,7 @@ PDP/PoTR 応答を阻害する。
 - DA-2 に replay cache と cursor 永続化が入った。`crates/iroha_core/src/da/replay_cache.rs`
   (cache ロジック) と `crates/iroha_torii/src/da/ingest.rs` (Torii 統合) を参照。
 - PDP/PoTR streaming simulations は proof-stream harness
-  `crates/sorafs_car/tests/sorafs_cli.rs` で実施し、PoR/PDP/PoTR の request flows と
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs` で実施し、PoR/PDP/PoTR の request flows と
   threat model に記載の failure scenarios をカバー。
 - Capacity/repair soak の結果は `docs/source/sorafs/reports/sf2c_capacity_soak.md`、
   Sumeragi の広域 soak matrix は `docs/source/sumeragi_soak_matrix.md` (翻訳版含む)。

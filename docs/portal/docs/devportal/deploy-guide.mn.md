@@ -23,7 +23,7 @@ translator: machine-google-reviewed
 суллах олдвор нь дахин давтагдах, аудит хийх боломжтой.
 
 Урсгал нь таныг `sorafs_cli` хоёртын системтэй (үүнтэй хамт бүтээгдсэн) гэж үздэг.
-`--features cli`), пин бүртгэлийн зөвшөөрөлтэй Torii төгсгөлийн цэгт хандах, мөн
+`sorafs_orchestrator` Cargo target), пин бүртгэлийн зөвшөөрөлтэй Torii төгсгөлийн цэгт хандах, мөн
 OIDC Sigstore-ийн итгэмжлэл. Урт хугацааны нууцыг хадгалах (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii жетонууд) таны CI хадгалах санд; Орон нутгийн гүйлтүүд тэдгээрийг эх сурвалж болгож чадна
 бүрхүүлийн экспортоос.
@@ -31,7 +31,7 @@ OIDC Sigstore-ийн итгэмжлэл. Урт хугацааны нууцыг 
 ## Урьдчилсан нөхцөл
 
 - `npm` эсвэл `pnpm` бүхий 18.18+ зангилаа.
-- `cargo run -p sorafs_car --features cli --bin sorafs_cli`-аас `sorafs_cli`.
+- `cargo run -p sorafs_orchestrator --bin sorafs_cli`-аас `sorafs_cli`.
 - Torii URL, `/v1/sorafs/*` болон эрх мэдлийн бүртгэл/хувийн түлхүүрийг харуулсан URL
   манифест болон бусад нэр оруулах боломжтой.
 - OIDC гаргагч (GitHub Actions, GitLab, ажлын ачаалал гэх мэт)

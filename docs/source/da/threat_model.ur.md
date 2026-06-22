@@ -205,7 +205,7 @@ _ لسٹ کا جائزہ لیا گیا: 2026-01-19-اگلا شیڈول جائز�
   `crates/iroha_torii/src/da/ingest.rs` میں Torii انضمام ، جو تھریڈ کرتا ہے
   فنگر پرنٹ `/v1/da/ingest` کے ذریعے چیک کرتا ہے۔
 - PDP/POTR اسٹریمنگ تخروپن میں پروف اسٹریم کنٹرول کے ذریعے استعمال کیا جاتا ہے
-  `crates/sorafs_car/tests/sorafs_cli.rs` ، پور/PDP/POTR درخواست کے بہاؤ کا احاطہ کریں
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs` ، پور/PDP/POTR درخواست کے بہاؤ کا احاطہ کریں
   اور ناکامی کے منظرنامے خطرے کے ماڈل میں متحرک ہیں۔
 - صلاحیت اور مرمت کو بھگانا نتائج کے تحت زندہ رہتے ہیں
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` ، جبکہ وسیع تر

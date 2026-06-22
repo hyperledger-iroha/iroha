@@ -19,7 +19,7 @@ description : Recorrido orienté vers les tareas de la surface consolidée de `s
 Cette page reflète `docs/source/sorafs/developer/cli.md`. Mantén est une copie synchronisée.
 :::
 
-La surface consolidée de `sorafs_cli` (proportionnée par la caisse `sorafs_car` avec la fonctionnalité `cli` autorisée) expose chaque étape nécessaire pour préparer les artefacts de SoraFS. Utilisez ce récepteur pour saler directement les municipalités de Flujos ; combiné avec le pipeline de manifeste et les runbooks de l'explorateur pour le contexte opérationnel.
+La surface consolidée de `sorafs_cli` (provided by the `sorafs_orchestrator` crate) expose chaque étape nécessaire pour préparer les artefacts de SoraFS. Utilisez ce récepteur pour saler directement les municipalités de Flujos ; combiné avec le pipeline de manifeste et les runbooks de l'explorateur pour le contexte opérationnel.
 
 ## Charges utiles Empaquetar
 

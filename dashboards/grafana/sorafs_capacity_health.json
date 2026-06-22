@@ -621,6 +621,48 @@
         "overrides": []
       },
       "description": "GC evictions blocked by active repair tickets in the last 15 minutes."
+    },
+    {
+      "type": "timeseries",
+      "title": "Egress Bytes by Source",
+      "id": 25,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_egress_bytes{provider=~\"$provider\"}",
+          "legendFormat": "{{provider}} {{source}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Billing, gateway, and orchestrator egress byte counters for capacity telemetry windows."
+    },
+    {
+      "type": "timeseries",
+      "title": "Egress Counter Drift (%)",
+      "id": 26,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "100 * torii_sorafs_egress_drift_ratio{provider=~\"$provider\",source=~\"gateway|orchestrator\"}",
+          "legendFormat": "{{provider}} {{source}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Absolute gateway/orchestrator drift from billing egress bytes. Values over 10% for 10 minutes trigger SoraFSEgressCounterDrift."
     }
   ]
 }

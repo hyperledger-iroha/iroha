@@ -86,7 +86,7 @@ Hesab tablosu açıq tələbləri, provayder reklamlarını və telemetriyanı b
 
 ## CLI & SDK Bayraq Referansı
 
-`sorafs_cli fetch` (bax: `crates/sorafs_car/src/bin/sorafs_cli.rs`) və
+`sorafs_cli fetch` (bax: `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) və
 `iroha_cli app sorafs fetch` sarğı (`crates/iroha_cli/src/commands/sorafs.rs`)
 eyni orkestr konfiqurasiya səthini paylaşın. Zaman aşağıdakı bayraqlardan istifadə edin
 yayılma dəlili əldə etmək və ya kanonik qurğuları təkrar oynamaq:

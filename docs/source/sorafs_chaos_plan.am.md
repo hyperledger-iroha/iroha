@@ -7,11 +7,11 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 43dfc53b7a951ec0b036a56941335a4fd05657da91c7a3f727e3846b8c647d23
 source_last_modified: "2025-12-29T18:16:36.135347+00:00"
 translation_last_reviewed: 2026-02-07
-title: SoraFS Chaos Drill & Incident Playbook Plan (Draft)
+title: SoraFS Chaos Drill & Incident Playbook Plan
 summary: Outline for SF-7b chaos drills and incident response materials.
 ---
 
-# SoraFS Chaos Drill & Incident Playbook Plan (Draft)
+# SoraFS Chaos Drill & Incident Playbook Plan
 
 ## Chaos Scenarios (Initial)
 

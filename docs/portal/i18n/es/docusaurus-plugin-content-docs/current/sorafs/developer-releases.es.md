@@ -29,7 +29,7 @@ recientes de la revisión de seguridad:- Descarga el memo más reciente de revis
 - Adjunta el enlace del ticket de remediación (por ejemplo, `governance/tickets/SF6-SR-2026.md`) y anota
   los aprobadores de Security Engineering y del Tooling Working Group.
 - Verifica que la lista de remediación del memo esté cerrada; los elementos sin resolver bloquean el lanzamiento.
-- Prepárate para subir los registros del arnés de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Prepárate para subir los registros del arnés de paridad (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   junto con el paquete del manifiesto.
 - Confirma que el comando de firma que planeas ejecutar incluye tanto `--identity-token-provider` como
   un `--identity-token-audience=<aud>` explícito para que el alcance de Fulcio quede capturado en la evidencia del lanzamiento.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 El guión realiza las siguientes comprobaciones:
 
 - `cargo fmt --all -- --check` (espacio de trabajo)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (con la característica `cli`),
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` para esos mismos cajonesSi algún paso falla, corrija la regresión antes de etiquetar. Las compilaciones de lanzamiento
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 deben estar continuos con main; no hagas cherry-pick de fixes en ramas de liberación.
 El gate también comprueba que las banderas de firma sin claves (`--identity-token-issuer`,
 `--identity-token-audience`) se proporcionen donde corresponda; los argumentos

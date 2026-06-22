@@ -241,7 +241,7 @@ DA、顧客の矛盾をフェッチするための約束。
   Torii と `crates/iroha_torii/src/da/ingest.rs` を統合し、エンカディア チェックを実行します。
   `/v1/da/ingest` 経由の指紋。
 - ストリーミング PDP/PoTR のシミュレーションとして、プルーフ ストリームを利用して実行
-  em `crates/sorafs_car/tests/sorafs_cli.rs`、コブリンド・フラクソス・デ・レクイシカオ
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`、コブリンド・フラクソス・デ・レクイシカオ
   PoR/PDP/PoTR は、ファルハ動物のシナリオではなく、アメリカのモデルでもありません。
 - 結果の容量と修復の結果
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`、マトリックスを浸すだけ

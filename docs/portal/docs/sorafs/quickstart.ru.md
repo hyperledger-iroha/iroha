@@ -69,11 +69,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Соберите и подпишите манифест
 
 Объедините план чанков, алиасы и подписи управления в манифест с помощью
-`sorafs-manifest-stub`. Команда ниже показывает payload одного файла; передайте путь
+`sorafs_manifest_stub`. Команда ниже показывает payload одного файла; передайте путь
 к директории, чтобы упаковать дерево (CLI обходит его в лексикографическом порядке).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

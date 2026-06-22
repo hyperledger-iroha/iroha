@@ -205,7 +205,7 @@ _Һуңғы тикшерелгән: 2026-01-19 — Киләһе планлы т�
   Sumeragi интеграцияһы `crates/iroha_torii/src/da/ingest.rs`, был ептәр
   бармаҡ эҙҙәре аша тикшерелгән `/v1/da/ingest`.
 - PDP/PoTR стриминг моделләштереүҙәре 2012 йылда коррект-ағым йүгәне аша тормошҡа ашырыла.
-  `crates/sorafs_car/tests/sorafs_cli.rs`, ҡаплап PoR/PDP/PoTR запрос ағымдары
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, ҡаплап PoR/PDP/PoTR запрос ағымдары
   һәм хәүеф моделендә йәнләндерелгән етешһеҙлектәр сценарийҙары.
 - Һөҙөмтәлелек һәм ремонтлау һөҙөмтәләре тура эфирҙа йәшәй
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, ә киңерәк

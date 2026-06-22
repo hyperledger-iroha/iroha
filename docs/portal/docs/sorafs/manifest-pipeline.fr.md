@@ -55,7 +55,7 @@ auditeurs puissent demander des ensembles de témoins déterministes. Associez c
 - Signatures du conseil et métadonnées optionnelles (par ex., IDs de build).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

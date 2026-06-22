@@ -9,8 +9,6 @@ source_last_modified: "2026-04-04T15:25:30.328743+00:00"
 translation_last_reviewed: 2026-04-05
 ---
 
-> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
-
 # Telemetry & Metrics Overview
 
 日本語の概要は [`telemetry.ja.md`](./telemetry.ja.md) を参照してください。
@@ -940,10 +938,11 @@ Use `scripts/telemetry/test_torii_norito_rpc_alerts.sh` to run `promtool test ru
   - `dashboards/grafana/sorafs_gateway_observability.json` focuses on replication/backlog metrics such as `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_deadline_slack_epochs`, PoR ingest queues (`torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total`), and gateway refusal/throttle counters.
   - `dashboards/grafana/sorafs_capacity_penalties.json` tracks retention (`torii_sorafs_storage_bytes_{used,capacity}`), accumulated GiB·hours, replication SLA outcomes (`torii_sorafs_replication_sla_total`), disputes/slash proposals, and fee projections so finance/storage stakeholders review the same evidence bundle.
   - `dashboards/grafana/sorafs_capacity_health.json` graphes declared/effective/utilised GiB, outstanding reservations, backlog depth, and expired-order rates per provider to highlight saturation before SLO drift.
+  - `dashboards/grafana/sorafs_governance_dag.json` tracks Governance DAG publication attempts, failures, published bytes, backlog, head age, and last-success age via `sorafs_governance_dag_*` metrics. The filesystem publisher emits local publication outcomes today; public IPFS/IPNS head emission remains an SF-12 rollout gate.
 - **Chunking cost.** `torii_da_chunking_seconds` tracks DA chunking + erasure coding CPU time; monitor p95 via `histogram_quantile(0.95, sum(rate(torii_da_chunking_seconds_bucket[5m])) by (le))`.
 - **Proof health.** PDP/PoTR pass rates surface through `torii_sorafs_proof_stream_events_total{kind="pdp|potr",result}`; latency distributions are published via `torii_sorafs_proof_stream_latency_ms`. Pair them with `torii_sorafs_storage_por_samples_{success,failed}_total` to prove challenge coverage and link panels directly to provider alerts.
 - **Retention digest.** `docs/source/status/sorafs_da_weekly_digest.md` is the weekly template mandated by DA-9. Populate it with snapshots exported from the dashboards above plus the PromQL snippets used to compute p95 ingestion latency and backlog deltas; attach the Markdown to the Friday digest mail that SRE sends to Storage + Product.
-- **Alerting.** Import `dashboards/alerts/sorafs_fetch_rules.yml`, `dashboards/alerts/sorafs_gateway_rules.yml`, and `dashboards/alerts/sorafs_capacity_rules.yml` so ingestion, gateway, and capacity saturation signals stay covered. Validate each pack with its fixture (`dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/sorafs_capacity_rules.test.yml`) via `promtool test rules …` (or `scripts/check_prometheus_rules.sh dashboards/alerts/sorafs_*`) before publishing changes.
+- **Alerting.** Import `dashboards/alerts/sorafs_fetch_rules.yml`, `dashboards/alerts/sorafs_gateway_rules.yml`, `dashboards/alerts/sorafs_capacity_rules.yml`, and `dashboards/alerts/sorafs_governance_dag_rules.yml` so ingestion, gateway, capacity saturation, and local governance publication signals stay covered. Validate each pack with its fixture (`dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/sorafs_capacity_rules.test.yml`, `dashboards/alerts/tests/sorafs_governance_dag_rules.test.yml`) via `promtool test rules …` (or `scripts/check_prometheus_rules.sh dashboards/alerts/sorafs_*`) before publishing changes.
 - **Runbook integration.** Incident tickets tied to DA need three artefacts: (1) Grafana JSON exports (`sorafs_fetch_observability` and `sorafs_gateway_observability`), (2) the filled digest template, and (3) alert UUIDs from the rule groups above. This satisfies the DA-9 roadmap requirement that SRE/operator reviews include dashboards plus a narrative digest.
 
 ### Confidential Tree Telemetry (M2.2)
@@ -1075,6 +1074,25 @@ pipeline summaries via `nexus_scheduler_lane_teu_status` responses. Each lane
 snapshot includes the scheduler graph counters (`tx_vertices`, `tx_edges`,
 `overlay_count`, `overlay_instr_total`, `overlay_bytes_total`, `rbc_chunks`,
 `rbc_bytes_total`) plus:
+
+The root `/status` payload also exposes a `build` object so operators can
+verify what binary is actually serving traffic. The object includes:
+
+- `version` — Cargo package version baked into the node binary.
+- `git_commit_sha` — source revision baked into the node binary.
+- `cargo_features` — enabled Cargo feature set used for the build.
+- `target_triple` — compilation target triple for the running binary.
+
+Queue-aware liveness checks should use the raw `/status` facts together with
+`GET /v1/pipeline/preflight`. The status payload exposes `observed_at_ms`,
+`queue_size`, `queue_queued`, `queue_inflight`,
+`last_block_committed_at_ms`, `last_non_empty_block_committed_at_ms`,
+`time_since_last_block_ms`, and `time_since_last_non_empty_block_ms`.
+Treat `queue_size` as the primary gate: a peer is stalled only when queued work
+exists and elapsed block time exceeds
+`/v1/pipeline/preflight.sumeragi.stall_threshold_ms`. The preflight response
+also reports current admission, block, pipeline, queue, and fee limits so SDKs
+can explain rejected or delayed submissions before posting a transaction.
 
 - `peak_layer_width`, `layer_count` — outer bounds of the scheduler layering
   that executed for the lane in the latest block.

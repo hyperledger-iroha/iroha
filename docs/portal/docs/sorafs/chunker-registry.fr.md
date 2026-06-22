@@ -60,7 +60,7 @@ du registre exigent que le handle canonique (`namespace.name@semver`) soit la pr
 Pour inspecter le registre depuis les outils, exécutez le CLI helper :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -110,7 +110,7 @@ Pour inspecter un témoin PoR spécifique, fournissez des indices de chunk/segme
 persistez la preuve sur disque :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -123,7 +123,7 @@ enregistrés) qui peut être collé dans `chunker_registry_data.rs` lors de la p
 par défaut :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -136,7 +136,7 @@ Pour valider une preuve existante contre un payload, passez le chemin via
 correspond à la racine calculée) :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -145,7 +145,7 @@ Le CLI garantit un ordre déterministe (seedé avec `splitmix64`) et tronque aut
 la requête dépasse les feuilles disponibles :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -155,7 +155,7 @@ Le manifest stub reflète les mêmes données, ce qui est pratique pour scripter
 (`--profile=sorafs.sf1@1.0.0`) afin que les scripts de build évitent de coder en dur des IDs numériques :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

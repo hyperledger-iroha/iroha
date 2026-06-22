@@ -13,6 +13,7 @@ pub mod deal;
 pub mod gateway;
 mod governance;
 pub mod metering;
+mod orderbook;
 pub mod por;
 pub mod potr;
 mod reconciliation;
@@ -24,6 +25,11 @@ pub mod telemetry;
 pub use deal::{
     ClientSnapshot, DealEngine, DealEngineError, DealSettlementOutcome, DealSnapshot,
     ProviderSnapshot, UsageOutcome,
+};
+pub use orderbook::{
+    OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
+    OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
+    local_orderbook_provider_id_for_owner_account,
 };
 pub use por::{
     ManifestVrfBundle, PlannedChallenge, PorChallengePlannerError, PorRandomness, PorTracker,
@@ -164,8 +170,10 @@ pub use repair::{
 };
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
-    ManifestV1, ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotV1,
-    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
+    ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
+    ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotV1,
+    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementReceiptV1,
+    SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::DealSettlementV1,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -184,6 +192,7 @@ use tokio::sync::broadcast;
 use crate::{
     governance::FilesystemGovernancePublisher,
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
+    orderbook::OrderbookRuntime,
     potr::PotrTracker,
     scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
     store::{ChunkFileRecord, ChunkRoleMetadata, StorageBackend, StorageError, StoredManifest},
@@ -226,7 +235,25 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn orderbook_side_label(side: OrderSideV1) -> &'static str {
+    match side {
+        OrderSideV1::Bid => "bid",
+        OrderSideV1::Ask => "ask",
+    }
+}
+
+fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
+    match tier {
+        OrderTierV1::Hot => "hot",
+        OrderTierV1::Warm => "warm",
+        OrderTierV1::Archive => "archive",
+    }
+}
+
+const REPAIR_EVENT_CHANNEL_CAPACITY: usize = 128;
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
+const ORDERBOOK_EVENT_CHANNEL_CAPACITY: usize = 128;
+const ORDERBOOK_METRIC_CLUSTER_LOCAL: &str = "local";
 
 fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
     matches!(
@@ -351,6 +378,15 @@ pub struct RepairChunkPayload {
     pub source: Option<String>,
 }
 
+/// Sequenced local repair event used for replay and live Torii streams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairEvent {
+    /// Monotonic local stream sequence.
+    pub sequence: u64,
+    /// Canonical repair task transition payload.
+    pub event: RepairTaskEventV1,
+}
+
 /// Errors surfaced when the repair orchestrator cannot fetch missing chunks.
 #[derive(Debug, Error)]
 pub enum RepairOrchestratorError {
@@ -396,12 +432,17 @@ pub struct NodeHandle {
     storage: Option<Arc<StorageBackend>>,
     deal_engine: DealEngine,
     repair: RepairManager,
+    repair_events: Arc<RwLock<Vec<RepairEvent>>>,
+    repair_event_sender: broadcast::Sender<RepairEvent>,
     repair_orchestrator: Arc<RwLock<Option<Arc<dyn RepairOrchestrator>>>>,
     governance_publisher: Arc<RwLock<Option<Arc<dyn GovernancePublisher>>>>,
     latest_reputation_snapshot: Arc<RwLock<Option<ReputationSnapshotV1>>>,
     reputation_snapshots: Arc<RwLock<BTreeMap<[u8; 16], ReputationSnapshotV1>>>,
     reputation_events: Arc<RwLock<Vec<ReputationSnapshotEventV1>>>,
     reputation_event_sender: broadcast::Sender<ReputationSnapshotEventV1>,
+    orderbook: Arc<RwLock<OrderbookRuntime>>,
+    orderbook_events: Arc<RwLock<Vec<OrderbookEvent>>>,
+    orderbook_event_sender: broadcast::Sender<OrderbookEvent>,
 }
 
 type PorHistoryKey = ([u8; 32], [u8; 32]);
@@ -498,7 +539,11 @@ impl NodeHandle {
         let smoothing = config.smoothing_config();
         let deal_engine = DealEngine::new();
         let governance_dir = config.governance_dir().cloned();
+        let governance_dag_publisher_peer_id = config.governance_dag_publisher_peer_id().cloned();
+        let governance_dag_signing_key_path = config.governance_dag_signing_key_path().cloned();
+        let (repair_event_sender, _) = broadcast::channel(REPAIR_EVENT_CHANNEL_CAPACITY);
         let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
+        let (orderbook_event_sender, _) = broadcast::channel(ORDERBOOK_EVENT_CHANNEL_CAPACITY);
 
         let repair = RepairManager::new_with_config_and_policy(
             repair_config.clone(),
@@ -518,23 +563,55 @@ impl NodeHandle {
             storage,
             deal_engine,
             repair,
+            repair_events: Arc::new(RwLock::new(Vec::new())),
+            repair_event_sender,
             repair_orchestrator: Arc::new(RwLock::new(None)),
             governance_publisher: Arc::new(RwLock::new(None)),
             latest_reputation_snapshot: Arc::new(RwLock::new(None)),
             reputation_snapshots: Arc::new(RwLock::new(BTreeMap::new())),
             reputation_events: Arc::new(RwLock::new(Vec::new())),
             reputation_event_sender,
+            orderbook: Arc::new(RwLock::new(OrderbookRuntime::default())),
+            orderbook_events: Arc::new(RwLock::new(Vec::new())),
+            orderbook_event_sender,
         };
 
         if node.storage.is_some() {
             if let Some(dir) = governance_dir.clone() {
                 match FilesystemGovernancePublisher::try_new(dir.clone()) {
                     Ok(publisher) => {
-                        iroha_logger::info!(
-                            path = ?dir,
-                            "SoraFS governance publisher initialised"
-                        );
-                        node.set_governance_publisher(Arc::new(publisher));
+                        let publisher = match (
+                            governance_dag_publisher_peer_id.clone(),
+                            governance_dag_signing_key_path.clone(),
+                        ) {
+                            (Some(peer_id), Some(signing_key_path)) => publisher
+                                .with_runtime_dag_signer(peer_id.into_bytes(), signing_key_path),
+                            (Some(_), None) | (None, Some(_)) => {
+                                iroha_logger::warn!(
+                                    "SoraFS governance runtime DAG signer requires both publisher peer id and signing key path"
+                                );
+                                Ok(publisher)
+                            }
+                            (None, None) => Ok(publisher),
+                        };
+                        match publisher {
+                            Ok(publisher) => {
+                                iroha_logger::info!(
+                                    path = ?dir,
+                                    signed_runtime_dag = governance_dag_publisher_peer_id.is_some()
+                                        && governance_dag_signing_key_path.is_some(),
+                                    "SoraFS governance publisher initialised"
+                                );
+                                node.set_governance_publisher(Arc::new(publisher));
+                            }
+                            Err(err) => {
+                                iroha_logger::error!(
+                                    ?err,
+                                    path = ?dir,
+                                    "failed to initialise SoraFS signed governance runtime DAG publisher"
+                                );
+                            }
+                        }
                     }
                     Err(err) => {
                         iroha_logger::error!(
@@ -749,6 +826,341 @@ impl NodeHandle {
         self.reputation_event_sender.subscribe()
     }
 
+    /// Return local repair events after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn repair_events_since(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> Vec<RepairEvent> {
+        let limit = limit.max(1);
+        let since = since_sequence.unwrap_or(0);
+        self.repair_events.read().map_or_else(
+            |_| Vec::new(),
+            |guard| {
+                guard
+                    .iter()
+                    .filter(|event| event.sequence > since)
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+
+    /// Return the latest local repair event sequence accepted by this node.
+    #[must_use]
+    pub fn latest_repair_event_sequence(&self) -> Option<u64> {
+        self.repair_events
+            .read()
+            .ok()
+            .and_then(|guard| guard.last().map(|event| event.sequence))
+    }
+
+    /// Subscribe to live local repair events.
+    #[must_use]
+    pub fn subscribe_repair_events(&self) -> broadcast::Receiver<RepairEvent> {
+        self.repair_event_sender.subscribe()
+    }
+
+    /// Return local orderbook events after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn orderbook_events_since(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> Vec<OrderbookEvent> {
+        let limit = limit.max(1);
+        let since = since_sequence.unwrap_or(0);
+        self.orderbook_events.read().map_or_else(
+            |_| Vec::new(),
+            |guard| {
+                guard
+                    .iter()
+                    .filter(|event| event.sequence > since)
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+
+    /// Return the latest local orderbook event sequence accepted by this node.
+    #[must_use]
+    pub fn latest_orderbook_event_sequence(&self) -> Option<u64> {
+        self.orderbook_events
+            .read()
+            .ok()
+            .and_then(|guard| guard.last().map(|event| event.sequence))
+    }
+
+    /// Subscribe to live local orderbook events.
+    #[must_use]
+    pub fn subscribe_orderbook_events(&self) -> broadcast::Receiver<OrderbookEvent> {
+        self.orderbook_event_sender.subscribe()
+    }
+
+    /// Accept an order into the local SoraFS orderbook mirror and run matching.
+    ///
+    /// This deterministic local runtime mirror is for SFM-2 rollout testing. It
+    /// does not submit an on-chain orderbook transaction or mutate escrow
+    /// balances outside the settlement-channel snapshots it returns.
+    pub fn submit_orderbook_order(
+        &self,
+        order: OrderRequestV1,
+        now_unix: u64,
+    ) -> Result<OrderbookSubmitOutcome, OrderbookRuntimeError> {
+        let side = order.side;
+        let tier = order.tier;
+        let outcome = self
+            .orderbook
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+            .submit_order(order, now_unix);
+        match &outcome {
+            Ok(outcome) => {
+                global_or_default().record_sorafs_orderbook_order(
+                    ORDERBOOK_METRIC_CLUSTER_LOCAL,
+                    orderbook_tier_label(tier),
+                    orderbook_side_label(side),
+                    "accepted",
+                );
+                self.record_orderbook_snapshot_metrics(now_unix);
+                self.publish_orderbook_event(
+                    OrderbookEventKind::OrderAccepted,
+                    now_unix,
+                    Some(outcome.accepted_order.order_id),
+                    outcome
+                        .fills
+                        .iter()
+                        .map(|fill| fill.trade.trade_id)
+                        .collect(),
+                    outcome
+                        .settlement_channels_opened
+                        .iter()
+                        .map(|channel| channel.channel_id)
+                        .collect(),
+                    None,
+                    outcome.expired_order_ids.clone(),
+                );
+            }
+            Err(err) => {
+                let status = match err {
+                    OrderbookRuntimeError::DuplicateOrderId { .. } => "duplicate",
+                    OrderbookRuntimeError::Validation(_) => "rejected",
+                    OrderbookRuntimeError::SequenceOverflow
+                    | OrderbookRuntimeError::MissingMatchedOrder
+                    | OrderbookRuntimeError::InvalidMatchedSides
+                    | OrderbookRuntimeError::StateLockPoisoned
+                    | OrderbookRuntimeError::SettlementChannelNotFound { .. }
+                    | OrderbookRuntimeError::DuplicateReceiptId { .. }
+                    | OrderbookRuntimeError::ReceiptRangeOverlap { .. }
+                    | OrderbookRuntimeError::OrderNotFound { .. }
+                    | OrderbookRuntimeError::CancelOwnerMismatch => "error",
+                };
+                global_or_default().record_sorafs_orderbook_order(
+                    ORDERBOOK_METRIC_CLUSTER_LOCAL,
+                    orderbook_tier_label(tier),
+                    orderbook_side_label(side),
+                    status,
+                );
+            }
+        }
+        outcome
+    }
+
+    /// Cancel an open order from the local SoraFS orderbook mirror.
+    pub fn cancel_orderbook_order(
+        &self,
+        cancel: OrderCancelV1,
+        now_unix: u64,
+    ) -> Result<OrderbookCancelOutcome, OrderbookRuntimeError> {
+        let outcome = self
+            .orderbook
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+            .cancel_order(cancel);
+        if let Ok(outcome) = &outcome {
+            global_or_default().record_sorafs_orderbook_order(
+                ORDERBOOK_METRIC_CLUSTER_LOCAL,
+                "all",
+                "all",
+                "cancelled",
+            );
+            self.record_orderbook_snapshot_metrics(now_unix);
+            self.publish_orderbook_event(
+                OrderbookEventKind::OrderCancelled,
+                now_unix,
+                Some(outcome.cancelled_order.order_id),
+                Vec::new(),
+                Vec::new(),
+                None,
+                Vec::new(),
+            );
+        }
+        outcome
+    }
+
+    /// Apply a streaming-settlement receipt to a local SoraFS orderbook channel.
+    ///
+    /// The local mirror validates the receipt, rejects replayed receipt ids and
+    /// overlapping byte ranges, then updates the in-memory channel snapshot. It
+    /// does not yet mutate on-chain escrow balances.
+    pub fn submit_orderbook_receipt(
+        &self,
+        receipt: SettlementReceiptV1,
+        now_unix: u64,
+    ) -> Result<OrderbookReceiptOutcome, OrderbookRuntimeError> {
+        let outcome = self
+            .orderbook
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+            .submit_receipt(receipt);
+        if let Ok(outcome) = &outcome {
+            self.record_orderbook_snapshot_metrics(now_unix);
+            self.publish_orderbook_event(
+                OrderbookEventKind::SettlementReceiptAccepted,
+                now_unix,
+                None,
+                Vec::new(),
+                vec![outcome.updated_channel.channel_id],
+                Some(outcome.accepted_receipt.receipt_id),
+                Vec::new(),
+            );
+        }
+        outcome
+    }
+
+    /// Return a point-in-time snapshot of the local SoraFS orderbook mirror.
+    #[must_use]
+    pub fn orderbook_snapshot(&self, generated_at_unix: u64) -> OrderbookSnapshot {
+        self.orderbook.read().map_or_else(
+            |_| OrderbookSnapshot {
+                next_sequence: 0,
+                generated_at_unix,
+                open_orders: Vec::new(),
+                trades: Vec::new(),
+                settlement_channels: Vec::new(),
+                settlement_receipts: Vec::new(),
+                expired_order_ids: Vec::new(),
+            },
+            |orderbook| orderbook.snapshot(generated_at_unix),
+        )
+    }
+
+    fn record_orderbook_snapshot_metrics(&self, now_unix: u64) {
+        let snapshot = self.orderbook_snapshot(now_unix);
+        let mut hot_bid = 0u64;
+        let mut hot_ask = 0u64;
+        let mut warm_bid = 0u64;
+        let mut warm_ask = 0u64;
+        let mut archive_bid = 0u64;
+        let mut archive_ask = 0u64;
+        for entry in &snapshot.open_orders {
+            match (entry.order.tier, entry.order.side) {
+                (OrderTierV1::Hot, OrderSideV1::Bid) => {
+                    hot_bid = hot_bid.saturating_add(entry.order.remaining_gib);
+                }
+                (OrderTierV1::Hot, OrderSideV1::Ask) => {
+                    hot_ask = hot_ask.saturating_add(entry.order.remaining_gib);
+                }
+                (OrderTierV1::Warm, OrderSideV1::Bid) => {
+                    warm_bid = warm_bid.saturating_add(entry.order.remaining_gib);
+                }
+                (OrderTierV1::Warm, OrderSideV1::Ask) => {
+                    warm_ask = warm_ask.saturating_add(entry.order.remaining_gib);
+                }
+                (OrderTierV1::Archive, OrderSideV1::Bid) => {
+                    archive_bid = archive_bid.saturating_add(entry.order.remaining_gib);
+                }
+                (OrderTierV1::Archive, OrderSideV1::Ask) => {
+                    archive_ask = archive_ask.saturating_add(entry.order.remaining_gib);
+                }
+            }
+        }
+        let metrics = global_or_default();
+        for (tier, side, depth) in [
+            ("hot", "bid", hot_bid),
+            ("hot", "ask", hot_ask),
+            ("warm", "bid", warm_bid),
+            ("warm", "ask", warm_ask),
+            ("archive", "bid", archive_bid),
+            ("archive", "ask", archive_ask),
+        ] {
+            metrics.set_sorafs_orderbook_depth_gib(
+                ORDERBOOK_METRIC_CLUSTER_LOCAL,
+                tier,
+                side,
+                depth as f64,
+            );
+            metrics.set_sorafs_orderbook_match_lag_seconds(
+                ORDERBOOK_METRIC_CLUSTER_LOCAL,
+                tier,
+                0.0,
+            );
+        }
+
+        let open_channels = snapshot
+            .settlement_channels
+            .iter()
+            .filter(|channel| matches!(channel.status, SettlementChannelStatusV1::Open))
+            .collect::<Vec<_>>();
+        let oldest_age = open_channels
+            .iter()
+            .filter_map(|channel| now_unix.checked_sub(channel.opened_at_unix))
+            .max()
+            .unwrap_or(0);
+        metrics.set_sorafs_orderbook_settlement_backlog(
+            ORDERBOOK_METRIC_CLUSTER_LOCAL,
+            open_channels.len() as u64,
+            oldest_age,
+        );
+        for (provider, seconds) in orderbook_provider_escrow_runways(&snapshot, now_unix) {
+            metrics.set_sorafs_orderbook_escrow_runway_seconds(&provider, seconds);
+        }
+        metrics
+            .set_sorafs_orderbook_contract_mirror_divergence(ORDERBOOK_METRIC_CLUSTER_LOCAL, false);
+    }
+
+    fn publish_orderbook_event(
+        &self,
+        kind: OrderbookEventKind,
+        generated_at_unix: u64,
+        order_id: Option<[u8; 32]>,
+        trade_ids: Vec<[u8; 32]>,
+        settlement_channel_ids: Vec<[u8; 32]>,
+        receipt_id: Option<[u8; 32]>,
+        expired_order_ids: Vec<[u8; 32]>,
+    ) {
+        let snapshot = self.orderbook_snapshot(generated_at_unix);
+        let open_settlement_channel_count = snapshot
+            .settlement_channels
+            .iter()
+            .filter(|channel| matches!(channel.status, SettlementChannelStatusV1::Open))
+            .count() as u64;
+        let Ok(mut events) = self.orderbook_events.write() else {
+            return;
+        };
+        let sequence = events
+            .last()
+            .map_or(1, |event| event.sequence.saturating_add(1));
+        let event = OrderbookEvent {
+            sequence,
+            kind,
+            generated_at_unix,
+            order_id,
+            trade_ids,
+            settlement_channel_ids,
+            receipt_id,
+            expired_order_ids,
+            open_order_count: snapshot.open_orders.len() as u64,
+            open_settlement_channel_count,
+            settlement_receipt_count: snapshot.settlement_receipts.len() as u64,
+        };
+        events.push(event.clone());
+        let _ = self.orderbook_event_sender.send(event);
+    }
+
     /// Finalise a deal settlement for the supplied epoch.
     pub fn settle_deal(
         &self,
@@ -777,6 +1189,18 @@ impl NodeHandle {
             }
         }
         Ok(outcome)
+    }
+
+    fn record_repair_event(&self, event: RepairTaskEventV1) {
+        let Ok(mut events) = self.repair_events.write() else {
+            return;
+        };
+        let sequence = events
+            .last()
+            .map_or(1, |event| event.sequence.saturating_add(1));
+        let event = RepairEvent { sequence, event };
+        events.push(event.clone());
+        let _ = self.repair_event_sender.send(event);
     }
 
     fn publish_repair_audit_event(&self, event: RepairTaskEventV1) {
@@ -907,6 +1331,7 @@ impl NodeHandle {
         slash_stage: Option<RepairSlashStage>,
     ) {
         if let Some(event) = update.event.clone() {
+            self.record_repair_event(event.clone());
             self.publish_repair_audit_event(event);
         }
         if let Some(proposal) = update.slash_proposal.as_ref() {
@@ -941,6 +1366,15 @@ impl NodeHandle {
         let update = self.repair.enqueue_report_with_event(report.clone())?;
         self.publish_repair_update(&update, None);
         Ok(update.record)
+    }
+
+    /// Record a signed repair auditor request nonce for replay protection.
+    pub fn record_repair_auditor_nonce(
+        &self,
+        auditor_account: &str,
+        nonce: u64,
+    ) -> Result<(), RepairSchedulerError> {
+        self.repair.record_auditor_nonce(auditor_account, nonce)
     }
 
     /// Fetch repair tasks with optional filters applied.
@@ -1118,6 +1552,7 @@ impl NodeHandle {
         }
         let report = self.repair.run_watchdog(now_unix)?;
         for event in &report.events {
+            self.record_repair_event(event.clone());
             self.publish_repair_audit_event(event.clone());
         }
         for proposal in &report.escalated {
@@ -2617,6 +3052,46 @@ impl NodeHandle {
     }
 }
 
+fn orderbook_provider_escrow_runways(
+    snapshot: &OrderbookSnapshot,
+    now_unix: u64,
+) -> BTreeMap<String, u64> {
+    let mut debit_by_channel = BTreeMap::<[u8; 32], u128>::new();
+    for receipt in &snapshot.settlement_receipts {
+        debit_by_channel
+            .entry(receipt.channel_id)
+            .and_modify(|total| *total = total.saturating_add(receipt.xor_debited.as_micro()))
+            .or_insert_with(|| receipt.xor_debited.as_micro());
+    }
+
+    let mut runways_by_provider = BTreeMap::<[u8; 32], Option<u64>>::new();
+    for channel in &snapshot.settlement_channels {
+        let provider_runway = runways_by_provider.entry(channel.provider_id).or_default();
+        if !matches!(channel.status, SettlementChannelStatusV1::Open) {
+            continue;
+        }
+
+        let elapsed = now_unix.saturating_sub(channel.opened_at_unix);
+        let debited = debit_by_channel
+            .get(&channel.channel_id)
+            .copied()
+            .unwrap_or_default();
+        let escrow_remaining = channel.xor_locked.as_micro();
+        if elapsed == 0 || debited == 0 || escrow_remaining == 0 {
+            continue;
+        }
+
+        let runway = (escrow_remaining.saturating_mul(u128::from(elapsed)) / debited)
+            .min(u128::from(u64::MAX)) as u64;
+        *provider_runway = Some(provider_runway.map_or(runway, |current| current.min(runway)));
+    }
+
+    runways_by_provider
+        .into_iter()
+        .map(|(provider, runway)| (hex::encode(provider), runway.unwrap_or(0)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2627,6 +3102,7 @@ mod tests {
         },
     };
 
+    use iroha_crypto::{Algorithm, Signature as IrohaSignature};
     use iroha_data_model::{
         metadata::Metadata,
         name::Name,
@@ -2643,26 +3119,32 @@ mod tests {
     use norito::{codec::Decode, to_bytes};
     use sorafs_car::CarBuildPlan;
     use sorafs_manifest::{
-        DagCodecId, ManifestBuilder, PinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-        REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1,
-        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
-        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
-        build_reputation_snapshot,
+        BYTES_PER_GIB as ORDERBOOK_BYTES_PER_GIB, ByteRangeV1, DagCodecId, ManifestBuilder,
+        ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1,
+        OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1, PinPolicy,
+        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1,
+        SorafsReconciliationReportV1, build_reputation_snapshot,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
-        deal::{DealSettlementStatusV1, DealSettlementV1},
+        deal::{DealSettlementStatusV1, DealSettlementV1, XorAmount},
+        order_cancel_signature_digest_v1, order_request_signature_digest_v1,
+        provider_advert::SignatureAlgorithm,
         repair::{
             CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
             GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
             InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
             REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
             RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEvidenceV1,
-            RepairReportV1, RepairSlashProposalV1, RepairTaskStateV1, RepairTaskStatusV1,
-            RepairTicketId,
+            RepairManualCauseV1, RepairPorFailureCauseV1, RepairReportV1, RepairSlashProposalV1,
+            RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
         },
+        settlement_receipt_signature_digest_v1,
     };
     use tempfile::TempDir;
 
@@ -2766,6 +3248,424 @@ mod tests {
         assert_eq!(by_digest.manifest_id(), manifest_id);
         assert_eq!(by_digest.manifest_digest(), &manifest_digest);
         assert_eq!(by_id.manifest_digest(), by_digest.manifest_digest());
+    }
+
+    fn orderbook_signature() -> OrderbookSignatureV1 {
+        OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: Vec::new(),
+            signature: Vec::new(),
+        }
+    }
+
+    fn orderbook_keypair(seed: u8) -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("orderbook fixture seed must derive keypair")
+    }
+
+    fn orderbook_signature_for_digest(
+        keypair: &iroha_crypto::KeyPair,
+        digest: &[u8; 32],
+    ) -> OrderbookSignatureV1 {
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must expose bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        let signature = IrohaSignature::try_new(keypair.private_key(), digest)
+            .expect("fixture signature must be produced");
+        OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: signature.payload().to_vec(),
+        }
+    }
+
+    fn sign_orderbook_order(mut order: OrderRequestV1, seed: u8) -> OrderRequestV1 {
+        let keypair = orderbook_keypair(seed);
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must expose bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        order.signature = OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: Vec::new(),
+        };
+        let digest = order_request_signature_digest_v1(&order).expect("order digest");
+        order.signature = orderbook_signature_for_digest(&keypair, &digest);
+        order
+    }
+
+    fn sign_orderbook_cancel(mut cancel: OrderCancelV1, seed: u8) -> OrderCancelV1 {
+        let keypair = orderbook_keypair(seed);
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must expose bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        cancel.signature = OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: Vec::new(),
+        };
+        let digest = order_cancel_signature_digest_v1(&cancel).expect("cancel digest");
+        cancel.signature = orderbook_signature_for_digest(&keypair, &digest);
+        cancel
+    }
+
+    fn sign_orderbook_receipt(mut receipt: SettlementReceiptV1, seed: u8) -> SettlementReceiptV1 {
+        let keypair = orderbook_keypair(seed);
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must expose bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        receipt.settlement_signature = OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: Vec::new(),
+        };
+        let digest =
+            settlement_receipt_signature_digest_v1(&receipt).expect("settlement receipt digest");
+        receipt.settlement_signature = orderbook_signature_for_digest(&keypair, &digest);
+        receipt
+    }
+
+    fn orderbook_order(
+        id: u8,
+        side: OrderSideV1,
+        price_micro: u128,
+        owner: &[u8],
+    ) -> OrderRequestV1 {
+        sign_orderbook_order(
+            OrderRequestV1 {
+                version: ORDERBOOK_ORDER_VERSION_V1,
+                order_id: [id; 32],
+                side,
+                tier: OrderTierV1::Hot,
+                price_per_gib: XorAmount::from_micro(price_micro),
+                quantity_gib: 4,
+                remaining_gib: 4,
+                owner_account: owner.to_vec(),
+                expiry_unix: 1_800_000_100,
+                nonce: u64::from(id),
+                maker_fee_bps: 10,
+                taker_fee_bps: 20,
+                signature: orderbook_signature(),
+            },
+            id.saturating_add(0x20),
+        )
+    }
+
+    fn orderbook_cancel(id: u8, owner: &[u8]) -> OrderCancelV1 {
+        sign_orderbook_cancel(
+            OrderCancelV1 {
+                version: ORDERBOOK_CANCEL_VERSION_V1,
+                order_id: [id; 32],
+                owner_account: owner.to_vec(),
+                reason: OrderCancelReasonV1::OwnerRequested,
+                nonce: u64::from(id).saturating_add(100),
+                signature: orderbook_signature(),
+            },
+            id.saturating_add(0x40),
+        )
+    }
+
+    fn orderbook_receipt(
+        id: u8,
+        channel: &SettlementChannelV1,
+        start: u64,
+        end: u64,
+        issued_at_unix: u64,
+        debited_micro: u128,
+    ) -> SettlementReceiptV1 {
+        sign_orderbook_receipt(
+            SettlementReceiptV1 {
+                version: SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: [id; 32],
+                channel_id: channel.channel_id,
+                trade_id: channel.trade_id,
+                range: ByteRangeV1 { start, end },
+                chunk_hash: [id.saturating_add(70); 32],
+                bytes_delivered: end - start,
+                xor_debited: XorAmount::from_micro(debited_micro),
+                provider_credit: XorAmount::from_micro(debited_micro.saturating_sub(10)),
+                fee_amount: XorAmount::from_micro(10),
+                issued_at_unix,
+                settlement_signature: orderbook_signature(),
+            },
+            id.saturating_add(0x60),
+        )
+    }
+
+    #[test]
+    fn node_handle_orderbook_matches_crossing_orders_and_records_snapshot() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+
+        let before = global_or_default()
+            .torii_sorafs_orderbook_orders_total
+            .with_label_values(&["local", "hot", "bid", "accepted"])
+            .get();
+        let ask = orderbook_order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let bid = orderbook_order(2, OrderSideV1::Bid, 1_600_000, b"buyer");
+
+        let first = handle.submit_orderbook_order(ask, now).expect("accept ask");
+        assert!(first.fills.is_empty());
+        assert_eq!(first.open_order_count, 1);
+
+        let second = handle
+            .submit_orderbook_order(bid, now)
+            .expect("accept bid and match");
+        assert_eq!(second.fills.len(), 1);
+        assert_eq!(second.settlement_channels_opened.len(), 1);
+        assert_eq!(second.open_order_count, 0);
+
+        let snapshot = handle.orderbook_snapshot(now);
+        assert!(snapshot.open_orders.is_empty());
+        assert_eq!(snapshot.trades.len(), 1);
+        assert_eq!(snapshot.settlement_channels.len(), 1);
+        assert_eq!(
+            snapshot.settlement_channels[0].buyer_account,
+            b"buyer".to_vec()
+        );
+        assert!(
+            global_or_default()
+                .torii_sorafs_orderbook_orders_total
+                .with_label_values(&["local", "hot", "bid", "accepted"])
+                .get()
+                >= before.saturating_add(1)
+        );
+        assert_eq!(
+            global_or_default()
+                .torii_sorafs_orderbook_settlement_backlog
+                .with_label_values(&["local"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn node_handle_orderbook_cancels_owner_order_only() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+        let ask = orderbook_order(3, OrderSideV1::Ask, 1_500_000, b"provider");
+        handle.submit_orderbook_order(ask, now).expect("accept ask");
+
+        assert!(matches!(
+            handle.cancel_orderbook_order(orderbook_cancel(3, b"other"), now),
+            Err(OrderbookRuntimeError::CancelOwnerMismatch)
+        ));
+
+        let outcome = handle
+            .cancel_orderbook_order(orderbook_cancel(3, b"provider"), now)
+            .expect("cancel provider order");
+        assert_eq!(outcome.open_order_count, 0);
+        assert_eq!(handle.orderbook_snapshot(now).open_orders.len(), 0);
+    }
+
+    #[test]
+    fn node_handle_orderbook_receipts_update_channel_and_metrics() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+        let ask = orderbook_order(4, OrderSideV1::Ask, 1_500_000, b"provider");
+        let bid = orderbook_order(5, OrderSideV1::Bid, 1_600_000, b"buyer");
+        handle.submit_orderbook_order(ask, now).expect("accept ask");
+        handle.submit_orderbook_order(bid, now).expect("match bid");
+        let channel = handle.orderbook_snapshot(now).settlement_channels[0].clone();
+        let receipt = orderbook_receipt(
+            9,
+            &channel,
+            0,
+            channel.total_bytes,
+            now.saturating_add(10),
+            channel.xor_locked.as_micro(),
+        );
+
+        let outcome = handle
+            .submit_orderbook_receipt(receipt, now.saturating_add(10))
+            .expect("apply receipt");
+
+        assert_eq!(outcome.updated_channel.remaining_bytes, 0);
+        assert_eq!(outcome.open_settlement_channel_count, 0);
+        assert_eq!(
+            handle
+                .orderbook_snapshot(now.saturating_add(10))
+                .settlement_receipts
+                .len(),
+            1
+        );
+        assert_eq!(
+            global_or_default()
+                .torii_sorafs_orderbook_settlement_backlog
+                .with_label_values(&["local"])
+                .get(),
+            0
+        );
+        assert_eq!(handle.latest_orderbook_event_sequence(), Some(3));
+        let events = handle.orderbook_events_since(Some(2), 10);
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].kind,
+            OrderbookEventKind::SettlementReceiptAccepted
+        );
+        assert_eq!(
+            events[0].receipt_id,
+            handle
+                .orderbook_snapshot(now.saturating_add(10))
+                .settlement_receipts
+                .first()
+                .map(|receipt| receipt.receipt_id)
+        );
+    }
+
+    #[test]
+    fn node_handle_orderbook_receipts_record_escrow_runway_metric() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+        let ask = orderbook_order(12, OrderSideV1::Ask, 1_500_000, b"runway-provider");
+        let bid = orderbook_order(13, OrderSideV1::Bid, 1_600_000, b"runway-buyer");
+        handle.submit_orderbook_order(ask, now).expect("accept ask");
+        handle.submit_orderbook_order(bid, now).expect("match bid");
+
+        let channel = handle.orderbook_snapshot(now).settlement_channels[0].clone();
+        let first_end = channel.total_bytes / 2;
+        let first_debit = channel.xor_locked.as_micro() / 2;
+        let first_outcome = handle
+            .submit_orderbook_receipt(
+                orderbook_receipt(
+                    14,
+                    &channel,
+                    0,
+                    first_end,
+                    now.saturating_add(10),
+                    first_debit,
+                ),
+                now.saturating_add(10),
+            )
+            .expect("apply partial receipt");
+        let provider = hex::encode(channel.provider_id);
+        let expected_runway = first_outcome
+            .updated_channel
+            .xor_locked
+            .as_micro()
+            .saturating_mul(10)
+            / first_debit;
+        assert_eq!(
+            global_or_default()
+                .torii_sorafs_orderbook_escrow_runway_seconds
+                .with_label_values(&[provider.as_str()])
+                .get(),
+            expected_runway.min(u128::from(u64::MAX)) as u64
+        );
+
+        let updated_channel = first_outcome.updated_channel;
+        handle
+            .submit_orderbook_receipt(
+                orderbook_receipt(
+                    15,
+                    &updated_channel,
+                    first_end,
+                    channel.total_bytes,
+                    now.saturating_add(20),
+                    updated_channel.xor_locked.as_micro(),
+                ),
+                now.saturating_add(20),
+            )
+            .expect("apply final receipt");
+        assert_eq!(
+            global_or_default()
+                .torii_sorafs_orderbook_escrow_runway_seconds
+                .with_label_values(&[provider.as_str()])
+                .get(),
+            0
+        );
+    }
+
+    #[test]
+    fn node_handle_orderbook_rejects_overlapping_receipts() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+        handle
+            .submit_orderbook_order(
+                orderbook_order(6, OrderSideV1::Ask, 1_500_000, b"provider"),
+                now,
+            )
+            .expect("accept ask");
+        handle
+            .submit_orderbook_order(
+                orderbook_order(7, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                now,
+            )
+            .expect("match bid");
+        let channel = handle.orderbook_snapshot(now).settlement_channels[0].clone();
+        handle
+            .submit_orderbook_receipt(
+                orderbook_receipt(10, &channel, 0, ORDERBOOK_BYTES_PER_GIB, now + 10, 100),
+                now + 10,
+            )
+            .expect("apply first receipt");
+
+        assert!(matches!(
+            handle.submit_orderbook_receipt(
+                orderbook_receipt(
+                    11,
+                    &channel,
+                    ORDERBOOK_BYTES_PER_GIB - 1,
+                    ORDERBOOK_BYTES_PER_GIB + 1,
+                    now + 11,
+                    100,
+                ),
+                now + 11,
+            ),
+            Err(OrderbookRuntimeError::ReceiptRangeOverlap { .. })
+        ));
+    }
+
+    #[test]
+    fn node_handle_orderbook_events_replay_and_broadcast() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut receiver = handle.subscribe_orderbook_events();
+        let now = 1_800_000_000;
+
+        handle
+            .submit_orderbook_order(
+                orderbook_order(12, OrderSideV1::Ask, 1_500_000, b"provider"),
+                now,
+            )
+            .expect("accept ask");
+        let event = receiver.try_recv().expect("live orderbook event");
+        assert_eq!(event.sequence, 1);
+        assert_eq!(event.kind, OrderbookEventKind::OrderAccepted);
+        assert_eq!(event.order_id, Some([12; 32]));
+        assert_eq!(event.open_order_count, 1);
+
+        handle
+            .submit_orderbook_order(
+                orderbook_order(13, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                now,
+            )
+            .expect("match bid");
+        let event = receiver.try_recv().expect("live matching event");
+        assert_eq!(event.sequence, 2);
+        assert_eq!(event.kind, OrderbookEventKind::OrderAccepted);
+        assert_eq!(event.trade_ids.len(), 1);
+        assert_eq!(event.settlement_channel_ids.len(), 1);
+        assert_eq!(event.open_order_count, 0);
+        assert_eq!(event.open_settlement_channel_count, 1);
+
+        let replay = handle.orderbook_events_since(Some(1), 10);
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].sequence, 2);
+        assert_eq!(handle.latest_orderbook_event_sequence(), Some(2));
     }
 
     #[test]
@@ -3341,11 +4241,11 @@ mod tests {
                 manifest_digest: [0x44; 32],
                 provider_id: [0x77; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::PorFailure {
+                cause: RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
                     challenge_id: [0xAA; 32],
                     failed_samples: 4,
                     proof_digest: None,
-                },
+                }),
                 evidence_json: None,
                 notes: Some("PoR sample failed twice".into()),
             },
@@ -3384,6 +4284,17 @@ mod tests {
             RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
         ));
 
+        let events = handle.repair_events_since(None, 10);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[0].event.status, RepairTaskStatusV1::Queued);
+        assert_eq!(events[1].event.status, RepairTaskStatusV1::InProgress);
+        assert_eq!(events[2].event.status, RepairTaskStatusV1::Completed);
+        assert_eq!(events[2].event.ticket_id, report.ticket_id);
+        assert_eq!(handle.latest_repair_event_sequence(), Some(3));
+        let after_first = handle.repair_events_since(Some(1), 10);
+        assert_eq!(after_first.len(), 2);
+
         let tasks = handle.repair_tasks_for_manifest(&report.evidence.manifest_digest);
         assert_eq!(tasks.len(), 1);
         let provider_tasks = handle.repair_tasks(RepairTaskFilters {
@@ -3392,6 +4303,7 @@ mod tests {
         });
         assert_eq!(provider_tasks.len(), 1);
 
+        let mut live_events = handle.subscribe_repair_events();
         let escalated_report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-352".into()),
@@ -3402,11 +4314,11 @@ mod tests {
                 manifest_digest: [0x45; 32],
                 provider_id: [0x88; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::PorFailure {
+                cause: RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
                     challenge_id: [0xAB; 32],
                     failed_samples: 6,
                     proof_digest: None,
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3415,6 +4327,10 @@ mod tests {
         handle
             .enqueue_repair_report(&escalated_report)
             .expect("queue second report");
+        let live_queued = live_events.try_recv().expect("live queued repair event");
+        assert_eq!(live_queued.sequence, 4);
+        assert_eq!(live_queued.event.ticket_id, escalated_report.ticket_id);
+        assert_eq!(live_queued.event.status, RepairTaskStatusV1::Queued);
 
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -3437,6 +4353,10 @@ mod tests {
             escalated.state,
             RepairTaskStateV1::Escalated(EscalatedRepairStateV1 { .. })
         ));
+        let live_escalated = live_events.try_recv().expect("live escalated repair event");
+        assert_eq!(live_escalated.sequence, 5);
+        assert_eq!(live_escalated.event.ticket_id, escalated_report.ticket_id);
+        assert_eq!(live_escalated.event.status, RepairTaskStatusV1::Escalated);
     }
 
     #[test]
@@ -3454,9 +4374,9 @@ mod tests {
                 manifest_digest: [0x10; 32],
                 provider_id: [0x20; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "manual".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3512,9 +4432,9 @@ mod tests {
                 manifest_digest: [0x11; 32],
                 provider_id: [0x21; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "manual".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3575,9 +4495,9 @@ mod tests {
                 manifest_digest: [0x44; 32],
                 provider_id: [0x77; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "manual".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3671,9 +4591,9 @@ mod tests {
                 manifest_digest,
                 provider_id: [0x01; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "manual".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3689,9 +4609,9 @@ mod tests {
                 manifest_digest: missing_digest,
                 provider_id: [0x02; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "manual".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3834,9 +4754,9 @@ mod tests {
                 manifest_digest: digest_a,
                 provider_id: [0x03; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "local-rehydrate".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3932,9 +4852,9 @@ mod tests {
                 manifest_digest: digest,
                 provider_id: [0x04; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "orchestrator-rehydrate".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -4143,9 +5063,9 @@ mod tests {
                 manifest_digest,
                 provider_id: declaration.provider_id,
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "reconciliation".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -4253,9 +5173,9 @@ mod tests {
                 manifest_digest,
                 provider_id: [0x44; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "missing shard".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },

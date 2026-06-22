@@ -31,7 +31,7 @@ translation_last_reviewed: 2026-02-07
 - قم بإرفاق رابط بطاقة الإصلاح (على سبيل المثال، `governance/tickets/SF6-SR-2026.md`) والملاحظة
   نحن خبراء الهندسة الأمنية ومجموعة عمل الأدوات.
 - التحقق من عدم ظهور قائمة المراجعة الخاصة بالإصلاحات؛ itens pendentes bloqueiam o Release.
-- إعداد وتحميل سجلات dos لتسخير de paridade (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- إعداد وتحميل سجلات dos لتسخير de paridade (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   جنبًا إلى جنب مع حزمة البيان.
 - قم بتأكيد أمر الاغتيال الذي ستنفذه بما في ذلك `--identity-token-provider` e
   أم `--identity-token-audience=<aud>` صريح لالتقاط أو استكشاف الاستكمال لإصدار الأدلة.قم بتضمين هذه الأعمال الفنية في إشعار الإدارة ونشر الإصدار.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 O script faz as seguintes verificacoes:
 
 - `cargo fmt --all -- --check` (مساحة العمل)
-- `cargo clippy --locked --all-targets` لـ `sorafs_car` (مع ميزة `cli`)،
-  `sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` لصناديق الرسائل
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 إذا كان الأمر كذلك، فقد تم التراجع قبل التراجع. يبني الإصدار
 سر مستمر كوم الرئيسي؛ لا يمكنك اختيار التصحيحات من فروع الإصدار. يا

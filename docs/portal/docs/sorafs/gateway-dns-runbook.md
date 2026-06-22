@@ -108,10 +108,10 @@ cargo xtask sorafs-gateway-probe \
 
 ## Session facilitation & evidence hand-off
 
-- **Moderator timeline:**  
-  - T‑24 h — Program Management posts the reminder + agenda/attendance snapshot in `#nexus-steering`.  
-  - T‑2 h — Networking TL refreshes the GAR telemetry snapshot and records deltas in `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`.  
-  - T‑15 m — Ops Automation verifies probe readiness and writes the active run ID into `artifacts/sorafs_gateway_dns/current`.  
+- **Moderator timeline:**
+  - T‑24 h — Program Management posts the reminder + agenda/attendance snapshot in `#nexus-steering`.
+  - T‑2 h — Networking TL refreshes the GAR telemetry snapshot and records deltas in `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`.
+  - T‑15 m — Ops Automation verifies probe readiness and writes the active run ID into `artifacts/sorafs_gateway_dns/current`.
   - During the call — Moderator shares this runbook and assigns a live scribe; Docs/DevRel capture action items inline.
 - **Minute template:** Copy the skeleton from
   `docs/source/sorafs_gateway_dns_design_minutes.md` (also mirrored in the portal
@@ -138,7 +138,9 @@ below mirror the canonical manifest (`artifacts/sorafs_gateway_dns/<run-id>/runb
   - `5c6163d0ae9032c2d52ca2ecca4037dfaddcc503eb56239b53c5e9c4000997cf  probe_20250303.json`
   - `87f6341896bfb830966a4a5d0fc9158fabcc135ba16ef0d53882e558de77ba49  probe_20250303_webhook.jsonl`
   - `9b968b0bf4ca654d466ec2be5291936f1441908354e9d2da4d0a52f1568bbe03  probe.staging.toml`
-  - _(Pending upload: `gateway_dns_minutes_20250303.pdf` — Docs/DevRel will append the SHA-256 once the rendered PDF lands in the bundle.)_
+  - Minutes PDF: not stored in this repository; use the governance bucket
+    manifest when the rendered PDF is attached, and keep the markdown minutes
+    hash above as repo-local evidence.
 
 ## Related Material
 

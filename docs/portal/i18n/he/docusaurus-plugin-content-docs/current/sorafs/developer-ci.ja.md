@@ -54,7 +54,7 @@ jobs:
           profile: minimal
           toolchain: stable
       - name: Build CLI
-        run: cargo install --path crates/sorafs_car --features cli --bin sorafs_cli --debug
+        run: cargo install --path crates/sorafs_orchestrator --bin sorafs_cli --debug
       - name: Pack payload and manifest
         run: |
           sorafs_cli car pack \
@@ -123,7 +123,7 @@ sorafs:build:
   stage: build
   image: rust:1.81
   script:
-    - cargo install --path crates/sorafs_car --features cli --bin sorafs_cli --debug
+    - cargo install --path crates/sorafs_orchestrator --bin sorafs_cli --debug
     - sorafs_cli car pack --input fixtures/site.tar.gz --car-out artifacts/site.car --plan-out artifacts/site.plan.json --summary-out artifacts/site.car.json
     - sorafs_cli manifest build --summary artifacts/site.car.json --chunk-plan artifacts/site.plan.json --manifest-out artifacts/site.manifest.to
   artifacts:

@@ -44,7 +44,7 @@ Boutons de mise en application côté passerelle `docs/examples/sorafs_gateway_d
 Préparation au mode direct pour l'orchestrateur et les caisses CLI pour une couverture complète :- `direct_only_policy_rejects_soranet_only_providers` est en cas d'échec d'une annonce de candidat ou d'un relais SoraNet pris en charge ہو۔【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` pour les transports en commun Torii/QUIC transporte pour les transports en commun SoraNet relaye la session en cours de lecture 【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` analyser les fichiers et les aides de documents alignés رہیں۔【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` pour la passerelle Torii simulée pour les environnements réglementés et les tests de fumée pour les environnements réglementés Broche de transport direct ہیں۔【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` pour la passerelle Torii simulée pour les environnements réglementés et les tests de fumée pour les environnements réglementés Broche de transport direct ہیں۔【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` commande et politique JSON et persistance du tableau de bord et emballage et automatisation du déploiement et automatisation du déploiement.
 
 Les mises à jour publient une suite ciblée sur la suite :

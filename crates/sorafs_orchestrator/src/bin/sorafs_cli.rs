@@ -2,7 +2,7 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     convert::TryInto,
     env,
     fmt::Write as FmtWrite,
@@ -58,7 +58,7 @@ use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
-    FilePlan, StoredChunk,
+    FileEntry, FilePlan, StoredChunk,
     chunker_registry::{self, ChunkerProfileDescriptor},
     fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_string},
     gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput},
@@ -73,10 +73,14 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    ChunkingProfileV1, DagCodecId, MANIFEST_DAG_CODEC, ManifestBuildError, ManifestBuilder,
-    ManifestV1, ManualPorChallengeV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1, ReputationSnapshotV1,
-    StorageClass, chunker_registry as manifest_chunker_registry,
+    ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC, ManifestBuildError,
+    ManifestBuilder, ManifestV1, ManualPorChallengeV1, PinPolicy, PorChallengeOutcome,
+    PorChallengeStatusV1, PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1,
+    ReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
+    chunker_registry as manifest_chunker_registry, governance_dag_block_cid_v1,
+    validate_governance_dag_head_against_chain_v1, validate_governance_log_node_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
@@ -619,6 +623,34 @@ fn run() -> Result<(), String> {
                 "settle" => appeal_settle(args.collect()),
                 "disburse" => appeal_disburse(args.collect()),
                 _ => Err(appeal_usage()),
+            }
+        }
+        "governance" => {
+            let Some(sub) = args.next() else {
+                return Err(governance_usage());
+            };
+            match sub.as_str() {
+                "dag" => {
+                    let Some(dag_sub) = args.next() else {
+                        return Err(governance_usage());
+                    };
+                    match dag_sub.as_str() {
+                        "list" => governance_dag_list(args.collect()),
+                        "show" => governance_dag_show(args.collect()),
+                        "verify" => governance_dag_verify(args.collect()),
+                        "export" => governance_dag_export(args.collect()),
+                        "build" => governance_dag_build(args.collect()),
+                        "verify-build" => governance_dag_verify_build(args.collect()),
+                        "rebuild-head" => governance_dag_rebuild_head(args.collect()),
+                        "checkpoint" => governance_dag_checkpoint(args.collect()),
+                        "checkpoint-verify" => governance_dag_checkpoint_verify(args.collect()),
+                        "checkpoint-recover" => governance_dag_checkpoint_recover(args.collect()),
+                        "mirror-build" => governance_dag_mirror_build(args.collect()),
+                        "mirror-query" => governance_dag_mirror_query(args.collect()),
+                        _ => Err(governance_usage()),
+                    }
+                }
+                _ => Err(governance_usage()),
             }
         }
         "--help" | "-h" | "help" => Err(usage()),
@@ -3116,7 +3148,7 @@ fn usage() -> String {
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli reputation publish --torii-url=URL --snapshot=PATH [--summary-out=PATH]
@@ -3133,7 +3165,19 @@ fn usage() -> String {
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
   sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]
   sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
-  sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]"
+  sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]
+  sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
+  sorafs_cli governance dag show --node=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli governance dag verify --root=DIR [--require-chain] [--require-sidecars] [--head-cid=CID|hex:HEX] [--summary-out=PATH]
+  sorafs_cli governance dag export --root=DIR --out=DIR [--require-chain] [--require-sidecars] [--head-cid=CID|hex:HEX]
+  sorafs_cli governance dag build --root=DIR --out=DIR --publisher-peer-id=ID (--key-hex=HEX | --key=PATH) [--generated-at=UNIX_SECS] [--checkpoint-cid=CID|hex:HEX] [--require-sidecars] [--summary-out=PATH] [--car-out=PATH [--car-plan-out=PATH] [--car-chunker-handle=HANDLE]]
+  sorafs_cli governance dag verify-build --root=DIR [--require-sidecars] [--head-cid=CID|hex:HEX] [--summary-out=PATH]
+  sorafs_cli governance dag rebuild-head --root=DIR --head-out=PATH --publisher-peer-id=ID (--key-hex=HEX | --key=PATH) [--generated-at=UNIX_SECS] [--checkpoint-cid=CID|hex:HEX] [--require-sidecars] [--summary-out=PATH]
+  sorafs_cli governance dag checkpoint --root=DIR --out=PATH [--require-sidecars] [--head-cid=CID|hex:HEX] [--car=PATH] [--mirror-index=PATH] [--generated-at=UNIX_SECS]
+  sorafs_cli governance dag checkpoint-verify --checkpoint=PATH [--root=DIR] [--car=PATH] [--mirror-index=PATH] [--require-sidecars] [--summary-out=PATH]
+  sorafs_cli governance dag checkpoint-recover --checkpoint=PATH --root=DIR --out=PATH [--car=PATH] [--require-sidecars] [--summary-out=PATH]
+  sorafs_cli governance dag mirror-build --root=DIR --out=PATH [--require-sidecars] [--head-cid=CID|hex:HEX]
+  sorafs_cli governance dag mirror-query --index=PATH (--head | --block-cid=CID|hex:HEX | --node-cid=CID|hex:HEX) [--format=table|json]"
         .to_string()
 }
 
@@ -3149,7 +3193,7 @@ fn reputation_usage() -> String {
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
         .to_string()
 }
 
@@ -3202,6 +3246,29 @@ struct GatewayScoreboardMetadataInput<'a> {
     write_mode: WriteModeHint,
     scoreboard_now: Option<u64>,
     telemetry_source: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+enum FetchCacheProfile {
+    Warm,
+    Cold,
+}
+
+impl FetchCacheProfile {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "hot" | "warm" => Some(Self::Warm),
+            "cold" => Some(Self::Cold),
+            _ => None,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Warm => "warm",
+            Self::Cold => "cold",
+        }
+    }
 }
 
 struct CliPolicyLabels {
@@ -3366,6 +3433,23 @@ fn appeal_usage() -> String {
         .to_string()
 }
 
+fn governance_usage() -> String {
+    "Usage:
+  sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
+  sorafs_cli governance dag show --node=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli governance dag verify --root=DIR [--require-chain] [--require-sidecars] [--head-cid=CID|hex:HEX] [--summary-out=PATH]
+  sorafs_cli governance dag export --root=DIR --out=DIR [--require-chain] [--require-sidecars] [--head-cid=CID|hex:HEX]
+  sorafs_cli governance dag build --root=DIR --out=DIR --publisher-peer-id=ID (--key-hex=HEX | --key=PATH) [--generated-at=UNIX_SECS] [--checkpoint-cid=CID|hex:HEX] [--require-sidecars] [--summary-out=PATH] [--car-out=PATH [--car-plan-out=PATH] [--car-chunker-handle=HANDLE]]
+  sorafs_cli governance dag verify-build --root=DIR [--require-sidecars] [--head-cid=CID|hex:HEX] [--summary-out=PATH]
+  sorafs_cli governance dag rebuild-head --root=DIR --head-out=PATH --publisher-peer-id=ID (--key-hex=HEX | --key=PATH) [--generated-at=UNIX_SECS] [--checkpoint-cid=CID|hex:HEX] [--require-sidecars] [--summary-out=PATH]
+  sorafs_cli governance dag checkpoint --root=DIR --out=PATH [--require-sidecars] [--head-cid=CID|hex:HEX] [--car=PATH] [--mirror-index=PATH] [--generated-at=UNIX_SECS]
+  sorafs_cli governance dag checkpoint-verify --checkpoint=PATH [--root=DIR] [--car=PATH] [--mirror-index=PATH] [--require-sidecars] [--summary-out=PATH]
+  sorafs_cli governance dag checkpoint-recover --checkpoint=PATH --root=DIR --out=PATH [--car=PATH] [--require-sidecars] [--summary-out=PATH]
+  sorafs_cli governance dag mirror-build --root=DIR --out=PATH [--require-sidecars] [--head-cid=CID|hex:HEX]
+  sorafs_cli governance dag mirror-query --index=PATH (--head | --block-cid=CID|hex:HEX | --node-cid=CID|hex:HEX) [--format=table|json]"
+        .to_string()
+}
+
 fn moderation_usage() -> String {
     "Usage:
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
@@ -3412,6 +3496,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let mut scoreboard_out: Option<PathBuf> = None;
     let mut scoreboard_now: Option<u64> = None;
     let mut telemetry_source_label: Option<String> = None;
+    let mut cache_profile: Option<FetchCacheProfile> = None;
 
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
@@ -3535,6 +3620,12 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
                 return Err("`--telemetry-source-label` must not be empty".into());
             }
             telemetry_source_label = Some(trimmed.to_string());
+        } else if let Some(rest) = arg.strip_prefix("--profile=") {
+            let normalized = rest.trim().to_ascii_lowercase().replace('-', "_");
+            let parsed = FetchCacheProfile::parse(&normalized).ok_or_else(|| {
+                "`--profile` must be one of hot|warm|cold for `sorafs_cli fetch`".to_string()
+            })?;
+            cache_profile = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--orchestrator-config=") {
             orchestrator_config_source = Some(JsonSource::from_arg(rest)?);
         } else if let Some(rest) = arg.strip_prefix("--policy=") {
@@ -3959,6 +4050,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         client_id.as_deref(),
         rollout_phase,
         write_mode,
+        cache_profile,
     );
     if let Some(region) = telemetry_region_effective.as_deref()
         && let Some(obj) = summary.as_object_mut()
@@ -8332,6 +8424,3272 @@ fn prepare_clean_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GovernanceDagOutputFormat {
+    Table,
+    Json,
+}
+
+impl GovernanceDagOutputFormat {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "table" => Ok(Self::Table),
+            "json" => Ok(Self::Json),
+            other => Err(format!(
+                "unsupported governance DAG output format `{other}`; expected table|json"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GovernanceDagArtifact {
+    path: PathBuf,
+    rel_path: String,
+    encoded_len: u64,
+    blake3_hex: String,
+    sidecar_status: String,
+    sidecar_value: Option<String>,
+    sidecar_error: Option<String>,
+    node: Option<GovernanceDagNodeSummary>,
+    decode_error: Option<String>,
+    outcome: Option<ValidationOutcomeV1>,
+}
+
+#[derive(Debug, Clone)]
+struct GovernanceDagNodeSummary {
+    node_cid: Vec<u8>,
+    node_cid_label: String,
+    node_cid_hex: String,
+    prev_cid: Option<Vec<u8>>,
+    prev_cid_label: Option<String>,
+    prev_cid_hex: Option<String>,
+    timestamp: u64,
+    publisher_peer_id: String,
+    payload_kind: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct GovernanceDagVerifyOptions {
+    require_chain: bool,
+    require_sidecars: bool,
+    expected_head_cid: Option<Vec<u8>>,
+}
+
+fn governance_dag_list(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut format = GovernanceDagOutputFormat::Table;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--format" => format = GovernanceDagOutputFormat::parse(value)?,
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag list`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag list`".to_string()
+    })?;
+    let artifacts = load_governance_dag_inventory(&root)?;
+    let summary = governance_dag_inventory_value(&root, &artifacts);
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary)?;
+    }
+    match format {
+        GovernanceDagOutputFormat::Json => print_governance_dag_json(&summary),
+        GovernanceDagOutputFormat::Table => {
+            print_governance_dag_inventory_table(&root, &artifacts);
+            Ok(())
+        }
+    }
+}
+
+fn governance_dag_show(raw_args: Vec<String>) -> Result<(), String> {
+    let mut node: Option<PathBuf> = None;
+    let mut format = GovernanceDagOutputFormat::Table;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--node" => node = Some(PathBuf::from(value)),
+            "--format" => format = GovernanceDagOutputFormat::parse(value)?,
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag show`"
+                ));
+            }
+        }
+    }
+
+    let node = node.ok_or_else(|| {
+        "missing required `--node=PATH` for `sorafs_cli governance dag show`".to_string()
+    })?;
+    let root = node.parent().unwrap_or_else(|| Path::new("."));
+    let artifact = read_governance_dag_artifact(root, &node)?;
+    let value = governance_dag_artifact_value(&artifact, true);
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &value)?;
+    }
+    match format {
+        GovernanceDagOutputFormat::Json => print_governance_dag_json(&value),
+        GovernanceDagOutputFormat::Table => {
+            print_governance_dag_artifact_table(&artifact);
+            Ok(())
+        }
+    }
+}
+
+fn governance_dag_verify(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut require_chain = false;
+    let mut require_sidecars = false;
+    let mut head_cid: Option<Vec<u8>> = None;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        match arg.as_str() {
+            "--require-chain" => {
+                require_chain = true;
+                continue;
+            }
+            "--require-sidecars" => {
+                require_sidecars = true;
+                continue;
+            }
+            _ => {}
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--head-cid" => head_cid = Some(parse_governance_cid_arg(value)?),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag verify`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag verify`".to_string()
+    })?;
+    let artifacts = load_governance_dag_inventory(&root)?;
+    let (ok, summary, _) = verify_governance_dag_inventory(
+        &root,
+        &artifacts,
+        &GovernanceDagVerifyOptions {
+            require_chain,
+            require_sidecars,
+            expected_head_cid: head_cid,
+        },
+    );
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary)?;
+    }
+    print_governance_dag_json(&summary)?;
+    if ok {
+        Ok(())
+    } else {
+        Err("governance DAG verification failed".to_string())
+    }
+}
+
+fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut require_chain = false;
+    let mut require_sidecars = false;
+    let mut head_cid: Option<Vec<u8>> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        match arg.as_str() {
+            "--require-chain" => {
+                require_chain = true;
+                continue;
+            }
+            "--require-sidecars" => {
+                require_sidecars = true;
+                continue;
+            }
+            _ => {}
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--head-cid" => head_cid = Some(parse_governance_cid_arg(value)?),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag export`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag export`".to_string()
+    })?;
+    let out = out.ok_or_else(|| {
+        "missing required `--out=DIR` for `sorafs_cli governance dag export`".to_string()
+    })?;
+    let artifacts = load_governance_dag_inventory(&root)?;
+    let (ok, verify_summary, node_indices) = verify_governance_dag_inventory(
+        &root,
+        &artifacts,
+        &GovernanceDagVerifyOptions {
+            require_chain,
+            require_sidecars,
+            expected_head_cid: head_cid,
+        },
+    );
+    if !ok {
+        print_governance_dag_json(&verify_summary)?;
+        return Err("governance DAG export refused invalid archive".to_string());
+    }
+
+    prepare_clean_dir(&out)?;
+    let nodes_root = out.join("nodes");
+    let mut exported_files = Vec::new();
+    for index in node_indices {
+        let artifact = &artifacts[index];
+        let target = nodes_root.join(&artifact.rel_path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("failed to create `{}`: {err}", parent.display()))?;
+        }
+        fs::copy(&artifact.path, &target).map_err(|err| {
+            format!(
+                "failed to copy governance node `{}` to `{}`: {err}",
+                artifact.path.display(),
+                target.display()
+            )
+        })?;
+        let sidecar_path = target.with_extension("to.blake3");
+        let mut sidecar = artifact.blake3_hex.clone();
+        sidecar.push('\n');
+        write_text(&sidecar_path, sidecar.as_bytes())?;
+
+        let mut file = Map::new();
+        file.insert(
+            "path".into(),
+            Value::from(format!("nodes/{}", artifact.rel_path)),
+        );
+        file.insert("blake3".into(), Value::from(artifact.blake3_hex.clone()));
+        file.insert("encoded_len".into(), Value::from(artifact.encoded_len));
+        if let Some(node) = &artifact.node {
+            file.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
+            file.insert("payload_kind".into(), Value::from(node.payload_kind));
+        }
+        exported_files.push(Value::Object(file));
+    }
+
+    let mut manifest = Map::new();
+    manifest.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.export.v1"),
+    );
+    manifest.insert(
+        "generated_at".into(),
+        Value::from(governance_dag_now_secs()),
+    );
+    manifest.insert(
+        "source_root".into(),
+        Value::from(root.display().to_string()),
+    );
+    manifest.insert("verification".into(), verify_summary);
+    manifest.insert("files".into(), Value::Array(exported_files));
+    let manifest_value = Value::Object(manifest);
+    write_governance_dag_json(&out.join("manifest.json"), &manifest_value)?;
+    print_governance_dag_json(&manifest_value)
+}
+
+fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut publisher_peer_id: Option<Vec<u8>> = None;
+    let mut key_hex: Option<String> = None;
+    let mut key_path: Option<PathBuf> = None;
+    let mut generated_at: Option<u64> = None;
+    let mut checkpoint_cid: Option<Vec<u8>> = None;
+    let mut require_sidecars = false;
+    let mut summary_out: Option<PathBuf> = None;
+    let mut car_out: Option<PathBuf> = None;
+    let mut car_plan_out: Option<PathBuf> = None;
+    let mut car_chunker_handle: Option<String> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--publisher-peer-id" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--publisher-peer-id` must not be empty".to_string());
+                }
+                publisher_peer_id = Some(trimmed.as_bytes().to_vec());
+            }
+            "--key-hex" => key_hex = Some(value.to_string()),
+            "--key" => key_path = Some(PathBuf::from(value)),
+            "--generated-at" => {
+                generated_at = Some(parse_u64_arg(
+                    "--generated-at",
+                    value,
+                    "sorafs_cli governance dag build",
+                )?)
+            }
+            "--checkpoint-cid" => checkpoint_cid = Some(parse_governance_cid_arg(value)?),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            "--car-out" => car_out = Some(PathBuf::from(value)),
+            "--car-plan-out" => car_plan_out = Some(PathBuf::from(value)),
+            "--car-chunker-handle" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--car-chunker-handle` must not be empty".to_string());
+                }
+                car_chunker_handle = Some(trimmed.to_string());
+            }
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag build`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag build`".to_string()
+    })?;
+    let out = out.ok_or_else(|| {
+        "missing required `--out=DIR` for `sorafs_cli governance dag build`".to_string()
+    })?;
+    if car_out.is_none() && car_plan_out.is_some() {
+        return Err(
+            "`--car-plan-out=PATH` requires `--car-out=PATH` for `sorafs_cli governance dag build`"
+                .to_string(),
+        );
+    }
+    if car_out.is_none() && car_chunker_handle.is_some() {
+        return Err(
+            "`--car-chunker-handle=HANDLE` requires `--car-out=PATH` for `sorafs_cli governance dag build`"
+                .to_string(),
+        );
+    }
+    let publisher_peer_id = publisher_peer_id.ok_or_else(|| {
+        "missing required `--publisher-peer-id=ID` for `sorafs_cli governance dag build`"
+            .to_string()
+    })?;
+    let seed = load_governance_dag_build_seed(key_hex.as_deref(), key_path.as_deref())?;
+    let signing_key = SigningKey::from_bytes(&seed);
+    let generated_at = generated_at.unwrap_or_else(governance_dag_now_secs);
+
+    let artifacts = load_governance_dag_inventory(&root)?;
+    let (ok, verify_summary, node_indices) = verify_governance_dag_inventory(
+        &root,
+        &artifacts,
+        &GovernanceDagVerifyOptions {
+            require_chain: false,
+            require_sidecars,
+            expected_head_cid: None,
+        },
+    );
+    if !ok {
+        print_governance_dag_json(&verify_summary)?;
+        return Err("governance DAG build refused invalid node archive".to_string());
+    }
+
+    let ordered_indices = governance_dag_build_order(&artifacts, &node_indices);
+    prepare_clean_dir(&out)?;
+    let blocks_dir = out.join("blocks");
+    fs::create_dir_all(&blocks_dir)
+        .map_err(|err| format!("failed to create `{}`: {err}", blocks_dir.display()))?;
+
+    let mut blocks = Vec::<GovernanceDagBlockV1>::with_capacity(ordered_indices.len());
+    let mut block_files = Vec::<Value>::new();
+    let mut car_files = Vec::<FileEntry>::new();
+    let mut prev_block_cid: Option<Vec<u8>> = None;
+    for (sequence_usize, index) in ordered_indices.iter().enumerate() {
+        let artifact = &artifacts[*index];
+        let node = read_governance_log_node_file(&artifact.path)?;
+        let sequence = u64::try_from(sequence_usize).unwrap_or(u64::MAX);
+        let timestamp = node.timestamp;
+        let block_cid = governance_dag_block_cid_v1(
+            prev_block_cid.as_deref(),
+            sequence,
+            timestamp,
+            &publisher_peer_id,
+            &node,
+        )
+        .map_err(|err| format!("failed to derive governance DAG block CID: {err}"))?;
+        let mut block = GovernanceDagBlockV1 {
+            version: GOVERNANCE_DAG_BLOCK_VERSION_V1,
+            block_cid,
+            prev_block_cid: prev_block_cid.clone(),
+            sequence,
+            timestamp,
+            publisher_peer_id: publisher_peer_id.clone(),
+            node,
+            block_signature: empty_governance_dag_ed25519_signature(),
+        };
+        sign_governance_dag_block_cli(&mut block, &signing_key)?;
+
+        let block_bytes = to_bytes(&block)
+            .map_err(|err| format!("failed to encode governance DAG block: {err}"))?;
+        let block_file_name = format!("{sequence:020}-{}.to", hex_encode(&block.block_cid));
+        let block_rel_path = format!("blocks/{block_file_name}");
+        let block_path = blocks_dir.join(&block_file_name);
+        write_text(&block_path, &block_bytes)?;
+        let block_sidecar_bytes = write_governance_blake3_sidecar(&block_path, &block_bytes)?;
+        car_files.push(governance_dag_car_file(
+            &block_rel_path,
+            block_bytes.clone(),
+        )?);
+        car_files.push(governance_dag_car_file(
+            &format!("{block_rel_path}.blake3"),
+            block_sidecar_bytes,
+        )?);
+
+        let mut block_value = Map::new();
+        block_value.insert("path".into(), Value::from(block_rel_path));
+        block_value.insert("sequence".into(), Value::from(sequence));
+        block_value.insert(
+            "block_cid_hex".into(),
+            Value::from(hex_encode(&block.block_cid)),
+        );
+        block_value.insert(
+            "prev_block_cid_hex".into(),
+            block
+                .prev_block_cid
+                .as_ref()
+                .map(hex_encode)
+                .map_or(Value::Null, Value::from),
+        );
+        block_value.insert(
+            "source_node_path".into(),
+            Value::from(artifact.rel_path.clone()),
+        );
+        if let Some(node) = &artifact.node {
+            block_value.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
+            block_value.insert(
+                "node_cid_hex".into(),
+                Value::from(node.node_cid_hex.clone()),
+            );
+            block_value.insert("payload_kind".into(), Value::from(node.payload_kind));
+        }
+        block_value.insert(
+            "encoded_blake3_hex".into(),
+            Value::from(hex_encode(blake3_hash(&block_bytes).as_bytes())),
+        );
+        block_files.push(Value::Object(block_value));
+
+        prev_block_cid = Some(block.block_cid.clone());
+        blocks.push(block);
+    }
+
+    let head_block_cid = prev_block_cid.ok_or_else(|| {
+        "governance DAG build found no validated governance nodes to build".to_string()
+    })?;
+    let mut head = GovernanceDagHeadV1 {
+        version: GOVERNANCE_DAG_HEAD_VERSION_V1,
+        head_block_cid: head_block_cid.clone(),
+        block_count: blocks.len() as u64,
+        generated_at,
+        publisher_peer_id: publisher_peer_id.clone(),
+        checkpoint_cid,
+        head_signature: empty_governance_dag_ed25519_signature(),
+    };
+    sign_governance_dag_head_cli(&mut head, &signing_key)?;
+    validate_governance_dag_head_against_chain_v1(&head, &blocks)
+        .map_err(|err| format!("built governance DAG head failed validation: {err}"))?;
+
+    let head_bytes =
+        to_bytes(&head).map_err(|err| format!("failed to encode governance DAG head: {err}"))?;
+    let head_path = out.join("head.to");
+    write_text(&head_path, &head_bytes)?;
+    let head_sidecar_bytes = write_governance_blake3_sidecar(&head_path, &head_bytes)?;
+    car_files.push(governance_dag_car_file("head.to", head_bytes.clone())?);
+    car_files.push(governance_dag_car_file(
+        "head.to.blake3",
+        head_sidecar_bytes,
+    )?);
+
+    let car_archive_summary = if let Some(car_path) = car_out.as_deref() {
+        let handle = car_chunker_handle
+            .as_deref()
+            .unwrap_or(DEFAULT_CHUNKER_HANDLE);
+        Some(write_governance_dag_car_archive(
+            &out,
+            car_path,
+            car_plan_out.as_deref(),
+            handle,
+            car_files,
+        )?)
+    } else {
+        None
+    };
+
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.build.v1"),
+    );
+    summary.insert(
+        "source_root".into(),
+        Value::from(root.display().to_string()),
+    );
+    summary.insert("output_root".into(), Value::from(out.display().to_string()));
+    summary.insert("generated_at".into(), Value::from(generated_at));
+    summary.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&publisher_peer_id).to_string()),
+    );
+    summary.insert(
+        "publisher_public_key_hex".into(),
+        Value::from(hex_encode(signing_key.verifying_key().to_bytes())),
+    );
+    summary.insert("block_count".into(), Value::from(blocks.len() as u64));
+    summary.insert(
+        "head_block_cid_hex".into(),
+        Value::from(hex_encode(&head_block_cid)),
+    );
+    summary.insert("head_path".into(), Value::from("head.to"));
+    summary.insert(
+        "head_blake3_hex".into(),
+        Value::from(hex_encode(blake3_hash(&head_bytes).as_bytes())),
+    );
+    if let Some(checkpoint) = &head.checkpoint_cid {
+        summary.insert(
+            "checkpoint_cid_hex".into(),
+            Value::from(hex_encode(checkpoint)),
+        );
+    }
+    summary.insert("blocks".into(), Value::Array(block_files));
+    if let Some(car_summary) = car_archive_summary {
+        summary.insert("car_archive".into(), car_summary);
+    }
+    summary.insert("input_verification".into(), verify_summary);
+    let summary_value = Value::Object(summary);
+    write_governance_dag_json(&out.join("manifest.json"), &summary_value)?;
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary_value)?;
+    }
+    print_governance_dag_json(&summary_value)
+}
+
+fn governance_dag_verify_build(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut require_sidecars = false;
+    let mut head_cid: Option<Vec<u8>> = None;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--head-cid" => head_cid = Some(parse_governance_cid_arg(value)?),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag verify-build`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag verify-build`".to_string()
+    })?;
+    let (ok, summary) =
+        verify_governance_dag_build_snapshot(&root, require_sidecars, head_cid.as_deref());
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary)?;
+    }
+    print_governance_dag_json(&summary)?;
+    if ok {
+        Ok(())
+    } else {
+        Err("governance DAG build verification failed".to_string())
+    }
+}
+
+fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut head_out: Option<PathBuf> = None;
+    let mut publisher_peer_id: Option<Vec<u8>> = None;
+    let mut key_hex: Option<String> = None;
+    let mut key_path: Option<PathBuf> = None;
+    let mut generated_at: Option<u64> = None;
+    let mut checkpoint_cid: Option<Vec<u8>> = None;
+    let mut require_sidecars = false;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--head-out" => head_out = Some(PathBuf::from(value)),
+            "--publisher-peer-id" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--publisher-peer-id` must not be empty".to_string());
+                }
+                publisher_peer_id = Some(trimmed.as_bytes().to_vec());
+            }
+            "--key-hex" => key_hex = Some(value.to_string()),
+            "--key" => key_path = Some(PathBuf::from(value)),
+            "--generated-at" => {
+                generated_at = Some(parse_u64_arg(
+                    "--generated-at",
+                    value,
+                    "sorafs_cli governance dag rebuild-head",
+                )?)
+            }
+            "--checkpoint-cid" => checkpoint_cid = Some(parse_governance_cid_arg(value)?),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag rebuild-head`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag rebuild-head`".to_string()
+    })?;
+    let head_out = head_out.ok_or_else(|| {
+        "missing required `--head-out=PATH` for `sorafs_cli governance dag rebuild-head`"
+            .to_string()
+    })?;
+    let publisher_peer_id = publisher_peer_id.ok_or_else(|| {
+        "missing required `--publisher-peer-id=ID` for `sorafs_cli governance dag rebuild-head`"
+            .to_string()
+    })?;
+    let seed = load_governance_dag_build_seed(key_hex.as_deref(), key_path.as_deref())?;
+    let signing_key = SigningKey::from_bytes(&seed);
+    let generated_at = generated_at.unwrap_or_else(governance_dag_now_secs);
+
+    let (blocks, block_records, warnings) =
+        load_governance_dag_block_snapshot(&root, require_sidecars)?;
+    let head_block_cid = governance_dag_head_cid_from_blocks(&blocks)?;
+    let mut head = GovernanceDagHeadV1 {
+        version: GOVERNANCE_DAG_HEAD_VERSION_V1,
+        head_block_cid: head_block_cid.clone(),
+        block_count: blocks.len() as u64,
+        generated_at,
+        publisher_peer_id: publisher_peer_id.clone(),
+        checkpoint_cid,
+        head_signature: empty_governance_dag_ed25519_signature(),
+    };
+    sign_governance_dag_head_cli(&mut head, &signing_key)?;
+    validate_governance_dag_head_against_chain_v1(&head, &blocks)
+        .map_err(|err| format!("rebuilt governance DAG head failed validation: {err}"))?;
+
+    let head_bytes = to_bytes(&head)
+        .map_err(|err| format!("failed to encode rebuilt governance DAG head: {err}"))?;
+    ensure_parent_dir(&head_out)?;
+    write_text(&head_out, &head_bytes)?;
+    write_governance_blake3_sidecar(&head_out, &head_bytes)?;
+
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.head.rebuild.v1"),
+    );
+    summary.insert(
+        "source_root".into(),
+        Value::from(root.display().to_string()),
+    );
+    summary.insert(
+        "head_path".into(),
+        Value::from(head_out.display().to_string()),
+    );
+    summary.insert("generated_at".into(), Value::from(generated_at));
+    summary.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&publisher_peer_id).to_string()),
+    );
+    summary.insert(
+        "publisher_public_key_hex".into(),
+        Value::from(hex_encode(signing_key.verifying_key().to_bytes())),
+    );
+    summary.insert("block_count".into(), Value::from(blocks.len() as u64));
+    summary.insert(
+        "head_block_cid".into(),
+        Value::from(cid_display(&head_block_cid)),
+    );
+    summary.insert(
+        "head_block_cid_hex".into(),
+        Value::from(hex_encode(&head_block_cid)),
+    );
+    summary.insert(
+        "head_blake3_hex".into(),
+        Value::from(hex_encode(blake3_hash(&head_bytes).as_bytes())),
+    );
+    if let Some(checkpoint) = &head.checkpoint_cid {
+        summary.insert(
+            "checkpoint_cid_hex".into(),
+            Value::from(hex_encode(checkpoint)),
+        );
+    }
+    summary.insert("blocks".into(), Value::Array(block_records));
+    summary.insert("warnings".into(), Value::Array(warnings));
+    let summary_value = Value::Object(summary);
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary_value)?;
+    }
+    print_governance_dag_json(&summary_value)
+}
+
+fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut car_path: Option<PathBuf> = None;
+    let mut mirror_index_path: Option<PathBuf> = None;
+    let mut require_sidecars = false;
+    let mut head_cid: Option<Vec<u8>> = None;
+    let mut generated_at: Option<u64> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--car" => car_path = Some(PathBuf::from(value)),
+            "--mirror-index" => mirror_index_path = Some(PathBuf::from(value)),
+            "--head-cid" => head_cid = Some(parse_governance_cid_arg(value)?),
+            "--generated-at" => {
+                generated_at = Some(parse_u64_arg(
+                    "--generated-at",
+                    value,
+                    "sorafs_cli governance dag checkpoint",
+                )?)
+            }
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag checkpoint`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag checkpoint`".to_string()
+    })?;
+    let out = out.ok_or_else(|| {
+        "missing required `--out=PATH` for `sorafs_cli governance dag checkpoint`".to_string()
+    })?;
+
+    let (ok, verification) =
+        verify_governance_dag_build_snapshot(&root, require_sidecars, head_cid.as_deref());
+    if !ok {
+        print_governance_dag_json(&verification)?;
+        return Err("governance DAG checkpoint refused invalid build snapshot".to_string());
+    }
+
+    let head_path = root.join("head.to");
+    let (head_bytes, head_len, head_blake3_hex) =
+        governance_dag_read_digest_file(&head_path, "governance DAG checkpoint head")?;
+    let head = decode_from_bytes::<GovernanceDagHeadV1>(&head_bytes).map_err(|err| {
+        format!(
+            "failed to decode governance DAG checkpoint head `{}`: {err}",
+            head_path.display()
+        )
+    })?;
+
+    let mut head_value = Map::new();
+    head_value.insert("path".into(), Value::from("head.to"));
+    head_value.insert(
+        "source_path".into(),
+        Value::from(head_path.display().to_string()),
+    );
+    head_value.insert("encoded_len".into(), Value::from(head_len));
+    head_value.insert("blake3".into(), Value::from(head_blake3_hex));
+    head_value.insert(
+        "head_block_cid".into(),
+        Value::from(cid_display(&head.head_block_cid)),
+    );
+    head_value.insert(
+        "head_block_cid_hex".into(),
+        Value::from(hex_encode(&head.head_block_cid)),
+    );
+    head_value.insert("block_count".into(), Value::from(head.block_count));
+    head_value.insert("generated_at".into(), Value::from(head.generated_at));
+    head_value.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).to_string()),
+    );
+    head_value.insert(
+        "checkpoint_cid_hex".into(),
+        head.checkpoint_cid
+            .as_ref()
+            .map(hex_encode)
+            .map_or(Value::Null, Value::from),
+    );
+
+    let car_value = if let Some(path) = car_path.as_deref() {
+        let (_, encoded_len, blake3_hex) =
+            governance_dag_read_digest_file(path, "governance DAG checkpoint CAR")?;
+        let mut value = Map::new();
+        value.insert("path".into(), Value::from(path.display().to_string()));
+        value.insert("encoded_len".into(), Value::from(encoded_len));
+        value.insert("car_size".into(), Value::from(encoded_len));
+        value.insert("blake3".into(), Value::from(blake3_hex));
+        Some(Value::Object(value))
+    } else {
+        None
+    };
+
+    let mirror_index_value = if let Some(path) = mirror_index_path.as_deref() {
+        let (bytes, encoded_len, blake3_hex) =
+            governance_dag_read_digest_file(path, "governance DAG checkpoint mirror index")?;
+        let index: Value = from_slice(&bytes).map_err(|err| {
+            format!(
+                "failed to parse governance DAG checkpoint mirror index `{}` as JSON: {err}",
+                path.display()
+            )
+        })?;
+        if index.get("schema").and_then(Value::as_str) != Some("sorafs.governance_dag.mirror.v1") {
+            return Err(format!(
+                "governance DAG checkpoint mirror index `{}` has unsupported schema",
+                path.display()
+            ));
+        }
+        let index_head_cid = index
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "governance DAG checkpoint mirror index `{}` is missing `head.head_block_cid_hex`",
+                    path.display()
+                )
+            })?;
+        let snapshot_head_cid = hex_encode(&head.head_block_cid);
+        if index_head_cid != snapshot_head_cid {
+            return Err(format!(
+                "governance DAG checkpoint mirror index `{}` advertises head `{index_head_cid}` but snapshot advertises `{snapshot_head_cid}`",
+                path.display()
+            ));
+        }
+        let index_block_count = index
+            .get("block_count")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                format!(
+                    "governance DAG checkpoint mirror index `{}` is missing `block_count`",
+                    path.display()
+                )
+            })?;
+        if index_block_count != head.block_count {
+            return Err(format!(
+                "governance DAG checkpoint mirror index `{}` advertises block_count `{index_block_count}` but head advertises `{}`",
+                path.display(),
+                head.block_count
+            ));
+        }
+
+        let mut value = Map::new();
+        value.insert("path".into(), Value::from(path.display().to_string()));
+        value.insert("encoded_len".into(), Value::from(encoded_len));
+        value.insert("blake3".into(), Value::from(blake3_hex));
+        value.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.mirror.v1"),
+        );
+        value.insert("block_count".into(), Value::from(index_block_count));
+        value.insert(
+            "head_block_cid_hex".into(),
+            Value::from(index_head_cid.to_string()),
+        );
+        Some(Value::Object(value))
+    } else {
+        None
+    };
+
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.checkpoint.v1"),
+    );
+    summary.insert(
+        "source_root".into(),
+        Value::from(root.display().to_string()),
+    );
+    summary.insert("output_path".into(), Value::from(out.display().to_string()));
+    summary.insert(
+        "generated_at".into(),
+        Value::from(generated_at.unwrap_or_else(governance_dag_now_secs)),
+    );
+    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
+    summary.insert(
+        "expected_head_cid".into(),
+        head_cid
+            .as_ref()
+            .map(|cid| cid_display(cid))
+            .map_or(Value::Null, Value::from),
+    );
+    summary.insert(
+        "expected_head_cid_hex".into(),
+        head_cid
+            .as_ref()
+            .map(|cid| hex_encode(cid))
+            .map_or(Value::Null, Value::from),
+    );
+    summary.insert("head".into(), Value::Object(head_value));
+    summary.insert("block_count".into(), Value::from(head.block_count));
+    if let Some(blocks) = verification.get("blocks").cloned() {
+        summary.insert("blocks".into(), blocks);
+    }
+    if let Some(value) = car_value {
+        summary.insert("car_archive".into(), value);
+    }
+    if let Some(value) = mirror_index_value {
+        summary.insert("mirror_index".into(), value);
+    }
+    summary.insert("verification".into(), verification);
+    let summary_value = Value::Object(summary);
+    ensure_parent_dir(&out)?;
+    write_governance_dag_json(&out, &summary_value)?;
+    print_governance_dag_json(&summary_value)
+}
+
+fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String> {
+    let mut checkpoint_path: Option<PathBuf> = None;
+    let mut root_override: Option<PathBuf> = None;
+    let mut car_override: Option<PathBuf> = None;
+    let mut mirror_index_override: Option<PathBuf> = None;
+    let mut require_sidecars = false;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--checkpoint" => checkpoint_path = Some(PathBuf::from(value)),
+            "--root" => root_override = Some(PathBuf::from(value)),
+            "--car" => car_override = Some(PathBuf::from(value)),
+            "--mirror-index" => mirror_index_override = Some(PathBuf::from(value)),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag checkpoint-verify`"
+                ));
+            }
+        }
+    }
+
+    let checkpoint_path = checkpoint_path.ok_or_else(|| {
+        "missing required `--checkpoint=PATH` for `sorafs_cli governance dag checkpoint-verify`"
+            .to_string()
+    })?;
+    let (checkpoint_bytes, checkpoint_len, checkpoint_blake3_hex) =
+        governance_dag_read_digest_file(&checkpoint_path, "governance DAG checkpoint manifest")?;
+    let checkpoint: Value = from_slice(&checkpoint_bytes).map_err(|err| {
+        format!(
+            "failed to parse governance DAG checkpoint `{}` as JSON: {err}",
+            checkpoint_path.display()
+        )
+    })?;
+
+    let mut errors = Vec::<Value>::new();
+    if checkpoint.get("schema").and_then(Value::as_str)
+        != Some("sorafs.governance_dag.checkpoint.v1")
+    {
+        errors.push(governance_dag_problem(
+            checkpoint_path.to_string_lossy().as_ref(),
+            "schema",
+            "checkpoint manifest has unsupported schema",
+        ));
+    }
+
+    let mut checkpoint_file_value = Map::new();
+    checkpoint_file_value.insert(
+        "path".into(),
+        Value::from(checkpoint_path.display().to_string()),
+    );
+    checkpoint_file_value.insert("encoded_len".into(), Value::from(checkpoint_len));
+    checkpoint_file_value.insert("blake3".into(), Value::from(checkpoint_blake3_hex));
+
+    let expected_head_cid_hex = checkpoint
+        .get("head")
+        .and_then(|head| head.get("head_block_cid_hex"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let expected_head_cid = match expected_head_cid_hex.as_deref() {
+        Some(value) => match hex::decode(value) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                errors.push(governance_dag_problem(
+                    checkpoint_path.to_string_lossy().as_ref(),
+                    "head_cid",
+                    format!("checkpoint head_block_cid_hex is not valid hex: {err}"),
+                ));
+                None
+            }
+        },
+        None => {
+            errors.push(governance_dag_problem(
+                checkpoint_path.to_string_lossy().as_ref(),
+                "head_cid",
+                "checkpoint manifest is missing `head.head_block_cid_hex`",
+            ));
+            None
+        }
+    };
+
+    let root_path = match root_override {
+        Some(path) => Some(path),
+        None => checkpoint
+            .get("source_root")
+            .and_then(Value::as_str)
+            .map(PathBuf::from),
+    };
+    let mut root_value = Map::new();
+    let mut head_check = Value::Null;
+    let mut root_verification = Value::Null;
+    if let Some(root) = root_path.as_deref() {
+        root_value.insert("path".into(), Value::from(root.display().to_string()));
+        let (root_ok, verification) = verify_governance_dag_build_snapshot(
+            root,
+            require_sidecars,
+            expected_head_cid.as_deref(),
+        );
+        root_value.insert("ok".into(), Value::from(root_ok));
+        if !root_ok {
+            errors.push(governance_dag_problem(
+                root.to_string_lossy().as_ref(),
+                "snapshot",
+                "checkpoint root snapshot verification failed",
+            ));
+        }
+        root_verification = verification;
+        if let Some(expected_head) = checkpoint.get("head") {
+            let head_path = root.join("head.to");
+            head_check = governance_dag_checkpoint_file_check(
+                "head",
+                &head_path,
+                expected_head,
+                &["encoded_len"],
+                &mut errors,
+            );
+        }
+    } else {
+        errors.push(governance_dag_problem(
+            checkpoint_path.to_string_lossy().as_ref(),
+            "source_root",
+            "checkpoint verification requires `--root=DIR` or a checkpoint `source_root`",
+        ));
+    }
+    root_value.insert("verification".into(), root_verification);
+
+    let car_check = governance_dag_checkpoint_optional_artifact_check(
+        &checkpoint,
+        car_override.as_deref(),
+        "car_archive",
+        "governance DAG checkpoint CAR",
+        &["encoded_len", "car_size"],
+        &mut errors,
+    )?;
+    let mirror_check = governance_dag_checkpoint_optional_artifact_check(
+        &checkpoint,
+        mirror_index_override.as_deref(),
+        "mirror_index",
+        "governance DAG checkpoint mirror index",
+        &["encoded_len"],
+        &mut errors,
+    )?;
+    if let Some((path, value)) = mirror_check.as_ref() {
+        governance_dag_checkpoint_validate_mirror_index(
+            path,
+            value,
+            expected_head_cid_hex.as_deref(),
+            checkpoint.get("block_count").and_then(Value::as_u64),
+            &mut errors,
+        );
+    }
+
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.checkpoint.verify.v1"),
+    );
+    summary.insert("ok".into(), Value::from(errors.is_empty()));
+    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
+    summary.insert("checkpoint".into(), Value::Object(checkpoint_file_value));
+    summary.insert(
+        "expected_head_cid_hex".into(),
+        expected_head_cid_hex.map_or(Value::Null, Value::from),
+    );
+    summary.insert("root".into(), Value::Object(root_value));
+    summary.insert("head".into(), head_check);
+    if let Some((_, value)) = car_check {
+        summary.insert("car_archive".into(), value);
+    }
+    if let Some((_, value)) = mirror_check {
+        summary.insert("mirror_index".into(), value);
+    }
+    summary.insert("errors".into(), Value::Array(errors.clone()));
+    let summary_value = Value::Object(summary);
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary_value)?;
+    }
+    print_governance_dag_json(&summary_value)?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err("governance DAG checkpoint verification failed".to_string())
+    }
+}
+
+fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String> {
+    let mut checkpoint_path: Option<PathBuf> = None;
+    let mut root: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut car_path: Option<PathBuf> = None;
+    let mut require_sidecars = false;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--checkpoint" => checkpoint_path = Some(PathBuf::from(value)),
+            "--root" => root = Some(PathBuf::from(value)),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--car" => car_path = Some(PathBuf::from(value)),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag checkpoint-recover`"
+                ));
+            }
+        }
+    }
+
+    let checkpoint_path = checkpoint_path.ok_or_else(|| {
+        "missing required `--checkpoint=PATH` for `sorafs_cli governance dag checkpoint-recover`"
+            .to_string()
+    })?;
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag checkpoint-recover`"
+            .to_string()
+    })?;
+    let out = out.ok_or_else(|| {
+        "missing required `--out=PATH` for `sorafs_cli governance dag checkpoint-recover`"
+            .to_string()
+    })?;
+
+    let (checkpoint_bytes, checkpoint_len, checkpoint_blake3_hex) =
+        governance_dag_read_digest_file(&checkpoint_path, "governance DAG checkpoint manifest")?;
+    let checkpoint: Value = from_slice(&checkpoint_bytes).map_err(|err| {
+        format!(
+            "failed to parse governance DAG checkpoint `{}` as JSON: {err}",
+            checkpoint_path.display()
+        )
+    })?;
+
+    let mut errors = Vec::<Value>::new();
+    if checkpoint.get("schema").and_then(Value::as_str)
+        != Some("sorafs.governance_dag.checkpoint.v1")
+    {
+        errors.push(governance_dag_problem(
+            checkpoint_path.to_string_lossy().as_ref(),
+            "schema",
+            "checkpoint manifest has unsupported schema",
+        ));
+    }
+
+    let mut checkpoint_file_value = Map::new();
+    checkpoint_file_value.insert(
+        "path".into(),
+        Value::from(checkpoint_path.display().to_string()),
+    );
+    checkpoint_file_value.insert("encoded_len".into(), Value::from(checkpoint_len));
+    checkpoint_file_value.insert("blake3".into(), Value::from(checkpoint_blake3_hex));
+
+    let expected_head_cid_hex = checkpoint
+        .get("head")
+        .and_then(|head| head.get("head_block_cid_hex"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let expected_head_cid = match expected_head_cid_hex.as_deref() {
+        Some(value) => match hex::decode(value) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                errors.push(governance_dag_problem(
+                    checkpoint_path.to_string_lossy().as_ref(),
+                    "head_cid",
+                    format!("checkpoint head_block_cid_hex is not valid hex: {err}"),
+                ));
+                None
+            }
+        },
+        None => {
+            errors.push(governance_dag_problem(
+                checkpoint_path.to_string_lossy().as_ref(),
+                "head_cid",
+                "checkpoint manifest is missing `head.head_block_cid_hex`",
+            ));
+            None
+        }
+    };
+
+    let (root_ok, root_verification) =
+        verify_governance_dag_build_snapshot(&root, require_sidecars, expected_head_cid.as_deref());
+    if !root_ok {
+        errors.push(governance_dag_problem(
+            root.to_string_lossy().as_ref(),
+            "snapshot",
+            "checkpoint recovery root snapshot verification failed",
+        ));
+    }
+    let head_check = if let Some(expected_head) = checkpoint.get("head") {
+        governance_dag_checkpoint_file_check(
+            "head",
+            &root.join("head.to"),
+            expected_head,
+            &["encoded_len"],
+            &mut errors,
+        )
+    } else {
+        Value::Null
+    };
+    let car_check = governance_dag_checkpoint_optional_artifact_check(
+        &checkpoint,
+        car_path.as_deref(),
+        "car_archive",
+        "governance DAG checkpoint CAR",
+        &["encoded_len", "car_size"],
+        &mut errors,
+    )?;
+
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.checkpoint.recover.v1"),
+    );
+    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
+    summary.insert("checkpoint".into(), Value::Object(checkpoint_file_value));
+    summary.insert(
+        "expected_head_cid_hex".into(),
+        expected_head_cid_hex
+            .clone()
+            .map_or(Value::Null, Value::from),
+    );
+    let mut root_value = Map::new();
+    root_value.insert("path".into(), Value::from(root.display().to_string()));
+    root_value.insert("ok".into(), Value::from(root_ok));
+    root_value.insert("verification".into(), root_verification);
+    summary.insert("root".into(), Value::Object(root_value));
+    summary.insert("head".into(), head_check);
+    if let Some((_, value)) = car_check {
+        summary.insert("car_archive".into(), value);
+    }
+
+    if errors.is_empty() {
+        let index = governance_dag_mirror_index_value(
+            &root,
+            require_sidecars,
+            expected_head_cid.as_deref(),
+        )?;
+        write_governance_dag_json(&out, &index)?;
+        let (index_bytes, encoded_len, blake3_hex) =
+            governance_dag_read_digest_file(&out, "recovered governance DAG mirror index")?;
+        let index_value: Value = from_slice(&index_bytes).map_err(|err| {
+            format!(
+                "failed to parse recovered governance DAG mirror index `{}` as JSON: {err}",
+                out.display()
+            )
+        })?;
+        let mut recovered = Map::new();
+        recovered.insert("path".into(), Value::from(out.display().to_string()));
+        recovered.insert("encoded_len".into(), Value::from(encoded_len));
+        recovered.insert("blake3".into(), Value::from(blake3_hex));
+        recovered.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.mirror.v1"),
+        );
+        recovered.insert(
+            "head_block_cid_hex".into(),
+            index_value
+                .get("head")
+                .and_then(|head| head.get("head_block_cid_hex"))
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        recovered.insert(
+            "block_count".into(),
+            index_value
+                .get("block_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        summary.insert("recovered_mirror_index".into(), Value::Object(recovered));
+    }
+
+    summary.insert("ok".into(), Value::from(errors.is_empty()));
+    summary.insert("errors".into(), Value::Array(errors.clone()));
+    let summary_value = Value::Object(summary);
+    if let Some(path) = summary_out.as_deref() {
+        write_governance_dag_json(path, &summary_value)?;
+    }
+    print_governance_dag_json(&summary_value)?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err("governance DAG checkpoint recovery failed".to_string())
+    }
+}
+
+fn governance_dag_mirror_build(raw_args: Vec<String>) -> Result<(), String> {
+    let mut root: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut require_sidecars = false;
+    let mut head_cid: Option<Vec<u8>> = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--require-sidecars" {
+            require_sidecars = true;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--head-cid" => head_cid = Some(parse_governance_cid_arg(value)?),
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag mirror-build`"
+                ));
+            }
+        }
+    }
+
+    let root = root.ok_or_else(|| {
+        "missing required `--root=DIR` for `sorafs_cli governance dag mirror-build`".to_string()
+    })?;
+    let out = out.ok_or_else(|| {
+        "missing required `--out=PATH` for `sorafs_cli governance dag mirror-build`".to_string()
+    })?;
+    let (ok, verification) =
+        verify_governance_dag_build_snapshot(&root, require_sidecars, head_cid.as_deref());
+    if !ok {
+        print_governance_dag_json(&verification)?;
+        return Err("governance DAG mirror index refused invalid build snapshot".to_string());
+    }
+
+    let index = governance_dag_mirror_index_value(&root, require_sidecars, head_cid.as_deref())?;
+    write_governance_dag_json(&out, &index)?;
+    print_governance_dag_json(&index)
+}
+
+enum GovernanceDagMirrorQuery {
+    Head,
+    BlockCid(Vec<u8>),
+    NodeCid(Vec<u8>),
+}
+
+fn governance_dag_mirror_query(raw_args: Vec<String>) -> Result<(), String> {
+    let mut index_path: Option<PathBuf> = None;
+    let mut query: Option<GovernanceDagMirrorQuery> = None;
+    let mut format = GovernanceDagOutputFormat::Table;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(governance_usage());
+        }
+        if arg == "--head" {
+            set_governance_dag_mirror_query(&mut query, GovernanceDagMirrorQuery::Head)?;
+            continue;
+        }
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(governance_usage());
+        };
+        match key {
+            "--index" => index_path = Some(PathBuf::from(value)),
+            "--block-cid" => set_governance_dag_mirror_query(
+                &mut query,
+                GovernanceDagMirrorQuery::BlockCid(parse_governance_cid_arg(value)?),
+            )?,
+            "--node-cid" => set_governance_dag_mirror_query(
+                &mut query,
+                GovernanceDagMirrorQuery::NodeCid(parse_governance_cid_arg(value)?),
+            )?,
+            "--format" => format = GovernanceDagOutputFormat::parse(value)?,
+            other => {
+                return Err(format!(
+                    "unrecognised option `{other}` for `sorafs_cli governance dag mirror-query`"
+                ));
+            }
+        }
+    }
+
+    let index_path = index_path.ok_or_else(|| {
+        "missing required `--index=PATH` for `sorafs_cli governance dag mirror-query`".to_string()
+    })?;
+    let query = query.ok_or_else(|| {
+        "missing mirror query selector; provide `--head`, `--block-cid=...`, or `--node-cid=...`"
+            .to_string()
+    })?;
+    let index = read_governance_dag_json_file(&index_path)?;
+    if index.get("schema").and_then(Value::as_str) != Some("sorafs.governance_dag.mirror.v1") {
+        return Err(format!(
+            "governance DAG mirror index `{}` has unsupported schema",
+            index_path.display()
+        ));
+    }
+    let (found, query_value) = governance_dag_mirror_query_value(&index_path, &index, &query)?;
+    match format {
+        GovernanceDagOutputFormat::Json => print_governance_dag_json(&query_value)?,
+        GovernanceDagOutputFormat::Table => print_governance_dag_mirror_query_table(&query_value),
+    }
+    if found {
+        Ok(())
+    } else {
+        Err("governance DAG mirror query returned no match".to_string())
+    }
+}
+
+fn set_governance_dag_mirror_query(
+    slot: &mut Option<GovernanceDagMirrorQuery>,
+    value: GovernanceDagMirrorQuery,
+) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(
+            "governance DAG mirror query accepts exactly one of `--head`, `--block-cid`, or `--node-cid`"
+                .to_string(),
+        );
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn governance_dag_mirror_index_value(
+    root: &Path,
+    require_sidecars: bool,
+    expected_head_cid: Option<&[u8]>,
+) -> Result<Value, String> {
+    let head_path = root.join("head.to");
+    let head_bytes = fs::read(&head_path).map_err(|err| {
+        format!(
+            "failed to read governance DAG mirror head `{}`: {err}",
+            head_path.display()
+        )
+    })?;
+    let head_blake3_hex = hex_encode(blake3_hash(&head_bytes).as_bytes());
+    let head = decode_from_bytes::<GovernanceDagHeadV1>(&head_bytes).map_err(|err| {
+        format!(
+            "failed to decode governance DAG mirror head `{}`: {err}",
+            head_path.display()
+        )
+    })?;
+
+    let blocks_dir = root.join("blocks");
+    let mut block_paths = Vec::<PathBuf>::new();
+    collect_governance_dag_to_files(&blocks_dir, &mut block_paths)?;
+    block_paths.sort();
+    let mut blocks = Vec::<(String, String, String, GovernanceDagBlockV1)>::new();
+    for path in block_paths {
+        let rel_path = governance_dag_relative_path(root, &path);
+        let bytes = fs::read(&path).map_err(|err| {
+            format!(
+                "failed to read governance DAG mirror block `{}`: {err}",
+                path.display()
+            )
+        })?;
+        let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
+        let (sidecar_status, _, sidecar_error) = governance_dag_sidecar_status(&path, &blake3_hex);
+        match sidecar_status.as_str() {
+            "mismatch" | "error" => {
+                return Err(format!(
+                    "governance DAG mirror block `{rel_path}` has invalid sidecar status `{sidecar_status}`{}",
+                    sidecar_error
+                        .as_deref()
+                        .map(|err| format!(": {err}"))
+                        .unwrap_or_default()
+                ));
+            }
+            "missing" if require_sidecars => {
+                return Err(format!(
+                    "governance DAG mirror block `{rel_path}` is missing required sidecar"
+                ));
+            }
+            _ => {}
+        }
+        let block = decode_from_bytes::<GovernanceDagBlockV1>(&bytes).map_err(|err| {
+            format!(
+                "failed to decode governance DAG mirror block `{}`: {err}",
+                path.display()
+            )
+        })?;
+        blocks.push((rel_path, blake3_hex, sidecar_status, block));
+    }
+    blocks.sort_by(|left, right| {
+        left.3
+            .sequence
+            .cmp(&right.3.sequence)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let decoded_blocks = blocks
+        .iter()
+        .map(|(_, _, _, block)| block.clone())
+        .collect::<Vec<_>>();
+    validate_governance_dag_head_against_chain_v1(&head, &decoded_blocks)
+        .map_err(|err| format!("governance DAG mirror snapshot failed validation: {err}"))?;
+    if let Some(expected) = expected_head_cid
+        && head.head_block_cid != expected
+    {
+        return Err(format!(
+            "governance DAG mirror expected head CID `{}` but snapshot advertises `{}`",
+            cid_display(expected),
+            cid_display(&head.head_block_cid)
+        ));
+    }
+
+    let mut by_block_cid_hex = Map::new();
+    let mut by_node_cid_hex = Map::new();
+    let mut block_values = Vec::<Value>::new();
+    for (position, (path, blake3_hex, sidecar_status, block)) in blocks.iter().enumerate() {
+        let block_cid_hex = hex_encode(&block.block_cid);
+        let node_cid_hex = hex_encode(&block.node.node_cid);
+        by_block_cid_hex.insert(block_cid_hex.clone(), Value::from(position as u64));
+        by_node_cid_hex.insert(node_cid_hex.clone(), Value::from(position as u64));
+
+        let mut block_value = Map::new();
+        block_value.insert("position".into(), Value::from(position as u64));
+        block_value.insert("path".into(), Value::from(path.clone()));
+        block_value.insert("sequence".into(), Value::from(block.sequence));
+        block_value.insert("timestamp".into(), Value::from(block.timestamp));
+        block_value.insert(
+            "publisher_peer_id".into(),
+            Value::from(String::from_utf8_lossy(&block.publisher_peer_id).to_string()),
+        );
+        block_value.insert(
+            "block_cid".into(),
+            Value::from(cid_display(&block.block_cid)),
+        );
+        block_value.insert("block_cid_hex".into(), Value::from(block_cid_hex));
+        block_value.insert(
+            "prev_block_cid_hex".into(),
+            block
+                .prev_block_cid
+                .as_ref()
+                .map(hex_encode)
+                .map_or(Value::Null, Value::from),
+        );
+        block_value.insert(
+            "node_cid".into(),
+            Value::from(cid_display(&block.node.node_cid)),
+        );
+        block_value.insert("node_cid_hex".into(), Value::from(node_cid_hex));
+        block_value.insert(
+            "payload_kind".into(),
+            Value::from(governance_payload_kind_cli(&block.node.payload)),
+        );
+        block_value.insert("blake3".into(), Value::from(blake3_hex.clone()));
+        block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
+        block_values.push(Value::Object(block_value));
+    }
+
+    let mut head_value = Map::new();
+    head_value.insert("path".into(), Value::from("head.to"));
+    head_value.insert(
+        "head_block_cid".into(),
+        Value::from(cid_display(&head.head_block_cid)),
+    );
+    head_value.insert(
+        "head_block_cid_hex".into(),
+        Value::from(hex_encode(&head.head_block_cid)),
+    );
+    head_value.insert("block_count".into(), Value::from(head.block_count));
+    head_value.insert("generated_at".into(), Value::from(head.generated_at));
+    head_value.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).to_string()),
+    );
+    head_value.insert("blake3".into(), Value::from(head_blake3_hex));
+    head_value.insert(
+        "checkpoint_cid_hex".into(),
+        head.checkpoint_cid
+            .as_ref()
+            .map(hex_encode)
+            .map_or(Value::Null, Value::from),
+    );
+
+    let mut root_value = Map::new();
+    root_value.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.mirror.v1"),
+    );
+    root_value.insert(
+        "source_root".into(),
+        Value::from(root.display().to_string()),
+    );
+    root_value.insert(
+        "generated_at".into(),
+        Value::from(governance_dag_now_secs()),
+    );
+    root_value.insert("require_sidecars".into(), Value::from(require_sidecars));
+    root_value.insert("head".into(), Value::Object(head_value));
+    root_value.insert("block_count".into(), Value::from(block_values.len() as u64));
+    root_value.insert("blocks".into(), Value::Array(block_values));
+    root_value.insert("by_block_cid_hex".into(), Value::Object(by_block_cid_hex));
+    root_value.insert("by_node_cid_hex".into(), Value::Object(by_node_cid_hex));
+    Ok(Value::Object(root_value))
+}
+
+fn governance_dag_mirror_query_value(
+    index_path: &Path,
+    index: &Value,
+    query: &GovernanceDagMirrorQuery,
+) -> Result<(bool, Value), String> {
+    let mut result = Map::new();
+    result.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.mirror.query.v1"),
+    );
+    result.insert(
+        "index".into(),
+        Value::from(index_path.display().to_string()),
+    );
+
+    match query {
+        GovernanceDagMirrorQuery::Head => {
+            result.insert("query".into(), Value::from("head"));
+            let head = index.get("head").cloned().unwrap_or(Value::Null);
+            let found = !matches!(head, Value::Null);
+            result.insert("found".into(), Value::from(found));
+            result.insert("head".into(), head);
+            Ok((found, Value::Object(result)))
+        }
+        GovernanceDagMirrorQuery::BlockCid(cid) => {
+            let cid_hex = hex_encode(cid);
+            result.insert("query".into(), Value::from("block_cid"));
+            result.insert("cid".into(), Value::from(cid_display(cid)));
+            result.insert("cid_hex".into(), Value::from(cid_hex.clone()));
+            let block = governance_dag_mirror_lookup_block(index, "by_block_cid_hex", &cid_hex)?;
+            let found = !matches!(block, Value::Null);
+            result.insert("found".into(), Value::from(found));
+            result.insert("block".into(), block);
+            Ok((found, Value::Object(result)))
+        }
+        GovernanceDagMirrorQuery::NodeCid(cid) => {
+            let cid_hex = hex_encode(cid);
+            result.insert("query".into(), Value::from("node_cid"));
+            result.insert("cid".into(), Value::from(cid_display(cid)));
+            result.insert("cid_hex".into(), Value::from(cid_hex.clone()));
+            let block = governance_dag_mirror_lookup_block(index, "by_node_cid_hex", &cid_hex)?;
+            let found = !matches!(block, Value::Null);
+            result.insert("found".into(), Value::from(found));
+            result.insert("block".into(), block);
+            Ok((found, Value::Object(result)))
+        }
+    }
+}
+
+fn governance_dag_mirror_lookup_block(
+    index: &Value,
+    map_name: &str,
+    cid_hex: &str,
+) -> Result<Value, String> {
+    let Some(position) = index
+        .get(map_name)
+        .and_then(Value::as_object)
+        .and_then(|map| map.get(cid_hex))
+        .and_then(Value::as_u64)
+    else {
+        return Ok(Value::Null);
+    };
+    let blocks = index
+        .get("blocks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "governance DAG mirror index is missing `blocks` array".to_string())?;
+    let position = usize::try_from(position)
+        .map_err(|_| "governance DAG mirror block position exceeds host limits".to_string())?;
+    Ok(blocks.get(position).cloned().unwrap_or(Value::Null))
+}
+
+fn read_governance_dag_json_file(path: &Path) -> Result<Value, String> {
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
+    from_slice(&bytes).map_err(|err| format!("failed to parse `{}` as JSON: {err}", path.display()))
+}
+
+fn governance_dag_read_digest_file(
+    path: &Path,
+    label: &str,
+) -> Result<(Vec<u8>, u64, String), String> {
+    let bytes = fs::read(path)
+        .map_err(|err| format!("failed to read {label} `{}`: {err}", path.display()))?;
+    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
+    Ok((bytes, encoded_len, blake3_hex))
+}
+
+fn governance_dag_checkpoint_file_check(
+    artifact: &str,
+    path: &Path,
+    expected: &Value,
+    size_fields: &[&str],
+    errors: &mut Vec<Value>,
+) -> Value {
+    let mut value = Map::new();
+    value.insert("path".into(), Value::from(path.display().to_string()));
+    match governance_dag_read_digest_file(path, artifact) {
+        Ok((_, encoded_len, blake3_hex)) => {
+            value.insert("encoded_len".into(), Value::from(encoded_len));
+            value.insert("blake3".into(), Value::from(blake3_hex.clone()));
+
+            let expected_blake3 = expected.get("blake3").and_then(Value::as_str);
+            value.insert(
+                "expected_blake3".into(),
+                expected_blake3.map_or(Value::Null, Value::from),
+            );
+            let digest_ok = expected_blake3 == Some(blake3_hex.as_str());
+            value.insert("digest_ok".into(), Value::from(digest_ok));
+            if !digest_ok {
+                errors.push(governance_dag_problem(
+                    path.to_string_lossy().as_ref(),
+                    format!("{artifact}_digest"),
+                    "checkpoint artifact BLAKE3 digest does not match recorded value",
+                ));
+            }
+
+            let expected_len = size_fields
+                .iter()
+                .find_map(|field| expected.get(*field).and_then(Value::as_u64));
+            value.insert(
+                "expected_len".into(),
+                expected_len.map_or(Value::Null, Value::from),
+            );
+            let len_ok = expected_len == Some(encoded_len);
+            value.insert("encoded_len_ok".into(), Value::from(len_ok));
+            if !len_ok {
+                errors.push(governance_dag_problem(
+                    path.to_string_lossy().as_ref(),
+                    format!("{artifact}_encoded_len"),
+                    "checkpoint artifact length does not match recorded value",
+                ));
+            }
+            value.insert("ok".into(), Value::from(digest_ok && len_ok));
+        }
+        Err(err) => {
+            value.insert("ok".into(), Value::from(false));
+            value.insert("read_error".into(), Value::from(err.clone()));
+            errors.push(governance_dag_problem(
+                path.to_string_lossy().as_ref(),
+                format!("{artifact}_read"),
+                err,
+            ));
+        }
+    }
+    Value::Object(value)
+}
+
+fn governance_dag_checkpoint_optional_artifact_check(
+    checkpoint: &Value,
+    override_path: Option<&Path>,
+    artifact: &str,
+    label: &str,
+    size_fields: &[&str],
+    errors: &mut Vec<Value>,
+) -> Result<Option<(PathBuf, Value)>, String> {
+    let expected = checkpoint.get(artifact);
+    let Some(expected) = expected else {
+        if let Some(path) = override_path {
+            errors.push(governance_dag_problem(
+                path.to_string_lossy().as_ref(),
+                artifact,
+                format!(
+                    "`--{}` was supplied but checkpoint manifest has no `{artifact}` record",
+                    artifact.replace('_', "-")
+                ),
+            ));
+        }
+        return Ok(None);
+    };
+    if matches!(expected, Value::Null) {
+        if let Some(path) = override_path {
+            errors.push(governance_dag_problem(
+                path.to_string_lossy().as_ref(),
+                artifact,
+                format!(
+                    "`--{}` was supplied but checkpoint manifest has a null `{artifact}` record",
+                    artifact.replace('_', "-")
+                ),
+            ));
+        }
+        return Ok(None);
+    }
+
+    let path = if let Some(path) = override_path {
+        path.to_path_buf()
+    } else {
+        let Some(recorded) = expected.get("path").and_then(Value::as_str) else {
+            errors.push(governance_dag_problem(
+                artifact,
+                artifact,
+                "checkpoint artifact record is missing `path`",
+            ));
+            return Ok(None);
+        };
+        PathBuf::from(recorded)
+    };
+    let mut value =
+        governance_dag_checkpoint_file_check(artifact, &path, expected, size_fields, errors);
+    if let Value::Object(ref mut obj) = value {
+        obj.insert("label".into(), Value::from(label.to_string()));
+        obj.insert(
+            "path_source".into(),
+            Value::from(if override_path.is_some() {
+                "override"
+            } else {
+                "checkpoint"
+            }),
+        );
+    }
+    Ok(Some((path, value)))
+}
+
+fn governance_dag_checkpoint_validate_mirror_index(
+    path: &Path,
+    check_value: &Value,
+    expected_head_cid_hex: Option<&str>,
+    expected_block_count: Option<u64>,
+    errors: &mut Vec<Value>,
+) {
+    if check_value.get("ok").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    let index = match read_governance_dag_json_file(path) {
+        Ok(value) => value,
+        Err(err) => {
+            errors.push(governance_dag_problem(
+                path.to_string_lossy().as_ref(),
+                "mirror_index_json",
+                err,
+            ));
+            return;
+        }
+    };
+    if index.get("schema").and_then(Value::as_str) != Some("sorafs.governance_dag.mirror.v1") {
+        errors.push(governance_dag_problem(
+            path.to_string_lossy().as_ref(),
+            "mirror_index_schema",
+            "mirror index has unsupported schema",
+        ));
+    }
+    let index_head_cid_hex = index
+        .get("head")
+        .and_then(|head| head.get("head_block_cid_hex"))
+        .and_then(Value::as_str);
+    if index_head_cid_hex != expected_head_cid_hex {
+        errors.push(governance_dag_problem(
+            path.to_string_lossy().as_ref(),
+            "mirror_index_head",
+            "mirror index head does not match checkpoint head",
+        ));
+    }
+    let index_block_count = index.get("block_count").and_then(Value::as_u64);
+    if index_block_count != expected_block_count {
+        errors.push(governance_dag_problem(
+            path.to_string_lossy().as_ref(),
+            "mirror_index_block_count",
+            "mirror index block count does not match checkpoint block count",
+        ));
+    }
+}
+
+fn print_governance_dag_mirror_query_table(value: &Value) {
+    let found = value.get("found").and_then(Value::as_bool).unwrap_or(false);
+    println!("found: {found}");
+    match value.get("query").and_then(Value::as_str) {
+        Some("head") => {
+            if let Some(head) = value.get("head").and_then(Value::as_object) {
+                println!(
+                    "head_block_cid_hex: {}",
+                    head.get("head_block_cid_hex")
+                        .and_then(Value::as_str)
+                        .unwrap_or("<missing>")
+                );
+                println!(
+                    "block_count: {}",
+                    head.get("block_count")
+                        .and_then(Value::as_u64)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<missing>".to_string())
+                );
+            }
+        }
+        Some("block_cid" | "node_cid") => {
+            if let Some(block) = value.get("block").and_then(Value::as_object) {
+                println!(
+                    "sequence: {}",
+                    block
+                        .get("sequence")
+                        .and_then(Value::as_u64)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<missing>".to_string())
+                );
+                println!(
+                    "path: {}",
+                    block
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("<missing>")
+                );
+                println!(
+                    "block_cid_hex: {}",
+                    block
+                        .get("block_cid_hex")
+                        .and_then(Value::as_str)
+                        .unwrap_or("<missing>")
+                );
+                println!(
+                    "node_cid_hex: {}",
+                    block
+                        .get("node_cid_hex")
+                        .and_then(Value::as_str)
+                        .unwrap_or("<missing>")
+                );
+                println!(
+                    "payload_kind: {}",
+                    block
+                        .get("payload_kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("<missing>")
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn load_governance_dag_block_snapshot(
+    root: &Path,
+    require_sidecars: bool,
+) -> Result<(Vec<GovernanceDagBlockV1>, Vec<Value>, Vec<Value>), String> {
+    let blocks_dir = root.join("blocks");
+    if !blocks_dir.is_dir() {
+        return Err(format!(
+            "governance DAG block snapshot `{}` must contain a `blocks` directory",
+            root.display()
+        ));
+    }
+    let mut block_paths = Vec::<PathBuf>::new();
+    collect_governance_dag_to_files(&blocks_dir, &mut block_paths)?;
+    block_paths.sort();
+    if block_paths.is_empty() {
+        return Err(format!(
+            "governance DAG block snapshot `{}` contains no `.to` block payloads",
+            blocks_dir.display()
+        ));
+    }
+
+    let mut warnings = Vec::<Value>::new();
+    let mut decoded = Vec::<(String, String, String, GovernanceDagBlockV1)>::new();
+    for path in block_paths {
+        let rel_path = governance_dag_relative_path(root, &path);
+        let bytes = fs::read(&path).map_err(|err| {
+            format!(
+                "failed to read governance DAG block `{}`: {err}",
+                path.display()
+            )
+        })?;
+        let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
+        let (sidecar_status, _, sidecar_error) = governance_dag_sidecar_status(&path, &blake3_hex);
+        match sidecar_status.as_str() {
+            "mismatch" | "error" => {
+                return Err(format!(
+                    "governance DAG block `{rel_path}` has invalid sidecar status `{sidecar_status}`{}",
+                    sidecar_error
+                        .as_deref()
+                        .map(|err| format!(": {err}"))
+                        .unwrap_or_default()
+                ));
+            }
+            "missing" if require_sidecars => {
+                return Err(format!(
+                    "governance DAG block `{rel_path}` is missing required sidecar"
+                ));
+            }
+            "missing" => warnings.push(governance_dag_problem(
+                &rel_path,
+                "sidecar",
+                "missing optional `.to.blake3` sidecar",
+            )),
+            _ => {}
+        }
+        let block = decode_from_bytes::<GovernanceDagBlockV1>(&bytes).map_err(|err| {
+            format!(
+                "failed to decode governance DAG block `{}`: {err}",
+                path.display()
+            )
+        })?;
+        decoded.push((rel_path, blake3_hex, sidecar_status, block));
+    }
+
+    decoded.sort_by(|left, right| {
+        left.3
+            .sequence
+            .cmp(&right.3.sequence)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let mut blocks = Vec::<GovernanceDagBlockV1>::with_capacity(decoded.len());
+    let mut records = Vec::<Value>::with_capacity(decoded.len());
+    for (position, (path, blake3_hex, sidecar_status, block)) in decoded.into_iter().enumerate() {
+        let mut record = Map::new();
+        record.insert("position".into(), Value::from(position as u64));
+        record.insert("path".into(), Value::from(path));
+        record.insert("sequence".into(), Value::from(block.sequence));
+        record.insert("timestamp".into(), Value::from(block.timestamp));
+        record.insert(
+            "block_cid".into(),
+            Value::from(cid_display(&block.block_cid)),
+        );
+        record.insert(
+            "block_cid_hex".into(),
+            Value::from(hex_encode(&block.block_cid)),
+        );
+        record.insert(
+            "prev_block_cid_hex".into(),
+            block
+                .prev_block_cid
+                .as_ref()
+                .map(hex_encode)
+                .map_or(Value::Null, Value::from),
+        );
+        record.insert(
+            "node_cid".into(),
+            Value::from(cid_display(&block.node.node_cid)),
+        );
+        record.insert(
+            "node_cid_hex".into(),
+            Value::from(hex_encode(&block.node.node_cid)),
+        );
+        record.insert(
+            "payload_kind".into(),
+            Value::from(governance_payload_kind_cli(&block.node.payload)),
+        );
+        record.insert("blake3".into(), Value::from(blake3_hex));
+        record.insert("sidecar_status".into(), Value::from(sidecar_status));
+        blocks.push(block);
+        records.push(Value::Object(record));
+    }
+    Ok((blocks, records, warnings))
+}
+
+fn governance_dag_head_cid_from_blocks(blocks: &[GovernanceDagBlockV1]) -> Result<Vec<u8>, String> {
+    if blocks.is_empty() {
+        return Err("governance DAG head rebuild requires at least one block".to_string());
+    }
+    let referenced = blocks
+        .iter()
+        .filter_map(|block| block.prev_block_cid.clone())
+        .collect::<BTreeSet<_>>();
+    let heads = blocks
+        .iter()
+        .filter(|block| !referenced.contains(&block.block_cid))
+        .map(|block| block.block_cid.clone())
+        .collect::<Vec<_>>();
+    match heads.as_slice() {
+        [head] => Ok(head.clone()),
+        _ => Err(format!(
+            "governance DAG head rebuild expected exactly one block-chain head, found {}",
+            heads.len()
+        )),
+    }
+}
+
+fn governance_dag_car_file(rel_path: &str, data: Vec<u8>) -> Result<FileEntry, String> {
+    let path = rel_path.split('/').map(str::to_string).collect::<Vec<_>>();
+    if path.is_empty() || path.iter().any(|component| component.is_empty()) {
+        return Err(format!(
+            "invalid governance DAG CAR relative path `{rel_path}`"
+        ));
+    }
+    Ok(FileEntry { path, data })
+}
+
+fn write_governance_dag_car_archive(
+    snapshot_root: &Path,
+    car_out: &Path,
+    car_plan_out: Option<&Path>,
+    chunker_handle: &str,
+    files: Vec<FileEntry>,
+) -> Result<Value, String> {
+    let descriptor = chunker_registry::lookup_by_handle(chunker_handle).ok_or_else(|| {
+        format!(
+            "unknown governance DAG CAR chunker profile handle `{chunker_handle}`; see `sorafs_manifest_stub --list-chunker-profiles` for options"
+        )
+    })?;
+    let (plan, payload) = CarBuildPlan::from_files_with_profile(files, descriptor.profile)
+        .map_err(|err| format!("failed to build governance DAG CAR plan: {err}"))?;
+
+    ensure_parent_dir(car_out)?;
+    let car_file = File::create(car_out)
+        .map_err(|err| format!("failed to create `{}`: {err}", car_out.display()))?;
+    let mut writer = BufWriter::new(car_file);
+    let mut payload_reader = Cursor::new(payload);
+    let stats = CarStreamingWriter::new(&plan)
+        .write_from_reader(&mut payload_reader, &mut writer)
+        .map_err(format_car_error)?;
+    writer
+        .flush()
+        .map_err(|err| format!("failed to flush `{}`: {err}", car_out.display()))?;
+
+    if stats.chunk_profile != descriptor.profile {
+        return Err("emitted governance DAG CAR used unexpected chunk profile".to_string());
+    }
+
+    if let Some(plan_path) = car_plan_out {
+        ensure_parent_dir(plan_path)?;
+        let plan_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
+            .map_err(|err| format!("failed to render governance DAG CAR chunk plan: {err}"))?;
+        write_text(plan_path, plan_json.as_bytes())?;
+    }
+
+    let files = plan
+        .files
+        .iter()
+        .map(|file| {
+            let mut obj = Map::new();
+            obj.insert("path".into(), Value::from(file.path.join("/")));
+            obj.insert("size".into(), Value::from(file.size));
+            obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
+            obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+            Value::Object(obj)
+        })
+        .collect::<Vec<_>>();
+
+    let mut summary = Map::new();
+    summary.insert("schema".into(), Value::from("sorafs.governance_dag.car.v1"));
+    summary.insert(
+        "snapshot_root".into(),
+        Value::from(snapshot_root.display().to_string()),
+    );
+    summary.insert(
+        "output_car".into(),
+        Value::from(car_out.display().to_string()),
+    );
+    summary.insert(
+        "chunker_handle".into(),
+        Value::from(chunker_handle.to_string()),
+    );
+    summary.insert(
+        "chunker_profile_id".into(),
+        Value::from(descriptor.id.0 as u64),
+    );
+    summary.insert(
+        "chunker_profile_canonical".into(),
+        Value::from(format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        )),
+    );
+    summary.insert("payload_bytes".into(), Value::from(plan.content_length));
+    summary.insert("chunk_count".into(), Value::from(plan.chunks.len() as u64));
+    summary.insert("file_count".into(), Value::from(plan.files.len() as u64));
+    summary.insert("files".into(), Value::Array(files));
+    summary.insert("car_size".into(), Value::from(stats.car_size));
+    summary.insert(
+        "car_payload_digest_hex".into(),
+        Value::from(hex_encode(stats.car_payload_digest.as_bytes())),
+    );
+    summary.insert(
+        "car_digest_hex".into(),
+        Value::from(hex_encode(stats.car_archive_digest.as_bytes())),
+    );
+    summary.insert(
+        "car_cid_hex".into(),
+        Value::from(hex_encode(&stats.car_cid)),
+    );
+    summary.insert(
+        "root_cids_hex".into(),
+        Value::Array(
+            stats
+                .root_cids
+                .iter()
+                .map(|cid| Value::from(hex_encode(cid)))
+                .collect(),
+        ),
+    );
+    if let Some(plan_path) = car_plan_out {
+        summary.insert(
+            "chunk_plan_path".into(),
+            Value::from(plan_path.display().to_string()),
+        );
+    }
+    Ok(Value::Object(summary))
+}
+
+fn verify_governance_dag_build_snapshot(
+    root: &Path,
+    require_sidecars: bool,
+    expected_head_cid: Option<&[u8]>,
+) -> (bool, Value) {
+    let mut errors = Vec::<Value>::new();
+    let mut warnings = Vec::<Value>::new();
+    let mut head_value = Map::new();
+    let mut block_values = Vec::<Value>::new();
+    let mut decoded_head: Option<GovernanceDagHeadV1> = None;
+    let mut decoded_blocks = Vec::<(String, GovernanceDagBlockV1)>::new();
+
+    if !root.is_dir() {
+        errors.push(governance_dag_problem(
+            root.to_string_lossy().as_ref(),
+            "root",
+            "governance DAG build root must be a directory",
+        ));
+    }
+
+    let head_path = root.join("head.to");
+    let head_rel = governance_dag_relative_path(root, &head_path);
+    head_value.insert("path".into(), Value::from(head_rel.clone()));
+    head_value.insert(
+        "source_path".into(),
+        Value::from(head_path.display().to_string()),
+    );
+    match fs::read(&head_path) {
+        Ok(bytes) => {
+            let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
+            let (sidecar_status, sidecar_value, sidecar_error) =
+                governance_dag_sidecar_status(&head_path, &blake3_hex);
+            head_value.insert(
+                "encoded_len".into(),
+                Value::from(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+            );
+            head_value.insert("blake3".into(), Value::from(blake3_hex));
+            head_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
+            if let Some(value) = sidecar_value {
+                head_value.insert("sidecar_blake3".into(), Value::from(value));
+            }
+            if let Some(error) = &sidecar_error {
+                head_value.insert("sidecar_error".into(), Value::from(error.clone()));
+            }
+            push_governance_dag_sidecar_problem(
+                &head_rel,
+                &sidecar_status,
+                sidecar_error.as_deref(),
+                require_sidecars,
+                &mut warnings,
+                &mut errors,
+            );
+
+            match decode_from_bytes::<GovernanceDagHeadV1>(&bytes) {
+                Ok(head) => {
+                    head_value.insert("version".into(), Value::from(head.version));
+                    head_value.insert("block_count".into(), Value::from(head.block_count));
+                    head_value.insert("generated_at".into(), Value::from(head.generated_at));
+                    head_value.insert(
+                        "publisher_peer_id".into(),
+                        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).to_string()),
+                    );
+                    head_value.insert(
+                        "head_block_cid".into(),
+                        Value::from(cid_display(&head.head_block_cid)),
+                    );
+                    head_value.insert(
+                        "head_block_cid_hex".into(),
+                        Value::from(hex_encode(&head.head_block_cid)),
+                    );
+                    head_value.insert(
+                        "checkpoint_cid_hex".into(),
+                        head.checkpoint_cid
+                            .as_ref()
+                            .map(hex_encode)
+                            .map_or(Value::Null, Value::from),
+                    );
+                    decoded_head = Some(head);
+                }
+                Err(err) => {
+                    let message = format!("failed to decode GovernanceDagHeadV1: {err}");
+                    head_value.insert("decode_error".into(), Value::from(message.clone()));
+                    errors.push(governance_dag_problem(&head_rel, "decode_head", message));
+                }
+            }
+        }
+        Err(err) => {
+            let message = format!("failed to read governance DAG head: {err}");
+            head_value.insert("read_error".into(), Value::from(message.clone()));
+            errors.push(governance_dag_problem(&head_rel, "head", message));
+        }
+    }
+
+    let blocks_dir = root.join("blocks");
+    let mut block_paths = Vec::<PathBuf>::new();
+    if blocks_dir.is_dir() {
+        if let Err(err) = collect_governance_dag_to_files(&blocks_dir, &mut block_paths) {
+            errors.push(governance_dag_problem(
+                &governance_dag_relative_path(root, &blocks_dir),
+                "blocks",
+                err,
+            ));
+        }
+    } else {
+        errors.push(governance_dag_problem(
+            &governance_dag_relative_path(root, &blocks_dir),
+            "blocks",
+            "governance DAG build snapshot is missing the `blocks` directory",
+        ));
+    }
+    block_paths.sort();
+
+    if block_paths.is_empty() {
+        errors.push(governance_dag_problem(
+            &governance_dag_relative_path(root, &blocks_dir),
+            "blocks",
+            "no GovernanceDagBlockV1 `.to` payloads found",
+        ));
+    }
+
+    for block_path in &block_paths {
+        let rel_path = governance_dag_relative_path(root, block_path);
+        let mut block_value = Map::new();
+        block_value.insert("path".into(), Value::from(rel_path.clone()));
+        block_value.insert(
+            "source_path".into(),
+            Value::from(block_path.display().to_string()),
+        );
+        match fs::read(block_path) {
+            Ok(bytes) => {
+                let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
+                let (sidecar_status, sidecar_value, sidecar_error) =
+                    governance_dag_sidecar_status(block_path, &blake3_hex);
+                block_value.insert(
+                    "encoded_len".into(),
+                    Value::from(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+                );
+                block_value.insert("blake3".into(), Value::from(blake3_hex));
+                block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
+                if let Some(value) = sidecar_value {
+                    block_value.insert("sidecar_blake3".into(), Value::from(value));
+                }
+                if let Some(error) = &sidecar_error {
+                    block_value.insert("sidecar_error".into(), Value::from(error.clone()));
+                }
+                push_governance_dag_sidecar_problem(
+                    &rel_path,
+                    &sidecar_status,
+                    sidecar_error.as_deref(),
+                    require_sidecars,
+                    &mut warnings,
+                    &mut errors,
+                );
+
+                match decode_from_bytes::<GovernanceDagBlockV1>(&bytes) {
+                    Ok(block) => {
+                        block_value.insert("version".into(), Value::from(block.version));
+                        block_value.insert("sequence".into(), Value::from(block.sequence));
+                        block_value.insert("timestamp".into(), Value::from(block.timestamp));
+                        block_value.insert(
+                            "publisher_peer_id".into(),
+                            Value::from(
+                                String::from_utf8_lossy(&block.publisher_peer_id).to_string(),
+                            ),
+                        );
+                        block_value.insert(
+                            "block_cid".into(),
+                            Value::from(cid_display(&block.block_cid)),
+                        );
+                        block_value.insert(
+                            "block_cid_hex".into(),
+                            Value::from(hex_encode(&block.block_cid)),
+                        );
+                        block_value.insert(
+                            "prev_block_cid_hex".into(),
+                            block
+                                .prev_block_cid
+                                .as_ref()
+                                .map(hex_encode)
+                                .map_or(Value::Null, Value::from),
+                        );
+                        block_value.insert(
+                            "node_cid".into(),
+                            Value::from(cid_display(&block.node.node_cid)),
+                        );
+                        block_value.insert(
+                            "node_cid_hex".into(),
+                            Value::from(hex_encode(&block.node.node_cid)),
+                        );
+                        block_value.insert(
+                            "payload_kind".into(),
+                            Value::from(governance_payload_kind_cli(&block.node.payload)),
+                        );
+                        decoded_blocks.push((rel_path, block));
+                    }
+                    Err(err) => {
+                        let message = format!("failed to decode GovernanceDagBlockV1: {err}");
+                        block_value.insert("decode_error".into(), Value::from(message.clone()));
+                        errors.push(governance_dag_problem(&rel_path, "decode_block", message));
+                    }
+                }
+            }
+            Err(err) => {
+                let message = format!("failed to read governance DAG block: {err}");
+                block_value.insert("read_error".into(), Value::from(message.clone()));
+                errors.push(governance_dag_problem(&rel_path, "block", message));
+            }
+        }
+        block_values.push(Value::Object(block_value));
+    }
+
+    decoded_blocks.sort_by(|left, right| {
+        left.1
+            .sequence
+            .cmp(&right.1.sequence)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let blocks = decoded_blocks
+        .into_iter()
+        .map(|(_, block)| block)
+        .collect::<Vec<_>>();
+    if let Some(head) = decoded_head.as_ref() {
+        if let Some(expected) = expected_head_cid
+            && head.head_block_cid != expected
+        {
+            errors.push(governance_dag_problem(
+                &head_rel,
+                "head_cid",
+                format!(
+                    "expected head CID `{}` but snapshot advertises `{}`",
+                    cid_display(expected),
+                    cid_display(&head.head_block_cid)
+                ),
+            ));
+        }
+        if let Err(err) = validate_governance_dag_head_against_chain_v1(head, &blocks) {
+            errors.push(governance_dag_problem(
+                &head_rel,
+                "head_chain",
+                format!("governance DAG block/head validation failed: {err}"),
+            ));
+        }
+    }
+
+    let mut summary = Map::new();
+    summary.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.build.verify.v1"),
+    );
+    summary.insert("root".into(), Value::from(root.display().to_string()));
+    summary.insert("ok".into(), Value::from(errors.is_empty()));
+    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
+    summary.insert(
+        "expected_head_cid".into(),
+        expected_head_cid
+            .map(cid_display)
+            .map_or(Value::Null, Value::from),
+    );
+    summary.insert(
+        "expected_head_cid_hex".into(),
+        expected_head_cid
+            .map(hex_encode)
+            .map_or(Value::Null, Value::from),
+    );
+    summary.insert("head".into(), Value::Object(head_value));
+    summary.insert(
+        "block_file_count".into(),
+        Value::from(block_paths.len() as u64),
+    );
+    summary.insert("block_count".into(), Value::from(blocks.len() as u64));
+    summary.insert("blocks".into(), Value::Array(block_values));
+    summary.insert("warnings".into(), Value::Array(warnings));
+    summary.insert("errors".into(), Value::Array(errors.clone()));
+    (errors.is_empty(), Value::Object(summary))
+}
+
+fn load_governance_dag_inventory(root: &Path) -> Result<Vec<GovernanceDagArtifact>, String> {
+    if !root.is_dir() {
+        return Err(format!(
+            "governance DAG root `{}` must be a directory",
+            root.display()
+        ));
+    }
+    let mut paths = Vec::new();
+    collect_governance_dag_to_files(root, &mut paths)?;
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| read_governance_dag_artifact(root, path))
+        .collect()
+}
+
+fn collect_governance_dag_to_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(root).map_err(|err| {
+        format!(
+            "failed to read governance DAG directory `{}`: {err}",
+            root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            format!(
+                "failed to read governance DAG directory entry in `{}`: {err}",
+                root.display()
+            )
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|err| {
+            format!(
+                "failed to inspect governance DAG path `{}`: {err}",
+                path.display()
+            )
+        })?;
+        if file_type.is_dir() {
+            collect_governance_dag_to_files(&path, out)?;
+        } else if file_type.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("to")
+        {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn governance_dag_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn read_governance_dag_artifact(root: &Path, path: &Path) -> Result<GovernanceDagArtifact, String> {
+    let bytes = fs::read(path).map_err(|err| {
+        format!(
+            "failed to read governance DAG artifact `{}`: {err}",
+            path.display()
+        )
+    })?;
+    let digest = blake3_hash(&bytes);
+    let blake3_hex = digest.to_hex().to_string();
+    let rel_path = governance_dag_relative_path(root, path);
+    let (sidecar_status, sidecar_value, sidecar_error) =
+        governance_dag_sidecar_status(path, &blake3_hex);
+
+    let (node, decode_error, outcome) = match decode_from_bytes::<GovernanceLogNodeV1>(&bytes) {
+        Ok(node) => {
+            let summary = GovernanceDagNodeSummary::from_node(&node);
+            let outcome = validate_governance_log_node_bytes(
+                &bytes,
+                rel_path.clone(),
+                Some(node.node_cid.as_slice()),
+                governance_dag_now_secs(),
+            );
+            (Some(summary), None, Some(outcome))
+        }
+        Err(err) => (None, Some(err.to_string()), None),
+    };
+
+    Ok(GovernanceDagArtifact {
+        path: path.to_path_buf(),
+        rel_path,
+        encoded_len: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        blake3_hex,
+        sidecar_status,
+        sidecar_value,
+        sidecar_error,
+        node,
+        decode_error,
+        outcome,
+    })
+}
+
+fn read_governance_log_node_file(path: &Path) -> Result<GovernanceLogNodeV1, String> {
+    let bytes = fs::read(path).map_err(|err| {
+        format!(
+            "failed to read governance log node `{}`: {err}",
+            path.display()
+        )
+    })?;
+    decode_from_bytes::<GovernanceLogNodeV1>(&bytes).map_err(|err| {
+        format!(
+            "failed to decode governance log node `{}`: {err}",
+            path.display()
+        )
+    })
+}
+
+fn governance_dag_build_order(
+    artifacts: &[GovernanceDagArtifact],
+    node_indices: &[usize],
+) -> Vec<usize> {
+    let mut ordered = node_indices.to_vec();
+    ordered.sort_by(|left, right| {
+        let left_artifact = &artifacts[*left];
+        let right_artifact = &artifacts[*right];
+        let left_node = left_artifact.node.as_ref();
+        let right_node = right_artifact.node.as_ref();
+        left_node
+            .map(|node| node.timestamp)
+            .cmp(&right_node.map(|node| node.timestamp))
+            .then_with(|| {
+                left_node
+                    .map(|node| node.node_cid.as_slice())
+                    .cmp(&right_node.map(|node| node.node_cid.as_slice()))
+            })
+            .then_with(|| left_artifact.rel_path.cmp(&right_artifact.rel_path))
+    });
+    ordered
+}
+
+fn load_governance_dag_build_seed(
+    key_hex: Option<&str>,
+    key_path: Option<&Path>,
+) -> Result<[u8; ed25519_dalek::SECRET_KEY_LENGTH], String> {
+    let raw = match (key_hex, key_path) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "governance DAG build key flags are mutually exclusive; provide `--key-hex` or `--key`"
+                    .to_string(),
+            );
+        }
+        (Some(value), None) => value.trim().to_string(),
+        (None, Some(path)) => fs::read_to_string(path)
+            .map_err(|err| {
+                format!(
+                    "failed to read governance DAG signing key `{}`: {err}",
+                    path.display()
+                )
+            })?
+            .trim()
+            .to_string(),
+        (None, None) => {
+            return Err(
+                "missing governance DAG signing key; provide `--key-hex=HEX` or `--key=PATH`"
+                    .to_string(),
+            );
+        }
+    };
+    let trimmed = raw.strip_prefix("ed25519:").unwrap_or(raw.as_str()).trim();
+    let bytes = parse_hex_vec(trimmed).map_err(|err| {
+        format!("failed to parse governance DAG Ed25519 seed hex for `--key-hex`/`--key`: {err}")
+    })?;
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        format!(
+            "governance DAG Ed25519 seed must be {} bytes, found {} bytes",
+            ed25519_dalek::SECRET_KEY_LENGTH,
+            bytes.len()
+        )
+    })
+}
+
+fn empty_governance_dag_ed25519_signature() -> GovernanceLogSignatureV1 {
+    GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: Vec::new(),
+        signature: Vec::new(),
+    }
+}
+
+fn sign_governance_dag_block_cli(
+    block: &mut GovernanceDagBlockV1,
+    signing_key: &SigningKey,
+) -> Result<(), String> {
+    let payload = block
+        .signature_payload_bytes()
+        .map_err(|err| format!("failed to encode governance DAG block signing payload: {err}"))?;
+    let signature = signing_key.sign(&payload);
+    block.block_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    Ok(())
+}
+
+fn sign_governance_dag_head_cli(
+    head: &mut GovernanceDagHeadV1,
+    signing_key: &SigningKey,
+) -> Result<(), String> {
+    let payload = head
+        .signature_payload_bytes()
+        .map_err(|err| format!("failed to encode governance DAG head signing payload: {err}"))?;
+    let signature = signing_key.sign(&payload);
+    head.head_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    Ok(())
+}
+
+fn write_governance_blake3_sidecar(path: &Path, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let sidecar_path = path.with_extension("to.blake3");
+    let mut digest = hex_encode(blake3_hash(bytes).as_bytes());
+    digest.push('\n');
+    let sidecar_bytes = digest.into_bytes();
+    write_text(&sidecar_path, &sidecar_bytes)?;
+    Ok(sidecar_bytes)
+}
+
+impl GovernanceDagNodeSummary {
+    fn from_node(node: &GovernanceLogNodeV1) -> Self {
+        Self {
+            node_cid: node.node_cid.clone(),
+            node_cid_label: cid_display(&node.node_cid),
+            node_cid_hex: hex_encode(&node.node_cid),
+            prev_cid: node.prev_cid.clone(),
+            prev_cid_label: node.prev_cid.as_ref().map(|cid| cid_display(cid)),
+            prev_cid_hex: node.prev_cid.as_ref().map(hex_encode),
+            timestamp: node.timestamp,
+            publisher_peer_id: String::from_utf8_lossy(&node.publisher_peer_id).to_string(),
+            payload_kind: governance_payload_kind_cli(&node.payload),
+        }
+    }
+}
+
+fn governance_dag_sidecar_status(
+    path: &Path,
+    blake3_hex: &str,
+) -> (String, Option<String>, Option<String>) {
+    let sidecar_path = path.with_extension("to.blake3");
+    match fs::read_to_string(&sidecar_path) {
+        Ok(raw) => {
+            let sidecar_value = raw.trim().to_string();
+            let status = if sidecar_value == blake3_hex {
+                "match"
+            } else {
+                "mismatch"
+            };
+            (status.to_string(), Some(sidecar_value), None)
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => ("missing".to_string(), None, None),
+        Err(err) => ("error".to_string(), None, Some(err.to_string())),
+    }
+}
+
+fn push_governance_dag_sidecar_problem(
+    path: &str,
+    status: &str,
+    error: Option<&str>,
+    require_sidecars: bool,
+    warnings: &mut Vec<Value>,
+    errors: &mut Vec<Value>,
+) {
+    match status {
+        "mismatch" => errors.push(governance_dag_problem(
+            path,
+            "sidecar",
+            "BLAKE3 sidecar does not match encoded bytes",
+        )),
+        "error" => errors.push(governance_dag_problem(
+            path,
+            "sidecar",
+            format!(
+                "failed to inspect BLAKE3 sidecar: {}",
+                error.unwrap_or("unknown error")
+            ),
+        )),
+        "missing" if require_sidecars => errors.push(governance_dag_problem(
+            path,
+            "sidecar",
+            "missing required `.to.blake3` sidecar",
+        )),
+        "missing" => warnings.push(governance_dag_problem(
+            path,
+            "sidecar",
+            "missing optional `.to.blake3` sidecar",
+        )),
+        _ => {}
+    }
+}
+
+fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str {
+    match payload {
+        GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
+        GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
+        GovernanceLogPayloadV1::PorChallenge(_) => "por_challenge",
+        GovernanceLogPayloadV1::PorProof(_) => "por_proof",
+        GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
+        GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement",
+        GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot",
+    }
+}
+
+fn verify_governance_dag_inventory(
+    root: &Path,
+    artifacts: &[GovernanceDagArtifact],
+    options: &GovernanceDagVerifyOptions,
+) -> (bool, Value, Vec<usize>) {
+    let mut errors = Vec::<Value>::new();
+    let mut warnings = Vec::<Value>::new();
+    let mut node_indices = Vec::<usize>::new();
+    let mut node_by_cid = BTreeMap::<Vec<u8>, usize>::new();
+    let mut referenced_prev = BTreeSet::<Vec<u8>>::new();
+
+    for (index, artifact) in artifacts.iter().enumerate() {
+        match artifact.sidecar_status.as_str() {
+            "mismatch" | "error" => errors.push(governance_dag_problem(
+                &artifact.rel_path,
+                "sidecar",
+                format!("BLAKE3 sidecar status is `{}`", artifact.sidecar_status),
+            )),
+            "missing" if options.require_sidecars => errors.push(governance_dag_problem(
+                &artifact.rel_path,
+                "sidecar",
+                "missing required `.to.blake3` sidecar",
+            )),
+            "missing" => warnings.push(governance_dag_problem(
+                &artifact.rel_path,
+                "sidecar",
+                "missing optional `.to.blake3` sidecar",
+            )),
+            _ => {}
+        }
+
+        if let Some(node) = &artifact.node {
+            node_indices.push(index);
+            if let Some(existing) = node_by_cid.insert(node.node_cid.clone(), index) {
+                errors.push(governance_dag_problem(
+                    &artifact.rel_path,
+                    "duplicate_node_cid",
+                    format!("node CID duplicates `{}`", artifacts[existing].rel_path),
+                ));
+            }
+            if let Some(prev) = &node.prev_cid {
+                referenced_prev.insert(prev.clone());
+            }
+            if !artifact
+                .outcome
+                .as_ref()
+                .is_some_and(ValidationOutcomeV1::is_ok)
+            {
+                let code = artifact
+                    .outcome
+                    .as_ref()
+                    .map(|outcome| outcome.code.as_str())
+                    .unwrap_or("decode-error");
+                errors.push(governance_dag_problem(
+                    &artifact.rel_path,
+                    "validation",
+                    format!("governance node failed reference validation with `{code}`"),
+                ));
+            }
+        }
+    }
+
+    if node_indices.is_empty() {
+        errors.push(governance_dag_problem(
+            root.to_string_lossy().as_ref(),
+            "inventory",
+            "no GovernanceLogNodeV1 `.to` payloads found",
+        ));
+    }
+
+    if options.require_chain {
+        for index in &node_indices {
+            let artifact = &artifacts[*index];
+            let Some(node) = &artifact.node else {
+                continue;
+            };
+            if let Some(prev) = &node.prev_cid
+                && !node_by_cid.contains_key(prev)
+            {
+                errors.push(governance_dag_problem(
+                    &artifact.rel_path,
+                    "missing_parent",
+                    format!(
+                        "previous CID `{}` is not present in this archive",
+                        cid_display(prev)
+                    ),
+                ));
+            }
+        }
+    }
+
+    let mut heads = Vec::<Vec<u8>>::new();
+    for index in &node_indices {
+        let Some(node) = &artifacts[*index].node else {
+            continue;
+        };
+        if !referenced_prev.contains(&node.node_cid) {
+            heads.push(node.node_cid.clone());
+        }
+    }
+    heads.sort();
+
+    if options.require_chain && heads.len() != 1 {
+        errors.push(governance_dag_problem(
+            root.to_string_lossy().as_ref(),
+            "head_count",
+            format!(
+                "expected exactly one governance DAG head, found {}",
+                heads.len()
+            ),
+        ));
+    }
+    if let Some(expected_head) = &options.expected_head_cid
+        && !heads.iter().any(|head| head == expected_head)
+    {
+        errors.push(governance_dag_problem(
+            root.to_string_lossy().as_ref(),
+            "head_cid",
+            format!(
+                "expected head CID `{}` is not an archive head",
+                cid_display(expected_head)
+            ),
+        ));
+    }
+
+    let mut summary = governance_dag_inventory_value(root, artifacts);
+    if let Value::Object(ref mut obj) = summary {
+        obj.insert("ok".into(), Value::from(errors.is_empty()));
+        obj.insert("require_chain".into(), Value::from(options.require_chain));
+        obj.insert(
+            "require_sidecars".into(),
+            Value::from(options.require_sidecars),
+        );
+        obj.insert(
+            "head_cids".into(),
+            Value::Array(
+                heads
+                    .iter()
+                    .map(|cid| Value::from(cid_display(cid)))
+                    .collect(),
+            ),
+        );
+        obj.insert(
+            "head_cid_hex".into(),
+            Value::Array(
+                heads
+                    .iter()
+                    .map(|cid| Value::from(hex_encode(cid)))
+                    .collect(),
+            ),
+        );
+        if let Some(expected) = &options.expected_head_cid {
+            obj.insert(
+                "expected_head_cid".into(),
+                Value::from(cid_display(expected)),
+            );
+            obj.insert(
+                "expected_head_cid_hex".into(),
+                Value::from(hex_encode(expected)),
+            );
+        }
+        obj.insert("warnings".into(), Value::Array(warnings));
+        obj.insert("errors".into(), Value::Array(errors.clone()));
+    }
+
+    (errors.is_empty(), summary, node_indices)
+}
+
+fn governance_dag_problem(
+    path: &str,
+    kind: impl Into<String>,
+    message: impl Into<String>,
+) -> Value {
+    let mut obj = Map::new();
+    obj.insert("path".into(), Value::from(path.to_string()));
+    obj.insert("kind".into(), Value::from(kind.into()));
+    obj.insert("message".into(), Value::from(message.into()));
+    Value::Object(obj)
+}
+
+fn governance_dag_inventory_value(root: &Path, artifacts: &[GovernanceDagArtifact]) -> Value {
+    let node_count = artifacts
+        .iter()
+        .filter(|artifact| artifact.node.is_some())
+        .count();
+    let valid_node_count = artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact
+                .outcome
+                .as_ref()
+                .is_some_and(ValidationOutcomeV1::is_ok)
+        })
+        .count();
+    let sidecar_mismatch_count = artifacts
+        .iter()
+        .filter(|artifact| matches!(artifact.sidecar_status.as_str(), "mismatch" | "error"))
+        .count();
+    let sidecar_missing_count = artifacts
+        .iter()
+        .filter(|artifact| artifact.sidecar_status == "missing")
+        .count();
+
+    let mut obj = Map::new();
+    obj.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.inventory.v1"),
+    );
+    obj.insert("root".into(), Value::from(root.display().to_string()));
+    obj.insert("artifact_count".into(), Value::from(artifacts.len() as u64));
+    obj.insert("node_count".into(), Value::from(node_count as u64));
+    obj.insert(
+        "valid_node_count".into(),
+        Value::from(valid_node_count as u64),
+    );
+    obj.insert(
+        "sidecar_mismatch_count".into(),
+        Value::from(sidecar_mismatch_count as u64),
+    );
+    obj.insert(
+        "sidecar_missing_count".into(),
+        Value::from(sidecar_missing_count as u64),
+    );
+    obj.insert(
+        "artifacts".into(),
+        Value::Array(
+            artifacts
+                .iter()
+                .map(|artifact| governance_dag_artifact_value(artifact, false))
+                .collect(),
+        ),
+    );
+    Value::Object(obj)
+}
+
+fn governance_dag_artifact_value(artifact: &GovernanceDagArtifact, include_outcome: bool) -> Value {
+    let mut obj = Map::new();
+    obj.insert("path".into(), Value::from(artifact.rel_path.clone()));
+    obj.insert(
+        "source_path".into(),
+        Value::from(artifact.path.display().to_string()),
+    );
+    obj.insert("encoded_len".into(), Value::from(artifact.encoded_len));
+    obj.insert("blake3".into(), Value::from(artifact.blake3_hex.clone()));
+    obj.insert(
+        "sidecar_status".into(),
+        Value::from(artifact.sidecar_status.clone()),
+    );
+    if let Some(value) = &artifact.sidecar_value {
+        obj.insert("sidecar_blake3".into(), Value::from(value.clone()));
+    }
+    if let Some(error) = &artifact.sidecar_error {
+        obj.insert("sidecar_error".into(), Value::from(error.clone()));
+    }
+    if let Some(node) = &artifact.node {
+        obj.insert("node".into(), governance_dag_node_value(node));
+        if let Some(outcome) = &artifact.outcome {
+            obj.insert(
+                "validation_status".into(),
+                Value::from(outcome.status.clone()),
+            );
+            obj.insert("validation_code".into(), Value::from(outcome.code.clone()));
+            if include_outcome {
+                obj.insert(
+                    "validation_outcome".into(),
+                    to_value(outcome).unwrap_or_else(|_| Value::Null),
+                );
+            }
+        }
+    } else if let Some(error) = &artifact.decode_error {
+        obj.insert(
+            "validation_status".into(),
+            Value::from("not_governance_node"),
+        );
+        obj.insert("decode_error".into(), Value::from(error.clone()));
+    }
+    Value::Object(obj)
+}
+
+fn governance_dag_node_value(node: &GovernanceDagNodeSummary) -> Value {
+    let mut obj = Map::new();
+    obj.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
+    obj.insert(
+        "node_cid_hex".into(),
+        Value::from(node.node_cid_hex.clone()),
+    );
+    obj.insert(
+        "prev_cid".into(),
+        node.prev_cid_label.clone().map_or(Value::Null, Value::from),
+    );
+    obj.insert(
+        "prev_cid_hex".into(),
+        node.prev_cid_hex.clone().map_or(Value::Null, Value::from),
+    );
+    obj.insert("timestamp".into(), Value::from(node.timestamp));
+    obj.insert(
+        "publisher_peer_id".into(),
+        Value::from(node.publisher_peer_id.clone()),
+    );
+    obj.insert("payload_kind".into(), Value::from(node.payload_kind));
+    Value::Object(obj)
+}
+
+fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagArtifact]) {
+    println!("root: {}", root.display());
+    println!("path\tkind\tvalidation\tsidecar\tblake3");
+    for artifact in artifacts {
+        let kind = artifact
+            .node
+            .as_ref()
+            .map(|node| node.payload_kind)
+            .unwrap_or("raw");
+        let validation = artifact
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.status.as_str())
+            .unwrap_or("not_governance_node");
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            artifact.rel_path, kind, validation, artifact.sidecar_status, artifact.blake3_hex
+        );
+    }
+}
+
+fn print_governance_dag_artifact_table(artifact: &GovernanceDagArtifact) {
+    println!("path: {}", artifact.rel_path);
+    println!("encoded_len: {}", artifact.encoded_len);
+    println!("blake3: {}", artifact.blake3_hex);
+    println!("sidecar_status: {}", artifact.sidecar_status);
+    if let Some(node) = &artifact.node {
+        println!("node_cid: {}", node.node_cid_label);
+        println!("node_cid_hex: {}", node.node_cid_hex);
+        println!(
+            "prev_cid: {}",
+            node.prev_cid_label.as_deref().unwrap_or("<root>")
+        );
+        println!("timestamp: {}", node.timestamp);
+        println!("publisher_peer_id: {}", node.publisher_peer_id);
+        println!("payload_kind: {}", node.payload_kind);
+    }
+    if let Some(outcome) = &artifact.outcome {
+        println!("validation_status: {}", outcome.status);
+        println!("validation_code: {}", outcome.code);
+        println!("validation_message: {}", outcome.message);
+    } else if let Some(error) = &artifact.decode_error {
+        println!("validation_status: not_governance_node");
+        println!("decode_error: {error}");
+    }
+}
+
+fn write_governance_dag_json(path: &Path, value: &Value) -> Result<(), String> {
+    let rendered = to_string_pretty(value)
+        .map_err(|err| format!("failed to render governance DAG JSON: {err}"))?;
+    write_text(path, rendered.as_bytes())
+}
+
+fn print_governance_dag_json(value: &Value) -> Result<(), String> {
+    let rendered = to_string_pretty(value)
+        .map_err(|err| format!("failed to render governance DAG JSON: {err}"))?;
+    println!("{rendered}");
+    Ok(())
+}
+
+fn parse_governance_cid_arg(raw: &str) -> Result<Vec<u8>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("governance DAG CID argument must not be empty".to_string());
+    }
+    if let Some(hex) = trimmed.strip_prefix("hex:") {
+        return hex::decode(hex)
+            .map_err(|err| format!("failed to decode governance DAG hex CID `{trimmed}`: {err}"));
+    }
+    if trimmed.len() % 2 == 0 && trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return hex::decode(trimmed)
+            .map_err(|err| format!("failed to decode governance DAG hex CID `{trimmed}`: {err}"));
+    }
+    Ok(trimmed.as_bytes().to_vec())
+}
+
+fn cid_display(cid: &[u8]) -> String {
+    match std::str::from_utf8(cid) {
+        Ok(value) if !value.is_empty() && value.chars().all(|ch| !ch.is_control()) => {
+            value.to_string()
+        }
+        _ => format!("hex:{}", hex_encode(cid)),
+    }
+}
+
+fn governance_dag_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_secs()
+}
+
 fn generate_proof_stream_nonce(
     manifest_digest: &[u8],
     proof_kind: ProofKind,
@@ -10033,6 +13391,7 @@ fn build_fetch_summary(
     client_id: Option<&str>,
     rollout_phase: RolloutPhase,
     write_mode: WriteModeHint,
+    cache_profile: Option<FetchCacheProfile>,
 ) -> Value {
     let outcome = &session.outcome;
     let policy_report = &session.policy_report;
@@ -10048,6 +13407,11 @@ fn build_fetch_summary(
     );
     if let Some(client) = client_id {
         root.insert("client_id".into(), Value::from(client));
+    }
+    if let Some(profile) = cache_profile {
+        let label = profile.label();
+        root.insert("cache_profile".into(), Value::from(label));
+        root.insert("cache_state".into(), Value::from(label));
     }
     root.insert("chunk_count".into(), Value::from(plan.chunks.len() as u64));
     root.insert("content_length".into(), Value::from(plan.content_length));

@@ -28,6 +28,7 @@ Every profile that enters the registry must:
 - ship replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) that
   downstream SDKs can verify without bespoke tooling;
 - include governance-ready metadata (namespace, name, semver) plus migration
+  and deprecation notes when a profile supersedes an older entry;
 - pass the deterministic diff suite before council review.
 
 Follow the checklist below to prepare a proposal that satisfies those rules.
@@ -37,7 +38,7 @@ Follow the checklist below to prepare a proposal that satisfies those rules.
 Before drafting a proposal, confirm it conforms to the registry charter enforced
 by `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
-- Profile IDs are positive integers that increase monotonically without gaps.
+- Profile IDs are positive integers that increase monotonically.
 - The canonical handle (`namespace.name@semver`) must appear in the alias list
   and **must** be the first entry.
 - No alias may collide with another canonical handle or appear more than once.
@@ -47,10 +48,10 @@ Handy CLI helpers:
 
 ```bash
 # JSON listing of all registered descriptors (ids, handles, aliases, multihash)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 
 # Emit metadata for a candidate default profile (canonical handle + aliases)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
@@ -64,7 +65,7 @@ canonical metadata needed in governance discussions.
 | `namespace` | Logical grouping for related profiles. | `sorafs` |
 | `name` | Human-readable label. | `sf1` |
 | `semver` | Semantic version string for the parameter set. | `1.0.0` |
-| `profile_id` | Monotonic numeric identifier assigned once the profile lands. Reserve the next id but do not reuse existing numbers. | `1` |
+| `profile_id` | Strictly increasing numeric identifier assigned in the registry entry. Reserve the next governance-approved id and never reuse existing numbers. | `1` |
 | `profile_aliases` | Optional additional handles exposed to clients during negotiation. Always include the canonical handle as the first entry. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Minimum chunk length in bytes. | `65536` |
 | `profile.target_size` | Target chunk length in bytes. | `262144` |
@@ -127,12 +128,12 @@ metadata and PoR proofs remain consistent:
 
 ```bash
 # Validate chunk metadata + PoR with the new profile
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf2@1.0.0 \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -141,7 +142,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-
@@ -154,9 +155,10 @@ proposal.
 ## Proposal Template
 
 Proposals are submitted as `ChunkerProfileProposalV1` Norito records checked into
-`docs/source/sorafs/proposals/`. The JSON template below illustrates the expected
-shape (substitute your values as needed):
-
+`docs/source/sorafs/proposals/`. Use
+`docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json` as the concrete
+template and substitute your profile metadata, fixtures, and council envelope
+references.
 
 Provide a matching Markdown report (`determinism_report`) that captures the
 command output, chunk digests, and any deviations encountered during validation.
@@ -164,7 +166,7 @@ command output, chunk digests, and any deviations encountered during validation.
 ## Governance Workflow
 
 1. **Submit PR with proposal + fixtures.** Include the generated assets, the
-   Norito proposal, and updates to `chunker_registry_data.rs`.
+   Norito proposal, and updates to `crates/sorafs_manifest/src/chunker_registry.rs`.
 2. **Tooling WG review.** Reviewers re-run the validation checklist and confirm
    the proposal aligns with registry rules (no id reuse, determinism satisfied).
 3. **Council envelope.** Once approved, council members sign the proposal digest
@@ -173,13 +175,14 @@ command output, chunk digests, and any deviations encountered during validation.
 4. **Registry publish.** Merge bumps the registry, docs, and fixtures. The
    default CLI remains on the previous profile until governance declares the
    migration ready.
-5. **Deprecation tracking.** After the migration window, update the registry to
-   ledger.
+5. **Deprecation tracking.** After the migration window, update the registry,
+   migration ledger, operator docs, and fixture notes.
 
 ## Authoring Tips
 
 - Prefer even power-of-two bounds to minimise edge-case chunking behaviour.
-- Avoid changing the multihash code without coordinating manifest and gateway
+- Avoid changing the multihash code without coordinating manifest, gateway,
+  and SDK validation updates.
 - Keep gear table seeds human-readable but globally unique to simplify audit
   trails.
 - Store any benchmarking artefacts (e.g., throughput comparisons) under

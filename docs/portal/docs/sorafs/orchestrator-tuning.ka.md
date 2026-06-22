@@ -86,7 +86,7 @@ translator: machine-google-reviewed
 
 ## CLI & SDK დროშის მითითება
 
-`sorafs_cli fetch` (იხ. `crates/sorafs_car/src/bin/sorafs_cli.rs`) და
+`sorafs_cli fetch` (იხ. `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) და
 `iroha_cli app sorafs fetch` შეფუთვა (`crates/iroha_cli/src/commands/sorafs.rs`)
 იზიარებენ იგივე ორკესტრატორის კონფიგურაციის ზედაპირს. გამოიყენეთ შემდეგი დროშები, როდესაც
 გამოქვეყნებული მტკიცებულებების აღება ან კანონიკური მოწყობილობების გამეორება:

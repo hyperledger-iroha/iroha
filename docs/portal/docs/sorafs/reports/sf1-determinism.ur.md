@@ -27,7 +27,7 @@ validation کے وقت نیچے والا checklist دوبارہ چلانا چا�
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | تمام tests پاس ہوں؛ `vectors` parity test کامیاب ہو۔ | تصدیق کرتا ہے کہ canonical fixtures compile ہوتے ہیں اور Rust implementation سے match کرتے ہیں۔ |
 | 2 | `ci/check_sorafs_fixtures.sh` | اسکرپٹ 0 کے ساتھ exit کرے؛ نیچے والے manifest digests رپورٹ کرے۔ | verify کرتا ہے کہ fixtures صاف طور پر regenerate ہوں اور signatures attached رہیں۔ |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` کا entry registry descriptor (`profile_id=1`) سے match کرے۔ | یقینی بناتا ہے کہ registry metadata sync رہے۔ |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` کا entry registry descriptor (`profile_id=1`) سے match کرے۔ | یقینی بناتا ہے کہ registry metadata sync رہے۔ |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | regeneration `--allow-unsigned` کے بغیر succeed کرے؛ manifest اور signature فائلیں unchanged رہیں۔ | chunk boundaries اور manifests کے لئے determinism proof فراہم کرتا ہے۔ |
 | 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript fixtures اور Rust JSON کے درمیان کوئی diff report نہ کرے۔ | optional helper؛ runtimes کے درمیان parity یقینی بنائیں (script Tooling WG maintain کرتا ہے)۔ |
 

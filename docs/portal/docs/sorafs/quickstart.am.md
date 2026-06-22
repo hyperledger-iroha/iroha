@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. አንጸባራቂ ይገንቡ እና ይፈርሙ
 
 የጭራሹን እቅድ፣ ተለዋጭ ስሞች እና የአስተዳደር ፊርማዎችን ተጠቅመው ወደ አንጸባራቂነት ያቅርቡ
-`sorafs-manifest-stub`. ከታች ያለው ትዕዛዝ ነጠላ-ፋይል ጭነት ያሳያል; ማለፍ
+`sorafs_manifest_stub`. ከታች ያለው ትዕዛዝ ነጠላ-ፋይል ጭነት ያሳያል; ማለፍ
 ዛፍ ለመጠቅለል የማውጫ መንገድ (CLI በቃላት አነጋገር ይራመዳል)።
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

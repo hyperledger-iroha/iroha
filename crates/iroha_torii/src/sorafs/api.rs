@@ -5,13 +5,16 @@
 
 use std::{
     borrow::Cow,
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     convert::{Infallible, TryInto},
     fs,
     io::{self, Read, Write},
     net::SocketAddr,
     num::NonZeroU32,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        LazyLock, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -22,7 +25,7 @@ use axum::{
         ConnectInfo, Path, Query, State,
         ws::{Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     response::{
         IntoResponse, Response,
         sse::{Event as SseEvent, Sse},
@@ -44,6 +47,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     ChainId,
+    account::AccountId,
     block::BlockHeader,
     da::{ingest::DaStripeLayout, manifest::ChunkRole},
     soracloud::SoraRouteVisibilityV1,
@@ -63,25 +67,37 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, ManifestV1, PathDiversityPolicy, ProofStreamKind,
-    ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1,
-    ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
-    ReputationMerkleProofV1, ReputationSnapshotEventV1, ReputationSnapshotV1, StakePointer,
-    StreamBudgetV1, StreamTokenBodyV1, TransportHintV1, TransportProtocol,
+    EndpointMetadata, EndpointMetadataKey, ManifestV1, OrderBookEntryV1, OrderCancelReasonV1,
+    OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1, OrderTierV1,
+    OrderbookSignatureV1, PathDiversityPolicy, ProofStreamKind, ProofStreamRequestError,
+    ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1, ProviderAdvertV1,
+    ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
+    ReputationDegradationFlagV1, ReputationMerkleProofV1, ReputationSnapshotEventV1,
+    ReputationSnapshotV1, SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
+    StakePointer, StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1,
+    TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
+    repair::{RepairTaskEventV1, RepairTaskStatusV1},
     validate_manifest,
 };
 use sorafs_node::{
-    NodeStorageError, PorTrackerError,
+    NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
+    OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
+    PorTrackerError, RepairEvent,
     capacity::CapacityUsageSnapshot,
+    local_orderbook_provider_id_for_owner_account,
     metering::{FeeProjection, MeteringSnapshot},
     store::{
         ChunkFileRecord, ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest,
     },
     telemetry::TelemetryError,
+};
+use sorafs_orchestrator::appeals::{
+    AppealClass, AppealClassConfig, AppealPricingConfig, AppealQuote, AppealQuoteInput,
+    AppealUrgency,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, mpsc};
@@ -161,6 +177,16 @@ const TELEMETRY_ENDPOINT_MANIFEST: &str = "/v1/sorafs/storage/manifest";
 const TELEMETRY_ENDPOINT_PLAN: &str = "/v1/sorafs/storage/plan";
 const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por/sample";
 const TELEMETRY_ENDPOINT_PROOF_STREAM: &str = "/v1/sorafs/proof/stream";
+const TELEMETRY_ENDPOINT_ORDERBOOK: &str = "/v1/sorafs/orderbook";
+const ORDERBOOK_ROUTE_ORDERS: &str = "/v1/sorafs/orderbook/orders";
+const ORDERBOOK_ROUTE_CANCEL: &str = "/v1/sorafs/orderbook/cancel";
+const ORDERBOOK_ROUTE_RECEIPTS: &str = "/v1/sorafs/orderbook/receipts";
+const ORDERBOOK_ROUTE_BOOK: &str = "/v1/sorafs/orderbook/book";
+const ORDERBOOK_ROUTE_TRADES: &str = "/v1/sorafs/orderbook/trades";
+const ORDERBOOK_ROUTE_CHANNELS: &str = "/v1/sorafs/orderbook/channels";
+const ORDERBOOK_ROUTE_EVENTS: &str = "/v1/sorafs/orderbook/events";
+const ORDERBOOK_ROUTE_EVENTS_STREAM: &str = "/v1/sorafs/orderbook/events/stream";
+const ORDERBOOK_ROUTE_EVENTS_WS: &str = "/v1/sorafs/orderbook/events/ws";
 const RANGE_THROTTLE_REASON_QUOTA: &str = "quota";
 const RANGE_THROTTLE_REASON_CONCURRENCY: &str = "concurrency";
 const RANGE_THROTTLE_REASON_BYTE_RATE: &str = "byte_rate";
@@ -170,8 +196,15 @@ const RANGE_CAPABILITY_FEATURE_ALIGNMENT: &str = "requires_alignment";
 const RANGE_CAPABILITY_FEATURE_MERKLE: &str = "supports_merkle_proof";
 const RANGE_CAPABILITY_FEATURE_STREAM_BUDGET: &str = "stream_budget";
 const RANGE_CAPABILITY_FEATURE_TRANSPORT_HINTS: &str = "transport_hints";
+const GOVERNANCE_DAG_MIRROR_INDEX_FILE: &str = "mirror-index.json";
+const GOVERNANCE_DAG_PUBLISH_INDEX_FILE: &str = "publish-index.json";
+const GOVERNANCE_DAG_CAR_QUEUE_FILE: &str = "car-queue.json";
+const GOVERNANCE_DAG_RUNTIME_INDEX_FILE: &str = "runtime-dag-index.json";
+const GOVERNANCE_DAG_CACHE_CONTROL: &str = "public, max-age=15, must-revalidate";
 
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+static ORDERBOOK_API_ROUTE_COUNTS: LazyLock<Mutex<BTreeMap<&'static str, (u64, u64)>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[derive(Debug)]
 pub(crate) struct ResponseError(Box<Response>);
@@ -328,6 +361,13 @@ fn next_request_id() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     format!("{nanos:032x}{counter:016x}")
+}
+
+fn unix_timestamp_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
@@ -1538,6 +1578,22 @@ pub struct ProofStreamRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/appeals/pricing/quote`.
+pub struct AppealPricingQuoteRequestDto {
+    /// Appeal class (`content`, `access`, `fraud`, or `other`).
+    pub class: String,
+    /// Current queue backlog for the selected class.
+    pub backlog: u32,
+    /// Evidence size in MiB used by the pricing formula.
+    pub evidence_size_mb: u32,
+    /// Optional urgency hint (`normal` or `high`); defaults to `normal`.
+    pub urgency: Option<String>,
+    /// Optional panel size; defaults to the active pricing config.
+    pub panel_size: Option<u32>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/storage/por-challenge`.
 pub struct StoragePorChallengeDto {
     /// Base64-encoded Norito PoR challenge payload.
@@ -1939,6 +1995,1389 @@ pub(crate) async fn handle_get_sorafs_storage_peers(
     JsonBody(Value::Object(response)).into_response()
 }
 
+pub(crate) async fn handle_get_sorafs_governance_dag_dashboard(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_mirror_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let blocks = index
+        .get("blocks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut payload_counts = Map::new();
+    let mut first_sequence: Option<u64> = None;
+    let mut last_sequence: Option<u64> = None;
+    let mut last_timestamp: Option<u64> = None;
+    for block in &blocks {
+        if let Some(kind) = block.get("payload_kind").and_then(Value::as_str) {
+            let next = payload_counts
+                .get(kind)
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .saturating_add(1);
+            payload_counts.insert(kind.to_string(), Value::from(next));
+        }
+        if let Some(sequence) = block.get("sequence").and_then(Value::as_u64) {
+            first_sequence = Some(first_sequence.map_or(sequence, |current| current.min(sequence)));
+            last_sequence = Some(last_sequence.map_or(sequence, |current| current.max(sequence)));
+        }
+        if let Some(timestamp) = block.get("timestamp").and_then(Value::as_u64) {
+            last_timestamp =
+                Some(last_timestamp.map_or(timestamp, |current| current.max(timestamp)));
+        }
+    }
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.dashboard.v1"),
+    );
+    response.insert("source".into(), Value::from("local_mirror_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "mirror_generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "head".into(),
+        index.get("head").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "block_count".into(),
+        index
+            .get("block_count")
+            .cloned()
+            .unwrap_or_else(|| Value::from(blocks.len() as u64)),
+    );
+    response.insert(
+        "indexed_block_count".into(),
+        Value::from(blocks.len() as u64),
+    );
+    response.insert(
+        "first_sequence".into(),
+        first_sequence.map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "last_sequence".into(),
+        last_sequence.map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "last_timestamp".into(),
+        last_timestamp.map_or(Value::Null, Value::from),
+    );
+    response.insert("payload_kind_counts".into(), Value::Object(payload_counts));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_head(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_mirror_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.head.v1"),
+    );
+    response.insert("source".into(), Value::from("local_mirror_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "head".into(),
+        index.get("head").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "block_count".into(),
+        index.get("block_count").cloned().unwrap_or(Value::Null),
+    );
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_block(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(block_cid_hex): Path<String>,
+) -> Response {
+    governance_dag_lookup_response(
+        &state,
+        headers,
+        "block",
+        "by_block_cid_hex",
+        "sorafs.governance_dag.block.lookup.v1",
+        &block_cid_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_node(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(node_cid_hex): Path<String>,
+) -> Response {
+    governance_dag_lookup_response(
+        &state,
+        headers,
+        "block",
+        "by_node_cid_hex",
+        "sorafs.governance_dag.node.lookup.v1",
+        &node_cid_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_publish_index(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.publish_index.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "entry_count".into(),
+        index.get("entry_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "payload_kind_counts".into(),
+        index
+            .get("payload_kind_counts")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert("index".into(), index);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_publish_digest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(encoded_blake3_hex): Path<String>,
+) -> Response {
+    let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_publish_index_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.publish_index.digest.lookup.v1",
+        "digest",
+        "by_encoded_blake3",
+        &digest_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_publish_kind(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(payload_kind): Path<String>,
+) -> Response {
+    let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_publish_index_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.publish_index.kind.lookup.v1",
+        "payload_kind",
+        "by_payload_kind",
+        &payload_kind,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_car_queue(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (queue, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_car_queue(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.car_queue.v1"),
+    );
+    response.insert("source".into(), Value::from("local_car_queue"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        queue.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "segment_count".into(),
+        queue.get("segment_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "assembled_count".into(),
+        queue.get("assembled_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "pending_count".into(),
+        queue.get("pending_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert("queue".into(), queue);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_digest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(encoded_blake3_hex): Path<String>,
+) -> Response {
+    let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_car_queue_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.car_queue.digest.lookup.v1",
+        "digest",
+        "by_encoded_blake3",
+        &digest_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_kind(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(payload_kind): Path<String>,
+) -> Response {
+    let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_car_queue_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.car_queue.kind.lookup.v1",
+        "payload_kind",
+        "by_payload_kind",
+        &payload_kind,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_archive(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(car_archive_blake3_hex): Path<String>,
+) -> Response {
+    let car_archive_blake3 =
+        match normalize_governance_car_archive_digest_hex(&car_archive_blake3_hex) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    governance_car_queue_archive_lookup_response(&state, headers, &car_archive_blake3)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_runtime(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_runtime_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let blocks = match governance_runtime_dag_blocks(&index) {
+        Ok(blocks) => blocks,
+        Err(response) => return response,
+    };
+    let (payload_kind_counts, first_sequence, last_sequence, last_published_at) =
+        runtime_dag_block_summary(blocks);
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.runtime_index.v1"),
+    );
+    response.insert("source".into(), Value::from("local_runtime_dag_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "publisher_peer_id".into(),
+        index
+            .get("publisher_peer_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "publisher_peer_id_hex".into(),
+        index
+            .get("publisher_peer_id_hex")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "publisher_public_key_hex".into(),
+        index
+            .get("publisher_public_key_hex")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "head_block_cid_hex".into(),
+        index
+            .get("head_block_cid_hex")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "head_path".into(),
+        index.get("head_path").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "block_count".into(),
+        index.get("block_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "indexed_block_count".into(),
+        Value::from(blocks.len() as u64),
+    );
+    response.insert(
+        "first_sequence".into(),
+        first_sequence.map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "last_sequence".into(),
+        last_sequence.map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "last_published_at".into(),
+        last_published_at.map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "payload_kind_counts".into(),
+        Value::Object(payload_kind_counts),
+    );
+    response.insert("index".into(), index);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_runtime_head(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_runtime_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let latest_block = match governance_runtime_dag_latest_block(&index) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.runtime_head.v1"),
+    );
+    response.insert("source".into(), Value::from("local_runtime_dag_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "head_block_cid_hex".into(),
+        index
+            .get("head_block_cid_hex")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "head_path".into(),
+        index.get("head_path").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "block_count".into(),
+        index.get("block_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert("latest_block".into(), latest_block.unwrap_or(Value::Null));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_runtime_block(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(block_cid_hex): Path<String>,
+) -> Response {
+    let cid_hex = match normalize_governance_dag_lookup_hex(&block_cid_hex, "block_cid_hex") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_runtime_dag_block_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.runtime.block.lookup.v1",
+        "block",
+        "block_cid_hex",
+        &cid_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_runtime_node(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(node_cid_hex): Path<String>,
+) -> Response {
+    let cid_hex = match normalize_governance_dag_lookup_hex(&node_cid_hex, "node_cid_hex") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_runtime_dag_block_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.runtime.node.lookup.v1",
+        "node",
+        "node_cid_hex",
+        &cid_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_runtime_digest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(encoded_blake3_hex): Path<String>,
+) -> Response {
+    let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_runtime_dag_index_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.runtime.digest.lookup.v1",
+        "digest",
+        "by_encoded_blake3",
+        &digest_hex,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_runtime_kind(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(payload_kind): Path<String>,
+) -> Response {
+    let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_runtime_dag_index_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.runtime.kind.lookup.v1",
+        "payload_kind",
+        "by_payload_kind",
+        &payload_kind,
+    )
+}
+
+fn load_governance_dag_mirror_index(
+    state: &SharedAppState,
+) -> Result<(Value, String, u64, String, String), Response> {
+    let path = governance_dag_mirror_index_path(state)?;
+    let bytes = fs::read(&path).map_err(|err| {
+        let status = if err.kind() == io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        json_error(
+            status,
+            format!(
+                "failed to read governance DAG mirror index `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
+    let index: Value = json::from_slice(&bytes).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "failed to decode governance DAG mirror index `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if index.get("schema").and_then(Value::as_str) != Some("sorafs.governance_dag.mirror.v1") {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror index uses an unsupported schema",
+        ));
+    }
+    let etag = format!("\"{blake3_hex}\"");
+    Ok((
+        index,
+        path.display().to_string(),
+        encoded_len,
+        blake3_hex,
+        etag,
+    ))
+}
+
+fn load_governance_dag_publish_index(
+    state: &SharedAppState,
+) -> Result<(Value, String, u64, String, String), Response> {
+    let path = governance_dag_index_file_path(
+        state,
+        GOVERNANCE_DAG_PUBLISH_INDEX_FILE,
+        "sorafs governance DAG publish index directory is not configured",
+    )?;
+    let bytes = fs::read(&path).map_err(|err| {
+        let status = if err.kind() == io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        json_error(
+            status,
+            format!(
+                "failed to read governance DAG publish index `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
+    let index: Value = json::from_slice(&bytes).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "failed to decode governance DAG publish index `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if index.get("schema").and_then(Value::as_str)
+        != Some("sorafs.governance_dag.local_publish_index.v1")
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG publish index uses an unsupported schema",
+        ));
+    }
+    let etag = format!("\"{blake3_hex}\"");
+    Ok((
+        index,
+        path.display().to_string(),
+        encoded_len,
+        blake3_hex,
+        etag,
+    ))
+}
+
+fn load_governance_dag_car_queue(
+    state: &SharedAppState,
+) -> Result<(Value, String, u64, String, String), Response> {
+    let path = governance_dag_index_file_path(
+        state,
+        GOVERNANCE_DAG_CAR_QUEUE_FILE,
+        "sorafs governance DAG CAR queue directory is not configured",
+    )?;
+    let bytes = fs::read(&path).map_err(|err| {
+        let status = if err.kind() == io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        json_error(
+            status,
+            format!(
+                "failed to read governance DAG CAR queue `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
+    let queue: Value = json::from_slice(&bytes).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "failed to decode governance DAG CAR queue `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if queue.get("schema").and_then(Value::as_str)
+        != Some("sorafs.governance_dag.local_car_queue.v1")
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG CAR queue uses an unsupported schema",
+        ));
+    }
+    let etag = format!("\"{blake3_hex}\"");
+    Ok((
+        queue,
+        path.display().to_string(),
+        encoded_len,
+        blake3_hex,
+        etag,
+    ))
+}
+
+fn load_governance_dag_runtime_index(
+    state: &SharedAppState,
+) -> Result<(Value, String, u64, String, String), Response> {
+    let path = governance_dag_index_file_path(
+        state,
+        GOVERNANCE_DAG_RUNTIME_INDEX_FILE,
+        "sorafs governance DAG runtime index directory is not configured",
+    )?;
+    let bytes = fs::read(&path).map_err(|err| {
+        let status = if err.kind() == io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        json_error(
+            status,
+            format!(
+                "failed to read governance DAG runtime index `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
+    let index: Value = json::from_slice(&bytes).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "failed to decode governance DAG runtime index `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if index.get("schema").and_then(Value::as_str)
+        != Some("sorafs.governance_dag.runtime_signed_index.v1")
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG runtime index uses an unsupported schema",
+        ));
+    }
+    let blocks = governance_runtime_dag_blocks(&index)?;
+    if let Some(block_count) = index.get("block_count").and_then(Value::as_u64)
+        && block_count != blocks.len() as u64
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG runtime index block_count does not match blocks array",
+        ));
+    }
+    let etag = format!("\"{blake3_hex}\"");
+    Ok((
+        index,
+        path.display().to_string(),
+        encoded_len,
+        blake3_hex,
+        etag,
+    ))
+}
+
+fn governance_dag_mirror_index_path(
+    state: &SharedAppState,
+) -> Result<std::path::PathBuf, Response> {
+    governance_dag_index_file_path(
+        state,
+        GOVERNANCE_DAG_MIRROR_INDEX_FILE,
+        "sorafs governance DAG mirror directory is not configured",
+    )
+}
+
+fn governance_dag_index_file_path(
+    state: &SharedAppState,
+    file_name: &str,
+    missing_config_message: &str,
+) -> Result<std::path::PathBuf, Response> {
+    if !state.sorafs_node.is_enabled() {
+        return Err(feature_disabled(
+            "sorafs governance DAG API is not enabled on this node",
+        ));
+    }
+    let Some(governance_dir) = state.sorafs_node.config().governance_dir() else {
+        return Err(json_error(StatusCode::NOT_FOUND, missing_config_message));
+    };
+    Ok(governance_dir.join(file_name))
+}
+
+fn governance_dag_lookup_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    query: &str,
+    map_name: &str,
+    schema: &str,
+    raw_cid_hex: &str,
+) -> Response {
+    let cid_hex = match normalize_governance_dag_lookup_hex(raw_cid_hex, query) {
+        Ok(cid_hex) => cid_hex,
+        Err(response) => return response,
+    };
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_mirror_index(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let block = match governance_dag_mirror_lookup_block(&index, map_name, &cid_hex) {
+        Ok(Some(block)) => block,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("governance DAG {query} `{cid_hex}` was not found"),
+            );
+        }
+        Err(response) => return response,
+    };
+
+    let mut response = Map::new();
+    response.insert("schema".into(), Value::from(schema));
+    response.insert("source".into(), Value::from("local_mirror_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert("query".into(), Value::from(query));
+    response.insert("cid_hex".into(), Value::from(cid_hex));
+    response.insert("found".into(), Value::from(true));
+    response.insert("block".into(), block);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn normalize_governance_dag_lookup_hex(raw: &str, field: &str) -> Result<String, Response> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed.strip_prefix("hex:").unwrap_or(trimmed).trim();
+    if trimmed.is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must not be empty"),
+        ));
+    }
+    if trimmed.len() % 2 != 0 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must have an even number of hexadecimal characters"),
+        ));
+    }
+    if !trimmed
+        .as_bytes()
+        .iter()
+        .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must be hexadecimal"),
+        ));
+    }
+    hex::decode(trimmed).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid governance DAG {field}: {err}"),
+        )
+    })?;
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+fn governance_dag_mirror_lookup_block(
+    index: &Value,
+    map_name: &str,
+    cid_hex: &str,
+) -> Result<Option<Value>, Response> {
+    let Some(lookup) = index.get(map_name).and_then(Value::as_object) else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG mirror index is missing `{map_name}` lookup"),
+        ));
+    };
+    let Some(position_value) = lookup.get(cid_hex) else {
+        return Ok(None);
+    };
+    let Some(position) = position_value.as_u64() else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG mirror index `{map_name}` entry is not numeric"),
+        ));
+    };
+    let blocks = index
+        .get("blocks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG mirror index is missing `blocks` array",
+            )
+        })?;
+    let position = usize::try_from(position).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror block position exceeds host limits",
+        )
+    })?;
+    blocks.get(position).cloned().map(Some).ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror lookup points outside `blocks` array",
+        )
+    })
+}
+
+fn governance_runtime_dag_blocks(index: &Value) -> Result<&[Value], Response> {
+    index
+        .get("blocks")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG runtime index is missing `blocks` array",
+            )
+        })
+}
+
+fn governance_runtime_dag_latest_block(index: &Value) -> Result<Option<Value>, Response> {
+    Ok(governance_runtime_dag_blocks(index)?.last().cloned())
+}
+
+fn runtime_dag_block_summary(blocks: &[Value]) -> (Map, Option<u64>, Option<u64>, Option<u64>) {
+    let mut payload_kind_counts = Map::new();
+    let mut first_sequence: Option<u64> = None;
+    let mut last_sequence: Option<u64> = None;
+    let mut last_published_at: Option<u64> = None;
+    for block in blocks {
+        if let Some(kind) = block.get("payload_kind").and_then(Value::as_str) {
+            let next = payload_kind_counts
+                .get(kind)
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .saturating_add(1);
+            payload_kind_counts.insert(kind.to_string(), Value::from(next));
+        }
+        if let Some(sequence) = block.get("sequence").and_then(Value::as_u64) {
+            first_sequence = Some(first_sequence.map_or(sequence, |current| current.min(sequence)));
+            last_sequence = Some(last_sequence.map_or(sequence, |current| current.max(sequence)));
+        }
+        if let Some(published_at) = block.get("published_at_unix").and_then(Value::as_u64) {
+            last_published_at =
+                Some(last_published_at.map_or(published_at, |current| current.max(published_at)));
+        }
+    }
+    (
+        payload_kind_counts,
+        first_sequence,
+        last_sequence,
+        last_published_at,
+    )
+}
+
+fn governance_runtime_dag_block_lookup_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    schema: &str,
+    query: &str,
+    field_name: &str,
+    cid_hex: &str,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_runtime_index(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let block = match governance_runtime_dag_lookup_block_by_field(&index, field_name, cid_hex) {
+        Ok(Some(block)) => block,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("governance DAG runtime {query} `{cid_hex}` was not found"),
+            );
+        }
+        Err(response) => return response,
+    };
+
+    let mut response = Map::new();
+    response.insert("schema".into(), Value::from(schema));
+    response.insert("source".into(), Value::from("local_runtime_dag_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert("query".into(), Value::from(query));
+    response.insert("cid_hex".into(), Value::from(cid_hex.to_string()));
+    response.insert("found".into(), Value::from(true));
+    response.insert("block".into(), block);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn governance_runtime_dag_lookup_block_by_field(
+    index: &Value,
+    field_name: &str,
+    cid_hex: &str,
+) -> Result<Option<Value>, Response> {
+    let blocks = governance_runtime_dag_blocks(index)?;
+    Ok(blocks
+        .iter()
+        .find(|block| block.get(field_name).and_then(Value::as_str) == Some(cid_hex))
+        .cloned())
+}
+
+fn governance_runtime_dag_index_lookup_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    schema: &str,
+    query: &str,
+    map_name: &str,
+    key: &str,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_runtime_index(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let blocks = match governance_runtime_dag_lookup_blocks(&index, map_name, key) {
+        Ok(blocks) if blocks.is_empty() => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("governance DAG runtime {query} `{key}` was not found"),
+            );
+        }
+        Ok(blocks) => blocks,
+        Err(response) => return response,
+    };
+
+    let mut response = Map::new();
+    response.insert("schema".into(), Value::from(schema));
+    response.insert("source".into(), Value::from("local_runtime_dag_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert("query".into(), Value::from(query));
+    response.insert("key".into(), Value::from(key.to_string()));
+    response.insert("found".into(), Value::from(true));
+    response.insert("count".into(), Value::from(blocks.len() as u64));
+    response.insert("blocks".into(), Value::Array(blocks));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn governance_runtime_dag_lookup_blocks(
+    index: &Value,
+    map_name: &str,
+    key: &str,
+) -> Result<Vec<Value>, Response> {
+    let Some(lookup) = index.get(map_name).and_then(Value::as_object) else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG runtime index is missing `{map_name}` lookup"),
+        ));
+    };
+    let Some(positions) = lookup.get(key).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let blocks = governance_runtime_dag_blocks(index)?;
+    let mut found = Vec::with_capacity(positions.len());
+    for position in positions {
+        let Some(position) = position.as_u64() else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("governance DAG runtime index `{map_name}` entry is not numeric"),
+            ));
+        };
+        let position = usize::try_from(position).map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG runtime index block position exceeds host limits",
+            )
+        })?;
+        let Some(block) = blocks.get(position).cloned() else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG runtime index lookup points outside `blocks` array",
+            ));
+        };
+        found.push(block);
+    }
+    Ok(found)
+}
+
+fn governance_publish_index_lookup_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    schema: &str,
+    query: &str,
+    map_name: &str,
+    key: &str,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let entries = match governance_publish_index_lookup_entries(&index, map_name, key) {
+        Ok(entries) if entries.is_empty() => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("governance DAG publish index {query} `{key}` was not found"),
+            );
+        }
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+
+    let mut response = Map::new();
+    response.insert("schema".into(), Value::from(schema));
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert("query".into(), Value::from(query));
+    response.insert("key".into(), Value::from(key.to_string()));
+    response.insert("found".into(), Value::from(true));
+    response.insert("count".into(), Value::from(entries.len() as u64));
+    response.insert("entries".into(), Value::Array(entries));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn governance_publish_index_lookup_entries(
+    index: &Value,
+    map_name: &str,
+    key: &str,
+) -> Result<Vec<Value>, Response> {
+    let Some(lookup) = index.get(map_name).and_then(Value::as_object) else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG publish index is missing `{map_name}` lookup"),
+        ));
+    };
+    let Some(positions) = lookup.get(key).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let entries = index
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG publish index is missing `entries` array",
+            )
+        })?;
+    let mut found = Vec::with_capacity(positions.len());
+    for position in positions {
+        let Some(position) = position.as_u64() else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("governance DAG publish index `{map_name}` entry is not numeric"),
+            ));
+        };
+        let position = usize::try_from(position).map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG publish index position exceeds host limits",
+            )
+        })?;
+        let Some(entry) = entries.get(position).cloned() else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG publish index lookup points outside `entries` array",
+            ));
+        };
+        found.push(entry);
+    }
+    Ok(found)
+}
+
+fn governance_car_queue_lookup_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    schema: &str,
+    query: &str,
+    map_name: &str,
+    key: &str,
+) -> Response {
+    let (queue, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_car_queue(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let segments = match governance_car_queue_lookup_segments(&queue, map_name, key) {
+        Ok(segments) if segments.is_empty() => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("governance DAG CAR queue {query} `{key}` was not found"),
+            );
+        }
+        Ok(segments) => segments,
+        Err(response) => return response,
+    };
+
+    let mut response = Map::new();
+    response.insert("schema".into(), Value::from(schema));
+    response.insert("source".into(), Value::from("local_car_queue"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert("query".into(), Value::from(query));
+    response.insert("key".into(), Value::from(key.to_string()));
+    response.insert("found".into(), Value::from(true));
+    response.insert("count".into(), Value::from(segments.len() as u64));
+    response.insert("segments".into(), Value::Array(segments));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn governance_car_queue_archive_lookup_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    car_archive_blake3: &str,
+) -> Response {
+    let (queue, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_car_queue(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let segments = match queue.get("segments").and_then(Value::as_array) {
+        Some(segments) => segments,
+        None => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG CAR queue is missing `segments` array",
+            );
+        }
+    };
+    let segment = segments
+        .iter()
+        .find(|segment| {
+            segment.get("car_archive_blake3").and_then(Value::as_str) == Some(car_archive_blake3)
+        })
+        .cloned();
+    let Some(segment) = segment else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("governance DAG CAR queue archive `{car_archive_blake3}` was not found"),
+        );
+    };
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.car_queue.archive.lookup.v1"),
+    );
+    response.insert("source".into(), Value::from("local_car_queue"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert("query".into(), Value::from("car_archive_blake3"));
+    response.insert("key".into(), Value::from(car_archive_blake3.to_string()));
+    response.insert("found".into(), Value::from(true));
+    response.insert("segment".into(), segment);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn governance_car_queue_lookup_segments(
+    queue: &Value,
+    map_name: &str,
+    key: &str,
+) -> Result<Vec<Value>, Response> {
+    let Some(lookup) = queue.get(map_name).and_then(Value::as_object) else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG CAR queue is missing `{map_name}` lookup"),
+        ));
+    };
+    let Some(positions) = lookup.get(key).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let segments = queue
+        .get("segments")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG CAR queue is missing `segments` array",
+            )
+        })?;
+    let mut found = Vec::with_capacity(positions.len());
+    for position in positions {
+        let Some(position) = position.as_u64() else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("governance DAG CAR queue `{map_name}` entry is not numeric"),
+            ));
+        };
+        let position = usize::try_from(position).map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG CAR queue segment position exceeds host limits",
+            )
+        })?;
+        let Some(segment) = segments.get(position).cloned() else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG CAR queue lookup points outside `segments` array",
+            ));
+        };
+        found.push(segment);
+    }
+    Ok(found)
+}
+
+fn normalize_governance_publish_digest_hex(raw: &str) -> Result<String, Response> {
+    let digest_hex = normalize_governance_dag_lookup_hex(raw, "encoded_blake3_hex")?;
+    if digest_hex.len() != 64 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "encoded_blake3_hex must be 64 hexadecimal characters",
+        ));
+    }
+    Ok(digest_hex)
+}
+
+fn normalize_governance_car_archive_digest_hex(raw: &str) -> Result<String, Response> {
+    let digest_hex = normalize_governance_dag_lookup_hex(raw, "car_archive_blake3_hex")?;
+    if digest_hex.len() != 64 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "car_archive_blake3_hex must be 64 hexadecimal characters",
+        ));
+    }
+    Ok(digest_hex)
+}
+
+fn normalize_governance_publish_kind(raw: &str) -> Result<String, Response> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "payload_kind must not be empty",
+        ));
+    }
+    if trimmed.len() > 128 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "payload_kind must be 128 characters or fewer",
+        ));
+    }
+    if !trimmed
+        .as_bytes()
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-' | b'.'))
+    {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "payload_kind must contain only ASCII letters, digits, '.', '-', or '_'",
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn governance_dag_json_response(value: Value, etag: &str) -> Response {
+    let mut response = JsonBody(value).into_response();
+    insert_governance_dag_cache_headers(&mut response, etag);
+    response
+}
+
+fn governance_dag_not_modified_response(headers: &HeaderMap, etag: &str) -> Option<Response> {
+    if !if_none_match_matches(headers, etag) {
+        return None;
+    }
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_MODIFIED;
+    insert_governance_dag_cache_headers(&mut response, etag);
+    Some(response)
+}
+
+fn insert_governance_dag_cache_headers(response: &mut Response, etag: &str) {
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(GOVERNANCE_DAG_CACHE_CONTROL),
+    );
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        response.headers_mut().insert(ETAG, value);
+    }
+}
+
 pub(crate) async fn handle_post_sorafs_reputation_snapshot(
     State(state): State<SharedAppState>,
     NoritoJson(snapshot): NoritoJson<ReputationSnapshotV1>,
@@ -1961,6 +3400,30 @@ pub(crate) async fn handle_post_sorafs_reputation_snapshot(
             format!("failed to publish reputation snapshot: {err}"),
         );
     }
+    state.telemetry.with_metrics(|telemetry| {
+        let observed_at_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let provider_scores: Vec<(&str, u16, bool)> = snapshot
+            .providers
+            .iter()
+            .map(|provider| {
+                (
+                    provider.provider_id.as_str(),
+                    provider.score_bps,
+                    provider
+                        .degradation_flags
+                        .contains(&ReputationDegradationFlagV1::LowScore),
+                )
+            })
+            .collect();
+        telemetry.record_sorafs_reputation_snapshot(
+            snapshot.generated_at_unix,
+            observed_at_unix,
+            &provider_scores,
+        );
+    });
     match reputation_snapshot_summary_json(&snapshot) {
         Ok(mut value) => {
             if let Value::Object(map) = &mut value {
@@ -2162,6 +3625,1744 @@ pub(crate) async fn handle_get_sorafs_reputation_provider(
     match reputation_provider_response_json(&snapshot, provider, &proof) {
         Ok(value) => reputation_json_response(value, &etag),
         Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+fn orderbook_api_response(
+    telemetry: &MaybeTelemetry,
+    route: &'static str,
+    response: Response,
+) -> Response {
+    let ratio = record_orderbook_api_outcome(
+        route,
+        response.status().is_client_error() || response.status().is_server_error(),
+    );
+    telemetry.with_metrics(|metrics| metrics.set_sorafs_orderbook_api_error_ratio(route, ratio));
+    response
+}
+
+fn record_orderbook_api_outcome(route: &'static str, is_error: bool) -> f64 {
+    let Ok(mut counts) = ORDERBOOK_API_ROUTE_COUNTS.lock() else {
+        return 0.0;
+    };
+    let (errors, total) = counts.entry(route).or_insert((0, 0));
+    *total = total.saturating_add(1);
+    if is_error {
+        *errors = errors.saturating_add(1);
+    }
+    if *total == 0 {
+        0.0
+    } else {
+        *errors as f64 / *total as f64
+    }
+}
+
+#[cfg(test)]
+fn reset_orderbook_api_outcome_for_test(route: &'static str) {
+    if let Ok(mut counts) = ORDERBOOK_API_ROUTE_COUNTS.lock() {
+        counts.remove(route);
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_orderbook_order(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let order = match norito::decode_from_bytes::<OrderRequestV1>(body.as_ref()) {
+            Ok(order) => order,
+            Err(err) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("failed to decode SoraFS orderbook order: {err}"),
+                );
+            }
+        };
+        let owner_account = match orderbook_owner_account_id(&state, &order.owner_account) {
+            Ok(account) => account,
+            Err(response) => return response,
+        };
+        let verified = match require_orderbook_request_auth(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            body.as_ref(),
+            Some(&owner_account),
+        ) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+        if let Err(response) = ensure_orderbook_payload_signer(&verified, &order.signature) {
+            return response;
+        }
+        if let Err(response) = ensure_orderbook_order_provider_capability(&state, &order) {
+            return response;
+        }
+        let now_unix = unix_timestamp_now();
+        match state.sorafs_node.submit_orderbook_order(order, now_unix) {
+            Ok(outcome) => match orderbook_submit_outcome_json(&outcome) {
+                Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            },
+            Err(err) => orderbook_runtime_error_response(err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_ORDERS, response)
+}
+
+pub(crate) async fn handle_post_sorafs_orderbook_cancel(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let cancel = match norito::decode_from_bytes::<OrderCancelV1>(body.as_ref()) {
+            Ok(cancel) => cancel,
+            Err(err) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("failed to decode SoraFS orderbook cancel: {err}"),
+                );
+            }
+        };
+        let owner_account = match orderbook_owner_account_id(&state, &cancel.owner_account) {
+            Ok(account) => account,
+            Err(response) => return response,
+        };
+        let verified = match require_orderbook_request_auth(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            body.as_ref(),
+            Some(&owner_account),
+        ) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+        if let Err(response) = ensure_orderbook_payload_signer(&verified, &cancel.signature) {
+            return response;
+        }
+        let now_unix = unix_timestamp_now();
+        match state.sorafs_node.cancel_orderbook_order(cancel, now_unix) {
+            Ok(outcome) => match orderbook_cancel_outcome_json(&outcome) {
+                Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            },
+            Err(err) => orderbook_runtime_error_response(err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_CANCEL, response)
+}
+
+pub(crate) async fn handle_post_sorafs_orderbook_receipt(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let receipt = match norito::decode_from_bytes::<SettlementReceiptV1>(body.as_ref()) {
+            Ok(receipt) => receipt,
+            Err(err) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("failed to decode SoraFS orderbook settlement receipt: {err}"),
+                );
+            }
+        };
+        let verified = match require_orderbook_request_auth(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            body.as_ref(),
+            None,
+        ) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+        if let Err(response) =
+            ensure_orderbook_payload_signer(&verified, &receipt.settlement_signature)
+        {
+            return response;
+        }
+        if let Err(response) = ensure_orderbook_receipt_provider_role(&state, &verified, &receipt) {
+            return response;
+        }
+        let now_unix = unix_timestamp_now();
+        match state
+            .sorafs_node
+            .submit_orderbook_receipt(receipt, now_unix)
+        {
+            Ok(outcome) => match orderbook_receipt_outcome_json(&outcome) {
+                Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            },
+            Err(err) => orderbook_runtime_error_response(err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
+}
+
+fn orderbook_owner_account_id(
+    state: &SharedAppState,
+    owner_account: &[u8],
+) -> Result<AccountId, Response> {
+    let owner_literal = std::str::from_utf8(owner_account).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook owner_account must be UTF-8 canonical account bytes",
+        )
+    })?;
+    if owner_literal.is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook owner_account must not be empty",
+        ));
+    }
+    let (account, canonical) = crate::routing::parse_account_literal_with_state(
+        &state.state,
+        owner_literal,
+        &state.telemetry,
+        "sorafs_orderbook_owner_account",
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS orderbook owner_account: {}", err.reason()),
+        )
+    })?;
+    if owner_literal != canonical {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook owner_account must be canonical AccountId bytes",
+        ));
+    }
+    Ok(account)
+}
+
+fn require_orderbook_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(
+        &state.state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+    ) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS orderbook submissions require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS orderbook canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS orderbook request authentication",
+            ))
+        }
+    }
+}
+
+fn ensure_orderbook_payload_signer(
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+    signature: &OrderbookSignatureV1,
+) -> Result<(), Response> {
+    if !matches!(
+        signature.algorithm,
+        sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519
+    ) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook payload signer must use Ed25519",
+        ));
+    }
+    let matches_verified_signer = verified.verified_signers.iter().any(|signer| {
+        signer.try_to_bytes().is_ok_and(|(algorithm, payload)| {
+            algorithm == Algorithm::Ed25519 && payload == signature.public_key.as_slice()
+        })
+    });
+    if matches_verified_signer {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook payload signer is not an authenticated request signer",
+        ))
+    }
+}
+
+fn ensure_orderbook_order_provider_capability(
+    state: &SharedAppState,
+    order: &OrderRequestV1,
+) -> Result<(), Response> {
+    if order.side != OrderSideV1::Ask {
+        return Ok(());
+    }
+    let provider_id = local_orderbook_provider_id_for_owner_account(&order.owner_account);
+    enforce_orderbook_provider_capability(state, &provider_id)
+}
+
+fn ensure_orderbook_receipt_provider_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+    receipt: &SettlementReceiptV1,
+) -> Result<(), Response> {
+    let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+    let Some(channel) = snapshot
+        .settlement_channels
+        .iter()
+        .find(|channel| channel.channel_id == receipt.channel_id)
+    else {
+        return Ok(());
+    };
+    let signer_provider_id =
+        local_orderbook_provider_id_for_owner_account(verified.account.to_string().as_bytes());
+    if signer_provider_id == channel.provider_id {
+        enforce_orderbook_provider_capability(state, &channel.provider_id)
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook receipt signer is not the settlement-channel provider",
+        ))
+    }
+}
+
+fn enforce_orderbook_provider_capability(
+    state: &SharedAppState,
+    provider_id: &[u8; 32],
+) -> Result<(), Response> {
+    if !state.sorafs_gateway_config.enforce_capabilities {
+        return Ok(());
+    }
+    let capability = CapabilityType::ToriiGateway;
+    match state.provider_supports_capability(provider_id, capability) {
+        Some(true) => Ok(()),
+        Some(false) => Err(orderbook_provider_capability_response(
+            state,
+            StatusCode::PRECONDITION_FAILED,
+            "capability_missing",
+            "provider advert does not declare torii_gateway capability",
+            provider_id,
+            capability,
+        )),
+        None => Err(orderbook_provider_capability_response(
+            state,
+            StatusCode::PRECONDITION_FAILED,
+            "capability_state_unknown",
+            "gateway cannot confirm provider capability advertisement",
+            provider_id,
+            capability,
+        )),
+    }
+}
+
+fn orderbook_provider_capability_response(
+    state: &SharedAppState,
+    status: StatusCode,
+    error_code: &'static str,
+    reason: &'static str,
+    provider_id: &[u8; 32],
+    capability: CapabilityType,
+) -> Response {
+    let capability_label = capability_name(capability);
+    gateway_refusal_response(
+        state,
+        status,
+        error_code,
+        reason,
+        Some("orderbook"),
+        Some(provider_id),
+        TELEMETRY_ENDPOINT_ORDERBOOK,
+        [
+            ("capability", Value::from(capability_label)),
+            ("provider_id_hex", Value::from(hex::encode(provider_id))),
+        ],
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_book(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        match orderbook_snapshot_json(&snapshot) {
+            Ok(value) => JsonBody(value).into_response(),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_BOOK, response)
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_trades(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let trades = snapshot
+            .trades
+            .iter()
+            .map(orderbook_trade_json)
+            .collect::<Result<Vec<_>, _>>();
+        match trades {
+            Ok(trades) => JsonBody(json_object(vec![
+                json_entry("count", trades.len() as u64),
+                json_entry("trades", Value::Array(trades)),
+            ]))
+            .into_response(),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_TRADES, response)
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_channels(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let channels = snapshot
+            .settlement_channels
+            .iter()
+            .map(orderbook_channel_json)
+            .collect::<Result<Vec<_>, _>>();
+        match channels {
+            Ok(channels) => JsonBody(json_object(vec![
+                json_entry("count", channels.len() as u64),
+                json_entry("channels", Value::Array(channels)),
+            ]))
+            .into_response(),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_CHANNELS, response)
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_receipts(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let receipts = snapshot
+            .settlement_receipts
+            .iter()
+            .map(orderbook_receipt_json)
+            .collect::<Result<Vec<_>, _>>();
+        match receipts {
+            Ok(receipts) => JsonBody(json_object(vec![
+                json_entry("count", receipts.len() as u64),
+                json_entry("receipts", Value::Array(receipts)),
+            ]))
+            .into_response(),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_events(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
+        let events = state.sorafs_node.orderbook_events_since(query.since, limit);
+        let tip_sequence = state
+            .sorafs_node
+            .latest_orderbook_event_sequence()
+            .unwrap_or(0);
+        let etag = orderbook_events_etag(query.since, limit, tip_sequence, &events);
+        if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+            return response;
+        }
+        match orderbook_events_json(query.since, limit, &events) {
+            Ok(value) => reputation_json_response(value, &etag),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_EVENTS, response)
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_events_stream(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
+        let initial_events = state.sorafs_node.orderbook_events_since(query.since, limit);
+        let receiver = state.sorafs_node.subscribe_orderbook_events();
+        Sse::new(orderbook_event_sse_stream(initial_events, receiver)).into_response()
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_EVENTS_STREAM, response)
+}
+
+pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let response = (|| {
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs orderbook API is not enabled on this node");
+        }
+        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
+        let initial_events = state.sorafs_node.orderbook_events_since(query.since, limit);
+        let receiver = state.sorafs_node.subscribe_orderbook_events();
+        ws.on_upgrade(move |socket| async move {
+            if let Err(err) =
+                orderbook_event_websocket_stream(socket, initial_events, receiver).await
+            {
+                debug!(%err, "SoraFS orderbook WebSocket stream closed with error");
+            }
+        })
+        .into_response()
+    })();
+    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_EVENTS_WS, response)
+}
+
+pub(crate) async fn handle_get_sorafs_repair_events(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let events = state.sorafs_node.repair_events_since(query.since, limit);
+    let tip_sequence = state
+        .sorafs_node
+        .latest_repair_event_sequence()
+        .unwrap_or(0);
+    let etag = repair_events_etag(query.since, limit, tip_sequence, &events);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match repair_events_json(query.since, limit, &events) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_repair_events_stream(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let initial_events = state.sorafs_node.repair_events_since(query.since, limit);
+    let receiver = state.sorafs_node.subscribe_repair_events();
+    Sse::new(repair_event_sse_stream(initial_events, receiver)).into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_repair_events_ws(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let initial_events = state.sorafs_node.repair_events_since(query.since, limit);
+    let receiver = state.sorafs_node.subscribe_repair_events();
+    ws.on_upgrade(move |socket| async move {
+        if let Err(err) = repair_event_websocket_stream(socket, initial_events, receiver).await {
+            debug!(%err, "SoraFS repair WebSocket stream closed with error");
+        }
+    })
+    .into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_appeal_pricing_config() -> Response {
+    let config = baseline_appeal_pricing_config();
+    (
+        StatusCode::OK,
+        JsonBody(appeal_pricing_config_json(&config)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_appeal_pricing_status() -> Response {
+    let config = baseline_appeal_pricing_config();
+    (
+        StatusCode::OK,
+        JsonBody(appeal_pricing_status_json(&config)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_pricing_quote(
+    JsonOnly(req): JsonOnly<AppealPricingQuoteRequestDto>,
+) -> Response {
+    let config = baseline_appeal_pricing_config();
+    let input = match appeal_quote_input(req, &config) {
+        Ok(input) => input,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let quote = match config.quote(input) {
+        Ok(quote) => quote,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_pricing_quote_json(&config, input, &quote)),
+    )
+        .into_response()
+}
+
+fn baseline_appeal_pricing_config() -> AppealPricingConfig {
+    AppealPricingConfig::baseline_v1()
+}
+
+fn appeal_quote_input(
+    req: AppealPricingQuoteRequestDto,
+    config: &AppealPricingConfig,
+) -> Result<AppealQuoteInput, String> {
+    let class = req
+        .class
+        .parse::<AppealClass>()
+        .map_err(|err| err.to_string())?;
+    let urgency = match req.urgency.as_deref() {
+        Some(raw) => raw
+            .parse::<AppealUrgency>()
+            .map_err(|err| err.to_string())?,
+        None => AppealUrgency::Normal,
+    };
+    Ok(AppealQuoteInput {
+        class,
+        backlog: req.backlog,
+        evidence_size_mb: req.evidence_size_mb,
+        urgency,
+        panel_size: req
+            .panel_size
+            .unwrap_or_else(|| config.default_panel_size()),
+    })
+}
+
+fn appeal_decimal_json(value: impl ToString) -> Value {
+    Value::from(value.to_string())
+}
+
+fn appeal_pricing_class_config_json(config: &AppealClassConfig) -> Value {
+    json_object(vec![
+        json_entry("base_rate_xor", appeal_decimal_json(&config.base_rate_xor)),
+        json_entry(
+            "backlog_target",
+            Value::from(u64::from(config.backlog_target)),
+        ),
+        json_entry("backlog_cap", appeal_decimal_json(&config.backlog_cap)),
+        json_entry(
+            "size_divisor_mb",
+            appeal_decimal_json(&config.size_divisor_mb),
+        ),
+        json_entry("size_cap", appeal_decimal_json(&config.size_cap)),
+        json_entry(
+            "min_deposit_xor",
+            appeal_decimal_json(&config.min_deposit_xor),
+        ),
+        json_entry(
+            "max_deposit_xor",
+            appeal_decimal_json(&config.max_deposit_xor),
+        ),
+        json_entry(
+            "surge_multiplier",
+            appeal_decimal_json(&config.surge_multiplier),
+        ),
+    ])
+}
+
+fn appeal_pricing_config_json(config: &AppealPricingConfig) -> Value {
+    let mut classes = Map::new();
+    for class in [
+        AppealClass::Content,
+        AppealClass::Access,
+        AppealClass::Fraud,
+        AppealClass::Other,
+    ] {
+        if let Some(class_config) = config.class_config(class) {
+            classes.insert(
+                class.as_str().to_owned(),
+                appeal_pricing_class_config_json(class_config),
+            );
+        }
+    }
+
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.appeal_pricing.config.v1")),
+        json_entry("source", Value::from("baseline_v1")),
+        json_entry("version", Value::from(config.version().to_owned())),
+        json_entry("quote_ttl_secs", Value::from(config.quote_ttl_secs())),
+        json_entry(
+            "default_panel_size",
+            Value::from(u64::from(config.default_panel_size())),
+        ),
+        json_entry("classes", Value::Object(classes)),
+    ])
+}
+
+fn appeal_pricing_status_json(config: &AppealPricingConfig) -> Value {
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.appeal_pricing.status.v1")),
+        json_entry("pricing_api", Value::from("enabled")),
+        json_entry("config_api", Value::from("enabled")),
+        json_entry("quote_api", Value::from("enabled")),
+        json_entry("config_source", Value::from("baseline_v1")),
+        json_entry(
+            "pricing_config_version",
+            Value::from(config.version().to_owned()),
+        ),
+        json_entry("quote_ttl_secs", Value::from(config.quote_ttl_secs())),
+        json_entry(
+            "default_panel_size",
+            Value::from(u64::from(config.default_panel_size())),
+        ),
+        json_entry("deposit_api", Value::from("pending_runtime_escrow")),
+        json_entry(
+            "report_api",
+            Value::from("pending_governance_dag_publisher"),
+        ),
+        json_entry(
+            "settlement_processor",
+            Value::from("pending_runtime_ledger"),
+        ),
+    ])
+}
+
+fn appeal_pricing_quote_json(
+    config: &AppealPricingConfig,
+    input: AppealQuoteInput,
+    quote: &AppealQuote,
+) -> Value {
+    let breakdown = quote.breakdown;
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.appeal_pricing.quote.v1")),
+        json_entry("source", Value::from("baseline_v1")),
+        json_entry(
+            "pricing_config_version",
+            Value::from(config.version().to_owned()),
+        ),
+        json_entry("quote_ttl_secs", Value::from(config.quote_ttl_secs())),
+        json_entry("class", Value::from(input.class.as_str())),
+        json_entry("backlog", Value::from(u64::from(input.backlog))),
+        json_entry(
+            "evidence_size_mb",
+            Value::from(u64::from(input.evidence_size_mb)),
+        ),
+        json_entry("urgency", Value::from(input.urgency.as_str())),
+        json_entry("panel_size", Value::from(u64::from(input.panel_size))),
+        json_entry("deposit_xor", appeal_decimal_json(&quote.deposit_xor)),
+        json_entry(
+            "breakdown",
+            json_object(vec![
+                json_entry(
+                    "base_rate_xor",
+                    appeal_decimal_json(&breakdown.base_rate_xor),
+                ),
+                json_entry(
+                    "backlog_factor",
+                    appeal_decimal_json(&breakdown.backlog_factor),
+                ),
+                json_entry(
+                    "size_multiplier",
+                    appeal_decimal_json(&breakdown.size_multiplier),
+                ),
+                json_entry(
+                    "urgency_multiplier",
+                    appeal_decimal_json(&breakdown.urgency_multiplier),
+                ),
+                json_entry(
+                    "panel_multiplier",
+                    appeal_decimal_json(&breakdown.panel_multiplier),
+                ),
+                json_entry(
+                    "surge_multiplier",
+                    appeal_decimal_json(&breakdown.surge_multiplier),
+                ),
+                json_entry(
+                    "raw_deposit_xor",
+                    appeal_decimal_json(&breakdown.raw_deposit_xor),
+                ),
+                json_entry(
+                    "min_deposit_xor",
+                    appeal_decimal_json(&breakdown.min_deposit_xor),
+                ),
+                json_entry(
+                    "max_deposit_xor",
+                    appeal_decimal_json(&breakdown.max_deposit_xor),
+                ),
+            ]),
+        ),
+    ])
+}
+
+fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
+    let status = match err {
+        OrderbookRuntimeError::DuplicateOrderId { .. } => StatusCode::CONFLICT,
+        OrderbookRuntimeError::DuplicateReceiptId { .. }
+        | OrderbookRuntimeError::ReceiptRangeOverlap { .. } => StatusCode::CONFLICT,
+        OrderbookRuntimeError::OrderNotFound { .. } => StatusCode::NOT_FOUND,
+        OrderbookRuntimeError::SettlementChannelNotFound { .. } => StatusCode::NOT_FOUND,
+        OrderbookRuntimeError::Validation(_) | OrderbookRuntimeError::CancelOwnerMismatch => {
+            StatusCode::BAD_REQUEST
+        }
+        OrderbookRuntimeError::SequenceOverflow
+        | OrderbookRuntimeError::MissingMatchedOrder
+        | OrderbookRuntimeError::InvalidMatchedSides
+        | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(status, format!("sorafs orderbook error: {err}"))
+}
+
+fn orderbook_submit_outcome_json(outcome: &OrderbookSubmitOutcome) -> Result<Value, String> {
+    let fills = outcome
+        .fills
+        .iter()
+        .map(orderbook_fill_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let channels = outcome
+        .settlement_channels_opened
+        .iter()
+        .map(orderbook_channel_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut root = Map::new();
+    root.insert("status".into(), Value::from("accepted"));
+    root.insert("sequence".into(), Value::from(outcome.sequence));
+    root.insert(
+        "open_order_count".into(),
+        Value::from(outcome.open_order_count as u64),
+    );
+    root.insert(
+        "accepted_order".into(),
+        orderbook_order_json(&outcome.accepted_order),
+    );
+    root.insert("fills".into(), Value::Array(fills));
+    root.insert("settlement_channels_opened".into(), Value::Array(channels));
+    root.insert(
+        "expired_order_ids_hex".into(),
+        orderbook_digest_list_json(&outcome.expired_order_ids),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_cancel_outcome_json(outcome: &OrderbookCancelOutcome) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("status".into(), Value::from("cancelled"));
+    root.insert(
+        "reason".into(),
+        Value::from(orderbook_cancel_reason_label(outcome.reason)),
+    );
+    root.insert(
+        "open_order_count".into(),
+        Value::from(outcome.open_order_count as u64),
+    );
+    root.insert(
+        "cancelled_order".into(),
+        orderbook_order_json(&outcome.cancelled_order),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_receipt_outcome_json(outcome: &OrderbookReceiptOutcome) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("status".into(), Value::from("accepted"));
+    root.insert(
+        "settlement_receipt_count".into(),
+        Value::from(outcome.settlement_receipt_count as u64),
+    );
+    root.insert(
+        "open_settlement_channel_count".into(),
+        Value::from(outcome.open_settlement_channel_count as u64),
+    );
+    root.insert(
+        "accepted_receipt".into(),
+        orderbook_receipt_json(&outcome.accepted_receipt)?,
+    );
+    root.insert(
+        "updated_channel".into(),
+        orderbook_channel_json(&outcome.updated_channel)?,
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_snapshot_json(snapshot: &OrderbookSnapshot) -> Result<Value, String> {
+    let orders = snapshot
+        .open_orders
+        .iter()
+        .map(orderbook_entry_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let trades = snapshot
+        .trades
+        .iter()
+        .map(orderbook_trade_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let channels = snapshot
+        .settlement_channels
+        .iter()
+        .map(orderbook_channel_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let receipts = snapshot
+        .settlement_receipts
+        .iter()
+        .map(orderbook_receipt_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut root = Map::new();
+    root.insert("schema".into(), Value::from("sorafs.orderbook.local.v1"));
+    root.insert("source".into(), Value::from("local"));
+    root.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    root.insert("next_sequence".into(), Value::from(snapshot.next_sequence));
+    root.insert("open_order_count".into(), Value::from(orders.len() as u64));
+    root.insert("trade_count".into(), Value::from(trades.len() as u64));
+    root.insert(
+        "settlement_channel_count".into(),
+        Value::from(channels.len() as u64),
+    );
+    root.insert(
+        "settlement_receipt_count".into(),
+        Value::from(receipts.len() as u64),
+    );
+    root.insert("depth".into(), orderbook_depth_json(&snapshot.open_orders));
+    root.insert("open_orders".into(), Value::Array(orders));
+    root.insert("trades".into(), Value::Array(trades));
+    root.insert("settlement_channels".into(), Value::Array(channels));
+    root.insert("settlement_receipts".into(), Value::Array(receipts));
+    root.insert(
+        "expired_order_ids_hex".into(),
+        orderbook_digest_list_json(&snapshot.expired_order_ids),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_depth_json(entries: &[OrderBookEntryV1]) -> Value {
+    let mut hot_bid = 0u64;
+    let mut hot_ask = 0u64;
+    let mut warm_bid = 0u64;
+    let mut warm_ask = 0u64;
+    let mut archive_bid = 0u64;
+    let mut archive_ask = 0u64;
+    for entry in entries {
+        match (entry.order.tier, entry.order.side) {
+            (OrderTierV1::Hot, OrderSideV1::Bid) => {
+                hot_bid = hot_bid.saturating_add(entry.order.remaining_gib);
+            }
+            (OrderTierV1::Hot, OrderSideV1::Ask) => {
+                hot_ask = hot_ask.saturating_add(entry.order.remaining_gib);
+            }
+            (OrderTierV1::Warm, OrderSideV1::Bid) => {
+                warm_bid = warm_bid.saturating_add(entry.order.remaining_gib);
+            }
+            (OrderTierV1::Warm, OrderSideV1::Ask) => {
+                warm_ask = warm_ask.saturating_add(entry.order.remaining_gib);
+            }
+            (OrderTierV1::Archive, OrderSideV1::Bid) => {
+                archive_bid = archive_bid.saturating_add(entry.order.remaining_gib);
+            }
+            (OrderTierV1::Archive, OrderSideV1::Ask) => {
+                archive_ask = archive_ask.saturating_add(entry.order.remaining_gib);
+            }
+        }
+    }
+    json_object(vec![
+        json_entry("hot_bid_gib", hot_bid),
+        json_entry("hot_ask_gib", hot_ask),
+        json_entry("warm_bid_gib", warm_bid),
+        json_entry("warm_ask_gib", warm_ask),
+        json_entry("archive_bid_gib", archive_bid),
+        json_entry("archive_ask_gib", archive_ask),
+    ])
+}
+
+fn orderbook_entry_json(entry: &OrderBookEntryV1) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("sequence".into(), Value::from(entry.sequence));
+    root.insert("order".into(), orderbook_order_json(&entry.order));
+    Ok(Value::Object(root))
+}
+
+fn orderbook_order_json(order: &OrderRequestV1) -> Value {
+    let mut root = Map::new();
+    root.insert("version".into(), Value::from(order.version as u64));
+    root.insert(
+        "order_id_hex".into(),
+        Value::from(hex::encode(order.order_id)),
+    );
+    root.insert("side".into(), Value::from(orderbook_side_label(order.side)));
+    root.insert("tier".into(), Value::from(orderbook_tier_label(order.tier)));
+    root.insert(
+        "price_per_gib_micro_xor".into(),
+        Value::from(order.price_per_gib.as_micro().to_string()),
+    );
+    root.insert("quantity_gib".into(), Value::from(order.quantity_gib));
+    root.insert("remaining_gib".into(), Value::from(order.remaining_gib));
+    root.insert(
+        "owner_account_hex".into(),
+        Value::from(hex::encode(&order.owner_account)),
+    );
+    root.insert("expiry_unix".into(), Value::from(order.expiry_unix));
+    root.insert("nonce".into(), Value::from(order.nonce));
+    root.insert(
+        "maker_fee_bps".into(),
+        Value::from(order.maker_fee_bps as u64),
+    );
+    root.insert(
+        "taker_fee_bps".into(),
+        Value::from(order.taker_fee_bps as u64),
+    );
+    root.insert(
+        "signature".into(),
+        orderbook_signature_json(&order.signature),
+    );
+    Value::Object(root)
+}
+
+fn orderbook_signature_json(signature: &OrderbookSignatureV1) -> Value {
+    let mut root = Map::new();
+    root.insert(
+        "algorithm".into(),
+        Value::from(format!("{:?}", signature.algorithm)),
+    );
+    root.insert(
+        "public_key_hex".into(),
+        Value::from(hex::encode(&signature.public_key)),
+    );
+    root.insert(
+        "signature_hex".into(),
+        Value::from(hex::encode(&signature.signature)),
+    );
+    Value::Object(root)
+}
+
+fn orderbook_fill_json(fill: &OrderFillOutcomeV1) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("trade".into(), orderbook_trade_json(&fill.trade)?);
+    root.insert(
+        "maker_remaining_gib".into(),
+        Value::from(fill.maker_remaining_gib),
+    );
+    root.insert(
+        "taker_remaining_gib".into(),
+        Value::from(fill.taker_remaining_gib),
+    );
+    root.insert(
+        "gross_value_micro_xor".into(),
+        Value::from(fill.gross_value.as_micro().to_string()),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_trade_json(trade: &TradeEventV1) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("version".into(), Value::from(trade.version as u64));
+    root.insert(
+        "trade_id_hex".into(),
+        Value::from(hex::encode(trade.trade_id)),
+    );
+    root.insert(
+        "maker_order_id_hex".into(),
+        Value::from(hex::encode(trade.maker_order_id)),
+    );
+    root.insert(
+        "taker_order_id_hex".into(),
+        Value::from(hex::encode(trade.taker_order_id)),
+    );
+    root.insert("tier".into(), Value::from(orderbook_tier_label(trade.tier)));
+    root.insert(
+        "price_per_gib_micro_xor".into(),
+        Value::from(trade.price_per_gib.as_micro().to_string()),
+    );
+    root.insert("filled_gib".into(), Value::from(trade.filled_gib));
+    root.insert(
+        "maker_fee_micro_xor".into(),
+        Value::from(trade.maker_fee.as_micro().to_string()),
+    );
+    root.insert(
+        "taker_fee_micro_xor".into(),
+        Value::from(trade.taker_fee.as_micro().to_string()),
+    );
+    root.insert("timestamp_unix".into(), Value::from(trade.timestamp_unix));
+    Ok(Value::Object(root))
+}
+
+fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("version".into(), Value::from(channel.version as u64));
+    root.insert(
+        "channel_id_hex".into(),
+        Value::from(hex::encode(channel.channel_id)),
+    );
+    root.insert(
+        "trade_id_hex".into(),
+        Value::from(hex::encode(channel.trade_id)),
+    );
+    root.insert(
+        "buyer_account_hex".into(),
+        Value::from(hex::encode(&channel.buyer_account)),
+    );
+    root.insert(
+        "provider_id_hex".into(),
+        Value::from(hex::encode(channel.provider_id)),
+    );
+    root.insert("total_bytes".into(), Value::from(channel.total_bytes));
+    root.insert(
+        "remaining_bytes".into(),
+        Value::from(channel.remaining_bytes),
+    );
+    root.insert(
+        "xor_locked_micro".into(),
+        Value::from(channel.xor_locked.as_micro().to_string()),
+    );
+    root.insert(
+        "status".into(),
+        Value::from(orderbook_channel_status_label(channel.status)),
+    );
+    root.insert("opened_at_unix".into(), Value::from(channel.opened_at_unix));
+    root.insert(
+        "updated_at_unix".into(),
+        Value::from(channel.updated_at_unix),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_receipt_json(receipt: &SettlementReceiptV1) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert("version".into(), Value::from(receipt.version as u64));
+    root.insert(
+        "receipt_id_hex".into(),
+        Value::from(hex::encode(receipt.receipt_id)),
+    );
+    root.insert(
+        "channel_id_hex".into(),
+        Value::from(hex::encode(receipt.channel_id)),
+    );
+    root.insert(
+        "trade_id_hex".into(),
+        Value::from(hex::encode(receipt.trade_id)),
+    );
+    root.insert("range".into(), orderbook_byte_range_json(receipt));
+    root.insert(
+        "chunk_hash_hex".into(),
+        Value::from(hex::encode(receipt.chunk_hash)),
+    );
+    root.insert(
+        "bytes_delivered".into(),
+        Value::from(receipt.bytes_delivered),
+    );
+    root.insert(
+        "xor_debited_micro".into(),
+        Value::from(receipt.xor_debited.as_micro().to_string()),
+    );
+    root.insert(
+        "provider_credit_micro".into(),
+        Value::from(receipt.provider_credit.as_micro().to_string()),
+    );
+    root.insert(
+        "fee_amount_micro".into(),
+        Value::from(receipt.fee_amount.as_micro().to_string()),
+    );
+    root.insert("issued_at_unix".into(), Value::from(receipt.issued_at_unix));
+    root.insert(
+        "settlement_signature".into(),
+        orderbook_signature_json(&receipt.settlement_signature),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_byte_range_json(receipt: &SettlementReceiptV1) -> Value {
+    json_object(vec![
+        json_entry("start", receipt.range.start),
+        json_entry("end", receipt.range.end),
+    ])
+}
+
+fn orderbook_events_etag(
+    since: Option<u64>,
+    limit: usize,
+    tip_sequence: u64,
+    events: &[OrderbookEvent],
+) -> String {
+    let since = since.unwrap_or(0).to_le_bytes();
+    let limit = (limit as u64).to_le_bytes();
+    let tip = tip_sequence.to_le_bytes();
+    let count = (events.len() as u64).to_le_bytes();
+    let last_sequence = events
+        .last()
+        .map_or(0, |event| event.sequence)
+        .to_le_bytes();
+    orderbook_cache_etag(
+        "events",
+        &[
+            since.as_ref(),
+            limit.as_ref(),
+            tip.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn orderbook_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-orderbook:");
+    material.extend_from_slice(kind.as_bytes());
+    for part in parts {
+        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        material.extend_from_slice(part);
+    }
+    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
+}
+
+fn orderbook_events_json(
+    since: Option<u64>,
+    limit: usize,
+    events: &[OrderbookEvent],
+) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert(
+        "since".into(),
+        since.map_or(Value::Null, |value| Value::from(value)),
+    );
+    root.insert("limit".into(), Value::from(limit as u64));
+    root.insert("count".into(), Value::from(events.len() as u64));
+    root.insert(
+        "next_since".into(),
+        events
+            .last()
+            .map_or(Value::Null, |event| Value::from(event.sequence)),
+    );
+    root.insert(
+        "events".into(),
+        Value::Array(events.iter().map(orderbook_event_json).collect()),
+    );
+    Ok(Value::Object(root))
+}
+
+fn orderbook_event_sse_stream(
+    initial_events: Vec<OrderbookEvent>,
+    receiver: tokio::sync::broadcast::Receiver<OrderbookEvent>,
+) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
+    struct OrderbookSseState {
+        pending: VecDeque<OrderbookEvent>,
+        receiver: tokio::sync::broadcast::Receiver<OrderbookEvent>,
+    }
+
+    stream::unfold(
+        OrderbookSseState {
+            pending: initial_events.into_iter().collect(),
+            receiver,
+        },
+        |mut state| async move {
+            use tokio::sync::broadcast::error::RecvError;
+
+            if let Some(event) = state.pending.pop_front() {
+                return Some((Ok(orderbook_sse_event(&event)), state));
+            }
+            loop {
+                match state.receiver.recv().await {
+                    Ok(event) => return Some((Ok(orderbook_sse_event(&event)), state)),
+                    Err(RecvError::Lagged(skipped)) => {
+                        return Some((
+                            Ok(SseEvent::default()
+                                .event("lagged")
+                                .data(skipped.to_string())),
+                            state,
+                        ));
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    )
+}
+
+async fn orderbook_event_websocket_stream(
+    ws: WebSocket,
+    initial_events: Vec<OrderbookEvent>,
+    mut receiver: tokio::sync::broadcast::Receiver<OrderbookEvent>,
+) -> Result<(), String> {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let (mut sender, mut reader) = ws.split();
+    for event in initial_events {
+        let text = orderbook_websocket_frame(&event);
+        sender
+            .send(WsMessage::Text(Utf8Bytes::from(text)))
+            .await
+            .map_err(|err| format!("failed to send orderbook backlog frame: {err}"))?;
+    }
+
+    loop {
+        tokio::select! {
+            received = receiver.recv() => {
+                match received {
+                    Ok(event) => {
+                        let text = orderbook_websocket_frame(&event);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send orderbook live frame: {err}"))?;
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        let text = reputation_lagged_websocket_frame(skipped);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send orderbook lag frame: {err}"))?;
+                    }
+                    Err(RecvError::Closed) => return Ok(()),
+                }
+            }
+            message = reader.next() => {
+                match message {
+                    Some(Ok(WsMessage::Close(_))) | None => return Ok(()),
+                    Some(Ok(WsMessage::Ping(payload))) => {
+                        sender
+                            .send(WsMessage::Pong(payload))
+                            .await
+                            .map_err(|err| format!("failed to send orderbook pong frame: {err}"))?;
+                    }
+                    Some(Ok(WsMessage::Text(_)
+                        | WsMessage::Binary(_)
+                        | WsMessage::Pong(_))) => {}
+                    Some(Err(err)) => {
+                        return Err(format!("failed to receive orderbook WebSocket frame: {err}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn orderbook_sse_event(event: &OrderbookEvent) -> SseEvent {
+    let data = json::to_string(&orderbook_event_json(event)).unwrap_or_else(|_| "{}".to_owned());
+    SseEvent::default()
+        .event(orderbook_event_kind_label(event.kind))
+        .id(event.sequence.to_string())
+        .data(data)
+}
+
+fn orderbook_websocket_frame(event: &OrderbookEvent) -> String {
+    let mut frame = Map::new();
+    frame.insert(
+        "event".into(),
+        Value::from(orderbook_event_kind_label(event.kind)),
+    );
+    frame.insert("data".into(), orderbook_event_json(event));
+    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn orderbook_event_json(event: &OrderbookEvent) -> Value {
+    let mut root = Map::new();
+    root.insert("sequence".into(), Value::from(event.sequence));
+    root.insert(
+        "kind".into(),
+        Value::from(orderbook_event_kind_label(event.kind)),
+    );
+    root.insert(
+        "generated_at_unix".into(),
+        Value::from(event.generated_at_unix),
+    );
+    root.insert(
+        "order_id_hex".into(),
+        event
+            .order_id
+            .map_or(Value::Null, |order_id| Value::from(hex::encode(order_id))),
+    );
+    root.insert(
+        "trade_ids_hex".into(),
+        orderbook_digest_list_json(&event.trade_ids),
+    );
+    root.insert(
+        "settlement_channel_ids_hex".into(),
+        orderbook_digest_list_json(&event.settlement_channel_ids),
+    );
+    root.insert(
+        "receipt_id_hex".into(),
+        event.receipt_id.map_or(Value::Null, |receipt_id| {
+            Value::from(hex::encode(receipt_id))
+        }),
+    );
+    root.insert(
+        "expired_order_ids_hex".into(),
+        orderbook_digest_list_json(&event.expired_order_ids),
+    );
+    root.insert(
+        "open_order_count".into(),
+        Value::from(event.open_order_count),
+    );
+    root.insert(
+        "open_settlement_channel_count".into(),
+        Value::from(event.open_settlement_channel_count),
+    );
+    root.insert(
+        "settlement_receipt_count".into(),
+        Value::from(event.settlement_receipt_count),
+    );
+    Value::Object(root)
+}
+
+fn orderbook_event_kind_label(kind: OrderbookEventKind) -> &'static str {
+    match kind {
+        OrderbookEventKind::OrderAccepted => "order_accepted",
+        OrderbookEventKind::OrderCancelled => "order_cancelled",
+        OrderbookEventKind::SettlementReceiptAccepted => "settlement_receipt_accepted",
+    }
+}
+
+fn repair_events_etag(
+    since: Option<u64>,
+    limit: usize,
+    tip_sequence: u64,
+    events: &[RepairEvent],
+) -> String {
+    let since = since.unwrap_or(0).to_le_bytes();
+    let limit = (limit as u64).to_le_bytes();
+    let tip = tip_sequence.to_le_bytes();
+    let count = (events.len() as u64).to_le_bytes();
+    let last_sequence = events
+        .last()
+        .map_or(0, |event| event.sequence)
+        .to_le_bytes();
+    repair_cache_etag(
+        "events",
+        &[
+            since.as_ref(),
+            limit.as_ref(),
+            tip.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn repair_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-repair:");
+    material.extend_from_slice(kind.as_bytes());
+    for part in parts {
+        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        material.extend_from_slice(part);
+    }
+    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
+}
+
+fn repair_events_json(
+    since: Option<u64>,
+    limit: usize,
+    events: &[RepairEvent],
+) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert(
+        "since".into(),
+        since.map_or(Value::Null, |value| Value::from(value)),
+    );
+    root.insert("limit".into(), Value::from(limit as u64));
+    root.insert("count".into(), Value::from(events.len() as u64));
+    root.insert(
+        "next_since".into(),
+        events
+            .last()
+            .map_or(Value::Null, |event| Value::from(event.sequence)),
+    );
+    root.insert(
+        "events".into(),
+        Value::Array(
+            events
+                .iter()
+                .map(repair_event_json)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Object(root))
+}
+
+fn repair_event_sse_stream(
+    initial_events: Vec<RepairEvent>,
+    receiver: tokio::sync::broadcast::Receiver<RepairEvent>,
+) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
+    struct RepairSseState {
+        pending: VecDeque<RepairEvent>,
+        receiver: tokio::sync::broadcast::Receiver<RepairEvent>,
+    }
+
+    stream::unfold(
+        RepairSseState {
+            pending: initial_events.into_iter().collect(),
+            receiver,
+        },
+        |mut state| async move {
+            use tokio::sync::broadcast::error::RecvError;
+
+            if let Some(event) = state.pending.pop_front() {
+                return Some((Ok(repair_sse_event(&event)), state));
+            }
+            loop {
+                match state.receiver.recv().await {
+                    Ok(event) => return Some((Ok(repair_sse_event(&event)), state)),
+                    Err(RecvError::Lagged(skipped)) => {
+                        return Some((
+                            Ok(SseEvent::default()
+                                .event("lagged")
+                                .data(skipped.to_string())),
+                            state,
+                        ));
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    )
+}
+
+async fn repair_event_websocket_stream(
+    ws: WebSocket,
+    initial_events: Vec<RepairEvent>,
+    mut receiver: tokio::sync::broadcast::Receiver<RepairEvent>,
+) -> Result<(), String> {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let (mut sender, mut reader) = ws.split();
+    for event in initial_events {
+        let text = repair_websocket_frame(&event);
+        sender
+            .send(WsMessage::Text(Utf8Bytes::from(text)))
+            .await
+            .map_err(|err| format!("failed to send repair backlog frame: {err}"))?;
+    }
+
+    loop {
+        tokio::select! {
+            received = receiver.recv() => {
+                match received {
+                    Ok(event) => {
+                        let text = repair_websocket_frame(&event);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send repair live frame: {err}"))?;
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        let text = reputation_lagged_websocket_frame(skipped);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send repair lag frame: {err}"))?;
+                    }
+                    Err(RecvError::Closed) => return Ok(()),
+                }
+            }
+            message = reader.next() => {
+                match message {
+                    Some(Ok(WsMessage::Close(_))) | None => return Ok(()),
+                    Some(Ok(WsMessage::Ping(payload))) => {
+                        sender
+                            .send(WsMessage::Pong(payload))
+                            .await
+                            .map_err(|err| format!("failed to send repair pong frame: {err}"))?;
+                    }
+                    Some(Ok(WsMessage::Text(_)
+                        | WsMessage::Binary(_)
+                        | WsMessage::Pong(_))) => {}
+                    Some(Err(err)) => {
+                        return Err(format!("failed to receive repair WebSocket frame: {err}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn repair_sse_event(event: &RepairEvent) -> SseEvent {
+    let data = repair_event_json(event)
+        .and_then(|value| {
+            json::to_string(&value)
+                .map_err(|err| format!("failed to serialize repair event: {err}"))
+        })
+        .unwrap_or_else(|err| {
+            let mut map = Map::new();
+            map.insert("error".into(), Value::from(err));
+            json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_owned())
+        });
+    SseEvent::default()
+        .event(repair_status_label(event.event.status))
+        .id(event.sequence.to_string())
+        .data(data)
+}
+
+fn repair_websocket_frame(event: &RepairEvent) -> String {
+    let data = repair_event_json(event).unwrap_or_else(|err| {
+        let mut map = Map::new();
+        map.insert("error".into(), Value::from(err));
+        Value::Object(map)
+    });
+    let mut frame = Map::new();
+    frame.insert(
+        "event".into(),
+        Value::from(repair_status_label(event.event.status)),
+    );
+    frame.insert("data".into(), data);
+    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn repair_event_json(event: &RepairEvent) -> Result<Value, String> {
+    event
+        .event
+        .validate()
+        .map_err(|err| format!("invalid repair event: {err}"))?;
+    let mut root = Map::new();
+    root.insert("sequence".into(), Value::from(event.sequence));
+    root.insert("event".into(), repair_task_event_json(&event.event));
+    Ok(Value::Object(root))
+}
+
+fn repair_task_event_json(event: &RepairTaskEventV1) -> Value {
+    let mut root = Map::new();
+    root.insert("version".into(), Value::from(u64::from(event.version)));
+    root.insert("ticket_id".into(), Value::from(event.ticket_id.to_string()));
+    root.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex::encode(event.manifest_digest)),
+    );
+    root.insert(
+        "provider_id_hex".into(),
+        Value::from(hex::encode(event.provider_id)),
+    );
+    root.insert(
+        "status".into(),
+        Value::from(repair_status_label(event.status)),
+    );
+    root.insert(
+        "occurred_at_unix".into(),
+        Value::from(event.occurred_at_unix),
+    );
+    root.insert(
+        "actor".into(),
+        event.actor.clone().map_or(Value::Null, Value::from),
+    );
+    root.insert(
+        "message".into(),
+        event.message.clone().map_or(Value::Null, Value::from),
+    );
+    Value::Object(root)
+}
+
+fn repair_status_label(status: RepairTaskStatusV1) -> &'static str {
+    match status {
+        RepairTaskStatusV1::Queued => "queued",
+        RepairTaskStatusV1::Verifying => "verifying",
+        RepairTaskStatusV1::InProgress => "in_progress",
+        RepairTaskStatusV1::Completed => "completed",
+        RepairTaskStatusV1::Failed => "failed",
+        RepairTaskStatusV1::Escalated => "escalated",
+    }
+}
+
+fn orderbook_digest_list_json(digests: &[[u8; 32]]) -> Value {
+    Value::Array(
+        digests
+            .iter()
+            .map(|digest| Value::from(hex::encode(digest)))
+            .collect(),
+    )
+}
+
+fn orderbook_side_label(side: OrderSideV1) -> &'static str {
+    match side {
+        OrderSideV1::Bid => "bid",
+        OrderSideV1::Ask => "ask",
+    }
+}
+
+fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
+    match tier {
+        OrderTierV1::Hot => "hot",
+        OrderTierV1::Warm => "warm",
+        OrderTierV1::Archive => "archive",
+    }
+}
+
+fn orderbook_cancel_reason_label(reason: OrderCancelReasonV1) -> &'static str {
+    match reason {
+        OrderCancelReasonV1::OwnerRequested => "owner_requested",
+        OrderCancelReasonV1::Expired => "expired",
+        OrderCancelReasonV1::Governance => "governance",
+        OrderCancelReasonV1::Replaced => "replaced",
+    }
+}
+
+fn orderbook_channel_status_label(status: SettlementChannelStatusV1) -> &'static str {
+    match status {
+        SettlementChannelStatusV1::Open => "open",
+        SettlementChannelStatusV1::Closing => "closing",
+        SettlementChannelStatusV1::Closed => "closed",
+        SettlementChannelStatusV1::Breached => "breached",
+        SettlementChannelStatusV1::Refunded => "refunded",
     }
 }
 
@@ -10586,6 +13787,7 @@ mod advert_tests {
             Arc,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
+        time::{SystemTime, UNIX_EPOCH},
     };
 
     use axum::{
@@ -10605,11 +13807,12 @@ mod advert_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Hash, KeyPair, PublicKey};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature as IrohaSignature};
     use iroha_data_model::{
-        Encode,
-        account::AccountId,
+        Encode, Registrable,
+        account::{Account, AccountId},
         block::BlockHeader,
+        domain::Domain,
         domain::DomainId,
         metadata::Metadata,
         soracloud::{
@@ -10629,16 +13832,16 @@ mod advert_tests {
     use iroha_primitives::json::Json;
     use norito::to_bytes;
     use sorafs_manifest::{
-        AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
-        CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
-        EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
-        EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
-        PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionEnvelopeV1,
-        ProviderAdmissionProposalV1, ProviderAdvertBodyV1, ProviderAdvertV1, QosHints,
-        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        RendezvousTopic, ReputationProviderInputV1, ReputationProviderMetricsV1,
-        ReputationReserveStageV1, ReputationWeightsV1, SignatureAlgorithm, StakePointer,
-        build_reputation_snapshot,
+        AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier,
+        BYTES_PER_GIB as ORDERBOOK_BYTES_PER_GIB, ByteRangeV1, CapabilityTlv, CapabilityType,
+        CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
+        EndpointAttestationKind, EndpointAttestationV1, EndpointKind, EndpointMetadata,
+        EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
+        PathDiversityPolicy, PinPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
+        ProviderAdvertBodyV1, ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, RendezvousTopic, ReputationProviderInputV1,
+        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
+        SETTLEMENT_RECEIPT_VERSION_V1, SignatureAlgorithm, StakePointer, build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_proposal_digest,
         por::{
@@ -10664,7 +13867,7 @@ mod advert_tests {
             StreamTokenIssuer,
             registry::{RegistryCreditLedgerEntry, RegistryDeclaration, RegistryFeeLedgerEntry},
         },
-        tests_runtime_handlers::mk_app_state_for_tests_with_world,
+        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_app_headers},
         utils::extractors::JsonOnly,
     };
 
@@ -10702,12 +13905,1113 @@ mod advert_tests {
         );
     }
 
+    fn sorafs_app_state_with_governance_mirror() -> (SharedAppState, TempDir, String, String) {
+        let mut app = mk_app_state_for_tests();
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+
+        let block_cid_hex = "11".repeat(32);
+        let node_cid_hex = "22".repeat(32);
+        let mut head = Map::new();
+        head.insert("path".into(), Value::from("head.to"));
+        head.insert(
+            "head_block_cid".into(),
+            Value::from(format!("hex:{block_cid_hex}")),
+        );
+        head.insert(
+            "head_block_cid_hex".into(),
+            Value::from(block_cid_hex.clone()),
+        );
+        head.insert("block_count".into(), Value::from(1_u64));
+        head.insert("generated_at".into(), Value::from(1_800_000_000_u64));
+        head.insert("publisher_peer_id".into(), Value::from("peer-a"));
+        head.insert("blake3".into(), Value::from("33".repeat(32)));
+        head.insert("checkpoint_cid_hex".into(), Value::Null);
+
+        let mut block = Map::new();
+        block.insert("position".into(), Value::from(0_u64));
+        block.insert("path".into(), Value::from("blocks/00/block.to"));
+        block.insert("sequence".into(), Value::from(7_u64));
+        block.insert("timestamp".into(), Value::from(1_800_000_123_u64));
+        block.insert("publisher_peer_id".into(), Value::from("peer-a"));
+        block.insert(
+            "block_cid".into(),
+            Value::from(format!("hex:{block_cid_hex}")),
+        );
+        block.insert("block_cid_hex".into(), Value::from(block_cid_hex.clone()));
+        block.insert("prev_block_cid_hex".into(), Value::Null);
+        block.insert(
+            "node_cid".into(),
+            Value::from(format!("hex:{node_cid_hex}")),
+        );
+        block.insert("node_cid_hex".into(), Value::from(node_cid_hex.clone()));
+        block.insert("payload_kind".into(), Value::from("checkpoint"));
+        block.insert("blake3".into(), Value::from("44".repeat(32)));
+        block.insert("sidecar_status".into(), Value::from("present"));
+
+        let mut by_block_cid_hex = Map::new();
+        by_block_cid_hex.insert(block_cid_hex.clone(), Value::from(0_u64));
+        let mut by_node_cid_hex = Map::new();
+        by_node_cid_hex.insert(node_cid_hex.clone(), Value::from(0_u64));
+
+        let mut index = Map::new();
+        index.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.mirror.v1"),
+        );
+        index.insert(
+            "source_root".into(),
+            Value::from(governance_dir.display().to_string()),
+        );
+        index.insert("generated_at".into(), Value::from(1_800_000_200_u64));
+        index.insert("require_sidecars".into(), Value::from(true));
+        index.insert("head".into(), Value::Object(head));
+        index.insert("block_count".into(), Value::from(1_u64));
+        index.insert("blocks".into(), Value::Array(vec![Value::Object(block)]));
+        index.insert("by_block_cid_hex".into(), Value::Object(by_block_cid_hex));
+        index.insert("by_node_cid_hex".into(), Value::Object(by_node_cid_hex));
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE),
+            norito::json::to_vec(&Value::Object(index)).expect("encode governance mirror index"),
+        )
+        .expect("write governance mirror index");
+
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_node = sorafs_node::NodeHandle::new(cfg);
+        (app, temp_dir, block_cid_hex, node_cid_hex)
+    }
+
+    fn sorafs_app_state_with_governance_publish_index() -> (SharedAppState, TempDir, String) {
+        let mut app = mk_app_state_for_tests();
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+
+        let digest_hex = "aa".repeat(32);
+        let reputation_digest_hex = "bb".repeat(32);
+        let mut repair_labels = Map::new();
+        repair_labels.insert("ticket_id".into(), Value::from("REP-123"));
+        repair_labels.insert("status".into(), Value::from("queued"));
+        let mut repair_entry = Map::new();
+        repair_entry.insert("position".into(), Value::from(0_u64));
+        repair_entry.insert("payload_kind".into(), Value::from("repair_audit"));
+        repair_entry.insert(
+            "encoded_path".into(),
+            Value::from("repairs/audit/00000000000000000001.to"),
+        );
+        repair_entry.insert(
+            "json_path".into(),
+            Value::from("repairs/audit/00000000000000000001.json"),
+        );
+        repair_entry.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
+        repair_entry.insert("encoded_len".into(), Value::from(128_u64));
+        repair_entry.insert("published_at_unix".into(), Value::from(1_800_000_300_u64));
+        repair_entry.insert("labels".into(), Value::Object(repair_labels));
+
+        let mut reputation_labels = Map::new();
+        reputation_labels.insert("provider_count".into(), Value::from(2_u64));
+        let mut reputation_entry = Map::new();
+        reputation_entry.insert("position".into(), Value::from(1_u64));
+        reputation_entry.insert("payload_kind".into(), Value::from("reputation_snapshot"));
+        reputation_entry.insert(
+            "encoded_path".into(),
+            Value::from("reputation/snapshots/snapshot-a.to"),
+        );
+        reputation_entry.insert(
+            "json_path".into(),
+            Value::from("reputation/snapshots/snapshot-a.json"),
+        );
+        reputation_entry.insert(
+            "encoded_blake3".into(),
+            Value::from(reputation_digest_hex.clone()),
+        );
+        reputation_entry.insert("encoded_len".into(), Value::from(256_u64));
+        reputation_entry.insert("published_at_unix".into(), Value::from(1_800_000_301_u64));
+        reputation_entry.insert("labels".into(), Value::Object(reputation_labels));
+
+        let mut payload_kind_counts = Map::new();
+        payload_kind_counts.insert("repair_audit".into(), Value::from(1_u64));
+        payload_kind_counts.insert("reputation_snapshot".into(), Value::from(1_u64));
+        let mut by_encoded_blake3 = Map::new();
+        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
+        by_encoded_blake3.insert(
+            reputation_digest_hex,
+            Value::Array(vec![Value::from(1_u64)]),
+        );
+        let mut by_payload_kind = Map::new();
+        by_payload_kind.insert(
+            "repair_audit".into(),
+            Value::Array(vec![Value::from(0_u64)]),
+        );
+        by_payload_kind.insert(
+            "reputation_snapshot".into(),
+            Value::Array(vec![Value::from(1_u64)]),
+        );
+
+        let mut index = Map::new();
+        index.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.local_publish_index.v1"),
+        );
+        index.insert("source".into(), Value::from("filesystem"));
+        index.insert(
+            "root".into(),
+            Value::from(governance_dir.display().to_string()),
+        );
+        index.insert("generated_at".into(), Value::from(1_800_000_400_u64));
+        index.insert("entry_count".into(), Value::from(2_u64));
+        index.insert(
+            "payload_kind_counts".into(),
+            Value::Object(payload_kind_counts),
+        );
+        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
+        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
+        index.insert(
+            "entries".into(),
+            Value::Array(vec![
+                Value::Object(repair_entry),
+                Value::Object(reputation_entry),
+            ]),
+        );
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE),
+            norito::json::to_vec(&Value::Object(index)).expect("encode publish index"),
+        )
+        .expect("write publish index");
+
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_node = sorafs_node::NodeHandle::new(cfg);
+        (app, temp_dir, digest_hex)
+    }
+
+    fn sorafs_app_state_with_governance_car_queue() -> (SharedAppState, TempDir, String, String) {
+        let mut app = mk_app_state_for_tests();
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+
+        let digest_hex = "aa".repeat(32);
+        let reputation_digest_hex = "bb".repeat(32);
+        let car_archive_hex = "cc".repeat(32);
+        let reputation_car_archive_hex = "dd".repeat(32);
+
+        let mut repair_segment = Map::new();
+        repair_segment.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.local_car_segment.v1"),
+        );
+        repair_segment.insert("queue_position".into(), Value::from(0_u64));
+        repair_segment.insert("status".into(), Value::from("assembled"));
+        repair_segment.insert("source".into(), Value::from("filesystem"));
+        repair_segment.insert("source_publish_index_position".into(), Value::from(0_u64));
+        repair_segment.insert("payload_kind".into(), Value::from("repair_audit"));
+        repair_segment.insert(
+            "encoded_path".into(),
+            Value::from("repairs/audit/00000000000000000001.to"),
+        );
+        repair_segment.insert(
+            "json_path".into(),
+            Value::from("repairs/audit/00000000000000000001.json"),
+        );
+        repair_segment.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
+        repair_segment.insert("encoded_len".into(), Value::from(128_u64));
+        repair_segment.insert(
+            "car_path".into(),
+            Value::from("car-segments/00000000000000000000_repair_audit_aaaaaaaaaaaaaaaa.car"),
+        );
+        repair_segment.insert(
+            "plan_path".into(),
+            Value::from(
+                "car-segments/00000000000000000000_repair_audit_aaaaaaaaaaaaaaaa.plan.json",
+            ),
+        );
+        repair_segment.insert(
+            "manifest_path".into(),
+            Value::from("car-segments/00000000000000000000_repair_audit_aaaaaaaaaaaaaaaa.json"),
+        );
+        repair_segment.insert("car_size".into(), Value::from(2_048_u64));
+        repair_segment.insert(
+            "car_archive_blake3".into(),
+            Value::from(car_archive_hex.clone()),
+        );
+        repair_segment.insert("car_payload_blake3".into(), Value::from("ee".repeat(32)));
+        repair_segment.insert("car_cid_hex".into(), Value::from("01".repeat(36)));
+        repair_segment.insert(
+            "root_cids_hex".into(),
+            Value::Array(vec![Value::from("02".repeat(36))]),
+        );
+        repair_segment.insert("dag_codec".into(), Value::from(0x71_u64));
+        repair_segment.insert("chunk_count".into(), Value::from(3_u64));
+        repair_segment.insert("payload_bytes".into(), Value::from(512_u64));
+        repair_segment.insert("assembled_at_unix".into(), Value::from(1_800_000_500_u64));
+
+        let mut reputation_segment = repair_segment.clone();
+        reputation_segment.insert("queue_position".into(), Value::from(1_u64));
+        reputation_segment.insert("source_publish_index_position".into(), Value::from(1_u64));
+        reputation_segment.insert("payload_kind".into(), Value::from("reputation_snapshot"));
+        reputation_segment.insert(
+            "encoded_path".into(),
+            Value::from("reputation/snapshots/snapshot-a.to"),
+        );
+        reputation_segment.insert(
+            "json_path".into(),
+            Value::from("reputation/snapshots/snapshot-a.json"),
+        );
+        reputation_segment.insert(
+            "encoded_blake3".into(),
+            Value::from(reputation_digest_hex.clone()),
+        );
+        reputation_segment.insert("encoded_len".into(), Value::from(256_u64));
+        reputation_segment.insert(
+            "car_archive_blake3".into(),
+            Value::from(reputation_car_archive_hex),
+        );
+
+        let mut by_encoded_blake3 = Map::new();
+        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
+        by_encoded_blake3.insert(
+            reputation_digest_hex,
+            Value::Array(vec![Value::from(1_u64)]),
+        );
+        let mut by_payload_kind = Map::new();
+        by_payload_kind.insert(
+            "repair_audit".into(),
+            Value::Array(vec![Value::from(0_u64)]),
+        );
+        by_payload_kind.insert(
+            "reputation_snapshot".into(),
+            Value::Array(vec![Value::from(1_u64)]),
+        );
+
+        let mut queue = Map::new();
+        queue.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.local_car_queue.v1"),
+        );
+        queue.insert("source".into(), Value::from("filesystem"));
+        queue.insert(
+            "root".into(),
+            Value::from(governance_dir.display().to_string()),
+        );
+        queue.insert("generated_at".into(), Value::from(1_800_000_600_u64));
+        queue.insert("segment_count".into(), Value::from(2_u64));
+        queue.insert("assembled_count".into(), Value::from(2_u64));
+        queue.insert("pending_count".into(), Value::from(0_u64));
+        queue.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
+        queue.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
+        queue.insert(
+            "segments".into(),
+            Value::Array(vec![
+                Value::Object(repair_segment),
+                Value::Object(reputation_segment),
+            ]),
+        );
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_CAR_QUEUE_FILE),
+            norito::json::to_vec(&Value::Object(queue)).expect("encode CAR queue"),
+        )
+        .expect("write CAR queue");
+
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_node = sorafs_node::NodeHandle::new(cfg);
+        (app, temp_dir, digest_hex, car_archive_hex)
+    }
+
+    fn sorafs_app_state_with_governance_runtime_index()
+    -> (SharedAppState, TempDir, String, String, String) {
+        let mut app = mk_app_state_for_tests();
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+
+        let digest_hex = "aa".repeat(32);
+        let reputation_digest_hex = "bb".repeat(32);
+        let block_cid_hex = "cc".repeat(32);
+        let reputation_block_cid_hex = "dd".repeat(32);
+        let node_cid_hex = "ee".repeat(32);
+        let reputation_node_cid_hex = "ff".repeat(32);
+
+        let mut settlement_block = Map::new();
+        settlement_block.insert("position".into(), Value::from(0_u64));
+        settlement_block.insert("sequence".into(), Value::from(0_u64));
+        settlement_block.insert("payload_kind".into(), Value::from("deal_settlement"));
+        settlement_block.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
+        settlement_block.insert("encoded_len".into(), Value::from(128_u64));
+        settlement_block.insert(
+            "encoded_path".into(),
+            Value::from("settlements/deal-a/00000000000000000001.to"),
+        );
+        settlement_block.insert(
+            "json_path".into(),
+            Value::from("settlements/deal-a/00000000000000000001.json"),
+        );
+        settlement_block.insert("node_cid_hex".into(), Value::from(node_cid_hex.clone()));
+        settlement_block.insert("prev_node_cid_hex".into(), Value::Null);
+        settlement_block.insert("block_cid_hex".into(), Value::from(block_cid_hex.clone()));
+        settlement_block.insert("prev_block_cid_hex".into(), Value::Null);
+        settlement_block.insert(
+            "block_path".into(),
+            Value::from(format!(
+                "runtime-dag/blocks/00000000000000000000_{block_cid_hex}.to"
+            )),
+        );
+        settlement_block.insert("published_at_unix".into(), Value::from(1_800_000_700_u64));
+
+        let mut reputation_block = Map::new();
+        reputation_block.insert("position".into(), Value::from(1_u64));
+        reputation_block.insert("sequence".into(), Value::from(1_u64));
+        reputation_block.insert("payload_kind".into(), Value::from("reputation_snapshot"));
+        reputation_block.insert(
+            "encoded_blake3".into(),
+            Value::from(reputation_digest_hex.clone()),
+        );
+        reputation_block.insert("encoded_len".into(), Value::from(256_u64));
+        reputation_block.insert(
+            "encoded_path".into(),
+            Value::from("reputation/snapshots/snapshot-a.to"),
+        );
+        reputation_block.insert(
+            "json_path".into(),
+            Value::from("reputation/snapshots/snapshot-a.json"),
+        );
+        reputation_block.insert("node_cid_hex".into(), Value::from(reputation_node_cid_hex));
+        reputation_block.insert(
+            "prev_node_cid_hex".into(),
+            Value::from(node_cid_hex.clone()),
+        );
+        reputation_block.insert(
+            "block_cid_hex".into(),
+            Value::from(reputation_block_cid_hex.clone()),
+        );
+        reputation_block.insert(
+            "prev_block_cid_hex".into(),
+            Value::from(block_cid_hex.clone()),
+        );
+        reputation_block.insert(
+            "block_path".into(),
+            Value::from(format!(
+                "runtime-dag/blocks/00000000000000000001_{reputation_block_cid_hex}.to"
+            )),
+        );
+        reputation_block.insert("published_at_unix".into(), Value::from(1_800_000_701_u64));
+
+        let mut by_encoded_blake3 = Map::new();
+        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
+        by_encoded_blake3.insert(
+            reputation_digest_hex,
+            Value::Array(vec![Value::from(1_u64)]),
+        );
+        let mut by_payload_kind = Map::new();
+        by_payload_kind.insert(
+            "deal_settlement".into(),
+            Value::Array(vec![Value::from(0_u64)]),
+        );
+        by_payload_kind.insert(
+            "reputation_snapshot".into(),
+            Value::Array(vec![Value::from(1_u64)]),
+        );
+
+        let mut index = Map::new();
+        index.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.runtime_signed_index.v1"),
+        );
+        index.insert("source".into(), Value::from("filesystem"));
+        index.insert(
+            "root".into(),
+            Value::from(governance_dir.display().to_string()),
+        );
+        index.insert("generated_at".into(), Value::from(1_800_000_800_u64));
+        index.insert("publisher_peer_id".into(), Value::from("runtime-peer-a"));
+        index.insert(
+            "publisher_peer_id_hex".into(),
+            Value::from(hex::encode("runtime-peer-a")),
+        );
+        index.insert(
+            "publisher_public_key_hex".into(),
+            Value::from("11".repeat(32)),
+        );
+        index.insert(
+            "head_block_cid_hex".into(),
+            Value::from(reputation_block_cid_hex),
+        );
+        index.insert("head_path".into(), Value::from("runtime-dag/head.to"));
+        index.insert("block_count".into(), Value::from(2_u64));
+        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
+        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
+        index.insert(
+            "blocks".into(),
+            Value::Array(vec![
+                Value::Object(settlement_block),
+                Value::Object(reputation_block),
+            ]),
+        );
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE),
+            norito::json::to_vec(&Value::Object(index)).expect("encode runtime index"),
+        )
+        .expect("write runtime index");
+
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_node = sorafs_node::NodeHandle::new(cfg);
+        (app, temp_dir, digest_hex, block_cid_hex, node_cid_hex)
+    }
+
+    #[tokio::test]
+    async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
+        let (app, _temp_dir, block_cid_hex, node_cid_hex) =
+            sorafs_app_state_with_governance_mirror();
+
+        let response =
+            handle_get_sorafs_governance_dag_dashboard(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let dashboard_etag = response
+            .headers()
+            .get(ETAG)
+            .cloned()
+            .expect("dashboard etag");
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(GOVERNANCE_DAG_CACHE_CONTROL)
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect dashboard body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode dashboard JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.dashboard.v1")
+        );
+        assert_eq!(value.get("block_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("first_sequence").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            value.get("last_timestamp").and_then(Value::as_u64),
+            Some(1_800_000_123)
+        );
+        assert_eq!(
+            value
+                .get("payload_kind_counts")
+                .and_then(Value::as_object)
+                .and_then(|counts| counts.get("checkpoint"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
+        let response =
+            handle_get_sorafs_governance_dag_dashboard(State(app.clone()), headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&dashboard_etag));
+
+        let response =
+            handle_get_sorafs_governance_dag_head(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect head body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode head JSON");
+        assert_eq!(
+            value
+                .get("head")
+                .and_then(|head| head.get("head_block_cid_hex"))
+                .and_then(Value::as_str),
+            Some(block_cid_hex.as_str())
+        );
+
+        let response = handle_get_sorafs_governance_dag_block(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(block_cid_hex.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect block lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode block JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.block.lookup.v1")
+        );
+        assert_eq!(value.get("found").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("block")
+                .and_then(|block| block.get("block_cid_hex"))
+                .and_then(Value::as_str),
+            Some(block_cid_hex.as_str())
+        );
+
+        let response = handle_get_sorafs_governance_dag_node(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(format!("hex:{node_cid_hex}")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect node lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode node JSON");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.node.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("block")
+                .and_then(|block| block.get("node_cid_hex"))
+                .and_then(Value::as_str),
+            Some(node_cid_hex.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_dag_lookup_rejects_malformed_and_missing_cids() {
+        let (app, _temp_dir, _block_cid_hex, _node_cid_hex) =
+            sorafs_app_state_with_governance_mirror();
+
+        let response = handle_get_sorafs_governance_dag_block(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("not-hex".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_block(
+            State(app),
+            HeaderMap::new(),
+            Path("ff".repeat(32)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn governance_dag_publish_index_and_lookups_read_local_index() {
+        let (app, _temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response =
+            handle_get_sorafs_governance_dag_publish_index(State(app.clone()), HeaderMap::new())
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let index_etag = response.headers().get(ETAG).cloned().expect("index etag");
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(GOVERNANCE_DAG_CACHE_CONTROL)
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect publish index body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode publish index");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.publish_index.v1")
+        );
+        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value
+                .get("payload_kind_counts")
+                .and_then(Value::as_object)
+                .and_then(|counts| counts.get("repair_audit"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, index_etag.clone());
+        let response =
+            handle_get_sorafs_governance_dag_publish_index(State(app.clone()), headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&index_etag));
+
+        let response = handle_get_sorafs_governance_dag_publish_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(format!("hex:{digest_hex}")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect digest lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode digest lookup");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.publish_index.digest.lookup.v1")
+        );
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some("repair_audit")
+        );
+
+        let response = handle_get_sorafs_governance_dag_publish_kind(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("repair_audit".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect kind lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode kind lookup");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.publish_index.kind.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("encoded_blake3"))
+                .and_then(Value::as_str),
+            Some(digest_hex.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_dag_publish_index_rejects_bad_and_missing_lookups() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response = handle_get_sorafs_governance_dag_publish_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("abcd".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_publish_kind(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("bad kind".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_publish_digest(
+            State(app),
+            HeaderMap::new(),
+            Path("ff".repeat(32)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn governance_dag_car_queue_and_lookups_read_local_queue() {
+        let (app, _temp_dir, digest_hex, car_archive_hex) =
+            sorafs_app_state_with_governance_car_queue();
+
+        let response =
+            handle_get_sorafs_governance_dag_car_queue(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let queue_etag = response.headers().get(ETAG).cloned().expect("queue etag");
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(GOVERNANCE_DAG_CACHE_CONTROL)
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect CAR queue body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode CAR queue");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.car_queue.v1")
+        );
+        assert_eq!(value.get("segment_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("assembled_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(value.get("pending_count").and_then(Value::as_u64), Some(0));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, queue_etag.clone());
+        let response =
+            handle_get_sorafs_governance_dag_car_queue(State(app.clone()), headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&queue_etag));
+
+        let response = handle_get_sorafs_governance_dag_car_queue_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(format!("hex:{digest_hex}")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect digest lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode digest lookup");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.car_queue.digest.lookup.v1")
+        );
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("segments")
+                .and_then(Value::as_array)
+                .and_then(|segments| segments.first())
+                .and_then(|segment| segment.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some("repair_audit")
+        );
+
+        let response = handle_get_sorafs_governance_dag_car_queue_kind(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("repair_audit".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect kind lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode kind lookup");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.car_queue.kind.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("segments")
+                .and_then(Value::as_array)
+                .and_then(|segments| segments.first())
+                .and_then(|segment| segment.get("encoded_blake3"))
+                .and_then(Value::as_str),
+            Some(digest_hex.as_str())
+        );
+
+        let response = handle_get_sorafs_governance_dag_car_queue_archive(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(car_archive_hex.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect archive lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode archive lookup");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.car_queue.archive.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("segment")
+                .and_then(|segment| segment.get("car_archive_blake3"))
+                .and_then(Value::as_str),
+            Some(car_archive_hex.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_dag_car_queue_rejects_bad_and_missing_lookups() {
+        let (app, _temp_dir, _digest_hex, _car_archive_hex) =
+            sorafs_app_state_with_governance_car_queue();
+
+        let response = handle_get_sorafs_governance_dag_car_queue_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("abcd".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_car_queue_kind(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("bad kind".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_car_queue_archive(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("abcd".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_car_queue_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("ff".repeat(32)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = handle_get_sorafs_governance_dag_car_queue_archive(
+            State(app),
+            HeaderMap::new(),
+            Path("ee".repeat(32)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn governance_dag_runtime_index_head_and_lookups_read_local_index() {
+        let (app, _temp_dir, digest_hex, block_cid_hex, node_cid_hex) =
+            sorafs_app_state_with_governance_runtime_index();
+
+        let response =
+            handle_get_sorafs_governance_dag_runtime(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let runtime_etag = response.headers().get(ETAG).cloned().expect("runtime etag");
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(GOVERNANCE_DAG_CACHE_CONTROL)
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime index");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.runtime_index.v1")
+        );
+        assert_eq!(value.get("block_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("indexed_block_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("payload_kind_counts")
+                .and_then(Value::as_object)
+                .and_then(|counts| counts.get("deal_settlement"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("last_published_at").and_then(Value::as_u64),
+            Some(1_800_000_701)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, runtime_etag.clone());
+        let response = handle_get_sorafs_governance_dag_runtime(State(app.clone()), headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&runtime_etag));
+
+        let response =
+            handle_get_sorafs_governance_dag_runtime_head(State(app.clone()), HeaderMap::new())
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime head body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime head");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.runtime_head.v1")
+        );
+        assert_eq!(
+            value
+                .get("latest_block")
+                .and_then(|block| block.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some("reputation_snapshot")
+        );
+
+        let response = handle_get_sorafs_governance_dag_runtime_block(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(format!("hex:{block_cid_hex}")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime block body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime block");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.runtime.block.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("block")
+                .and_then(|block| block.get("block_cid_hex"))
+                .and_then(Value::as_str),
+            Some(block_cid_hex.as_str())
+        );
+
+        let response = handle_get_sorafs_governance_dag_runtime_node(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(node_cid_hex.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime node body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime node");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.runtime.node.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("block")
+                .and_then(|block| block.get("node_cid_hex"))
+                .and_then(Value::as_str),
+            Some(node_cid_hex.as_str())
+        );
+
+        let response = handle_get_sorafs_governance_dag_runtime_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(digest_hex.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime digest body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime digest");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.runtime.digest.lookup.v1")
+        );
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("blocks")
+                .and_then(Value::as_array)
+                .and_then(|blocks| blocks.first())
+                .and_then(|block| block.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some("deal_settlement")
+        );
+
+        let response = handle_get_sorafs_governance_dag_runtime_kind(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("deal_settlement".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime kind body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime kind");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.governance_dag.runtime.kind.lookup.v1")
+        );
+        assert_eq!(
+            value
+                .get("blocks")
+                .and_then(Value::as_array)
+                .and_then(|blocks| blocks.first())
+                .and_then(|block| block.get("encoded_blake3"))
+                .and_then(Value::as_str),
+            Some(digest_hex.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_dag_runtime_rejects_bad_missing_and_malformed_lookups() {
+        let (app, temp_dir, _digest_hex, _block_cid_hex, _node_cid_hex) =
+            sorafs_app_state_with_governance_runtime_index();
+
+        let response = handle_get_sorafs_governance_dag_runtime_digest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("abcd".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_runtime_kind(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("bad kind".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_governance_dag_runtime_block(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("ff".repeat(32)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let governance_dir = temp_dir.path().join("governance");
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE),
+            br#"{"schema":"sorafs.governance_dag.wrong","blocks":[]}"#,
+        )
+        .expect("write malformed runtime index");
+        let response = handle_get_sorafs_governance_dag_runtime(State(app), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     fn sorafs_app_state_with_reputation_storage() -> (SharedAppState, TempDir) {
         let mut app = mk_app_state_for_tests();
         let (node, temp_dir) = sorafs_node_with_temp_storage();
-        Arc::get_mut(&mut app)
-            .expect("unique app state")
-            .sorafs_node = node;
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
         (app, temp_dir)
     }
 
@@ -10762,6 +15066,1110 @@ mod advert_tests {
         .expect("build reputation snapshot")
     }
 
+    struct OrderbookAccountFixture {
+        account: AccountId,
+        keypair: KeyPair,
+    }
+
+    struct OrderbookAuthFixture {
+        provider: OrderbookAccountFixture,
+        buyer: OrderbookAccountFixture,
+    }
+
+    fn orderbook_account(seed: u8) -> OrderbookAccountFixture {
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive orderbook auth fixture keypair");
+        let account = AccountId::of(keypair.public_key().clone());
+        OrderbookAccountFixture { account, keypair }
+    }
+
+    fn orderbook_auth_fixture() -> OrderbookAuthFixture {
+        OrderbookAuthFixture {
+            provider: orderbook_account(0xA1),
+            buyer: orderbook_account(0xB1),
+        }
+    }
+
+    fn orderbook_world(auth: &OrderbookAuthFixture) -> World {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&auth.provider.account);
+        let provider = Account::new(auth.provider.account.clone()).build(&auth.provider.account);
+        let buyer = Account::new(auth.buyer.account.clone()).build(&auth.buyer.account);
+        World::with([domain], [provider, buyer], [])
+    }
+
+    fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let (node, temp_dir) = sorafs_node_with_temp_storage();
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
+    fn enable_orderbook_capability_policy(
+        app: SharedAppState,
+        cache: Option<ProviderAdvertCache>,
+    ) -> SharedAppState {
+        let mut app = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state required"));
+        app.sorafs_gateway_config.enforce_capabilities = true;
+        app.sorafs_cache = cache.map(|cache| Arc::new(RwLock::new(cache)));
+        Arc::new(app)
+    }
+
+    #[test]
+    fn appeal_pricing_quote_uses_baseline_config() {
+        let config = baseline_appeal_pricing_config();
+        let request = AppealPricingQuoteRequestDto {
+            class: "content".to_owned(),
+            backlog: 28,
+            evidence_size_mb: 45,
+            urgency: Some("normal".to_owned()),
+            panel_size: Some(7),
+        };
+        let input = appeal_quote_input(request, &config).expect("valid quote input");
+        let quote = config.quote(input).expect("baseline quote");
+        let value = appeal_pricing_quote_json(&config, input, &quote);
+        let deposit = quote.deposit_xor.to_string();
+
+        assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
+        assert_eq!(value.get("urgency").and_then(Value::as_str), Some("normal"));
+        assert_eq!(value.get("panel_size").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            value.get("pricing_config_version").and_then(Value::as_str),
+            Some(config.version())
+        );
+        assert_eq!(
+            value.get("deposit_xor").and_then(Value::as_str),
+            Some(deposit.as_str())
+        );
+        assert!(
+            value
+                .get("breakdown")
+                .and_then(|breakdown| breakdown.get("raw_deposit_xor"))
+                .and_then(Value::as_str)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn appeal_pricing_quote_rejects_unknown_class() {
+        let config = baseline_appeal_pricing_config();
+        let request = AppealPricingQuoteRequestDto {
+            class: "unknown".to_owned(),
+            backlog: 0,
+            evidence_size_mb: 0,
+            urgency: None,
+            panel_size: None,
+        };
+        let err = appeal_quote_input(request, &config).expect_err("unknown class rejected");
+
+        assert!(err.contains("unknown appeal class"));
+    }
+
+    #[test]
+    fn appeal_pricing_status_marks_mutating_flows_pending() {
+        let config = baseline_appeal_pricing_config();
+        let value = appeal_pricing_status_json(&config);
+
+        assert_eq!(
+            value.get("pricing_api").and_then(Value::as_str),
+            Some("enabled")
+        );
+        assert_eq!(
+            value.get("quote_api").and_then(Value::as_str),
+            Some("enabled")
+        );
+        assert_eq!(
+            value.get("deposit_api").and_then(Value::as_str),
+            Some("pending_runtime_escrow")
+        );
+        assert_eq!(
+            value.get("report_api").and_then(Value::as_str),
+            Some("pending_governance_dag_publisher")
+        );
+        assert_eq!(
+            value.get("settlement_processor").and_then(Value::as_str),
+            Some("pending_runtime_ledger")
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_pricing_handlers_return_baseline_quote_and_status() {
+        let config_response = handle_get_sorafs_appeal_pricing_config().await;
+        assert_eq!(config_response.status(), StatusCode::OK);
+        let config_body = body::to_bytes(config_response.into_body(), usize::MAX)
+            .await
+            .expect("collect pricing config body");
+        let config_value: Value =
+            norito::json::from_slice(&config_body).expect("decode pricing config body");
+        assert_eq!(
+            config_value.get("source").and_then(Value::as_str),
+            Some("baseline_v1")
+        );
+        assert!(
+            config_value
+                .get("classes")
+                .and_then(|classes| classes.get("content"))
+                .is_some()
+        );
+
+        let quote_request = AppealPricingQuoteRequestDto {
+            class: "fraud".to_owned(),
+            backlog: 9,
+            evidence_size_mb: 12,
+            urgency: Some("high".to_owned()),
+            panel_size: None,
+        };
+        let quote_response = handle_post_sorafs_appeal_pricing_quote(JsonOnly(quote_request)).await;
+        assert_eq!(quote_response.status(), StatusCode::OK);
+        let quote_body = body::to_bytes(quote_response.into_body(), usize::MAX)
+            .await
+            .expect("collect pricing quote body");
+        let quote_value: Value =
+            norito::json::from_slice(&quote_body).expect("decode pricing quote body");
+        assert_eq!(
+            quote_value.get("class").and_then(Value::as_str),
+            Some("fraud")
+        );
+        assert_eq!(
+            quote_value.get("urgency").and_then(Value::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            quote_value.get("panel_size").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert!(
+            quote_value
+                .get("deposit_xor")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+
+        let status_response = handle_get_sorafs_appeal_pricing_status().await;
+        assert_eq!(status_response.status(), StatusCode::OK);
+        let status_body = body::to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .expect("collect pricing status body");
+        let status_value: Value =
+            norito::json::from_slice(&status_body).expect("decode pricing status body");
+        assert_eq!(
+            status_value.get("deposit_api").and_then(Value::as_str),
+            Some("pending_runtime_escrow")
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_pricing_quote_handler_rejects_invalid_panel_size() {
+        let request = AppealPricingQuoteRequestDto {
+            class: "content".to_owned(),
+            backlog: 0,
+            evidence_size_mb: 0,
+            urgency: None,
+            panel_size: Some(0),
+        };
+        let response = handle_post_sorafs_appeal_pricing_quote(JsonOnly(request)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect pricing error body");
+        let value: Value = norito::json::from_slice(&body).expect("decode pricing error body");
+        assert!(
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|error| error.contains("panel"))
+        );
+    }
+
+    fn orderbook_provider_advert_cache(fixture: &ProviderFixture) -> ProviderAdvertCache {
+        let admission =
+            AdmissionRegistry::from_envelopes([fixture.envelope.clone()]).expect("valid envelope");
+        let mut cache = ProviderAdvertCache::new(
+            vec![
+                CapabilityType::ToriiGateway,
+                CapabilityType::ChunkRangeFetch,
+            ],
+            Arc::new(admission),
+        );
+        cache
+            .ingest(fixture.advert.clone(), fixture.issued_at())
+            .expect("cache ingest");
+        cache
+    }
+
+    fn orderbook_signature_fixture() -> sorafs_manifest::OrderbookSignatureV1 {
+        sorafs_manifest::OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: Vec::new(),
+            signature: Vec::new(),
+        }
+    }
+
+    fn orderbook_signature_for_digest(
+        keypair: &KeyPair,
+        digest: &[u8; 32],
+    ) -> sorafs_manifest::OrderbookSignatureV1 {
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("orderbook signer public key bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        let signature = IrohaSignature::try_new(keypair.private_key(), digest)
+            .expect("sign orderbook payload digest");
+        sorafs_manifest::OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: signature.payload().to_vec(),
+        }
+    }
+
+    fn sign_orderbook_order(mut order: OrderRequestV1, keypair: &KeyPair) -> OrderRequestV1 {
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("orderbook order signer public key bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        order.signature = sorafs_manifest::OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: Vec::new(),
+        };
+        let digest = sorafs_manifest::order_request_signature_digest_v1(&order)
+            .expect("order signature digest");
+        order.signature = orderbook_signature_for_digest(keypair, &digest);
+        order
+    }
+
+    fn sign_orderbook_cancel(mut cancel: OrderCancelV1, keypair: &KeyPair) -> OrderCancelV1 {
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("orderbook cancel signer public key bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        cancel.signature = sorafs_manifest::OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: Vec::new(),
+        };
+        let digest = sorafs_manifest::order_cancel_signature_digest_v1(&cancel)
+            .expect("cancel signature digest");
+        cancel.signature = orderbook_signature_for_digest(keypair, &digest);
+        cancel
+    }
+
+    fn sign_orderbook_receipt(
+        mut receipt: SettlementReceiptV1,
+        keypair: &KeyPair,
+    ) -> SettlementReceiptV1 {
+        let (algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("orderbook receipt signer public key bytes");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        receipt.settlement_signature = sorafs_manifest::OrderbookSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: public_key.to_vec(),
+            signature: Vec::new(),
+        };
+        let digest = sorafs_manifest::settlement_receipt_signature_digest_v1(&receipt)
+            .expect("settlement receipt signature digest");
+        receipt.settlement_signature = orderbook_signature_for_digest(keypair, &digest);
+        receipt
+    }
+
+    fn orderbook_owner_bytes(owner: &OrderbookAccountFixture) -> Vec<u8> {
+        owner.account.to_string().into_bytes()
+    }
+
+    fn orderbook_order_fixture(
+        id: u8,
+        side: OrderSideV1,
+        price_micro: u128,
+        owner: &OrderbookAccountFixture,
+    ) -> OrderRequestV1 {
+        sign_orderbook_order(
+            OrderRequestV1 {
+                version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
+                order_id: [id; 32],
+                side,
+                tier: OrderTierV1::Hot,
+                price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(price_micro),
+                quantity_gib: 4,
+                remaining_gib: 4,
+                owner_account: orderbook_owner_bytes(owner),
+                expiry_unix: unix_timestamp_now().saturating_add(300),
+                nonce: u64::from(id),
+                maker_fee_bps: 10,
+                taker_fee_bps: 20,
+                signature: orderbook_signature_fixture(),
+            },
+            &owner.keypair,
+        )
+    }
+
+    fn orderbook_cancel_fixture(id: u8, owner: &OrderbookAccountFixture) -> OrderCancelV1 {
+        sign_orderbook_cancel(
+            OrderCancelV1 {
+                version: sorafs_manifest::ORDERBOOK_CANCEL_VERSION_V1,
+                order_id: [id; 32],
+                owner_account: orderbook_owner_bytes(owner),
+                reason: OrderCancelReasonV1::OwnerRequested,
+                nonce: u64::from(id).saturating_add(100),
+                signature: orderbook_signature_fixture(),
+            },
+            &owner.keypair,
+        )
+    }
+
+    fn orderbook_receipt_fixture(
+        id: u8,
+        channel: &SettlementChannelV1,
+        start: u64,
+        end: u64,
+        issued_at_unix: u64,
+        debited_micro: u128,
+        signer: &OrderbookAccountFixture,
+    ) -> SettlementReceiptV1 {
+        sign_orderbook_receipt(
+            SettlementReceiptV1 {
+                version: SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: [id; 32],
+                channel_id: channel.channel_id,
+                trade_id: channel.trade_id,
+                range: ByteRangeV1 { start, end },
+                chunk_hash: [id.saturating_add(90); 32],
+                bytes_delivered: end - start,
+                xor_debited: sorafs_manifest::deal::XorAmount::from_micro(debited_micro),
+                provider_credit: sorafs_manifest::deal::XorAmount::from_micro(
+                    debited_micro.saturating_sub(10),
+                ),
+                fee_amount: sorafs_manifest::deal::XorAmount::from_micro(10),
+                issued_at_unix,
+                settlement_signature: orderbook_signature_fixture(),
+            },
+            &signer.keypair,
+        )
+    }
+
+    fn orderbook_order_body(order: OrderRequestV1) -> Bytes {
+        Bytes::from(norito::to_bytes(&order).expect("encode orderbook order"))
+    }
+
+    fn orderbook_cancel_body(cancel: OrderCancelV1) -> Bytes {
+        Bytes::from(norito::to_bytes(&cancel).expect("encode orderbook cancel"))
+    }
+
+    fn orderbook_receipt_body(receipt: SettlementReceiptV1) -> Bytes {
+        Bytes::from(norito::to_bytes(&receipt).expect("encode orderbook receipt"))
+    }
+
+    const ORDERBOOK_ORDER_URI: &str = "/v1/sorafs/orderbook/orders";
+    const ORDERBOOK_CANCEL_URI: &str = "/v1/sorafs/orderbook/cancel";
+    const ORDERBOOK_RECEIPT_URI: &str = "/v1/sorafs/orderbook/receipts";
+
+    fn orderbook_uri(path: &'static str) -> Uri {
+        Uri::from_static(path)
+    }
+
+    async fn post_orderbook_order(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = orderbook_uri(ORDERBOOK_ORDER_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_orderbook_order(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_orderbook_cancel(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = orderbook_uri(ORDERBOOK_CANCEL_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_orderbook_cancel(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_orderbook_receipt(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = orderbook_uri(ORDERBOOK_RECEIPT_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_orderbook_receipt(State(app), headers, method, uri, body).await
+    }
+
+    #[test]
+    fn orderbook_api_error_ratio_tracks_route_outcomes() {
+        const ROUTE: &str = "/test/sorafs/orderbook/error-ratio";
+        reset_orderbook_api_outcome_for_test(ROUTE);
+
+        assert_eq!(record_orderbook_api_outcome(ROUTE, false), 0.0);
+        assert_eq!(record_orderbook_api_outcome(ROUTE, true), 0.5);
+        let ratio = record_orderbook_api_outcome(ROUTE, true);
+        assert!((ratio - (2.0 / 3.0)).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn orderbook_order_endpoint_requires_canonical_request_auth() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = orderbook_order_body(orderbook_order_fixture(
+            41,
+            OrderSideV1::Ask,
+            1_500_000,
+            &auth.provider,
+        ));
+        let response = handle_post_sorafs_orderbook_order(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            orderbook_uri(ORDERBOOK_ORDER_URI),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn orderbook_order_endpoint_rejects_payload_signer_mismatch() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let order = sign_orderbook_order(
+            OrderRequestV1 {
+                version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
+                order_id: [42; 32],
+                side: OrderSideV1::Bid,
+                tier: OrderTierV1::Hot,
+                price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(1_600_000),
+                quantity_gib: 4,
+                remaining_gib: 4,
+                owner_account: orderbook_owner_bytes(&auth.buyer),
+                expiry_unix: unix_timestamp_now().saturating_add(300),
+                nonce: 42,
+                maker_fee_bps: 10,
+                taker_fee_bps: 20,
+                signature: orderbook_signature_fixture(),
+            },
+            &auth.provider.keypair,
+        );
+
+        let response = post_orderbook_order(app, &auth.buyer, orderbook_order_body(order)).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn orderbook_ask_requires_provider_capability_when_enforced() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+        let app = enable_orderbook_capability_policy(app, None);
+
+        let response = post_orderbook_order(
+            app,
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                45,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect capability error body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error body");
+        assert_eq!(
+            value.get("error").and_then(Value::as_str),
+            Some("capability_state_unknown")
+        );
+        assert_eq!(
+            value
+                .get("details")
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("capability"))
+                .and_then(Value::as_str),
+            Some("torii_gateway")
+        );
+        assert_eq!(
+            value
+                .get("details")
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("provider_id_hex"))
+                .and_then(Value::as_str),
+            Some(hex::encode(provider_id).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn orderbook_ask_accepts_advertised_provider_capability_when_enforced() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+        let fixture = make_signed_advert_for_provider(provider_id);
+        let app = enable_orderbook_capability_policy(
+            app,
+            Some(orderbook_provider_advert_cache(&fixture)),
+        );
+
+        let response = post_orderbook_order(
+            app,
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                46,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn orderbook_receipt_endpoint_requires_channel_provider_signer() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                43,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.buyer,
+            orderbook_order_body(orderbook_order_fixture(
+                44,
+                OrderSideV1::Bid,
+                1_600_000,
+                &auth.buyer,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let channel = app
+            .sorafs_node
+            .orderbook_snapshot(unix_timestamp_now())
+            .settlement_channels[0]
+            .clone();
+        let receipt = orderbook_receipt_fixture(
+            45,
+            &channel,
+            0,
+            channel.total_bytes,
+            unix_timestamp_now().saturating_add(1),
+            channel.xor_locked.as_micro(),
+            &auth.buyer,
+        );
+
+        let response =
+            post_orderbook_receipt(app, &auth.buyer, orderbook_receipt_body(receipt)).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn orderbook_receipt_requires_provider_capability_when_enforced() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                47,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.buyer,
+            orderbook_order_body(orderbook_order_fixture(
+                48,
+                OrderSideV1::Bid,
+                1_600_000,
+                &auth.buyer,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let channel = app
+            .sorafs_node
+            .orderbook_snapshot(unix_timestamp_now())
+            .settlement_channels[0]
+            .clone();
+        let app = enable_orderbook_capability_policy(app, None);
+        let receipt = orderbook_receipt_fixture(
+            49,
+            &channel,
+            0,
+            channel.total_bytes,
+            unix_timestamp_now().saturating_add(1),
+            channel.xor_locked.as_micro(),
+            &auth.provider,
+        );
+
+        let response =
+            post_orderbook_receipt(app, &auth.provider, orderbook_receipt_body(receipt)).await;
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect capability error body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error body");
+        assert_eq!(
+            value.get("error").and_then(Value::as_str),
+            Some("capability_state_unknown")
+        );
+    }
+
+    #[tokio::test]
+    async fn orderbook_order_match_and_read_endpoints_share_local_runtime() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                1,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = handle_get_sorafs_orderbook_book(State(app.clone())).await;
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect orderbook body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode orderbook body");
+        assert_eq!(
+            value.get("open_order_count").and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.buyer,
+            orderbook_order_body(orderbook_order_fixture(
+                2,
+                OrderSideV1::Bid,
+                1_600_000,
+                &auth.buyer,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect order response");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode order response");
+        assert_eq!(
+            value.get("fills").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("settlement_channels_opened")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_orderbook_trades(State(app.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect trades body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode trades body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+
+        let response = handle_get_sorafs_orderbook_channels(State(app)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect channels body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode channels body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+    }
+
+    #[tokio::test]
+    async fn orderbook_receipt_endpoint_updates_channel_and_rejects_overlap() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                21,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.buyer,
+            orderbook_order_body(orderbook_order_fixture(
+                22,
+                OrderSideV1::Bid,
+                1_600_000,
+                &auth.buyer,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let channel = app
+            .sorafs_node
+            .orderbook_snapshot(unix_timestamp_now())
+            .settlement_channels[0]
+            .clone();
+        let receipt = orderbook_receipt_fixture(
+            23,
+            &channel,
+            0,
+            channel.total_bytes,
+            unix_timestamp_now().saturating_add(1),
+            channel.xor_locked.as_micro(),
+            &auth.provider,
+        );
+
+        let response = post_orderbook_receipt(
+            app.clone(),
+            &auth.provider,
+            orderbook_receipt_body(receipt.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect receipt response");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode receipt response");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            value
+                .get("updated_channel")
+                .and_then(Value::as_object)
+                .and_then(|channel| channel.get("status"))
+                .and_then(Value::as_str),
+            Some("closed")
+        );
+
+        let response = handle_get_sorafs_orderbook_receipts(State(app.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect receipts body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode receipts body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+
+        let overlapping = orderbook_receipt_fixture(
+            24,
+            &channel,
+            ORDERBOOK_BYTES_PER_GIB.saturating_sub(1),
+            ORDERBOOK_BYTES_PER_GIB,
+            unix_timestamp_now().saturating_add(2),
+            100,
+            &auth.provider,
+        );
+        let response = post_orderbook_receipt(
+            app.clone(),
+            &auth.provider,
+            orderbook_receipt_body(overlapping),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = handle_get_sorafs_orderbook_book(State(app)).await;
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect book body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode book body");
+        assert_eq!(
+            value
+                .get("settlement_receipt_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn orderbook_events_endpoint_returns_backlog_and_sse_replay() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                31,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.buyer,
+            orderbook_order_body(orderbook_order_fixture(
+                32,
+                OrderSideV1::Bid,
+                1_600_000,
+                &auth.buyer,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = handle_get_sorafs_orderbook_events(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("since=1&limit=10".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect orderbook events body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode orderbook events body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        let event = value
+            .get("events")
+            .and_then(Value::as_array)
+            .and_then(|events| events.first())
+            .and_then(Value::as_object)
+            .expect("event object");
+        assert_eq!(
+            event.get("kind").and_then(Value::as_str),
+            Some("order_accepted")
+        );
+        assert_eq!(event.get("sequence").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            event
+                .get("open_settlement_channel_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_orderbook_events_stream(
+            State(app),
+            axum::extract::RawQuery(Some("since=1&limit=10".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("text/event-stream"))
+        );
+        let mut body = response.into_body();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.frame())
+            .await
+            .expect("orderbook SSE frame timeout")
+            .expect("orderbook SSE body frame")
+            .expect("orderbook SSE data frame");
+        let data = frame.into_data().expect("orderbook SSE data frame");
+        let text = String::from_utf8(data.to_vec()).expect("orderbook SSE frame UTF-8");
+        assert!(text.contains("event: order_accepted"));
+        assert!(text.contains("\"sequence\":2"));
+    }
+
+    #[test]
+    fn orderbook_websocket_frames_wrap_event_payloads() {
+        let event = OrderbookEvent {
+            sequence: 42,
+            kind: OrderbookEventKind::SettlementReceiptAccepted,
+            generated_at_unix: 1_800_000_555,
+            order_id: Some([0x11; 32]),
+            trade_ids: vec![[0x22; 32]],
+            settlement_channel_ids: vec![[0x33; 32]],
+            receipt_id: Some([0x44; 32]),
+            expired_order_ids: vec![[0x55; 32]],
+            open_order_count: 7,
+            open_settlement_channel_count: 3,
+            settlement_receipt_count: 2,
+        };
+
+        let frame: Value =
+            norito::json::from_str(&orderbook_websocket_frame(&event)).expect("decode frame");
+        assert_eq!(
+            frame.get("event").and_then(Value::as_str),
+            Some("settlement_receipt_accepted")
+        );
+        let data = frame
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("frame data");
+        assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(42));
+        assert_eq!(
+            data.get("kind").and_then(Value::as_str),
+            Some("settlement_receipt_accepted")
+        );
+        assert_eq!(
+            data.get("order_id_hex").and_then(Value::as_str),
+            Some(hex::encode([0x11; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("receipt_id_hex").and_then(Value::as_str),
+            Some(hex::encode([0x44; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("open_order_count").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            data.get("open_settlement_channel_count")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            data.get("settlement_receipt_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        let trade_ids = data
+            .get("trade_ids_hex")
+            .and_then(Value::as_array)
+            .expect("trade id list");
+        assert_eq!(
+            trade_ids.first().and_then(Value::as_str),
+            Some(hex::encode([0x22; 32]).as_str())
+        );
+    }
+
+    #[test]
+    fn repair_event_frames_wrap_canonical_task_events() {
+        let event = RepairEvent {
+            sequence: 7,
+            event: RepairTaskEventV1 {
+                version: sorafs_manifest::repair::REPAIR_TASK_EVENT_VERSION_V1,
+                ticket_id: sorafs_manifest::repair::RepairTicketId("REP-STREAM".into()),
+                manifest_digest: [0x11; 32],
+                provider_id: [0x22; 32],
+                status: RepairTaskStatusV1::Queued,
+                occurred_at_unix: 1_800_000_000,
+                actor: Some("auditor".into()),
+                message: Some("queued".into()),
+            },
+        };
+
+        let page = repair_events_json(Some(6), 10, std::slice::from_ref(&event))
+            .expect("repair event page");
+        let page = page.as_object().expect("repair event page object");
+        assert_eq!(page.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(page.get("next_since").and_then(Value::as_u64), Some(7));
+
+        let frame: Value =
+            norito::json::from_str(&repair_websocket_frame(&event)).expect("decode frame");
+        assert_eq!(frame.get("event").and_then(Value::as_str), Some("queued"));
+        let data = frame
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("frame data");
+        assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(7));
+        let task = data
+            .get("event")
+            .and_then(Value::as_object)
+            .expect("canonical repair task event");
+        assert_eq!(
+            task.get("ticket_id").and_then(Value::as_str),
+            Some("REP-STREAM")
+        );
+        assert_eq!(task.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(
+            task.get("manifest_digest_hex").and_then(Value::as_str),
+            Some(hex::encode([0x11; 32]).as_str())
+        );
+        assert_eq!(
+            task.get("provider_id_hex").and_then(Value::as_str),
+            Some(hex::encode([0x22; 32]).as_str())
+        );
+        assert_eq!(task.get("actor").and_then(Value::as_str), Some("auditor"));
+        assert_eq!(task.get("message").and_then(Value::as_str), Some("queued"));
+    }
+
+    #[tokio::test]
+    async fn orderbook_cancel_rejects_wrong_owner_and_removes_matching_order() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let response = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                3,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = post_orderbook_cancel(
+            app.clone(),
+            &auth.buyer,
+            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.buyer)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = post_orderbook_cancel(
+            app.clone(),
+            &auth.provider,
+            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect cancel body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode cancel body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("cancelled")
+        );
+
+        let response = handle_get_sorafs_orderbook_book(State(app)).await;
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect orderbook body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode orderbook body");
+        assert_eq!(
+            value.get("open_order_count").and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
     #[tokio::test]
     async fn reputation_latest_returns_not_found_before_publish() {
         let (app, _dir) = sorafs_app_state_with_reputation_storage();
@@ -10798,6 +16206,43 @@ mod advert_tests {
             value.get("snapshot_id_hex").and_then(Value::as_str),
             Some(hex::encode(snapshot.snapshot_id).as_str())
         );
+        #[cfg(feature = "telemetry")]
+        {
+            let metrics = app.telemetry.metrics().await;
+            assert_eq!(
+                metrics.sorafs_reputation_snapshot_generated_at_unix.get(),
+                snapshot.generated_at_unix
+            );
+            assert_eq!(
+                metrics.sorafs_reputation_provider_count.get(),
+                u64::try_from(snapshot.providers.len()).expect("provider count fits u64")
+            );
+            let low_score_providers = snapshot
+                .providers
+                .iter()
+                .filter(|provider| {
+                    provider
+                        .degradation_flags
+                        .contains(&ReputationDegradationFlagV1::LowScore)
+                })
+                .count();
+            assert_eq!(
+                metrics.sorafs_reputation_low_score_providers.get(),
+                u64::try_from(low_score_providers).expect("low-score count fits u64")
+            );
+            let provider_a = snapshot
+                .providers
+                .iter()
+                .find(|provider| provider.provider_id == "provider-a")
+                .expect("provider-a fixture");
+            assert_eq!(
+                metrics
+                    .sorafs_reputation_score
+                    .with_label_values(&["provider-a"])
+                    .get(),
+                f64::from(provider_a.score_bps)
+            );
+        }
 
         let response =
             handle_get_sorafs_reputation_latest(State(app.clone()), HeaderMap::new()).await;
@@ -19192,8 +24637,18 @@ mod advert_tests {
     }
 
     fn make_signed_advert_with_host(host_pattern: &str) -> ProviderFixture {
+        make_signed_advert_with_host_and_provider(host_pattern, [0x11; 32])
+    }
+
+    fn make_signed_advert_for_provider(provider_id: [u8; 32]) -> ProviderFixture {
+        make_signed_advert_with_host_and_provider("storage.example.test", provider_id)
+    }
+
+    fn make_signed_advert_with_host_and_provider(
+        host_pattern: &str,
+        provider_id: [u8; 32],
+    ) -> ProviderFixture {
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
-        let provider_id = [0x11; 32];
         let stake_pool_id = [0x21; 32];
         let capabilities = vec![
             CapabilityTlv {

@@ -134,6 +134,68 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "timeseries",
+      "title": "PoR Scheduler Challenges (5m)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(torii_sorafs_por_challenges_total[5m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PoR Forced Challenges (1h)",
+      "id": 7,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(torii_sorafs_por_forced_challenges_total[1h])",
+          "legendFormat": "forced",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "PoR Ingestion Backlog",
+      "id": 8,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (provider, manifest) (torii_sorafs_por_ingest_backlog{provider=~\"$provider\"})",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
     }
   ]
 }

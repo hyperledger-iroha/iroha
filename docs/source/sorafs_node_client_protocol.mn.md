@@ -98,12 +98,12 @@ The signature covers the serialized `ProviderAdvertBodyV1` and currently
 supports `Ed25519` (single-signer) with reserved space for future Norito-backed
 multi-signatures.
 
-For operator tooling, the repository ships `sorafs-provider-advert-stub`.
+For operator tooling, the repository ships `sorafs_provider_advert_stub`.
 It validates the inputs, emits the Norito advertisement blob, and produces a
 JSON summary for dashboards:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-provider-advert-stub -- \
+cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --emit \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --provider-id=001122... \
@@ -586,7 +586,7 @@ and submit fetch requests in `max_chunk_span`-bounded slices. The CLI’s
 end-to-end tests cover this flow and expose the resulting provider receipts so
 integrations can assert deterministic scheduling.【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
 
-For audits, run `sorafs-provider-advert-stub --verify --advert=<path> [--now=unix_ts]` to
+For audits, run `sorafs_provider_advert_stub --verify --advert=<path> [--now=unix_ts]` to
 validate signatures, enforce TTL/path/QoS rules, and print a JSON summary of an
 existing advert (optionally with `--json-out` to persist the summary). The JSON
 payload includes `signature_verified=true` when the ed25519 signature matches the

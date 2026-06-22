@@ -15694,6 +15694,13 @@ export interface SorafsPinRegisterRequest {
   pin_policy?: SorafsPinRegisterPinPolicyInput;
   manifestDigestHex?: string;
   manifest_digest_hex?: string;
+  manifest?: BinaryLike | string | null;
+  manifestBytes?: BinaryLike | string | null;
+  manifest_bytes?: BinaryLike | string | null;
+  manifestB64?: BinaryLike | string | null;
+  manifest_b64?: BinaryLike | string | null;
+  manifestBase64?: BinaryLike | string | null;
+  manifest_base64?: BinaryLike | string | null;
   chunkDigestSha3_256Hex?: string;
   chunk_digest_sha3_256_hex?: string;
   chunkDigest?: string;

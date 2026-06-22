@@ -86,7 +86,7 @@ Batafsil maydon ta'riflari uchun qarang
 
 ## CLI va SDK bayroq ma'lumotnomasi
 
-`sorafs_cli fetch` (qarang: `crates/sorafs_car/src/bin/sorafs_cli.rs`) va
+`sorafs_cli fetch` (qarang: `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) va
 `iroha_cli app sorafs fetch` o'rami (`crates/iroha_cli/src/commands/sorafs.rs`)
 bir xil orkestr konfiguratsiya yuzasini baham ko'ring. Quyidagi bayroqlardan foydalaning
 tarqatish dalillarini olish yoki kanonik moslamalarni takrorlash:

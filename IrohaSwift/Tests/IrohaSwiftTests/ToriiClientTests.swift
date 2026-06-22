@@ -15029,6 +15029,7 @@ id: 88
                 retentionEpoch: 72
             ),
             manifestDigestHex: manifestDigestHex,
+            manifestBytes: Data("manifest-norito".utf8),
             chunkDigestSha3_256Hex: chunkDigestSha3_256Hex,
             contentLength: 4096,
             submittedEpoch: 42,
@@ -15085,6 +15086,7 @@ id: 88
         let chunkHex = String(repeating: "b", count: 64)
         let successorHex = String(repeating: "c", count: 64)
         let aliasProof = Data("alias-proof".utf8).base64EncodedString()
+        let manifestBase64 = Data("manifest-norito".utf8).base64EncodedString()
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
@@ -15106,6 +15108,7 @@ id: 88
             XCTAssertEqual(storageClass?["type"] as? String, "Hot")
             XCTAssertEqual(pinPolicy?["retention_epoch"] as? Int, 72)
             XCTAssertEqual(root["manifest_digest_hex"] as? String, manifestHex)
+            XCTAssertEqual(root["manifest_b64"] as? String, manifestBase64)
             XCTAssertEqual(root["chunk_digest_sha3_256_hex"] as? String, chunkHex)
             XCTAssertEqual(root["content_length"] as? Int, 4096)
             XCTAssertEqual(root["submitted_epoch"] as? Int, 42)
@@ -15155,9 +15158,41 @@ id: 88
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterSoraFsPinManifestAcceptsManifestBase64Payload() async throws {
+        let manifestBase64 = Data("explicit-manifest".utf8).base64EncodedString()
+        StubURLProtocol.handler = { request in
+            let root = self.bodyJSON(from: request)
+            XCTAssertEqual(root["manifest_b64"] as? String, manifestBase64)
+            let responseObject: [String: Any] = [
+                "manifest_digest_hex": String(repeating: "a", count: 64),
+                "chunker_handle": "sorafs.sf1@1.0.0",
+                "submitted_epoch": 42,
+                "content_length": 4096,
+                "pin_fee_nano": 500_000_000,
+                "pin_fee_asset_id": "xor#universal",
+                "pin_fee_treasury_account_id": "treasury@boi",
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
+            return (response, body)
+        }
+
+        var request = makeValidSoraFsPinRegisterRequest()
+        request.manifestBase64 = manifestBase64
+        request.manifestBytes = nil
+        _ = try await makeClient().registerSoraFsPinManifest(request)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest() async throws {
         let invalidRequests: [ToriiSoraFsPinRegisterRequest] = [
             mutatedSoraFsPinRequest { $0.manifestDigestHex = "abc123" },
+            mutatedSoraFsPinRequest { $0.manifestBase64 = "not base64!"; $0.manifestBytes = nil },
+            mutatedSoraFsPinRequest { $0.manifestBase64 = Data("manifest".utf8).base64EncodedString() },
+            mutatedSoraFsPinRequest { $0.manifestBytes = Data() },
             mutatedSoraFsPinRequest { $0.chunkDigestSha3_256Hex = String(repeating: "z", count: 64) },
             mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "c", count: 63) },
             mutatedSoraFsPinRequest { $0.contentLength = nil },

@@ -81,7 +81,7 @@ SDK и автоматизация для того, чтобы каждый ра�
 
 ## Ссылка на флаги CLI и SDK
 
-`sorafs_cli fetch` (версия `crates/sorafs_car/src/bin/sorafs_cli.rs`) и обертка
+`sorafs_cli fetch` (версия `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) и обертка
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) компартильхам
 одна из лучших настроек ордера. Используйте флаги os seguintes ao
 Запишите доказательства развертывания или воспроизведения канонических светильников:

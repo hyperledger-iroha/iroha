@@ -76,7 +76,7 @@ Para definiciones detalladas de campos, veja
 
 ## Referencia de banderas de CLI y SDK
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) y envoltorio
+`sorafs_cli fetch` (ver `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) y envoltorio
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) compartilham
 a mesma superfície de configuración del orquestador. Utilice las siguientes banderas ao
 Capture evidencias de implementación o reproducción de accesorios canónicos:

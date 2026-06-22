@@ -77,7 +77,7 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 
 ## CARGO_BIN_EXE_sorafs_cli (test: 1)
 
-- test: sandıqlar/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- test: sandıqlar/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_getch (test: 1)
 
@@ -85,7 +85,7 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 
 ## CARGO_BIN_EXE_taikai_car (test: 1)
 
-- test: sandıqlar/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- test: sandıqlar/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## KARGO_BIN_NAME (məhsul: 3)
 

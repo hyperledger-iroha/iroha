@@ -58,7 +58,7 @@ Manifest сериализует профили через `ChunkingProfileV1`. �
 Чтобы посмотреть реестр из tooling, запустите helper CLI:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -107,7 +107,7 @@ CARv1 bridge из production gateways.
 сохраните proof на диск:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -120,7 +120,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 продвижении нового профиля по умолчанию:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -133,7 +133,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 совпадает с вычисленным корнем):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -142,7 +142,7 @@ CLI гарантирует детерминированный порядок (`s
 когда он превышает число доступных листьев:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -153,7 +153,7 @@ Manifest stub отражает те же данные, что удобно пр�
 хардкода числовых ID:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

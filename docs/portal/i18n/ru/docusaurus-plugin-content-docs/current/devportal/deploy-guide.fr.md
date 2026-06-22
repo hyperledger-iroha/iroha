@@ -16,7 +16,7 @@ Il couvre laphase build/lint, l'empaquetage SoraFS, la подпись маниф
 продвижение псевдонимов, проверка и инструкции по откату для предварительного просмотра и выпуска каждой части
 так что это воспроизводимо и проверяемо.
 
-Le flux предположим, что вы получили двоичный файл `sorafs_cli` (компилируем с `--features cli`), доступ к
+Le flux предположим, что вы получили двоичный файл `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), доступ к
 конечная точка Torii с разрешениями на регистрацию контактов и учетными данными OIDC для Sigstore.
 Сохраняйте длинные секреты (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, токены Torii) в
 ваш ящик CI; Локали выполнения могут быть использованы для зарядного устройства через экспорт оболочки.
@@ -24,7 +24,7 @@ Le flux предположим, что вы получили двоичный ф
 ## Предварительное условие
 
 - Узел 18.18+ с `npm` или `pnpm`.
-- `sorafs_cli` через `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` через `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL Torii, который предоставляет доступ к `/v1/sorafs/*` плюс доступ к конфиденциальному доступу к авторизации, который может быть полезен.
   де манифесты и де псевдонимы.
 - Emmeteur OIDC (GitHub Actions, GitLab, удостоверение рабочей нагрузки и т. д.) для заполнения `SIGSTORE_ID_TOKEN`.

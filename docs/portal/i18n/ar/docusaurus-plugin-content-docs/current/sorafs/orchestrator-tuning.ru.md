@@ -76,7 +76,7 @@ description: تدريب عملي على العزف، ونصائح حول الإ�
 
 ## العلم الرسمي CLI وSDK
 
-`sorafs_cli fetch` (باسم `crates/sorafs_car/src/bin/sorafs_cli.rs`) والفتح
+`sorafs_cli fetch` (باسم `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) والفتح
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) يستخدم
 واحدة وهي أفضل تكوين للمنسق. استخدم الأعلام التالية
 عند تقديم الأدلة أو تثبيت التركيبات القانونية:

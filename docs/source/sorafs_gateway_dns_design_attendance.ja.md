@@ -9,59 +9,56 @@ source_last_modified: "2025-11-20T07:16:03.636926+00:00"
 translation_last_reviewed: 2026-01-22
 ---
 
-<!-- 日本語訳: docs/source/sorafs_gateway_dns_design_attendance.md -->
+# Attendance Tracker
 
-# 出席トラッカー
+Meeting: **SoraFS Gateway & DNS Design Kickoff** (2025-03-03 @ 16:00 UTC)
 
-会議: **SoraFS Gateway & DNS Design Kickoff**（2025-03-03 16:00 UTC）
+This tracker is archived. The kickoff completed on 2025-03-03; decisions and
+follow-up ownership are recorded in
+`docs/source/sorafs_gateway_dns_design_minutes.md`.
 
-## ステータス概要
+## Status Summary
 
-- 招待は 2025-02-21 に `docs/source/sorafs_gateway_dns_design_invite.txt` を使って送付。
-- 返信期限は **2025-02-26**。以下のステータスは確認が届き次第更新。
-- **2025-02-26** までに全員の確認が揃い、キックオフ前に RSVP リストをクローズした。
+- Invitations sent 2025-02-21 using `docs/source/sorafs_gateway_dns_design_invite.txt`.
+- Responses were requested by **2025-02-26** and are closed.
+- All confirmations received by **2025-02-26** and logged here so the workstream enters the kickoff with a closed RSVP list.
 
-## 回答ログ
+## Respondent Log
 
-| 役割 | 連絡先 | ステータス | メモ／フォローアップ |
-|------|--------|------------|-----------------------|
-| Networking TL（ファシリテーター） | `networking.tl@soranet` | ✅ 確認済み 2025-02-21 | アジェンダ担当。ブリッジを 10 分前に開く。 |
-| Ops リード | `ops.lead@soranet` | ✅ 確認済み 2025-02-23 | ロールアウトのランブックを担当。事前読込用デッキを依頼済み。 |
-| Storage チーム代表 | `storage.rep@sorafs` | ✅ 確認済み 2025-02-21 | 最新の chunker フィクスチャ状況を持参。 |
-| Tooling WG 代表 | `tooling.wg@sorafs` | ✅ 確認済み 2025-02-21 | コンフォーマンス・ハーネスの更新を準備中。 |
-| ガバナンス連絡役 | `governance@sora` | ✅ 確認済み（代理）2025-02-24 | 代理: `governance.alt@sora`。本担当は OOO のまま。 |
-| QA ギルドリード | `qa.guild@sorafs` | ✅ 確認済み 2025-02-21 | 会議前のテレメトリ・スナップショットが必要。 |
-| Docs/DevRel オブザーバー | `docs.devrel@sora` | ✅ 確認済み 2025-02-21 | 共有メモ文書をドラフト中。 |
-| Torii プラットフォーム代表 | `torii.platform@soranet` | ✅ 確認済み 2025-02-21 | GAR メトリクスのエクスポートを収集中。 |
-| セキュリティエンジニアリング オブザーバー | `security@soranet` | ✅ 確認済み 2025-02-25 | スライドデッキは 2025-02-24 に共有済み。リモート参加。 |
+| Role | Contact | Status | Notes / Follow-up |
+|------|---------|--------|-------------------|
+| Networking TL (facilitator) | `networking.tl@soranet` | ✅ Confirmed 2025-02-21 | Owned the agenda and opened the bridge 10 min early. |
+| Ops Lead | `ops.lead@soranet` | ✅ Confirmed 2025-02-23 | Covered rollout runbook; requested preread deck. |
+| Storage Team Rep | `storage.rep@sorafs` | ✅ Confirmed 2025-02-21 | Brought latest chunker fixture status. |
+| Tooling WG Rep | `tooling.wg@sorafs` | ✅ Confirmed 2025-02-21 | Prepared conformance harness updates. |
+| Governance Liaison | `governance@sora` | ✅ Confirmed (delegate) 2025-02-24 | Delegate `governance.alt@sora`; primary remains OOO. |
+| QA Guild Lead | `qa.guild@sorafs` | ✅ Confirmed 2025-02-21 | Received telemetry snapshot ahead of meeting. |
+| Docs/DevRel Observer | `docs.devrel@sora` | ✅ Confirmed 2025-02-21 | Published minutes and outcome brief. |
+| Torii Platform Rep | `torii.platform@soranet` | ✅ Confirmed 2025-02-21 | Collected GAR metrics export. |
+| Security Engineering Observer | `security@soranet` | ✅ Confirmed 2025-02-25 | Slide deck shared 2025-02-24; attending remotely. |
 
-## DNS 自動化オーナー
+## DNS Automation Owners
 
-ロードマップ項目 **Decentralized DNS & Gateway** は、キックオフ前に自動化オーナーを
-指名することを求めている。以下の表はスコープ、責任リード、バックアップを記録し、
-フォローアップタスクがリポジトリ内のコード／資産に直接紐づくようにする。
+Roadmap item **Decentralized DNS & Gateway** calls for named automation owners ahead of the kickoff. The table below records the scope, accountable lead, and backup so follow-up tasks map directly to code/assets already in the repository.
 
-| スコープ | 主担当 | バックアップ | 責務 |
-|---------|--------|--------------|------|
-| SoraDNS ゾーンファイル自動化 & GAR ピン留め | Ops リード（`ops.lead@soranet`） | Networking TL（`networking.tl@soranet`） | `tools/soradns-resolver/` の自動化を維持し、`docs/source/sns/governance_playbook.md` に記載された署名済みゾーンファイルのスケルトンを公開し、各カットオーバー前に SPKI/GAR データをローテーションする。 |
-| ゲートウェイ別名 & SoraFS 切替メタデータ | Tooling WG 代表（`tooling.wg@sorafs`） | Docs/DevRel（`docs.devrel@sora`） | `docs/portal/scripts/sorafs-pin-release.sh` と `docs/portal/scripts/generate-dns-cutover-plan.mjs`（テストは `docs/portal/scripts/__tests__/dns-cutover-plan.test.mjs`）を運用し、生成したマニフェストを `docs/portal/docs/devportal/deploy-guide.md` に添付し、別名変更を pin registry に告知する。 |
-| テレメトリ・スナップショット & ロールバック自動化 | QA ギルドリード（`qa.guild@sorafs`） | セキュリティエンジニアリング（`security@soranet`） | GAR メトリクス（`docs/source/sorafs_gateway_dns_design_gar_telemetry.md`, `docs/source/sorafs_gateway_dns_design_metrics_*.prom`）を収集・保存し、アラートフックがキックオフのダッシュボードに接続されたままであることを確認し、GA 前にセキュリティ担当とロールバック手順をリハーサルする。 |
+| Scope | Primary Owner | Backup | Responsibilities |
+|-------|---------------|--------|------------------|
+| SoraDNS zonefile automation & GAR pinning | Ops Lead (`ops.lead@soranet`) | Networking TL (`networking.tl@soranet`) | Maintain the `tools/soradns-resolver/` automation, publish the signed zonefile skeletons documented in `docs/source/sns/governance_playbook.md`, and rotate SPKI/GAR data before every cutover. |
+| Gateway alias & SoraFS cutover metadata | Tooling WG Rep (`tooling.wg@sorafs`) | Docs/DevRel (`docs.devrel@sora`) | Operate `docs/portal/scripts/sorafs-pin-release.sh` + `docs/portal/scripts/generate-dns-cutover-plan.mjs` (and its tests under `docs/portal/scripts/__tests__/dns-cutover-plan.test.mjs`), attach the generated manifests to `docs/portal/docs/devportal/deploy-guide.md`, and broadcast alias changes to the pin registry. |
+| Telemetry snapshots & rollback automation | QA Guild Lead (`qa.guild@sorafs`) | Security Engineering (`security@soranet`) | Collect and archive GAR metrics (`docs/source/sorafs_gateway_dns_design_gar_telemetry.md`, `docs/source/sorafs_gateway_dns_design_metrics_*.prom`), ensure alert hooks stay wired into the kickoff dashboard, and rehearse the rollback flow alongside the security observer ahead of GA. |
 
-## フォローアップアクション
+## Follow-up Actions
 
-1. **デッキ配布** — 2025-02-27 までに最終スライドを全員へ配布（Networking TL）。
-2. **代理向けブリーフ** — セッション前にガバナンス代理へ DNS ポリシー付録を共有（Docs/DevRel）。
-3. **セッション録画の段取り** — Docs/DevRel が共有メモ文書と録画チェックリストを準備。
-4. **自動化オーナーの同期** — 上記オーナーが 2025-03-04 までにランブックのチェックポイント
-   （ゾーンファイル公開、別名昇格、テレメトリ採取）を確認し、キックオフの責任分界を明確化。
-5. **オーナー向けランブック** — 共有 SOP は `docs/source/sorafs_gateway_dns_owner_runbook.md` に格納。
-   キックオフのデッキと一緒に配布し、リハーサル進捗の追跡に参照する。
-6. **クローズアウト確認** — すべてのフォローアップは `docs/source/sorafs_gateway_dns_design_minutes.md`
-   の 2025-03-04 クローズアウト記録に完了として記載済み。
+1. **Deck distribution** — email final slide deck to all attendees by 2025-02-27 (Networking TL).
+2. **Delegate brief** — governance delegate received the DNS policy appendix during pre-work (Docs/DevRel).
+3. **Session recording logistics** — Docs/DevRel prepared the shared notes doc and recording checklist.
+4. **Automation owner sync** — owners listed above confirmed runbook checkpoints (zonefile publish, alias promotion, telemetry sampling) by 2025-03-04 so the kickoff closed with clear accountability.
+5. **Owner runbook** — The shared SOP now lives in `docs/source/sorafs_gateway_dns_owner_runbook.md`; it was circulated with the kickoff deck and referenced when tracking rehearsal status.
+6. **Close-out confirmation** — All follow-ups above were completed and logged in `docs/source/sorafs_gateway_dns_design_minutes.md` under the 2025-03-04 close-out entry.
 
-## カレンダーと成果物
+## Calendar & Artefacts
 
-- カレンダー招待は 2025-02-25 に Google Calendar で送付。イベントリンク:
-  `https://calendar.google.com/calendar/event?eid=c29yYWZzLWdhdGV3YXktZG5zLTIwMjUwMzAz`（SoraNet 内部）。
-- 共有メモ文書のスタブ: `docs/source/sorafs_gateway_dns_design_agenda.md`
-  （セッション後にアクションレジスタを追記）。
+- Calendar invite dispatched 2025-02-25 via Google Calendar. Event link:
+  `https://calendar.google.com/calendar/event?eid=c29yYWZzLWdhdGV3YXktZG5zLTIwMjUwMzAz` (SoraNet internal).
+- Agenda archive: `docs/source/sorafs_gateway_dns_design_agenda.md`.
+- Minutes and action register: `docs/source/sorafs_gateway_dns_design_minutes.md`.

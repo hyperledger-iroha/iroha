@@ -233,6 +233,7 @@ fn register_paid_pin_manifest(
         authority: &ALICE_ID,
         private_key: ALICE_KEYPAIR.private_key(),
         manifest,
+        manifest_bytes: None,
         chunk_digest_sha3_256: compute_chunk_plan_digest_sha3(&plan.chunks),
         submitted_epoch: 1,
         alias: None,

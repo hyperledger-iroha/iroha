@@ -10,80 +10,84 @@ translation_last_reviewed: 2026-02-07
 id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
-description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+description: Completed status for ManifestV1 validation gating in the SF-4 Pin Registry rollout.
 translator: machine-google-reviewed
 ---
 
-:::注意规范来源
+:::note Canonical Source
 :::
 
-# Pin 注册表清单验证计划 (SF-4 Prep)
+# Pin Registry Manifest Validation Status (SF-4)
 
-该计划概述了线程 `sorafs_manifest::ManifestV1` 所需的步骤
-验证即将到来的密码注册合同，以便 SF-4 工作可以
-基于现有工具构建，无需重复编码/解码逻辑。
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-## 目标
+## Implemented Goals
 
-1. 主机端提交路径验证清单结构、分块配置文件和
-   在接受提案之前先确定治理信封。
-2. Torii 和网关服务重用相同的验证例程以确保
-   跨主机的确定性行为。
-3. 集成测试涵盖明显接受的正面/负面案例，
-   策略执行和错误遥测。
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## 架构
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### 组件
+## Shipped Components
 
-- `ManifestValidator`（`sorafs_manifest` 或 `sorafs_pin` 板条箱中的新模块）
-  封装结构检查和策略门。
-- Torii 暴露了调用的 gRPC 端点 `SubmitManifest`
-  `ManifestValidator` 在转发到合约之前。
-- 网关获取路径在缓存新内容时可以选择使用相同的验证器
-  从注册表中体现出来。
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## 任务分解
+## Completion Matrix
 
-|任务|描述 |业主|状态 |
-|------|-------------|--------|--------|
-| V1 API 骨架 |将 `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` 添加到 `sorafs_manifest`。包括 BLAKE3 摘要验证和分块器注册表查找。 |核心基础设施| ✅ 完成 |共享助手（`validate_chunker_handle`、`validate_pin_policy`、`validate_manifest`）现在位于 `sorafs_manifest::validation` 中。 |
-|政策布线|将注册表策略配置（`min_replicas`、到期窗口、允许的分块句柄）映射到验证输入。 |治理/核心基础设施|待定 — 在 SORAFS-215 中跟踪 |
-| Torii 集成 |在 Torii 清单提交路径内调用验证器；失败时返回结构化 Norito 错误。 | Torii 团队 |已计划 — 在 SORAFS-216 中跟踪 |
-|主机合同存根 |确保合约入口点拒绝验证哈希失败的清单；公开指标计数器。 |智能合约团队 | ✅ 完成 | `RegisterPinManifest` 现在在改变状态之前调用共享验证器 (`ensure_chunker_handle`/`ensure_pin_policy`)，并且单元测试覆盖失败案例。 |
-|测试 |为无效清单添加验证器 + trybuild 案例的单元测试； `crates/iroha_core/tests/pin_registry.rs` 中的集成测试。 |质量保证协会 | 🟠 进行中 |验证器单元测试与链上拒绝测试同时进行；完整的集成套件仍在等待中。 |
-|文档 |验证器登陆后更新 `docs/source/sorafs_architecture_rfc.md` 和 `migration_roadmap.md`；在 `docs/source/sorafs/manifest_pipeline.md` 中记录 CLI 用法。 |文档团队 |待处理 — 在 DOCS-489 中跟踪 |
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-## 依赖关系
+## Operational Notes
 
-- Pin 注册表 Norito 架构最终确定（参考：路线图中的 SF-4 项目）。
-- 理事会签署的分块注册信封（确保验证器映射是
-  确定性）。
-- Torii 清单提交的身份验证决定。
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## 风险与缓解措施
+## Remaining Rollout Evidence
 
-|风险|影响 |缓解措施 |
-|------|--------|------------|
-| Torii与合同政策解读分歧|非确定性接受。 |共享验证箱+添加集成测试来比较主机与链上决策。 |
-|大型清单的性能回归 |提交速度较慢 |通过货物标准进行基准；考虑缓存清单摘要结果。 |
-|错误消息漂移|操作员困惑|定义Norito错误代码；将它们记录在 `manifest_pipeline.md` 中。 |
-
-## 时间表目标
-
-- 第 1 周：登陆 `ManifestValidator` 骨架 + 单元测试。
-- 第 2 周：连接 Torii 提交路径并更新 CLI 以显示验证错误。
-- 第 3 周：实施合约挂钩、添加集成测试、更新文档。
-- 第 4 周：进行端到端排练，包括迁移分类账录入、捕获委员会签字。
-
-验证器工作开始后，该计划将在路线图中引用。
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

@@ -99,6 +99,7 @@ iroha_sccp = { path = "../iroha_sccp" }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { workspace = true }
 sorafs_node = { path = "../sorafs_node" }
+sorafs_orchestrator = { workspace = true }
 iroha_version = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_futures = { workspace = true }

@@ -810,7 +810,7 @@ fn list_chunker_profiles(args: impl Iterator<Item = String>) -> Result<(), Strin
 }
 
 fn usage() -> &'static str {
-    "usage: sorafs-manifest-stub <path|-> \
+    "usage: sorafs_manifest_stub <path|-> \
      [--root-cid=hex] (verifies computed root) \
      [--dag-codec=0x71] (verifies computed codec) \
      [--car-digest=hex] (defaults to computed payload BLAKE3) \
@@ -848,7 +848,7 @@ fn usage() -> &'static str {
      [--por-sample-seed=value] \
      [--por-sample-out=path]
 
-usage: sorafs-manifest-stub --list-chunker-profiles [--json-out=path]"
+usage: sorafs_manifest_stub --list-chunker-profiles [--json-out=path]"
 }
 
 struct ReportContext<'a> {
@@ -1790,4 +1790,18 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
     }
     fs::write(path, bytes).map_err(|err| format!("failed to write {path:?}: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_uses_cargo_binary_name() {
+        let text = usage();
+
+        assert!(text.contains("sorafs_manifest_stub <path|->"));
+        assert!(text.contains("sorafs_manifest_stub --list-chunker-profiles"));
+        assert!(!text.contains("sorafs-manifest-stub"));
+    }
 }

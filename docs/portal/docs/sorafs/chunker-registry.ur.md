@@ -53,7 +53,7 @@ Consumers کو پہلے `profile_id` کے ذریعے registry lookup کرنا چ
 Registry کو tooling سے inspect کرنے کے لیے helper CLI چلائیں:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -75,19 +75,19 @@ CLI کے وہ تمام flags جو JSON لکھتے ہیں (`--json-out`, `--por-j
 یہ tooling میں data pipe کرنا آسان بناتا ہے جبکہ main report کو پرنٹ کرنے والا default behavior برقرار رہتا ہے۔
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```

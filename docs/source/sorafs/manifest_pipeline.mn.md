@@ -55,7 +55,7 @@ a Norito-encoded manifest suitable for pinning in the SoraFS registry.
 ### CLI quickstart
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub \
+cargo run -p sorafs_car --bin sorafs_manifest_stub \
   ./docs.tar \
   --root-cid=0155aa \
   --car-cid=017112... \
@@ -194,7 +194,7 @@ assert that the assembled payload matches manifest expectations before writing
 outputs—handy for CI smoke-tests that want to ensure the orchestrator did not
 silently drop or reorder chunks.
 
-If you already have the JSON report created by `sorafs-manifest-stub`, pass it
+If you already have the JSON report created by `sorafs_manifest_stub`, pass it
 directly via `--manifest-report=docs.report.json`. The fetch CLI will re-use the
 embedded `chunk_fetch_specs`, `payload_digest_hex`, and `payload_len` fields so
 you don’t need to manage separate plan or validation files.

@@ -76,10 +76,13 @@ rolling the tooling out to real gateways and storage providers.
 
 ## Next steps
 
-- Integrate orchestrator automation (`sorafs_car::multi_fetch`) once the
-  multi-source fetch orchestrator (SF-6b) lands.
-- Track PDP/PoTR upgrades under SF-13/SF-14; the CLI and docs will evolve to
-  surface deadlines and tier selection once those proofs stabilize.
+- Use the implemented `sorafs_car::multi_fetch` and `sorafs_orchestrator`
+  automation when enabling multi-source retrieval; archive the scoreboard and
+  telemetry artefacts from `multi_source_rollout.md` for audits.
+- Treat PoTR as part of the current proof-stream smoke path with
+  `--proof-kind=potr` when deadline receipts are available. Track PDP upgrades
+  under SF-13; the CLI already builds schema-compatible PDP requests, and
+  gateway support follows the provider protocol and CDC commitment work.
 
 By combining these deployment notes with the quickstart and CI recipes, teams
 can move from local experiments to production-grade SoraFS pipelines with a

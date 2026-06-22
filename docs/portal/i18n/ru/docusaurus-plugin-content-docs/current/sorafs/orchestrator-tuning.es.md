@@ -82,7 +82,7 @@ de perillas a medida que progresa el despliegue. La tabla siguiente вспоми
 
 ## Ссылка на флаги CLI и SDK
 
-`sorafs_cli fetch` (версия `crates/sorafs_car/src/bin/sorafs_cli.rs`) и обертка
+`sorafs_cli fetch` (версия `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) и обертка
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) разделяет
 неправильная настройка конфигурации ордера. Флаги Лос-Сигуентес США
 захватить доказательства показа или воспроизвести канонические светильники:

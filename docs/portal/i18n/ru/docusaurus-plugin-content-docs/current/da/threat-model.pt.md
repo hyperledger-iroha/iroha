@@ -241,7 +241,7 @@ Nexus и артефакты управления, восстановленные
   и интегрирован Torii в `crates/iroha_torii/src/da/ingest.rs`, que encadeia проверяет
   отпечаток пальца через `/v1/da/ingest`.
 - В качестве имитации потоковой передачи PDP/PoTR при выполнении упражнений с помощью протокола проверки потока.
-  em `crates/sorafs_car/tests/sorafs_cli.rs`, объединенные потоки заявок
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, объединенные потоки заявок
   PoR/PDP/PoTR и сценарии жизни животных без моделей Америки.
 - Результаты восстановления и восстановления работоспособности
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, матрица для замачивания

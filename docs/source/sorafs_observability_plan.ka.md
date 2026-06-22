@@ -11,6 +11,11 @@ title: SoraFS Observability & SLO Plan
 summary: SF-7 telemetry schema, dashboards, and SLO enforcement for gateways and nodes.
 ---
 
+---
+title: SoraFS Observability & SLO Plan
+summary: SF-7 telemetry schema, dashboards, and SLO enforcement for gateways and nodes.
+---
+
 # SoraFS Observability & SLO Plan
 
 > **Note:** This plan is also mirrored in the Docusaurus developer portal at
@@ -178,21 +183,27 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 4. **PDP & PoTR Health** (`dashboards/grafana/sorafs_pdp_potr_health.json`)
    - Consolidates SF-13/SF-14 telemetry for DA-5: PDP challenge rates/success, latency P95, duplicate counters, slash proposal history, PoTR latency histograms, and failure breakdowns filtered by provider/tier so Taikai/CDN reviewers can audit proof health before gating releases.
 5. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`)
-   - Tracks provider capacity, outstanding reservations, repair SLA escalations, repair queue depth by provider, and GC/retention panels covering sweep runs, evictions, bytes freed, blocked reasons, expired-manifest age, and reconciliation divergence snapshots.
+   - Tracks provider capacity, outstanding reservations, egress byte/drift reconciliation, repair SLA escalations, repair queue depth by provider, and GC/retention panels covering sweep runs, evictions, bytes freed, blocked reasons, expired-manifest age, and reconciliation divergence snapshots.
+6. **Orderbook Observability** (`dashboards/grafana/sorafs_orderbook_observability.json`)
+   - Defines the target SFM-2 dashboard for orderbook runtime metrics: order flow, depth, matching lag, settlement backlog, API error ratio, escrow runway, and contract/mirror divergence. `iroha_telemetry::metrics::Metrics` now registers the referenced `torii_sorafs_orderbook_*` families and helper methods; the matcher and settlement services still need to feed those helpers with live data before this dashboard becomes live evidence.
+7. **Governance DAG Publication** (`dashboards/grafana/sorafs_governance_dag.json`)
+   - Tracks SF-12 local publication attempts, failures, published bytes, backlog, head age, and last-success age through `sorafs_governance_dag_*` metrics. Filesystem-backed evidence publishers emit local publication outcomes today; IPFS/IPNS public-head workers still need live emission before this dashboard becomes rollout evidence for the public DAG.
 
 ## Alerts
 
 - `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB P95, proof failure spikes.
 - `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failure/retry spikes (unchanged).
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC/retention stall, blocked eviction, and GC error alerts.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure, egress counter drift, repair SLA/backlog/lease-expiry, and GC/retention stall, blocked eviction, and GC error alerts.
+- `dashboards/alerts/sorafs_orderbook_rules.yml` — target SFM-2 matching lag, settlement backlog, contract/matcher divergence, API error ratio, and escrow runway alerts.
+- `dashboards/alerts/sorafs_governance_dag_rules.yml` — SF-12 local publication failures, backlog, stale head, and missing recent publication alerts.
 - `dashboards/alerts/soranet_privacy_rules.yml` — downgrade spikes, bucket suppression, collector-idle detection, and disabled-collector alerts driven by `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and poll failure counters.
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms tied to `sorafs_orchestrator_brownouts_total` so SNNet-5 default-on rollouts stay gated.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts derived from `torii_sorafs_proof_health_*`.
-- `scripts/telemetry/test_sorafs_fetch_alerts.sh` exercises
-  `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`,
-  `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and
-  `dashboards/alerts/tests/soranet_policy_rules.test.yml` via `promtool test rules`
-  so the stall burst SLO gates, privacy suppression checks, collector-disabled alarms, and anonymity brownout detectors stay regression-tested alongside chaos harnesses.
+- Run `promtool test rules` against the matching files under
+  `dashboards/alerts/tests/` so the stall burst SLO gates, orderbook thresholds,
+  Governance DAG publication health checks, privacy suppression checks,
+  collector-disabled alarms, and anonymity brownout detectors stay
+  regression-tested alongside chaos harnesses.
 
 ## Data Pipeline
 
@@ -221,6 +232,9 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
   region, and provider identifiers so dashboards can correlate per-session behaviour.
 - Nodes expose `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, and `torii_sorafs_por_*`
   gauges/counters from the embedded SoraFS node (`crates/sorafs_node`).
+- Governance DAG publication metrics use the `sorafs_governance_dag_*` prefix with
+  bounded `payload_kind`, `result`, and `sink` labels; do not attach manifest,
+  account, or path labels to these counters.
 - Work with the Observability team to register the metric catalog in the shared Prometheus naming
   doc and include label cardinality expectations (max providers, manifests).
 

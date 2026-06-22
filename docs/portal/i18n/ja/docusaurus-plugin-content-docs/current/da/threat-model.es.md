@@ -245,7 +245,7 @@ DA の妥協、クライアントの不正なフェッチの矛盾を引き起�
   統合 Torii と `crates/iroha_torii/src/da/ingest.rs`、エンヘブラ ラス
   `/v1/da/ingest` の指紋との比較。
 - エル ハーネス プルーフ ストリームを介したストリーミング PDP/PoTR のシミュレーション
-  en `crates/sorafs_car/tests/sorafs_cli.rs`、相談内容の確認
+  en `crates/sorafs_orchestrator/tests/sorafs_cli.rs`、相談内容の確認
   PoR/PDP/PoTR および動物モデルのシナリオ。
 - 損失の結果、容量を修復し、生きたままにします
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`、マトリス・デ・ミエントラ

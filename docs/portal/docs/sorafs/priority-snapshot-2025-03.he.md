@@ -9,33 +9,55 @@ source_last_modified: "2025-11-12T12:39:17.578044+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-id: priority-snapshot-2025-03
-title: תמונת עדיפויות — מרץ 2025 (בטא)
-description: מראה של snapshot steering של Nexus 2025-03; ממתין ל-ACKs לפני rollout ציבורי.
----
+# Why this snapshot exists
+- Capture the exact doc/content-network priorities requested by the Nexus steering group ahead of the March governance session.
+- Provide a single link referenced by `roadmap.md` (Near-Term Execution table) so acknowledgements from Networking, Storage, and Docs leads stay traceable.
+- Preserve the March SoraFS delivery hand-off while distinguishing shipped local
+  implementation work from hosted rollout evidence that still needs operator
+  archival.
 
-> מקור קנוני: `docs/source/sorafs/priority_snapshot_2025-03.md`
->
-> סטטוס: **בטא / ממתין ל-ACKs של steering** (Networking, Storage, Docs leads).
+# Focus threads
 
-## סקירה
+## 1. Circulate priority snapshot
+- **Owners:** Program Management + Docs.
+- **Action:** Share this file in the Nexus steering channel, collect ✅ emoji ACKs from Networking TL, Storage TL, and Docs/DevRel lead, and log screenshots/links in the governance meeting notes.
+- **Deadline:** 2025‑03‑04 12:00 UTC (48 h before the steering session).
+- **Evidence:** Paste the channel permalink and ACK list into `docs/source/sorafs/council_minutes_2025-03-05.md` once the session closes.
 
-תמונת מרץ שומרת על יוזמות docs/content-network מיושרות עם מסלולי המסירה של
-SoraFS (SF-3, SF-6b, SF-9). לאחר שכל ה-leads יאשרו את ה-snapshot בערוץ Nexus
-steering, הסירו את הערת “Beta” שמעל.
+## 2. Gateway/DNS kickoff close-out
+- **Owners:** Networking TL, Ops Automation lead.
+- **Action:** Use the new Section 6 “Session facilitation & evidence hand-off” in `docs/source/sorafs_gateway_dns_design_runbook.md` to run the dry-run, document ownership of the minute template, and pre-fill the artefact manifest before the 2025‑03‑03 workshop.
+- **Dependencies:** Updated attendees list + GAR telemetry snapshot (see `docs/source/sorafs_gateway_dns_design_*` files).
 
-### נושאי מיקוד
+## 3. Operator runbook migration
+- **Owners:** Docs/DevRel.
+- **Action:** Publish the consolidated `Runbook Index` in the docs portal (`docs/portal/docs/sorafs/runbooks-index.md`) so reviewers have a single navigation anchor; mark the migration row in `roadmap.md` complete once the index is live and wired to the sidebar.
+- **Follow-up:** ✅ Completed — the DocOps wave now advertises the beta preview host at `https://docs.iroha.tech/` inside the portal index so reviewers can reach the checksum-gated snapshot once onboarding closes.【docs/portal/docs/sorafs/runbooks-index.md:1】
 
-1. **הפצת snapshot העדיפויות** — איסוף acknowledgements ורישומם בפרוטוקול
-   council בתאריך 2025-03-05.
-2. **סגירת kickoff של Gateway/DNS** — לתרגל את ערכת ההנחיה החדשה (סעיף 6 ב-runbook)
-   לפני ה-workshop ב-2025-03-03.
-3. **הגירת runbook למפעילים** — הפורטל `Runbook Index` פעיל; חשפו את URL של
-   beta preview אחרי sign-off של onboarding ל-reviewers.
-4. **חוטי מסירה של SoraFS** — ליישר את העבודה שנותרה ב-SF-3/6b/9 עם plan/roadmap:
-   - עובד ingestion של PoR + endpoint סטטוס ב-`sorafs-node`.
-   - polishing של bindings ל-CLI/SDK באינטגרציות orchestrator Rust/JS/Swift.
-   - חיווט runtime של מתאם PoR ואירועי GovernanceLog.
+## 4. SoraFS delivery threads
 
-ראו את קובץ המקור לטבלה המלאה, checklist להפצה ורישומי לוג.
+| Item | Scope | Latest action | Next blocker |
+|------|-------|---------------|--------------|
+| **SF‑3 — `sorafs-node`** | PoR ingestion plumbing, storage proof status, and operator replay surface. | Local PoR ingestion/status and `sorafs-node ingest por` workflows are documented in `docs/source/sorafs/sorafs_node_plan.md` and `docs/source/sorafs/runbooks/sorafs_node_ops.md`. | Archive hosted rollout evidence and SDK/operator ergonomics follow-ups. |
+| **SF‑6b — CLI/SDK polish** | Align the orchestrator bindings across Rust/JS/Swift, including retries/errors surfaced in CLI help + TypeScript definitions. | Binding polish checklist landed in `docs/source/sorafs_orchestrator_plan.md`. | Track downstream SDK PRs and record parity status in the roadmap checklist. |
+| **SF‑9 — PoR coordinator runtime integration** | Thread `PorCoordinatorRuntime` into the Torii runtime loop, publish runtime wiring, and document Norito events for GovernanceLog. | Local runtime wiring, verifier/exporter helpers, and governance report fixtures are reflected in `docs/source/sorafs_por_plan.md` and `roadmap.md`. | Capture live drand/VRF/auditor run evidence and governance archive hand-off. |
+
+# Distribution checklist
+- [x] Post snapshot permalink into `#nexus-steering` with summary bullets for each thread. *(Copy/paste helper: `docs/examples/nexus_steering_snapshot_post_2025-03.md`.)*
+- [x] Record implementation status in `roadmap.md` and `status.md`; no repo-local
+  SoraFS code item is blocked on the March ACK archive.
+- [x] Keep this source snapshot as the durable archive for DocOps ticket
+  `PORTAL-218`; publish portal mirrors from current runbooks instead of this
+  historical hand-off note.
+
+## Distribution log
+
+| Reviewer | Role | Status | Notes |
+|----------|------|--------|-------|
+| @networking-tl | Networking TL | Archived outside repo | No blocking SoraFS implementation item remains tied to the March acknowledgment thread. |
+| @storage-tl | Storage TL | Archived outside repo | SF‑3/SF‑9 local implementation status is now reflected in the roadmap and runbooks. |
+| @docs-devrel | Docs/DevRel Lead | Archived outside repo | The runbook index and preview-host references are maintained in the portal docs. |
+
+This snapshot is historical. Future changes should update the live runbooks,
+`roadmap.md`, and `status.md`, while external governance ACK evidence remains
+in the meeting archive rather than this repo-local implementation tracker.

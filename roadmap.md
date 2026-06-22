@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -1598,9 +1598,13 @@ and completed history lives in [`status.md`](./status.md).
   plus `/ws/reputation` WebSocket parity for snapshot publications. The
   JavaScript/TypeScript and Python Torii clients also expose local convenience
   helpers for latest/provider/snapshot/weights reads, event polling, and SSE
-  consumption with cache-validator options. Remaining SFM-3 rollout work is the
-  deployed ingest/publisher, not the scoring, proof, local Torii API, cache
-  validators, SSE/WebSocket push, SDK convenience clients, or operator CLI core.
+  consumption with cache-validator options. Accepted snapshots now also export
+  reputation publisher health metrics, a bounded top-provider score gauge,
+  low-score threshold-crossing counters, a Grafana dashboard, and Prometheus
+  alerts. Remaining SFM-3 rollout work is deploying the ingest/publisher service
+  and capturing live run evidence, not the scoring, proof, local Torii API,
+  cache validators, SSE/WebSocket push, SDK convenience clients, operator CLI
+  core, or local observability wiring.
 - SoraFS gateway fixture version `1.0.0` now includes a detached Ed25519
   council envelope generated from the deterministic fixture-only council key.
   `xtask sorafs-gateway-fixtures --verify` validates the envelope JSON shape,
@@ -1609,6 +1613,101 @@ and completed history lives in [`status.md`](./status.md).
   the aggregate bundle hash. The prior fixture-envelope TODO is closed; future
   work should replace or add release governance key material only through the
   normal signed release process, not by reintroducing placeholder signatures.
+- SoraFS SF-11 reference validator now has provider-advert,
+  provider-admission-envelope, replication-order, orderbook payload, PoR
+  challenge/proof, PDP commitment/challenge/proof, PoTR receipt, repair
+  payload, fixture-directory bundle, governance log node, governance DAG block,
+  and signed governance DAG head-chain implementation slices:
+  `sorafs_manifest` exposes
+  `ValidationOutcomeV1`, `validate_provider_advert_bytes`,
+  `validate_provider_admission_envelope_bytes`,
+  `validate_provider_admission_renewal_bytes`,
+  `validate_provider_admission_revocation_bytes`,
+  `validate_replication_order_bytes`, `validate_orderbook_payload_bytes`,
+  `validate_pdp_commitment_bytes`, `validate_pdp_challenge_bytes`,
+  `validate_pdp_proof_bytes`, `validate_pdp_commitment_challenge_bytes`,
+  `validate_pdp_challenge_proof_bytes`,
+  `validate_pdp_commitment_challenge_proof_bytes`,
+  `validate_por_challenge_proof_bytes`, `validate_potr_receipt_bytes`,
+  `validate_repair_payload_bytes`, `validate_fixture_bundle_payloads`,
+  `validate_governance_log_node_bytes`,
+  `validate_governance_dag_block_bytes`,
+  `validate_governance_dag_head_chain_bytes`,
+  `validate_signed_replication_order_bytes`,
+  reusable provider-advert Ed25519 signature verification, signed
+  replication-order Ed25519 signature verification, signed auditor request
+  verification, and the `reference_ffi` C ABI facade returning
+  `ValidationOutcomeV1` Norito JSON buffers for signed replication-order,
+  admission renewal/revocation, orderbook payload, PDP
+  commitment/challenge/proof payload, and peer validators for SDK bindings.
+  `crates/sorafs_manifest/include/sorafs_reference.h` now provides the checked C
+  header for downstream bindings, and
+  `ci/check_sorafs_reference_ffi_header.sh` rejects Rust/header export,
+  signature, or selector drift. The release packager stages that header under
+  `include/`, records its SHA256 in the per-target manifest, writes
+  metadata-normalized tar/gzip archives with sorted entries and fixed ownership,
+  mode, and mtime, and the local SoraFS release gate runs the header-contract
+  guard before Clippy/tests. It also ships the
+  `sorafs-validate advert` /
+  `sorafs-validate admission` / `sorafs-validate order` /
+  `sorafs-validate orderbook` / `sorafs-validate por` /
+  `sorafs-validate pdp` / `sorafs-validate potr` /
+  `sorafs-validate repair` / `sorafs-validate bundle` /
+  `sorafs-validate governance` / `sorafs-validate sign --kind advert` /
+  `sorafs-validate sign --kind order` /
+  `sorafs-validate sign --kind governance` CLI commands. The CLI emits stable
+  Norito JSON/table/YAML outcomes, returns code `2` for
+  validation/policy/signature/Norito payload failures, and points `docs_url` at
+  the portal error catalogue. Admission validation covers base envelopes,
+  governed renewals against their previous envelope digest, and governed
+  revocations against the envelope digest and council signatures. Bundle
+  validation checks known fixture-directory artifacts, validates discovered
+  orderbook order/trade/channel/settlement fixtures, checks PoR and PDP
+  challenge/proof binding, checks PDP commitment/challenge/proof binding, shared
+  manifest digests for manifest-bearing artifacts, provider-admission provider
+  consistency, and replication-order provider assignments. Governance
+  validation checks
+  `GovernanceLogNodeV1` structure, embedded payload policy, publisher metadata,
+  signature material, Ed25519 and Dilithium3/ML-DSA publisher signatures, and
+  optional node-CID binding. Signed replication-order validation checks
+  `SignedReplicationOrderV1` structure and verifies Ed25519 signatures over the
+  `sorafs.replication_order.signature.v1` domain-separated canonical order
+  signing bytes. Advert, order, and governance signing sign canonical payload
+  bytes with runtime-supplied Ed25519 seeds, write Norito output only after
+  validation succeeds, and emit the same reference outcome contract. Committed
+  fixtures now include deterministic orderbook/streaming-settlement payloads,
+  PDP commitment/challenge/proof payloads plus initial negative fixtures, PoTR
+  receipt, and repair task payloads under
+  `fixtures/sorafs_manifest/orderbook/`, `fixtures/sorafs_manifest/pdp/`,
+  `fixtures/sorafs_manifest/potr/`, and `fixtures/sorafs_manifest/repair/`, so
+  orderbook and PDP fixture tests cover the committed bytes and bundle
+  validation exercises orderbook, PDP, PoTR receipt, and repair payloads
+  directly from a clean checkout. PDP remains fail-closed in embedded Torii
+  proof streaming until provider transport, live signature/inclusion
+  verification, governance archival, and repair handoff land.
+  `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
+  committed fixtures, exercises advert/order/governance signing, checks
+  orderbook receipt validation and bundle cross-links, and emits manifest/CAR
+  replay outcomes for SDK and release smoke testing.
+  `sorafs_car` now exposes `validate_manifest_car_replay` and
+  `validate_manifest_car_replay_bytes`, and `soranet_trustless_verifier
+  --validation-outcome` emits `ValidationOutcomeV1` for manifest policy plus
+  CARv2 digest, root, chunk-plan, payload, and PoR replay. Remaining SF-11 work
+  is live release evidence and downstream package publication rather than local
+  admission renewal/revocation, signing, governance publisher verification,
+  reference cookbook, manifest/CAR replay coverage, or `sorafs-validate`
+  packaging support: the packaging helper now records staged-file and smoke
+  output hashes in per-target manifests and can emit detached manifest
+  signatures when supplied governed release keys.
+- SoraFS SF-9 PoR coordinator runtime integration is wired locally: Torii builds
+  `PorCoordinatorRuntime` from `torii.sorafs_por`, starts it when the runtime and
+  embedded storage are enabled, records scheduler challenge/forced/failure and
+  duplicate-sample metrics through the existing telemetry handle, registers the
+  PoR ingestion/scheduler metrics for Prometheus export, and adds PoR scheduler
+  panels plus alert fixtures. Remaining SF-9 work is live drand/VRF/auditor run
+  evidence and any operator-specific governance archive handoff, not the local
+  Torii runtime, status/export/report endpoints, reference PoR validator command,
+  or local scheduler observability.
 - SoraFS provider admission observability now has a checked-in Grafana board
   (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
   rules and test vectors for missing admission envelopes, stale admission
@@ -1629,17 +1728,106 @@ and completed history lives in [`status.md`](./status.md).
   pin-fee side effects. Torii `POST /v1/sorafs/pin/register` now accepts
   optional `manifest_b64` for full `ManifestV1` validation and requires it when
   governance requires council signatures; the Rust client and `iroha app sorafs
-  pin register` request builders now include the exact manifest bytes. Focus
-  future SF-4 submission work on structured error labels and non-Rust SDK
-  request-builder parity instead of reopening the completed
+  pin register` request builders now include the exact manifest bytes. Torii
+  pin-register validation failures now return stable `sorafs_pin_*`
+  `AppQueryValidation` envelope codes for malformed request fields, manifest
+  payload decode failures, governance validation failures, and
+  digest/chunker/content-length/pin-policy mismatches. The Python, JavaScript,
+  C#, and Swift Torii clients now mirror the manifest payload field by accepting
+  base64 or raw manifest-byte aliases and failing closed on duplicate or
+  malformed payload aliases before request submission, and the SoraFS
+  pin-register SDK guard now pins those manifest payload surfaces across
+  JavaScript, Python, Swift, and C#. Focus future SF-4 submission work on
+  rollout and production evidence instead of reopening the completed
   SORAFS-215/SORAFS-216 validator wiring tasks.
 - SoraFS pricing docs now reflect the implemented egress accounting path:
   `RecordCapacityTelemetry.egress_bytes` is charged through
   `PricingScheduleRecord::egress_charge_bytes_nano`, recorded in the capacity
   fee ledger, folded into expected settlement, and debited from provider credit
-  alongside storage fees. The prior SF-8 wording that egress was only modeled is
-  closed; remaining pricing work is operational reconciliation of
-  gateway/orchestrator byte counters and dashboard drift alerts.
+  alongside storage fees. Operational reconciliation is wired through optional
+  gateway/orchestrator telemetry counters, `torii_sorafs_egress_bytes`,
+  `torii_sorafs_egress_drift_ratio`, the capacity dashboard drift panels, and
+  the `SoraFSEgressCounterDrift` alert for sustained gateway/orchestrator drift.
+- SoraFS economics/governance plan status is current for the remaining local
+  production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito
+  payloads and validators in `sorafs_manifest::orderbook` plus Rust reference
+  validator, reference FFI selectors, committed fixtures, bundle validation,
+  deterministic pair and full-book snapshot matching/fee/settlement helpers,
+  target dashboard/alert fixtures, Prometheus metric handles/helper methods for
+  the `torii_sorafs_orderbook_*` families, `sorafs-validate orderbook` CLI
+  coverage, a local in-memory `sorafs_node` orderbook mirror, local Torii
+  order/cancel/receipt/book/trade/channel/event routes, local settlement
+  receipt application with duplicate-id and overlapping-range rejection,
+  replayable local orderbook event history, local SSE/WebSocket event streams
+  with frame-shape coverage,
+  embedded Ed25519 payload signature digests/verification with local runtime
+  enforcement, local request-authenticated orderbook POST envelope/account/
+  signer binding, local known-channel receipt provider-role authorization,
+  local provider-advert capability authorization for asks and known-channel
+  receipts, and
+  local runtime metric emission for order flow, depth, matcher lag, settlement
+  backlog, escrow runway, API error ratios, and mirror divergence,
+  but still needs the on-chain contract surface, durable matcher service,
+  daemonized settlement receipt service with governance publication and escrow
+  custody mutation, contract-backed capability policy authorization, contract
+  forwarding, durable contract/matcher-backed WebSocket/SSE streams,
+  downstream SDK bindings, live dashboard wiring and alert routing, contract/mirror
+  reconciliation tests, and staged/live evidence;
+  SFM-4b2 appeal finance now has deterministic orchestrator pricing/settlement
+  helpers, CLI quote/settle/disburse commands, and read-only Torii config,
+  readiness, and quote endpoints for the baseline pricing formula, but still
+  needs mutating deposit/report APIs or a daemon, runtime escrow/ledger
+  settlement, governance DAG finance reports, and end-to-end ledger
+  reconciliation;
+  SFM-5 hedging/billing is still a target
+  architecture; SFM-6 currently ships the reserve policy, quote/ledger, matrix,
+  digest, dashboard, and alert tooling but still needs the signed reserve
+  lifecycle service/API, runtime reserve movements, credit-line automation, and
+  live provider bake; SF-12 currently ships governance log schemas, reference
+  validation/signing, governance DAG block/head reference CLI validation,
+  filesystem publishers, PoR publication hooks, Taikai cache bundles, public
+  DAG block/head schemas with deterministic CID and signed-head validation
+  helpers, local Governance DAG publication metrics for filesystem publish
+  attempts/bytes, local CAR queue backlog, and local signed runtime-head age,
+  the local `sorafs_cli governance dag list` / `show` / `verify` / `export` /
+  `build` / `verify-build` / `rebuild-head` archive operator commands, optional local
+  CARv2 segment emission for signed snapshots, local checkpoint metadata
+  packaging, verification, and local recovery for verified heads/CAR/mirror
+  indexes, local mirror index build/query commands, filesystem-publisher
+  `publish-index.json` maintenance for runtime-local artifact feeds, Torii
+  read-only publish-index lookup endpoints, runtime-local `car-queue.json`
+  maintenance and CARv2 segment assembly for filesystem-published governance
+  artifacts, config-backed local signed runtime block/head assembly for
+  supported filesystem-published payloads, Torii read-only CAR queue lookup
+  endpoints, Torii read-only runtime signed-DAG lookup endpoints, and checked-in
+  Grafana/Alertmanager fixtures, plus a Torii read-only local mirror
+  dashboard/query API, but still needs the always-on ingest/publisher services,
+  IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
+  live-head/public-checkpoint publication and recovery operator commands,
+  runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
+  metric emission, IPFS-backed tests, and staged/live publication evidence.
+  Prioritize signed service boundaries before adding public rollout evidence
+  for those lanes.
+- SoraFS repair auditor submission wiring now accepts JSON or Norito
+  `SignedAuditorRequestV1` envelopes on the existing `/report` and `/slash`
+  endpoints, validates envelope version, non-zero nonce, auditor-account match,
+  payload kind, Ed25519 signature over the canonical signed payload, and signer
+  key binding to the canonical auditor account, then persists the highest
+  accepted nonce per canonical auditor account in the repair state snapshot and
+  rejects stale or replayed signed report/slash nonces before scheduler
+  mutation. Torii also applies config-backed per-auditor signed report/slash
+  rate limits through `sorafs.repair.auditor_rate_per_sec` and
+  `sorafs.repair.auditor_burst` after signed-envelope validation and before the
+  scheduler mutates state. Legacy raw `RepairReportV1`/`RepairSlashProposalV1`
+  bodies are rejected for both JSON and Norito submissions. Local repair task
+  transitions are now also wrapped in a process-local monotonic `RepairEvent` stream and
+  exposed through Torii JSON polling, SSE, and WebSocket routes under
+  `/v1/sorafs/audit/repair/events*`, with frame-shape coverage while preserving
+  the canonical `RepairTaskEventV1` and governance audit payloads; the
+  generated Torii OpenAPI document advertises the same cursorable event route
+  set. Remaining repair production work is live PoR/PoTR failure, repair,
+  escalation, and governance handoff evidence with the deployed auditor roster
+  and coordinator.
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
@@ -5161,9 +5349,12 @@ and completed history lives in [`status.md`](./status.md).
   checked builder signature;
   SoraFS gateway conformance attestations now sign reports through
   `Signature::try_new`, with regression coverage that verifies the emitted
-  envelope signature and rejects a wrong key, and the conformance docs plus
-  translated copies now show the checked signing helper instead of the
-  compatibility signer;
+  envelope signature, rejects a wrong key, recomputes the embedded report hash
+  through `verify_attestation_envelope`, and exposes
+  `cargo xtask sorafs-gateway-attest --verify <attestation.to>` for operator
+  evidence checks; the conformance docs plus translated copies now show the
+  checked signing and verification helper instead of the compatibility signer
+  or the planned standalone verifier crate;
   irohad Soracloud runtime provider advert/admission fixtures and recording
   mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
   with remote provider hydration and local heartbeat/Inrou regressions covering

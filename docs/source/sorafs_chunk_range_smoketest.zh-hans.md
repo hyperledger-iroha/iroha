@@ -7,11 +7,11 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf6279ce239a097aaf93c11264e422ebde0e579087a0b8c0760209ff2195bf3c
 source_last_modified: "2026-01-22T14:35:37.504781+00:00"
 translation_last_reviewed: 2026-02-07
-title: SoraFS Chunk-Range Smoketest Plan (Draft)
+title: SoraFS Chunk-Range Smoketest Plan
 summary: Quick validation workflow for chunk-range endpoints and orchestrator integration.
 ---
 
-# SoraFS Chunk-Range Smoketest Plan (Draft)
+# SoraFS Chunk-Range Smoketest Plan
 
 ## Purpose
 
@@ -104,30 +104,26 @@ will reject the request.
 - Average latency < 50 ms (hot-cache expectation; adjust per environment)
 - Proof failures = 0
 
-## CI Integration
+## Current Focused Validation
 
-- Add a Buildkite step `ci/sorafs-chunk-range-smoketest` that executes the CLI against the
-  staging gateway immediately after deployment. Reference the shared template described in
-  `docs/source/sorafs_ci_templates.md` and pass the manifest/token fixtures via pipeline
-  secrets (`SORA_FS_GATEWAY_URL`, `SORA_FS_STREAM_TOKEN`).
-- Archive the CLI JSON output and attach it to the build summary so operators can review
-  latency/throughput without rerunning the test.
-- Wire the step as a merge gate for PRs touching `docs/source/sorafs_gateway_*`,
-  `crates/sorafs_*`, or `ci/sorafs_*` scripts.
+- Run `cargo test -p sorafs_node --test gateway` for the local gateway range path: `Range` parsing, `dag-scope=block`, stream-token headers, quota, rate-limit, and `X-Sora-Chunk-Range` coverage.
+- Run `cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture` for the fixture-backed gateway conformance path, including aligned ranges, misaligned-range refusal, and multi-range response parsing.
+- For orchestrator or provider-advert changes, run `cargo test -p sorafs_car --bin sorafs_fetch` or the narrower `cargo test -p sorafs_car --bin sorafs_fetch ensure_range_capability` lane so `chunk_range_fetch` capability validation stays covered.
+- Archive the `iroha app sorafs fetch --json-out <path>` report as deployment evidence. A committed Buildkite merge gate is not present in this checkout; use `docs/source/sorafs_ci_templates.md` as the template when wiring one.
 
 ## Cold-Cache Thresholds
 
 - For cold-cache validation (first-run or cache flush scenarios) relax the latency guard to
   `avg_latency_ms < 150` and `p95_latency_ms < 250`. Proof failure tolerance remains zero.
-- Extend the CLI to accept `--profile cold` so the report includes the profile label and the
-  CI job can choose the appropriate threshold set.
-- Record the cache state (`warm`/`cold`) in the JSON artifact (`"cache_state": "cold"`).
+- Pass `--profile=cold` so the report includes `cache_profile` and
+  `cache_state` labels and the CI job can choose the appropriate threshold set.
+- Confirm the JSON artifact records the cache state (`"cache_state": "cold"`).
 
 ## Multi-Gateway Scenario
 
-- Once the orchestrator MVP lands, expand the smoketest to iterate over the provider list
-  advertised in the manifest (`manifest.providers[]`). Use the orchestrator’s weighted
-  scheduler to fetch from each gateway and report per-gateway latency/failure metrics.
+- For multi-gateway validation, pass one provider entry per advertised gateway
+  (`manifest.providers[]`). The orchestrator fetch path already schedules across
+  repeated provider entries and reports per-gateway latency/failure metrics.
 - Aggregate results into a consolidated JSON report with per-gateway entries and a merged
-  success summary. Update the CI workflow to fail if any gateway falls below the success
+  success summary. When wiring a deployment CI job, fail if any gateway falls below the success
   threshold while still highlighting individual latency regressions.

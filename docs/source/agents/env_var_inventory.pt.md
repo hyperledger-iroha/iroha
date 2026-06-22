@@ -77,7 +77,7 @@ Referências totais: **505** · Variáveis únicas: **137**
 
 ## CARGO_BIN_EXE_sorafs_cli (teste: 1)
 
-- teste: crates/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- teste: crates/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_fetch (teste: 1)
 
@@ -85,7 +85,7 @@ Referências totais: **505** · Variáveis únicas: **137**
 
 ## CARGO_BIN_EXE_taikai_car (teste: 1)
 
-- teste: crates/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- teste: crates/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## CARGO_BIN_NAME (produção: 3)
 

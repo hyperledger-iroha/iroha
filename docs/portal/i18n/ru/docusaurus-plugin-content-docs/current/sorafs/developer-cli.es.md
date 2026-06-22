@@ -19,7 +19,7 @@ Sidebar_label: Получение CLI
 Эта страница отражает `docs/source/sorafs/developer/cli.md`. Mantén ambas copyas sincronizadas.
 :::
 
-Консолидированная поверхность `sorafs_cli` (пропорциональная корпусу `sorafs_car` с привычной функцией `cli`) показана каждый раз, когда необходимо подготовить артефакты SoraFS. США este Recetario Para Saltar Directamente Flujos Comunes; объединение с конвейером манифеста и Runbooks Orquestador для оперативного контекста.
+Консолидированная поверхность `sorafs_cli` (provided by the `sorafs_orchestrator` crate) показана каждый раз, когда необходимо подготовить артефакты SoraFS. США este Recetario Para Saltar Directamente Flujos Comunes; объединение с конвейером манифеста и Runbooks Orquestador для оперативного контекста.
 
 ## Полезные нагрузки Empaquetar
 

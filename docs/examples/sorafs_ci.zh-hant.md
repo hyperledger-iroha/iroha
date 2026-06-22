@@ -81,7 +81,7 @@ jobs:
 
 ## 註釋
 
-- `sorafs_cli` 必須在運行器上可用（例如，執行這些步驟之前的 `cargo install --path crates/sorafs_car --features cli`）。
+- `sorafs_cli` 必須在運行器上可用（例如，執行這些步驟之前的 `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli`）。
 - 工作流程必須提供明確的 OIDC 受眾（此處為 `sorafs`）；調整 `--identity-token-audience` 以匹配您的 Fulcio 策略。
 - 發布管道應存檔 `artifacts/manifest.bundle.json`、`artifacts/manifest.sig` 和 `artifacts/proof.json` 以供治理審查。
 - 確定性樣本工件位於 `fixtures/sorafs_manifest/ci_sample` 中；當您需要黃金清單、塊計劃或捆綁 JSON 時，將它們複製到測試中，而無需重新計算管道。

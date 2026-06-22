@@ -52,10 +52,10 @@ Herramientas CLI útiles:
 
 ```bash
 # Listado JSON de todos los descriptores registrados (ids, handles, aliases, multihash)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 
 # Emitir metadatos para un perfil candidato por defecto (handle canónico + aliases)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
@@ -69,7 +69,7 @@ proporcionan los metadatos canónicos necesarios en las discusiones de gobernanz
 | `namespace` | Agrupación lógica de perfiles relacionados. | `sorafs` |
 | `name` | Etiqueta legible para humanos. | `sf1` |
 | `semver` | Cadena de versión semántica para el conjunto de parámetros. | `1.0.0` |
-| `profile_id` | Identificador numérico monótono asignado una vez que el perfil se publica. Reserve el siguiente id pero no reutilice números existentes. | `1` |
+| `profile_id` | Identificador numérico estrictamente creciente asignado en la entrada del registro. Reserve el siguiente id aprobado por gobernanza y no reutilice números existentes. | `1` |
 | `profile_aliases` | Identificadores adicionales opcionales expuestos a los clientes durante la negociación. Incluya siempre el handle canónico como primera entrada. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Longitud mínima del chunk en bytes. | `65536` |
 | `profile.target_size` | Longitud objetivo del chunk en bytes. | `262144` |
@@ -135,12 +135,12 @@ coherentes:
 
 ```bash
 # Validar metadatos de chunk + PoR con el nuevo perfil
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf2@1.0.0 \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generar manifiesto + CAR y capturar el plan de fetch de chunks
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -149,7 +149,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-ejecutar usando el plan de fetch guardado (protege contra offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-
@@ -174,7 +174,7 @@ encontrada durante la validación.
 ## Flujo de gobernanza
 
 1. **Enviar un PR con propuesta + fixtures.** Incluya los activos generados, la
-   propuesta Norito y las actualizaciones de `chunker_registry_data.rs`.
+   propuesta Norito y las actualizaciones de `crates/sorafs_manifest/src/chunker_registry.rs`.
 2. **Revisión del Tooling WG.** Los revisores vuelven a ejecutar la lista de
    validación y confirman que la propuesta cumple las reglas del registro (sin
    reutilización de IDs, determinismo satisfecho).

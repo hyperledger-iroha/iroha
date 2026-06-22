@@ -79,7 +79,7 @@ Tableau de bord manifeste pour les annonces des fournisseurs et pour les annonce
 
 ## CLI et SDK en cours de réalisation
 
-`sorafs_cli fetch` (دیکھیں `crates/sorafs_car/src/bin/sorafs_cli.rs`)
+`sorafs_cli fetch` (دیکھیں `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`)
 Wrapper `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) ici
 surface de configuration de l'orchestrateur preuve de déploiement - canonique
 replay des rencontres کرنے کے لیے یہ flags استعمال کریں:

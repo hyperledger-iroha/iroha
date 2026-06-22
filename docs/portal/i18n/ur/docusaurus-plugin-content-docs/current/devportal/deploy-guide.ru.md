@@ -12,12 +12,12 @@ translation_last_reviewed: 2026-02-07
 
 یہ پلے بوک ** دستاویزات -7 ** (اشاعت SoraFS) اور ** دستاویزات -8 ** (CI/CD پن آٹومیشن) روڈ میپ آئٹمز کو ڈویلپر پورٹل کے عملی عمل میں ترجمہ کرتی ہے۔ اس میں بلڈ/لنٹ مرحلے ، پیکیجنگ SoraFS کا احاطہ کیا گیا ہے ، Sigstore کے ذریعے ظاہر ہوتا ہے ، عرفیوس کو فروغ دیتا ہے ، چیکنگ اور رول بیک ٹریننگ تاکہ ہر پیش نظارہ اور رہائی قابل تولیدی اور قابل اظہار ہو۔
 
-بہاؤ یہ فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری ہے (`--features cli` کے ساتھ بنایا گیا ہے) ، Torii اختتامی نقطہ تک PIN-REGGISTY کے حقوق کے ساتھ رسائی ، اور OIDC ساکھ Sigstore کے لئے۔ سی آئی والٹ میں طویل عرصے تک راز (`IROHA_PRIVATE_KEY` ، `SIGSTORE_ID_TOKEN` ، Torii ٹوکن) اسٹور کریں۔ مقامی لانچ ان کو شیل میں برآمد سے اٹھا سکتے ہیں۔
+بہاؤ یہ فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری ہے (built from the `sorafs_orchestrator` Cargo target) ، Torii اختتامی نقطہ تک PIN-REGGISTY کے حقوق کے ساتھ رسائی ، اور OIDC ساکھ Sigstore کے لئے۔ سی آئی والٹ میں طویل عرصے تک راز (`IROHA_PRIVATE_KEY` ، `SIGSTORE_ID_TOKEN` ، Torii ٹوکن) اسٹور کریں۔ مقامی لانچ ان کو شیل میں برآمد سے اٹھا سکتے ہیں۔
 
 ## شرائط
 
 - `npm` یا `pnpm` کے ساتھ نوڈ 18.18+۔
-- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے۔
+- `sorafs_cli` `cargo run -p sorafs_orchestrator --bin sorafs_cli` سے۔
 - URL Torii ، جو `/v1/sorafs/*` کھولتا ہے ، نیز ایک اکاؤنٹ/نجی کلید جو ظاہر اور عرفی نام بھیجنے کے قابل ہے۔
 - OIDC جاری کرنے والا (گٹ ہب ایکشنز ، گٹ لیب ، ورک بوجھ کی شناخت ، وغیرہ) رہائی کے لئے `SIGSTORE_ID_TOKEN`۔
 - اختیاری: خشک رن کے لئے `examples/sorafs_cli_quickstart.sh` اور Github/Gitlab ورک فلوز ٹیمپلیٹس کے لئے `docs/source/sorafs_ci_templates.md`۔

@@ -11,163 +11,189 @@ translation_last_reviewed: 2026-01-30
 
 ---
 title: SoraFS AI Pre-screening & Quarantine
-summary: Final specification for SFM-4a covering reproducible AI committees, manifests, quarantine flows, observability, and rollout.
+summary: SFM-4a implementation status for moderation reproducibility, honey-audit tooling, and remaining quarantine service gates.
 ---
 
 # SoraFS AI Pre-screening & Quarantine
 
-## Goals & Scope
-- Deploy deterministic, reproducible AI committees that screen content before it reaches public gateways, flagging or quarantining potentially non-compliant material.
-- Ensure model packaging, execution, and calibration are open-weight, auditable, and reproducible, with cryptographic manifests linked to governance.
-- Provide quarantine storage, escalation pathways, and operator tooling to handle detections responsibly.
-- Integrate screening decisions with gateway compliance (SFM-4) and moderation appeal systems (SFM-4b).
+## Status
 
-This specification completes **SFM-4a — AI pre-screening & quarantine service**.
+SFM-4a defines deterministic AI pre-screening before public SoraFS gateway
+publication. The repository currently ships the reproducibility, corpus,
+gateway-policy, honey-audit, and observability foundations. It does not yet ship
+the production AI runner service, quarantine queue, operator review panel, or
+release workflow as runnable services.
 
-## Architecture Overview
-| Component | Responsibility | Notes |
-|-----------|----------------|-------|
-| Model registry (`ai_model_registry`) | Stores model artefacts, manifests, calibration datasets, hashes. | Backed by S3/IPFS; manifests recorded in Governance DAG. |
-| AI runner (`sorafs_ai_runner`) | Executes models deterministically (CPU-only) with fixed seeds, returns structured scores. | Rust/ONNX-based service; gRPC/HTTP interface. |
-| Committee orchestrator (`ai_committee_service`) | Dispatches content to models, aggregates scores, issues verdicts, logs results. | Stateless pods with deterministic batching. |
-| Quarantine store (`quarantine_store`) | Secure storage for flagged content and metadata; handles retention & access controls. | Encrypted object storage + metadata DB. |
-| Escalation workflow (`moderation_bridge`) | Feeds flagged items to moderation appeal panel tooling (SFM-4b) and compliance modules. | Emits events via Torii + queue. |
+Implemented locally:
 
-### Data Flow
-1. Content (manifests, chunks, metadata) enters screening pipeline prior to gateway publication.
-2. Orchestrator fetches active `AiCommitteeManifestV1`, sends content to AI runner, collects `AiScreeningResultV1`.
-3. Based on combined score vs thresholds, the orchestrator yields verdict:
-   - `Pass` → content proceeds to gateway pipeline.
-   - `Quarantine` → content stored in encrypted quarantine bucket, proof token generated, operator notified.
-   - `Escalate` → triggers immediate manual review via moderation tooling.
-4. Results appended to Governance DAG if quarantine/escalation occurs, preserving audit trail.
-5. Operators use dashboards/CLI to review queue, annotate decisions, integrate with appeals.
+- `crates/iroha_data_model/src/sorafs/moderation.rs` defines
+  `ModerationReproManifestV1`, `ModerationReproBodyV1`,
+  `ModerationModelFingerprintV1`, `ModerationThresholdsV1`,
+  `ModerationReproSignatureV1`, and `AdversarialCorpusManifestV1` with Norito
+  encode/decode support and validators for schema version, model coverage,
+  duplicate signers, and governance signatures.
+- `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
+  validates governance-signed reproducibility manifests.
+- `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
+  validates adversarial corpus manifests before gateway adoption.
+- `sorafs_cli moderation honey-audit` probes configured gateways with
+  denylisted digests and emits JSON/Markdown evidence for policy enforcement.
+- `docs/examples/ai_moderation_calibration_manifest_202602.json`,
+  `docs/examples/ai_moderation_calibration_scorecard_202602.json`, and
+  `docs/examples/ai_moderation_perceptual_registry_202602.json` provide the
+  committed calibration and registry fixtures.
+- `docs/source/sorafs/reports/ai_moderation_calibration_202602.md` records the
+  calibration report, with localized mirrors.
+- Gateway Authorization Records support moderation directives and slugs through
+  `GarModerationDirectiveV1`, `GarModerationAction`, GAR v2 policy parsing, and
+  Torii gateway policy checks.
+- Torii CID lookup can report local moderation hits, while gateway fetch policy
+  still blocks serving when required moderation directives are absent.
+- `dashboards/grafana/ministry_moderation_overview.json` and
+  `dashboards/alerts/ministry_moderation_rules.yml` provide the moderation
+  ingest, latency, drift, and manifest-health monitoring story.
 
-## Model Packaging & Execution
-- **Initial committee models**:
-  - Vision: `OpenCLIP ViT-H/14` with moderation fine-tuning.
-  - Multimodal: `LLaVA-1.6 34B` safety-tuned.
-  - Perceptual hash: `pHash` + `aHash` + custom `neuralhash-lite`.
-  - Optional audio pipeline: `Whisper-medium` (transcription only) feeding text classifier.
-- **Packaging standards**:
-  - Each model packaged in OCI image built with `Dockerfile.ai`:
-    - CPU-only (OpenBLAS/MKL) with deterministic seeds.
-    - Hash-locked dependencies (`requirements.lock`, `Cargo.lock`).
-    - BLAKE3 digest recorded in manifest.
-  - Images pushed to `registry.sora.net/sorafs/ai/<model>@sha256:<digest>`.
-- **AI runner**:
-  - Accepts `AiScreeningRequestV1 { manifest_id, content_uri, content_hash, content_type }`.
-  - Executes models sequentially or in deterministic order; seeds derived from content hash.
-  - Outputs `ModelScoreV1 { model_name, score, confidence, threshold }`.
-  - Runner exposes `/v1/health` and `/v1/metrics`.
-- **Committee composition**:
-  - Determined by `AiCommitteeManifestV1`.
-  - Supports weightings per model and dynamic threshold adjustments.
-  - Manifest stored in Governance DAG (payload `AiCommitteeManifestNode`).
+Not shipped locally:
 
-## Manifests & Results
-- **Reproducibility manifest** (unchanged structure but clarified usage):
-  ```norito
-  struct AiCommitteeManifestV1 {
-      manifest_id: Uuid,
-      issued_at: Timestamp,
-      models: Vec<AiModelEntryV1>,
-      calibration_dataset: DatasetReferenceV1,
-      calibration_hash: Digest32,
-      runner_hash: Digest32,
-      config_version: String,
-      governance_signature: Signature,
-  }
-  ```
-- **Screening result**:
-  ```norito
-  struct AiScreeningResultV1 {
-      manifest_id: Uuid,
-      content_digest: Digest32,
-      content_uri: String,
-      request_id: Uuid,
-      model_scores: Vec<ModelScoreV1>,
-      combined_score: f32,
-      verdict: ScreeningVerdictV1, // Pass | Quarantine | Escalate
-      executed_at: Timestamp,
-      annotations: Option<Vec<String>>,
-  }
-  ```
-- Results stored in Postgres (`ai_screening_results`), with `verdict` indexed for quarantine.
-- Quarantine events generate `AiQuarantineEventV1` for Governance DAG.
+- A production `ai_model_registry` service.
+- A deterministic `sorafs_ai_runner` HTTP/gRPC service.
+- An `ai_committee_service` that executes models and emits screening verdicts.
+- Encrypted quarantine object storage and queue state.
+- `list-quarantine`, `review`, or `release` CLI commands.
+- A moderation operator web panel.
+- End-to-end ingest -> quarantine -> appeal -> transparency workflow services.
 
-## Thresholds & Decision Logic
-- Combined score computed via weighted max or logistic combination:
-  ```
-  combined = Σ w_model * clamp(score / threshold, 0, 1) / Σ w_model
-  ```
-- Default thresholds:
-  - `Pass` if combined < 0.5.
-  - `Quarantine` if 0.5 ≤ combined < 0.8 (requires manual release).
-  - `Escalate` if ≥ 0.8 or any model flagged critical label (e.g., child sexual abuse material).
-- Governance-approved configuration stored in `ai_committee_config.toml`.
-- Operators can temporarily adjust thresholds (within governance-specified bounds) via change request logged in audit DB.
+## Target Architecture
 
-## Quarantine & Escalation
-- **Quarantine storage**:
-  - Encrypted bucket `s3://sorafs-quarantine/<date>/<content_digest>` with server-side KMS, access limited to moderation roles.
-  - Metadata stored in Postgres `quarantine_items` table referencing `AiScreeningResultV1`.
-  - Retention: default 90 days (configurable). Items auto-deleted after release + retention window.
-- **Operator tools**:
-  - CLI `sorafs moderation list-quarantine`, `... review <content_digest>`, `... release <content_digest>`.
-  - Web UI integrated with moderation panel (SFM-4b) for annotation, appeal decisions.
-- **Escalation**:
-  - `Escalate` verdict pushes item into moderation appeal queue with `priority = critical`.
-  - Notification via PagerDuty/Slack for on-call moderation team.
-  - Appeal decision recorded as `ModerationDecisionV1` referencing AI result.
+The production service remains a staged rollout target:
 
-## Observability & Alerts
-- Metrics:
-  - `sorafs_ai_screening_requests_total{verdict}`
-  - `sorafs_ai_screening_latency_seconds_bucket`
-  - `sorafs_ai_model_score_bucket{model}`
-  - `sorafs_ai_quarantine_backlog`
-  - `sorafs_ai_manifest_version_current`
-- Logs: structured `ai_screening_event` (request_id, manifest_id, verdict, scores).
-- Alerts:
-  - Screening service down or error rate > 1%.
-  - Quarantine backlog > 100 items.
-  - Model manifest mismatch or unsigned manifest.
-  - Runner latency p95 > 3 s.
-  - False positive rate from appeals > threshold (requires manual review).
+| Component | Responsibility | Local state |
+|-----------|----------------|-------------|
+| Model registry | Stores model artifacts, reproducibility manifests, calibration datasets, and hashes. | Fixtures and validators exist; registry service not shipped. |
+| AI runner | Executes approved models deterministically and emits model scores. | Runner contract documented; service not shipped. |
+| Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema and calibration report exist; orchestrator not shipped. |
+| Quarantine store | Stores flagged content and metadata under moderation access controls. | GAR moderation policy and CID lookup reporting exist; queue/storage service not shipped. |
+| Moderation bridge | Hands escalations to appeal and transparency workflows. | Appeal finance CLI exists separately; bridge service not shipped. |
 
-## Security & Privacy
-- All content hashes and manifests hashed with BLAKE3; sensitive data stored encrypted.
-- Access control: RBAC; only moderation roles can view quarantined content; operations limited to metadata.
-- AI runner uses sandboxed environment (seccomp, AppArmor) with no outbound network except required endpoints.
-- Audit logs hashed daily and stored in Governance DAG.
-- Differential privacy optional for aggregated metrics released publicly.
+## Data Model
 
-## Testing & Reproducibility
-- Unit tests for runner determinism (same input → same score).
-- Regression tests verifying threshold logic with calibration dataset.
-- Integration tests with synthetic content verifying pipeline (ingest → quarantine → release).
-- Calibration tests produce reproducibility report comparing new vs previous committee performance.
-- Chaos scenarios: disable model, validate fallback (degraded mode uses remaining models + raises alert).
-- Fuzz tests for malformed content metadata.
+The shipped reproducibility manifest records the runner and model fingerprints
+that gateways should require before adopting a moderation committee:
 
-## Rollout Plan
-1. Package initial model set with manifests; publish `AiCommitteeManifestV1` via governance.
-2. Deploy staging pipeline with synthetic dataset; confirm determinism across runs.
-3. Integrate with gateway compliance (blocklist) in passive mode (log-only) for 2 weeks.
-4. Enable quarantine in staging; run operator exercises for release workflow.
-5. Production rollout:
-   - Stage 0: passive monitoring (no blocking) while logging outputs.
-   - Stage 1: enable quarantine for high-confidence detections (Critical categories).
-   - Stage 2: expand coverage (additional categories), integrate appeals and transparency reporting.
-6. Document SOP (`docs/source/sorafs/ai_prescreen_operator.md`), update compliance plan references, and record status update.
+```norito
+struct ModerationReproManifestV1 {
+    body: ModerationReproBodyV1,
+    signatures: Vec<ModerationReproSignatureV1>,
+}
 
-## Implementation Checklist
-- [x] Define model packaging, manifests, and runner interfaces.
-- [x] Specify committee orchestration, thresholds, and governance controls.
-- [x] Document quarantine storage, operator tooling, and escalation.
-- [x] Capture observability metrics, alerts, and logging.
-- [x] Outline security/privacy safeguards.
-- [x] Detail testing, reproducibility, and rollout sequence.
+struct ModerationReproBodyV1 {
+    schema_version: u16,
+    manifest_id: [u8; 16],
+    manifest_digest: Digest32,
+    runner_hash: Digest32,
+    runtime_version: String,
+    issued_at_unix: u64,
+    seed_material: ModerationSeedMaterialV1,
+    thresholds: ModerationThresholdsV1,
+    models: Vec<ModerationModelFingerprintV1>,
+    notes: Option<String>,
+}
 
-With this specification, AI Platform and operations teams can implement the AI pre-screening and quarantine pipeline confidently, ensuring compliant, reproducible moderation support for SoraFS gateways.
+struct ModerationThresholdsV1 {
+    quarantine: u16,
+    escalate: u16,
+}
+```
+
+The adversarial corpus manifest records digest families and variants used for
+honey-probe and regression testing. These structures are validation artifacts;
+they do not execute models or store quarantined payloads.
+
+## Gateway Policy Integration
+
+GAR v2 carries moderation directives:
+
+- `allow`, `warn`, `quarantine`, and `block` moderation actions.
+- Moderation slugs that must be present on gateway requests before content is
+  served.
+- Torii gateway policy checks that fail closed with `moderation_required` when
+  content requires moderation evidence and the request lacks accepted slugs.
+
+Honey-audit tooling exercises this policy path by probing gateway providers with
+known denied digests. Operators should archive the emitted JSON/Markdown reports
+with governance evidence for the active moderation cohort.
+
+## Operator CLI
+
+Shipped commands:
+
+```bash
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
+  moderation validate-repro --manifest docs/examples/ai_moderation_calibration_manifest_202602.json
+
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
+  moderation validate-corpus --manifest docs/examples/ai_moderation_perceptual_registry_202602.json
+
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
+  moderation honey-audit \
+  --manifest-id=<hex32> \
+  --honey=<digest_hex> \
+  --provider name=<alias>,provider-id=<hex32>,base-url=<url>,stream-token=<base64>
+```
+
+Do not document `list-quarantine`, `review`, or `release` as shipped commands
+until the moderation panel and quarantine state service exist.
+
+## Observability
+
+Implemented local observability:
+
+- Calibration and corpus evidence fixtures in `docs/examples/`.
+- Calibration report under `docs/source/sorafs/reports/`.
+- Grafana dashboard `dashboards/grafana/ministry_moderation_overview.json`.
+- Prometheus alert rules and tests under `dashboards/alerts/`.
+
+Reserved production metrics:
+
+- `sorafs_ai_screening_requests_total{verdict}`.
+- `sorafs_ai_screening_latency_seconds_bucket`.
+- `sorafs_ai_model_score_bucket{model}`.
+- `sorafs_ai_quarantine_backlog`.
+- `sorafs_ai_manifest_version_current`.
+
+Dashboards may keep reserved panels for production rollout, but release
+evidence must distinguish shipped validation/honey-audit tooling from a live AI
+runner and quarantine queue.
+
+## Remaining Production Gates
+
+- Implement the deterministic runner service with locked model artifacts,
+  fixed seeds, and no outbound network except approved artifact sources.
+- Implement committee orchestration and threshold aggregation over
+  governance-approved manifests.
+- Persist screening results and quarantine events with deterministic digests.
+- Ship encrypted quarantine storage, review/release queue state, and role-based
+  operator access.
+- Add operator panel and CLI commands for queue listing, review, release, and
+  appeal handoff.
+- Append quarantine/escalation evidence to the Governance DAG and transparency
+  ledgers.
+- Add end-to-end tests covering ingest, quarantine, review, release, appeal, and
+  transparency publication.
+- Update the portal and OpenAPI/operator docs only after the above commands and
+  services exist.
+
+## Rollout Status
+
+Completed local foundations:
+
+- Define governance-signed reproducibility manifests and validators.
+- Define adversarial corpus manifests and validators.
+- Provide moderation validation CLI commands.
+- Provide honey-audit gateway probing.
+- Provide calibration fixtures, report, dashboards, and alert rules.
+- Wire GAR moderation directives into gateway policy checks.
+
+Remaining rollout work is service implementation and live evidence, not the
+local manifest/corpus validators, honey-audit tool, GAR policy plumbing, or
+observability fixtures.

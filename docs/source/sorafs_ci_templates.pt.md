@@ -30,7 +30,7 @@ Key points to keep in mind when adapting the template:
 
 - Grant the workflow `permissions: id-token: write` so GitHub can mint an
   audience-bound OIDC token.
-- Install the CLI with `cargo install --path crates/sorafs_car --features cli
+- Install the CLI with `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli
   --bin sorafs_cli --force` (until the binary ships on crates.io/Homebrew).
 - Call `sorafs_cli manifest sign --identity-token-provider=github-actions`
   (optionally supplying `--identity-token-audience=<value>`) to let the CLI fetch
@@ -62,7 +62,7 @@ steps:
     with:
       rust-version: 1.92
   - name: Install SoraFS CLI
-    run: cargo install --path crates/sorafs_car --features cli --bin sorafs_cli --force
+    run: cargo install --path crates/sorafs_orchestrator --bin sorafs_cli --force
   - name: Package payload
     run: |
       mkdir -p artifacts
@@ -118,7 +118,7 @@ build_manifest:
   image: rust:${RUST_VERSION}
   before_script:
     - rustup default ${RUST_VERSION}
-    - cargo install --path crates/sorafs_car --features cli --bin sorafs_cli --force
+    - cargo install --path crates/sorafs_orchestrator --bin sorafs_cli --force
   script:
     - mkdir -p artifacts
     - sorafs_cli car pack --input payload.bin --car-out artifacts/payload.car --plan-out artifacts/chunk_plan.json --summary-out artifacts/car_summary.json
@@ -240,26 +240,26 @@ byte-for-byte comparisons survive across runners.
 Regenerate the fixtures with:
 
 ```sh
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   car pack \
   --input=fixtures/sorafs_manifest/ci_sample/payload.txt \
   --car-out=fixtures/sorafs_manifest/ci_sample/payload.car \
   --plan-out=fixtures/sorafs_manifest/ci_sample/chunk_plan.json \
   --summary-out=fixtures/sorafs_manifest/ci_sample/car_summary.json
 
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest build \
   --summary=fixtures/sorafs_manifest/ci_sample/car_summary.json \
   --manifest-out=fixtures/sorafs_manifest/ci_sample/manifest.to \
   --manifest-json-out=fixtures/sorafs_manifest/ci_sample/manifest.json
 
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   proof verify \
   --manifest=fixtures/sorafs_manifest/ci_sample/manifest.to \
   --car=fixtures/sorafs_manifest/ci_sample/payload.car \
   --summary-out=fixtures/sorafs_manifest/ci_sample/proof.json
 
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest sign \
   --manifest=fixtures/sorafs_manifest/ci_sample/manifest.to \
   --summary=fixtures/sorafs_manifest/ci_sample/car_summary.json \
@@ -270,7 +270,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   --issued-at=1700000000 \
 > fixtures/sorafs_manifest/ci_sample/manifest.sign.summary.json
 
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest verify-signature \
   --manifest=fixtures/sorafs_manifest/ci_sample/manifest.to \
   --bundle=fixtures/sorafs_manifest/ci_sample/manifest.bundle.json \
@@ -292,7 +292,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
 The integration test `ci_sample_fixtures_are_consistent` in
-`crates/sorafs_car/tests/sorafs_cli.rs` keeps these artefacts aligned with the
+`crates/sorafs_orchestrator/tests/sorafs_cli.rs` keeps these artefacts aligned with the
 manifest, signature bundle, and proof summary.
 
 See `fixtures/sorafs_manifest/ci_sample/README.md` for regeneration commands and
@@ -301,8 +301,7 @@ repository layout that mirrors the CI cookbook.
 
 ## Optional Add-ons
 
-- **Gateway smoke tests** – once SF-5d fixtures land, add a `gateway-smoke`
-  job that replays capability/refusal bundles against staging gateways.
+- **Gateway smoke tests** – run `ci/check_sorafs_gateway_conformance.sh` for the deterministic capability/refusal harness and `ci/check_sorafs_gateway_probe.sh` against staging gateways during rollout.
 - **Governance announcements** – add a job that uploads the evidence tarball in
   `artifacts/sorafs_cli_release/` to the governance release tracker (or evidence
   bucket) after the manual checklist completes.

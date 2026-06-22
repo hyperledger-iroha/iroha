@@ -1,64 +1,154 @@
 ---
 title: SoraFS Reference SDK & Validator
-summary: Final specification for SF-11 covering crate architecture, CLI surface, error contracts, policy defaults, integrations, and testing.
+summary: SF-11 implementation status for reference validators, CLI and FFI surfaces, release packaging, and remaining live-release evidence.
 ---
 
 # SoraFS Reference SDK & Validator
 
 ## Goals & Scope
-- Ship a Rust reference crate and CLI that sign, verify, and enforce SoraFS governance policies for adverts, replication orders, PoR/PoTR artefacts, repairs, and governance envelopes.
+- Ship a Rust reference crate and CLI that sign, verify, and enforce SoraFS governance policies for adverts, replication orders, PoR/PDP/PoTR artefacts, repairs, and governance envelopes.
 - Provide deterministic machine-readable outcomes so operators, auditors, and CI systems can gate deployments without bespoke tooling.
 - Expose bindings and artefacts other language teams can reuse (via FFI or generated code) while keeping Norito as the only canonical wire format.
 
-This specification completes **SF-11 — Reference SDK + validators** and supersedes the previous draft.
+## Status
+The local SF-11 reference validator and SDK foundations are implemented for
+provider adverts, admission envelopes, admission renewals/revocations,
+replication orders, signed replication orders, orderbook payloads, PoR
+challenge/proof pairs, PDP commitments/challenges/proofs, PoTR receipts, repair payloads, fixture bundles,
+governance log nodes, governance DAG blocks and signed-head chains, runtime
+signing helpers, C FFI validation, cookbook fixtures, and manifest/CAR replay.
+Remaining SF-11 work is release evidence and SDK distribution: per-target
+published archives, signed release manifests, downstream binding packages, and
+live operator smoke records.
 
-> **Status:** specification only. The `crates/sorafs_reference` library and the
-> `tools/sorafs-validate` CLI are not yet implemented in the workspace; see
-> `roadmap.md` for the delivery schedule.
+The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
+`validate_provider_advert_bytes`, `validate_provider_admission_envelope_bytes`,
+`validate_replication_order_bytes`,
+`validate_signed_replication_order_bytes`, `validate_orderbook_payload_bytes`,
+`validate_por_challenge_proof_bytes`,
+`validate_pdp_commitment_challenge_proof_bytes`, `validate_potr_receipt_bytes`,
+`validate_repair_payload_bytes`, and the `sorafs_car` crate exposes
+`validate_manifest_car_replay` and
+`validate_manifest_car_replay_bytes`. The `sorafs-validate advert` /
+`sorafs-validate admission` / `sorafs-validate order` /
+`sorafs-validate orderbook` / `sorafs-validate por` /
+`sorafs-validate pdp` / `sorafs-validate potr` /
+`sorafs-validate repair` / `sorafs-validate bundle` /
+`sorafs-validate governance` CLI commands cover Norito `ProviderAdvertV1`,
+`ProviderAdmissionEnvelopeV1`, `ReplicationOrderV1`, `PorChallengeV1`,
+`PorProofV1`, `PdpCommitmentV1`, `PdpChallengeV1`, `PdpProofV1`,
+`PotrReceiptV1`, orderbook/settlement payloads, and repair payloads,
+fixture-directory bundle cross-link checks, governance log node
+validation, governance DAG block validation, signed governance DAG head-chain
+validation, provider advert signing, signed replication-order envelopes, and
+governance log node Ed25519 signing.
+`soranet_trustless_verifier --validation-outcome` emits the same
+`ValidationOutcomeV1` contract for manifest/CAR replay.
 
 ## Architecture Overview
 | Component | Purpose | Notes |
 |-----------|---------|-------|
-| `crates/sorafs_reference` | Core library providing validation/signing helpers, policy enforcement, and error outcomes. | Depends on `sorafs_manifest`, `sorafs_car`, `sorafs_por` modules; no duplicate codecs. |
-| `tools/sorafs-validate` (binary) | CLI wrapping the reference crate with task-focused subcommands and consistent output. | Built using `clap` + `norito::json` (no direct `serde_json`). |
-| `ffi/` helpers | Optional C ABI surface for SDKs (Go/Swift/Node) built on top of the Rust crate. | Simple facade returning `ValidationOutcomeV1` Norito JSON. |
-| `docs/examples/sorafs_reference_sdk/` | Planned cookbook with ready-to-run scenarios and sample payloads. | Mirrors CI fixtures once implemented. |
+| `crates/sorafs_manifest::reference` | Core library module providing validation/signing helpers, policy enforcement, and error outcomes. | Reuses canonical `sorafs_manifest` payload modules and `sorafs_car` replay helpers; no duplicate codecs. |
+| `sorafs-validate` (binary) | CLI wrapping the reference validators with task-focused subcommands and consistent output. | The current `sorafs_manifest` slice is dependency-free and uses `norito::json`; the future full wrapper may use `clap` without adding direct `serde_json`. |
+| `reference_ffi` helpers | C ABI surface for SDKs (Go/Swift/Node) built on top of the Rust validators. | Implemented: returns `ValidationOutcomeV1` Norito JSON buffers plus explicit free function; `crates/sorafs_manifest/include/sorafs_reference.h` is the checked C header for downstream bindings. |
+| `docs/examples/sorafs_reference_sdk/` | Runnable cookbook with ready-to-run CLI and SDK smoke scenarios plus committed sample payloads. | Mirrors committed fixtures and exercises validator, signing, bundle, and manifest/CAR replay paths. |
 
 Internal modules (library):
-- `validator::advert`, `validator::order`, `validator::por`, `validator::potr`, `validator::repair`, `validator::governance`.
+- `validator::advert`, `validator::admission`, `validator::order`, `validator::por`, `validator::potr`, `validator::repair`, `validator::governance`.
 - `policy` module encapsulates default thresholds (TTLs, SLAs, retry budgets).
 - `outcome` module implements `ValidationOutcomeV1` (see below).
-- `signing` module exposes builders for adverts, orders, and governance envelopes, ensuring domain separation strings stay centralised.
+- Signing helpers expose implemented builders for adverts, signed replication-order envelopes, and governance log nodes; signed orders use the `sorafs.replication_order.signature.v1` domain string and canonical Norito order-envelope bytes.
 
 ## CLI Surface
 All commands accept `--format {table,json,yaml}` (default `table`) and `--telemetry-out <path>` to write the raw `ValidationOutcomeV1`.
 
+Current implementation slice: `cargo run -p sorafs_manifest --bin sorafs-validate -- advert --input <advert.to> --format json` validates Norito `ProviderAdvertV1` payloads, including canonical body validation and Ed25519 signature verification. `cargo run -p sorafs_manifest --bin sorafs-validate -- admission --input <envelope.to> --format json` validates Norito `ProviderAdmissionEnvelopeV1` payloads, including structural policy, digest binding, and council signature verification; `cargo run -p sorafs_manifest --bin sorafs-validate -- admission --envelope <envelope.to> --renewal <renewal.to> --format json` validates governed renewal payloads against the previous envelope, and `--revocation <revocation.to>` validates revocation digests and council signatures against the governed envelope. `cargo run -p sorafs_manifest --bin sorafs-validate -- order --order <order.to> --format json` validates Norito `ReplicationOrderV1` payloads against the canonical order schema, chunker registry handle rules, provider assignments, and SLA/deadline policy; `cargo run -p sorafs_manifest --bin sorafs-validate -- order --signed-order <signed-order.to> --format json` validates `SignedReplicationOrderV1` envelopes and verifies Ed25519 signatures over the domain-separated canonical order signing bytes. `cargo run -p sorafs_manifest --bin sorafs-validate -- orderbook --kind settlement-receipt --input <receipt.to> --format json` validates Norito orderbook and streaming-settlement payloads, including structural constraints, fee/timestamp policy, signature material, byte ranges, and settlement accounting. `cargo run -p sorafs_manifest --bin sorafs-validate -- por --challenge <challenge.to> --proof <proof.to> --format json` validates Norito `PorChallengeV1` and `PorProofV1` payloads, pair binding, deadline policy, and sample coverage. `cargo run -p sorafs_manifest --bin sorafs-validate -- pdp --commitment <commitment.to> --challenge <challenge.to> --proof <proof.to> --format json` validates Norito `PdpCommitmentV1`, `PdpChallengeV1`, and `PdpProofV1` payloads, commitment/challenge/proof binding, sample windows, coverage, tree roots, and signature material. `cargo run -p sorafs_manifest --bin sorafs-validate -- potr --receipt <receipt.to> --profile hot --format json` validates Norito `PotrReceiptV1` payloads, latency/deadline consistency, optional tier profile, range bounds, timestamps, and detached signatures. `cargo run -p sorafs_manifest --bin sorafs-validate -- repair --task <repair-task.to> --format json` validates Norito repair task records, evidence, reports, slash proposals, escalation policy/approval payloads, task events, worker action payloads, audit events, and signed auditor request signatures. `cargo run -p sorafs_manifest --bin sorafs-validate -- bundle --bundle fixtures/sorafs_manifest --now 120 --format json` validates known fixture-directory artifacts, validates discovered orderbook and PDP payload fixtures, checks PoR challenge/proof binding, checks PDP commitment/challenge/proof binding, enforces shared manifest digests for order/proof/receipt/repair artifacts, verifies provider-admission provider consistency, and checks manifest-bearing providers against replication-order assignments. `cargo run -p sorafs_manifest --bin sorafs-validate -- governance --node fixtures/sorafs_manifest/governance/node_v1.to --cid bafygovernancelognode --format json` validates `GovernanceLogNodeV1` payload shape, embedded payload policy, publisher metadata, signature material, Ed25519 and Dilithium3/ML-DSA publisher signature verification, and optional node-CID binding. `cargo run -p sorafs_manifest --bin sorafs-validate -- governance --block <block.to> --cid hex:<block-cid-hex> --format json` validates a Norito `GovernanceDagBlockV1`, recomputes its canonical block CID, checks embedded node policy and signature material, and verifies the block publisher signature. `cargo run -p sorafs_manifest --bin sorafs-validate -- governance --head <head.to> --block <block-0.to> --block <block-1.to> --format json` validates a signed `GovernanceDagHeadV1` against a parent-linked block chain, including head signature, expected head CID, chain topology, and block-count binding. `cargo run -p sorafs_manifest --bin sorafs-validate -- sign --kind advert --input <advert.to> --out <signed-advert.to> --key <runtime-key-file> --now 120 --format json` signs the canonical advert body with an Ed25519 seed supplied at runtime, `cargo run -p sorafs_manifest --bin sorafs-validate -- sign --kind order --input <order.to> --out <signed-order.to> --key <runtime-key-file> --format json` signs the domain-separated canonical order envelope, and `cargo run -p sorafs_manifest --bin sorafs-validate -- sign --kind governance --input <node.to> --out <signed-node.to> --key <runtime-key-file> --format json` signs the canonical governance node payload. `cargo run -p sorafs_car --features cli --bin soranet_trustless_verifier -- --manifest <manifest.to> --car <payload.car> --validation-outcome --generated-at <unix-seconds>` replays `ManifestV1` policy, CARv2 roots, CAR digest/size, content length, chunk plan, payload digest, and PoR root into `ValidationOutcomeV1`. These sign and validation commands write or print output only after validation succeeds where applicable and return code `0` for success or `2` for validation/policy/signature/Norito payload errors.
+
 | Command | Description | Key flags | Input |
 |---------|-------------|-----------|-------|
-| `sorafs-validate advert` | Validate `ProviderAdvertV1` payloads (signature, TTL, capability set). | `--input <file>` (`.to` or `.json`), `--policy <file>` overrides defaults, `--allow-missing-vrf` optional. | Norito bytes or JSON commentary. |
-| `sorafs-validate admission` | Verify onboarding/renewal/revocation envelopes. | `--input <file>`, `--governance-keyset <path>` for council keys. | Norito bytes. |
-| `sorafs-validate order` | Check replication orders (manifests, chunk plan digests, provider assignments). | `--order <file>`, `--manifest <file>` (optional: validate cross-links), `--car <file>` ensures CAR hash matches. | Norito + CAR. |
-| `sorafs-validate por` | Replay PoR challenge/proof pair, enforce SLA window, attach repair linkage. | `--challenge <file>`, `--proof <file>`, `--manifest <file>`, `--epoch <id>` override. | Norito JSON bundle. |
-| `sorafs-validate potr` | Validate PoTR probe/receipt (deadline proofs). | `--probe <file>`, `--receipt <file>`, `--profile hot|warm|cold`. | Norito JSON. |
-| `sorafs-validate repair` | Inspect `RepairTaskV1` envelopes and ensure evidence references exist. | `--task <file>`, `--fixtures-dir <path>`. | Norito JSON. |
-| `sorafs-validate governance` | Decode `GovernanceLogNodeV1`, verify signatures, check CID. | `--node <file>`, `--cid <cid>`, `--dag <car>` optional. | Norito bytes. |
-| `sorafs-validate bundle` | Run a composite check on a manifest bundle (advert + order + manifest + proofs + governance). | `--bundle <dir>`, `--policy <file>`, `--skip-por` optional. | Directory matching CI sample layout. |
-| `sorafs-validate sign` | Produce signed adverts/orders/governance documents using operator or governance keys. | `--kind advert|order|governance`, `--input <json>`, `--key <path>`. | JSON template -> Norito output. |
+| `sorafs-validate advert` | Validate `ProviderAdvertV1` payloads (signature, TTL, capability set). | Implemented: `--input <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>`. Governed policy overrides belong to a signed release-wrapper policy document; the current local validator uses deterministic defaults. | Norito bytes. |
+| `sorafs-validate admission` | Verify `ProviderAdmissionEnvelopeV1` onboarding, renewal, and revocation payloads (schema, digest bindings, retention epoch, council signatures). | Implemented: `--input <file>` (or `--envelope <file>` alias), optional `--renewal <file>` or `--revocation <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. External governance keyset selection remains a signed deployment-policy concern; the local validator verifies the key material encoded in the governed envelope. | Norito bytes. |
+| `sorafs-validate order` | Check `ReplicationOrderV1` payloads (schema, manifest digest presence, chunk profile, provider assignments, SLA/deadline policy). | Implemented: `--order <file>` (or `--input <file>` alias) for bare orders, `--signed-order <file>` for `SignedReplicationOrderV1` envelopes, `--format table\|json\|yaml`, `--telemetry-out <path>`. Manifest/CAR replay is handled by `soranet_trustless_verifier --validation-outcome` to keep CAR parsing in `sorafs_car`. | Norito bytes. |
+| `sorafs-validate orderbook` | Validate orderbook and streaming-settlement payloads (`OrderRequestV1`, `OrderCancelV1`, `TradeEventV1`, `SettlementChannelV1`, `SettlementReceiptV1`). | Implemented: `--kind <payload-kind> --input <file>` or aliases `--order <file>`, `--cancel <file>`, `--trade <file>`, `--channel <file>`, `--receipt <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Pure Rust helpers now cover pair matching, deterministic full-book snapshot matching, fee/escrow calculation, settlement-channel opening, and receipt application; runtime matcher service wiring, durable escrow mutation, and signature authorization remain SFM-2 rollout work. | Norito bytes. |
+| `sorafs-validate por` | Validate `PorChallengeV1` and `PorProofV1` pairs (typed payloads, challenge/manifest/provider binding, deadline, sample coverage). | Implemented: `--challenge <file>`, `--proof <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Manifest/CAR replay is implemented by `soranet_trustless_verifier --validation-outcome`; governed epoch overrides belong to signed release-wrapper policy. | Norito bytes. |
+| `sorafs-validate pdp` | Validate `PdpCommitmentV1`, `PdpChallengeV1`, and `PdpProofV1` payloads plus commitment/challenge/proof binding. | Implemented: `--commitment <file>`, `--challenge <file>`, `--proof <file>`, with pair or single-payload validation accepted where useful, `--format table\|json\|yaml`, `--telemetry-out <path>`. Bundle validation discovers committed PDP fixtures and enforces manifest/provider/sample binding. | Norito bytes. |
+| `sorafs-validate potr` | Validate `PotrReceiptV1` receipts (deadline/latency consistency, tier profile, range bounds, timestamps, signatures). | Implemented: `--receipt <file>`, optional `--profile hot\|warm\|archive\|cold`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Committed PoTR receipt fixtures are covered by bundle validation; live probe-bundle and orchestrator metric cross-checks are rollout evidence. | Norito bytes. |
+| `sorafs-validate repair` | Validate repair payloads (`RepairEvidenceV1`, `RepairReportV1`, `RepairTaskRecordV1`, slash proposals, escalation policy/approval, signed auditor requests, worker payloads, task/audit events). | Implemented: `--kind <payload-kind> --input <file>` or aliases such as `--task <file>`, `--evidence <file>`, `--report <file>`, `--signed-auditor-request <file>`, `--worker-signature <file>`, `--event <file>`, `--audit-event <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. | Norito bytes. |
+| `sorafs-validate governance` | Validate `GovernanceLogNodeV1` payloads, `GovernanceDagBlockV1` blocks, and signed `GovernanceDagHeadV1` chains. | Implemented: `--node <file>` (or `--input <file>` alias) with optional `--cid <node-cid>`; `--block <file>` with optional `--cid <block-cid\|hex:HEX>`; or `--head <file> --block <file> [--block <file>...]`, plus `--format table\|json\|yaml` and `--telemetry-out <path>`. Node validation covers embedded payload policy, publisher metadata, Ed25519 and Dilithium3/ML-DSA publisher signatures, and optional node-CID binding. Block/head validation covers canonical block-CID derivation, embedded node policy, block signatures, parent linkage, signed head binding, and block-count binding. | Norito bytes. |
+| `sorafs-validate bundle` | Run a composite check on a fixture bundle (admission artifacts plus order/proofs/receipts/repair payloads and orderbook fixtures). | Implemented: `--bundle <dir>`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>`. Manifest/CAR policy replay is implemented by `soranet_trustless_verifier --validation-outcome`. | Directory matching fixture layout. |
+| `soranet_trustless_verifier --validation-outcome` | Replay `ManifestV1` policy and a full CARv2 stream into the reference outcome contract. | Implemented: `--manifest <manifest.to>`, `--car <payload.car>`, optional `--config <toml>`, `--json-out <path>`, `--quiet`, `--generated-at <unix-seconds>`. | Manifest Norito or JSON plus CAR bytes. |
+| `sorafs-validate sign` | Produce signed reference payloads using operator or governance keys. | Implemented: `--kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> \| --key <path>)`, `--kind order --input <order.to> --out <signed-order.to> (--key-hex <hex> \| --key <path>)`, `--kind governance --input <node.to> --out <signed-node.to> (--key-hex <hex> \| --key <path>)`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>` for adverts. | Norito bytes -> Norito bytes. |
 
 Exit codes: `0` success, `2` validation/policy/signature errors, `3` I/O errors, `4` configuration errors, `10` internal faults.
 
+## FFI Surface
+`crates/sorafs_manifest::reference_ffi` exposes a C ABI for SDK bindings that
+need the Rust reference validators without linking Rust-native APIs. Each
+validator returns a `SorafsReferenceFfiBuffer` containing `ValidationOutcomeV1`
+rendered with Norito JSON; callers must release it with
+`sorafs_reference_free_buffer`. The public C binding contract lives at
+`crates/sorafs_manifest/include/sorafs_reference.h`; the
+`ci/check_sorafs_reference_ffi_header.sh` guard compares that header with
+`reference_ffi.rs`, verifies selector values, and syntax-checks the header as C
+and C++ when local compilers are available.
+
+Implemented functions cover provider adverts, admission envelopes, admission
+renewals, admission revocations, replication orders, signed replication-order
+envelopes, orderbook payloads, PoR challenge/proof pairs, PDP
+commitment/challenge/proof payloads, PoTR receipts, repair payloads,
+governance log nodes, and fixture bundle payload arrays:
+
+- `sorafs_reference_validate_provider_advert_json`
+- `sorafs_reference_validate_provider_admission_json`
+- `sorafs_reference_validate_provider_admission_renewal_json`
+- `sorafs_reference_validate_provider_admission_revocation_json`
+- `sorafs_reference_validate_replication_order_json`
+- `sorafs_reference_validate_signed_replication_order_json`
+- `sorafs_reference_validate_orderbook_json`
+- `sorafs_reference_validate_por_json`
+- `sorafs_reference_validate_pdp_commitment_json`
+- `sorafs_reference_validate_pdp_challenge_json`
+- `sorafs_reference_validate_pdp_proof_json`
+- `sorafs_reference_validate_pdp_commitment_challenge_json`
+- `sorafs_reference_validate_pdp_challenge_proof_json`
+- `sorafs_reference_validate_pdp_json`
+- `sorafs_reference_validate_potr_json`
+- `sorafs_reference_validate_repair_json`
+- `sorafs_reference_validate_governance_json`
+- `sorafs_reference_validate_bundle_json`
+
+FFI selectors are exported as constants for repair payload kinds, bundle payload
+kinds including orderbook and PDP bundle members, orderbook payload kinds, and
+PoTR profiles. Invalid selectors or null pointers paired with non-zero lengths
+return `SFS-FFI-001` instead of unwinding across the ABI. Downstream SDK
+package wrappers for orderbook and PDP validation remain rollout work.
+
 ## Validation Policies
-Default policy constants (override via Norito `PolicyOverrideV1` or CLI `--policy` file):
-- Advert TTL ≥ 24h, ≤ 14 days; `provider_id` must match governance registry; capability set must include `chunk-range`, `trustless`, `por`.
+Default policy constants used by the implemented validators:
+- Advert TTL must be non-zero and ≤ 24h; `provider_id` must be non-zero and capability metadata must pass the canonical advert schema.
 - Admission envelopes must reference approved senior council keyset (multi-signature) and admission window ≤ 7 days.
 - Replication orders validate:
-  - Manifest digest and CAR digest equality (Blake3).
+  - Manifest digest presence and order/assignment binding.
   - Order version supported by local `sorafs_manifest`.
   - Pricing schedule conforms to `sorafs_pricing.md` tiers.
+- Orderbook payloads validate:
+  - Order/cancel/trade/channel/receipt schema versions and non-zero identifiers.
+  - Positive price, quantity, escrow, byte-count, debit, timestamp, and nonce
+    fields where required.
+  - Ed25519 key/signature lengths and settlement accounting where provider
+    credit plus fee must equal buyer debit.
+- Manifest/CAR replay validates manifest policy, declared CAR digest and size,
+  content length, root CID, chunk profile, chunk digests, payload digest, chunk
+  plan, and PoR root through `sorafs_car::validate_manifest_car_replay*` and
+  `soranet_trustless_verifier --validation-outcome`.
 - PoR:
   - Challenge/proof share identical seed, epoch, and manifest digest (via `derive_challenge_seed`).
-  - Response deadline ≤ 10 minutes after issue time (policy override allowed down to 5, up to 20 with governance flag).
+  - Response deadline must be after issue time, and proof responses must arrive before the encoded deadline; governed deadline changes are release-wrapper policy, not ad hoc CLI flags.
   - Sample coverage meets tier thresholds from SF-9.
+- PDP:
+  - Commitments, challenges, and proofs share manifest digest, provider ID, epoch, sample window, coverage, and deterministic sample labels.
+  - Hot/segment roots, tree heights, proof leaves, and signature material must pass structural checks before pair binding is accepted.
+  - PDP bundle validation is fixture-backed and fail-closed until the SF-13 runtime admission path is enabled.
 - PoTR:
   - Probe durations respect hot/warm/cold SLAs (90s / 5m / 30m).
   - Receipt signature matches provider key; aggregated proofs cross-check with orchestrator metrics if provided.
@@ -66,10 +156,14 @@ Default policy constants (override via Norito `PolicyOverrideV1` or CLI `--polic
   - Evidence matches PoR/PoTR failure digests.
   - Escalation reason required for `escalated` status; `repair_task_id` must exist in history.
 - Governance nodes:
-  - Node CID recalculated and compared against input.
+  - Node CID can be compared against caller-supplied input.
   - Payload kind resolved; unsupported types flagged.
+  - DAG blocks recompute canonical block CID bytes and verify embedded node and
+    block publisher signatures.
+  - Signed DAG heads verify parent-linked chains, expected head CID, and
+    advertised block count before acceptance.
 
-Policy enforcement occurs in the `policy` module; CLI exposes `--policy` to load YAML/JSON override with explicit allowlist (fields: `advert_ttl_min`, `por_deadline_max`, etc.). Overrides require signature if `--require-signed-policy` is set (used in production pipelines).
+Governed policy override support is intentionally outside the local deterministic validator. Release wrappers that need overrides should load a Norito policy document with an allowlist of fields such as `advert_ttl_min` and `por_deadline_max`, and production pipelines must require a governed signature before applying overrides.
 
 ## Error & Outcome Contract
 `ValidationOutcomeV1` (Norito + JSON) includes:
@@ -88,20 +182,62 @@ struct ValidationOutcomeV1 {
     generated_at: Timestamp,
 }
 ```
-`ValidationContextV1` is a map of structured fields (manifest CID, provider ID, etc.). The outcome is printed by CLI (`table` format compresses key fields).
+`ValidationContextV1` is emitted as structured key/value fields (manifest CID, provider ID, etc.). The outcome is printed by CLI (`table` format compresses key fields).
 
-Error catalogue (initial codes):
-- `SFS-VAL-001` manifest digest mismatch.
+Error catalogue:
+- `SFS-OK-000` validation succeeded.
+- `SFS-VAL-001` required digest or identifier invalid or mismatch.
 - `SFS-VAL-002` unsupported schema version.
 - `SFS-VAL-003` chunk profile incompatibility.
+- `SFS-VAL-004` provider advert structure invalid.
+- `SFS-VAL-005` replication order structure invalid.
+- `SFS-VAL-006` provider admission envelope structure invalid.
+- `SFS-VAL-007` provider admission digest binding mismatch.
+- `SFS-VAL-008` PoR challenge structure invalid.
+- `SFS-VAL-009` PoR proof structure invalid.
+- `SFS-VAL-010` PoTR receipt structure invalid.
 - `SFS-SIG-001` invalid signature.
+- `SFS-SIG-002` provider admission council signature invalid.
+- `SFS-SIG-003` PoTR receipt signature invalid.
+- `SFS-SIG-004` signed auditor request signature invalid.
+- `SFS-SIG-005` governance log signature material invalid or publisher verification failed.
+- `SFS-SIG-006` signed replication order or governance DAG block signature invalid.
+- `SFS-SIG-007` orderbook or governance DAG head signature material invalid.
+- `SFS-SIG-008` PDP proof signature material missing or malformed.
 - `SFS-POL-001` advert TTL violation.
 - `SFS-POL-002` PoR deadline exceeded.
+- `SFS-POL-003` replication order deadline or SLA policy violation.
+- `SFS-POL-004` provider admission retention policy violation.
+- `SFS-POL-005` repair timestamp or SLA deadline policy violation.
+- `SFS-POL-006` manifest pin policy failed during manifest/CAR replay.
+- `SFS-POL-007` orderbook timestamp, nonce, or fee policy violation.
+- `SFS-CAR-001` CAR stream replay failed against manifest commitments.
+- `SFS-CAR-002` trustless manifest/CAR replay metadata derivation failed.
 - `SFS-POR-001` missing sample coverage.
 - `SFS-POR-002` proof sample digest mismatch.
+- `SFS-POR-003` PoR challenge/proof binding mismatch.
+- `SFS-PDP-001` PDP sample window or coverage invalid.
+- `SFS-PDP-002` PDP commitment, challenge, or proof structure invalid.
+- `SFS-PDP-003` PDP commitment/challenge/proof binding mismatch.
 - `SFS-POTR-001` deadline proof late.
-- `SFS-REP-001` repair evidence missing.
-- `SFS-GOV-001` governance key mismatch.
+- `SFS-POTR-002` PoTR receipt tier mismatch.
+- `SFS-OBK-001` orderbook payload structure invalid.
+- `SFS-OBK-002` orderbook settlement accounting invalid.
+- `SFS-REP-001` repair evidence is incomplete or internally invalid.
+- `SFS-REP-002` repair task, report, event, or worker payload structure invalid.
+- `SFS-BND-001` fixture bundle payload validation failed or too few linkable artifacts were present.
+- `SFS-BND-002` fixture bundle artifacts name different manifest digests.
+- `SFS-BND-003` fixture bundle provider links disagree with each other or with replication-order assignments.
+- `SFS-GOV-001` governance log node structure or embedded payload validation failed.
+- `SFS-GOV-002` repair escalation or slash governance payload invalid.
+- `SFS-GOV-003` governance log node CID does not match the expected CID.
+- `SFS-GOV-004` governance DAG block CID does not match the expected CID or canonical payload.
+- `SFS-GOV-005` governance DAG block structure or embedded node validation failed.
+- `SFS-GOV-006` governance DAG chain topology, parent linkage, or expected head validation failed.
+- `SFS-GOV-007` governance DAG head manifest structure failed validation.
+- `SFS-GOV-008` governance DAG head block-count binding failed validation.
+- `SFS-FFI-001` FFI caller supplied an invalid ABI argument.
+- `SFS-FFI-002` FFI panicked or failed to render outcome JSON.
 - `SFS-IO-001` input read failure.
 - `SFS-NORITO-001` decode error.
 - `SFS-INT-001` internal panic/unexpected.
@@ -109,49 +245,108 @@ Error catalogue (initial codes):
 CLI prints `docs_url` pointing to `docs/portal/docs/sorafs/reference-sdk/errors.md`.
 
 ## Library API Highlights
-- `AdvertValidator::validate(&[u8], &Policy) -> ValidationOutcome`.
-- `OrderValidator::validate(order_bytes, manifest_bytes, car_reader, policy)`.
-- `PorValidator::validate(challenge, proof, manifest, policy)`.
-- `Signer::sign_advert(advert, keypair) -> SignedAdvert`.
-- `OutcomeRecorder::emit(outcome, writer)` for journaling results (JSONL).
-- `FFI` functions: `sorafs_validate_advert`, `sorafs_validate_order`, etc., returning JSON strings (allocated via `CString`).
+- `sorafs_manifest::reference::validate_provider_advert_bytes(...)`.
+- `sorafs_manifest::reference::validate_provider_admission_envelope_bytes(...)`.
+- `sorafs_manifest::reference::validate_provider_admission_renewal_bytes(...)`.
+- `sorafs_manifest::reference::validate_provider_admission_revocation_bytes(...)`.
+- `sorafs_manifest::reference::validate_replication_order_bytes(...)`.
+- `sorafs_manifest::reference::validate_signed_replication_order_bytes(...)`.
+- `sorafs_manifest::reference::validate_orderbook_payload_bytes(...)`.
+- `sorafs_manifest::reference::validate_por_challenge_proof_bytes(...)`.
+- `sorafs_manifest::reference::validate_pdp_commitment_bytes(...)`.
+- `sorafs_manifest::reference::validate_pdp_challenge_bytes(...)`.
+- `sorafs_manifest::reference::validate_pdp_proof_bytes(...)`.
+- `sorafs_manifest::reference::validate_pdp_commitment_challenge_bytes(...)`.
+- `sorafs_manifest::reference::validate_pdp_challenge_proof_bytes(...)`.
+- `sorafs_manifest::reference::validate_pdp_commitment_challenge_proof_bytes(...)`.
+- `sorafs_manifest::reference::validate_potr_receipt_bytes(...)`.
+- `sorafs_manifest::reference::validate_repair_payload_bytes(...)`.
+- `sorafs_manifest::reference::validate_fixture_bundle_payloads(...)`.
+- `sorafs_manifest::reference::validate_governance_log_node_bytes(...)`.
+- `sorafs_manifest::reference::validate_governance_dag_block_bytes(...)`.
+- `sorafs_manifest::reference::validate_governance_dag_head_chain_bytes(...)`.
+- `sorafs_car::validate_manifest_car_replay_bytes(...)` and
+  `sorafs_car::validate_manifest_car_replay(...)`.
+- `reference_ffi` functions return `SorafsReferenceFfiBuffer` values
+  containing `ValidationOutcomeV1` Norito JSON for the same validator families.
 
-Public APIs avoid direct filesystem/CLI dependencies; CLI crate handles file I/O, streaming to validators via `Read` trait objects to support large payloads.
+Public APIs avoid direct filesystem dependencies; CLI binaries own file I/O and
+convert decoded or raw Norito payloads into the shared validation functions.
 
 ## Integration & Automation
-- **CI template:** `ci/validate_sorafs_payloads.yml` runs CLI against fixtures in PRs.
-- **Git hooks:** optional pre-commit to invoke `sorafs-validate bundle` when manifest files change.
-- **Torii integration:** reference implementation for `POST /sorafs/validate` uses the library to validate uploads prior to registry inclusion.
-- **Grafana dashboards:** aggregator ingests `telemetry_tags` to create `sorafs_reference_failures_total{code=...}` metrics; CLI emits `--telemetry-out` JSON for scraping.
-- **Crash reporting:** optional `--on-error <script>` hook to integrate with incident tooling; script receives path to JSON outcome.
+- **Cookbook smoke:** `docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh`
+  runs the committed validator, signing, bundle, and manifest/CAR replay
+  scenarios.
+- **Release packaging:** `scripts/package_sorafs_validate_release.sh` builds or
+  packages `sorafs-validate`, stages `include/sorafs_reference.h`, runs fixture
+  smoke checks, records per-file, binary, FFI-header, archive, and manifest
+  digests under an untracked output directory, and can emit a detached manifest
+  signature when supplied a release signing key.
+- **CI guard:** PR checks can run `sorafs-validate bundle` and the cookbook
+  script against committed fixtures; `ci/check_sorafs_reference_ffi_header.sh`
+  fails if Rust FFI exports, selector constants, or C signatures drift from the
+  checked header. No dedicated payload-validation workflow file exists in this
+  tree.
+- **Telemetry:** CLI `--telemetry-out` writes the raw `ValidationOutcomeV1`
+  contract so operators can scrape `telemetry_tags` and error codes.
+- **Torii integration:** production upload validation remains a rollout item; no
+  dedicated upload-validation route is currently shipped.
 
 ## Testing & Fixtures
-- Unit tests cover policy edge cases, error codes, and positive paths.
-- Golden tests compare CLI stdout (`--format table`) and JSON outputs for known fixtures.
-- Integration tests replay CI bundles (`fixtures/sorafs_manifest/ci_sample*`) verifying combined validation.
-- Cross-platform harness ensures CLI runs on macOS, Linux, Windows with the same outcomes (sha256 of JSON).
-- Fuzzers: `cargo fuzz run advert_decode` verifying Norito decoding resilience.
+- Unit tests cover policy edge cases, error codes, FFI error handling, and
+  positive validation paths in `crates/sorafs_manifest/src/reference.rs` and
+  `reference_ffi.rs`.
+- CLI tests cover argument parsing, output formats, signing paths, and failure
+  codes for `sorafs-validate`, including committed orderbook and PDP fixture
+  discovery from `sorafs-validate bundle --bundle fixtures/sorafs_manifest`.
+- The cookbook replays committed fixtures for adverts, admission, orders,
+  orderbook settlement receipts, PoR, PDP, PoTR, repair, governance nodes,
+  bundle cross-links, and manifest/CAR replay; focused Rust and CLI tests cover
+  governance DAG block and signed-head validation until committed DAG fixtures
+  are added.
+- Release smoke checks run through `scripts/package_sorafs_validate_release.sh`.
+- Cross-target release evidence is still a production gate; archive published
+  checksums and smoke outputs for each supported release target.
 
 ## Documentation Requirements
-- `docs/source/sorafs/reference_sdk_operator.md`: step-by-step operator guide.
-- `docs/source/sorafs/reference_sdk_metrics.md`: telemetry mapping and Prometheus configuration.
-- `docs/source/sorafs/reference_sdk_api.md`: library API doc (with doc comment extraction).
-- Planned: `docs/examples/sorafs_reference_sdk/` sample scripts and README.
-- Update docs portal to add Reference SDK section with error catalogue and CI integration notes.
+- Implemented: `docs/examples/sorafs_reference_sdk/` sample scripts, README, and
+  smoke runner that emits `ValidationOutcomeV1` JSON for committed fixtures.
+- Implemented: portal reference SDK error catalogue at
+  `docs/portal/docs/sorafs/reference-sdk/errors.md`.
+- Remaining: publish operator, metrics, and binding-generation guides once the
+  release artifacts and downstream packages are cut.
 
 ## Packaging & Release
-- Publish crate under `sorafs-reference-sdk` (Crates.io) with SemVer matching Norito schema major version.
-- Provide static binaries (`sorafs-validate`) for x86_64/aarch64 macOS + Linux in release pipeline.
-- Sign binaries with reproducible build pipeline (deterministic `cargo dist`).
+- Rust APIs currently ship through `sorafs_manifest::reference` and
+  `sorafs_car`; a standalone Rust reference SDK package is not present in this
+  workspace.
+- `scripts/package_sorafs_validate_release.sh` builds or packages `sorafs-validate` for the selected target, stages the checked `include/sorafs_reference.h` C header, runs committed-fixture smoke checks, writes binary, archive, and manifest SHA256 files, records staged-file, FFI-header, and smoke-output hashes in the manifest, normalizes tar/gzip metadata for reproducible archive hashes, and can sign/verify that manifest with `--manifest-signing-key` plus optional `--manifest-public-key`.
+- Provide per-target archives for x86_64/aarch64 macOS and Linux by running the helper once per target triple.
+- Sign published archives or binaries in the release pipeline after the helper records deterministic digests; when the release signer is available, sign the helper-generated manifest in the same run and archive the `.manifest.json.sig` file beside the hashes. Keep generated `dist/*` artifacts untracked and commit only `dist/.gitkeep`.
 - Release notes template references new/changed validations and error codes.
 
-## Implementation Checklist
-- [x] Document architecture and module responsibilities.
-- [x] Specify CLI commands, flags, and output formats.
-- [x] Define policy defaults and override mechanisms.
-- [x] Finalise error/outcome contract and code table.
-- [x] Outline API surface (Rust + FFI) and integration hooks.
-- [x] Detail testing, fixtures, and CI expectations.
-- [x] Capture documentation, packaging, and release tasks.
+## Rollout Status
+Implemented locally:
+- Reference validation APIs for adverts, admission envelopes, admission
+  renewals/revocations, orders, signed orders, orderbook payloads, PoR, PDP,
+  PoTR, repair, governance nodes, governance DAG blocks and signed-head chains,
+  bundles, and manifest/CAR replay.
+- `sorafs-validate` commands for validation and runtime signing, plus the
+  `soranet_trustless_verifier --validation-outcome` manifest/CAR replay path.
+- `reference_ffi` C ABI functions returning `ValidationOutcomeV1` Norito JSON,
+  including orderbook payload selectors and bundle selectors for orderbook and
+  PDP fixture members, with `crates/sorafs_manifest/include/sorafs_reference.h`
+  and `ci/check_sorafs_reference_ffi_header.sh` providing the local binding
+  contract guard.
+- Cookbook fixtures and smoke scripts under `docs/examples/sorafs_reference_sdk/`.
+- Release-packaging helper that stages binary/archive/manifest digests and
+  optional detached manifest signatures under untracked
+  `dist/sorafs-validate-release/`.
 
-Delivering this specification, alongside the PoR/repair schemas, provides a complete blueprint for the reference SDK and validator tooling required by SF-11. Implementation teams can now proceed without ambiguity while maintaining deterministic behaviour across platforms.
+Remaining production gates:
+- Run the packaging helper for the supported release targets and publish signed
+  release manifests outside the repository using governed release keys.
+- Ship downstream SDK binding packages that wrap the FFI surface for the
+  supported non-Rust consumers.
+- Archive live operator smoke evidence for the published `sorafs-validate`
+  archives and cookbook replay before declaring SF-11 fully released.

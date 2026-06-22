@@ -82,7 +82,7 @@ Pour les définitions détaillées des champs, consultez
 
 ## Référence des drapeaux de la CLI et du SDK
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) et le wrapper
+`sorafs_cli fetch` (ver `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) et le wrapper
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) partage le
 même superficie de configuration de l'orchestre. Usa los siguientes drapeaux al
 capturer les preuves du déroulement ou de la reproduction des matchs canoniques :

@@ -12,14 +12,14 @@ friendly to local experiments and CI smoke tests.
 ## 1. Install tooling
 
 ```bash
-cargo install --path crates/sorafs_car --features cli --bin sorafs_cli
+cargo install --path crates/sorafs_orchestrator --bin sorafs_cli
 ```
 
 Optional helpers:
 
 - `cargo run -p sorafs_car --bin sorafs_fetch -- --help` — deterministic
   orchestrator simulator for multi-provider fetches.
-- `cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- --help` — manifest
+- `cargo run -p sorafs_car --bin sorafs_manifest_stub -- --help` — manifest
   fixture generator used in examples and tests.
 
 ## 2. Compile Kotodama and pack a CAR archive

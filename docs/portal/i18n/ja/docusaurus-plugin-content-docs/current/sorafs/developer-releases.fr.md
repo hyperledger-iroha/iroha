@@ -31,7 +31,7 @@ ci-dessous pour Chaque タグ候補。
 - Joignez le lien du ticket de remédiation (par ex. `governance/tickets/SF6-SR-2026.md`) およびメモ
   セキュリティ エンジニアリングおよびツール ワーキング グループの承認。
 - 修復のチェックリストをメモ的に検証します。解放されたブロックを解放しないでください。
-- ハーネスのログをアップロードする前に (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- ハーネスのログをアップロードする前に (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   マニフェストの平均バンドル。
 - `--identity-token-provider` などの署名を含む実行者の署名を確認します
   Un `--identity-token-audience=<aud>` では、キャプチャー ファイルのスコープを明示的にリリースする必要があります。
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 スクリプトのアサーションの効果:
 
 - `cargo fmt --all -- --check` (ワークスペース)
-- `cargo clippy --locked --all-targets` は `sorafs_car` を注ぎます (平均機能 `cli`)、
-  `sorafs_manifest` と `sorafs_chunker`
-- `cargo test --locked --all-targets` ケースを注ぎます
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Si une étape ecchoue, corrigez la regression avant de tagger.リリースのビルド
 doivent être continuus avec main ;枝のチェリーピケを正しく修正してください

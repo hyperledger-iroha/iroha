@@ -12,33 +12,37 @@ description: "Canonical change log tracking every migration milestone, owners, a
 translator: machine-google-reviewed
 ---
 
-> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md)-dən uyğunlaşdırılıb.
+> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-# SoraFS Miqrasiya Kitabı
+# SoraFS Migration Ledger
 
-Bu kitab SoraFS-də qeydə alınan miqrasiya dəyişikliyi jurnalını əks etdirir.
-Memarlıq RFC. Girişlər mərhələyə görə qruplaşdırılır və təsirli olanları sadalayır
-pəncərə, təsirə məruz qalan komandalar və tələb olunan tədbirlər. Miqrasiya planına yeniliklər
-Həm bu səhifəni, həm də RFC-ni dəyişdirməlisiniz (`docs/source/sorafs_architecture_rfc.md`)
-aşağı axın istehlakçılarını uyğunlaşdırmaq üçün.
+This ledger mirrors the migration change log captured in the SoraFS
+Architecture RFC. Entries are grouped by milestone and list the effective
+window, impacted teams, and required actions. Updates to the migration plan
+MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
+to keep downstream consumers aligned.
 
-| Mərhələ | Effektiv Pəncərə | Xülasə dəyişikliyi | Təsirə məruz qalan komandalar | Fəaliyyət maddələri | Status |
-|----------|------------------|----------------|----------------|--------------|--------|
-| M1 | 7–12-ci həftələr | CI deterministik qurğuları tətbiq edir; səhnələşdirmədə mövcud olan ləqəb sübutları; alətlər açıq gözlənti bayraqlarını ifşa edir. | Sənədlər, Yaddaş, İdarəetmə | Qurğuların imzalanmış qalmasını təmin edin, səhnələşdirmə reyestrində ləqəbləri qeyd edin, buraxılış yoxlama siyahılarını `--car-digest/--root-cid` tətbiqi ilə yeniləyin. | ⏳ Gözləyir |
+| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
+|-----------|------------------|----------------|----------------|--------------|--------|
+| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; local tooling exposes explicit expectation flags; staging alias proof evidence is archived outside this repo. | Docs, Storage, Governance | Keep fixtures signed, keep release checklists using `--car-digest`/`--root-cid`, and attach fresh staging alias evidence to rollout tickets. | Local controls implemented; external evidence tracked in governance archive. |
 
-Rəhbərlik nəzarət təyyarəsi bu mərhələlərə istinad edən protokollar altında yaşayır
-`docs/source/sorafs/`. Komandalar hər cərgənin altına tarixli güllə nöqtələri əlavə etməlidirlər
-diqqətəlayiq hadisələr baş verdikdə (məsələn, yeni ləqəb qeydiyyatları, reyestr hadisəsi
-retrospektivlər) yoxlanıla bilən kağız izi təmin etmək.
+Governance control plane minutes referencing these milestones live under
+`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
+when notable events occur (e.g., new alias registrations, registry incident
+retrospectives) to provide an auditable paper trail.
 
-## Son Yeniləmələr
+## Recent Updates
 
-- 2025-11-01 - İdarəetmə şurasına `migration_roadmap.md` tirajlandı və
-  baxılmaq üçün operator siyahıları; Şuranın növbəti sessiyasında imzalanmasını gözləyir
-  (istin: `docs/source/sorafs/council_minutes_2025-10-29.md` təqibi).
-- 2025-11-02 — Pin Reyestrinin qeydiyyatı ISI indi paylaşılan chunker/siyasəti tətbiq edir
-  `sorafs_manifest` köməkçiləri vasitəsilə doğrulama, zəncirvari yolları hizalı saxlamaq
-  Torii çekləri ilə.
-- 2026-02-13 — Mühasibat kitabçasına provayderin reklamını təqdim etmə mərhələləri (R0–R3) əlavə edildi
-  əlaqəli tablosunu və operator təlimatını dərc etdi
+- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
+  operator lists for review; repository implementation status is now tracked by
+  the dated ledger entries below and external sign-off evidence remains in the
+  governance archive.
+- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
+  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
+  with Torii checks.
+- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
+  published the associated dashboards and operator guidance
   (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2026-06-22 — Refreshed the M1 status to separate implemented local
+  fixture/expectation-flag controls from external staging alias and governance
+  evidence required for live rollout sign-off.

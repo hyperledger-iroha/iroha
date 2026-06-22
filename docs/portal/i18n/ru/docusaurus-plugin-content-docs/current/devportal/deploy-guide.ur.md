@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 псевдоним پروموشن، توثیق، اور откат ڈرلز کو کور کرتی ہے تاکہ ہر предварительный просмотр اور
 релиз آرٹیفیکٹ قابلِ اعادہ اور قابلِ آڈٹ ہو۔
 
-Если вы хотите использовать `sorafs_cli` (`--features cli` کے ساتھ
+Если вы хотите использовать `sorafs_cli` (`sorafs_orchestrator` Cargo target کے ساتھ
 build شدہ) ہے، pin-registry اجازتوں والے Torii endpoint تک رسائی ہے، اور
 Sigstore کے لئے OIDC اسناد ہیں۔ طویل مدتی راز (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii (например) для подключения CI لوکل رنز انہیں
@@ -25,7 +25,7 @@ Sigstore کے لئے OIDC اسناد ہیں۔ طویل مدتی راز (`IROHA_P
 ## پیشگی شرائط
 
 - Узел 18.18+ имеет `npm` или `pnpm`.
-- `sorafs_cli` جو `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے حاصل ہو۔
+- `sorafs_cli` جو `cargo run -p sorafs_orchestrator --bin sorafs_cli` سے حاصل ہو۔
 - URL-адрес Torii `/v1/sorafs/*`
   Используйте псевдонимы جمع کر سکے۔
 - Эмитент OIDC (GitHub Actions, GitLab, идентификатор рабочей нагрузки).

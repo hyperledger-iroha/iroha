@@ -45,7 +45,7 @@ Les boutons de mise en application de la passerelle sont situés sur `docs/examp
 La proposition de mode directement ici inclut une couverture tant pour l'explorateur que pour nos caisses de CLI :- `direct_only_policy_rejects_soranet_only_providers` garantit que `TransportPolicy::DirectOnly` échouera rapidement lorsque chaque candidat annoncera son support aux relais SoraNet. [crates/sorafs_orchestrator/src/lib.rs:7238]
 - `direct_only_policy_prefers_direct_transports_when_available` garantit que les transports Torii/QUIC sont utilisés lorsqu'ils sont disponibles et que les relais SoraNet sont exclusifs de la session. [crates/sorafs_orchestrator/src/lib.rs:7285]
 - `direct_mode_policy_example_is_valid` permet d'analyser `docs/examples/sorafs_direct_mode_policy.json` pour garantir que la documentation est permanente et est destinée aux assistants. [crates/sorafs_orchestrator/src/lib.rs:7509] [docs/examples/sorafs_direct_mode_policy.json:1]
-- `fetch_command_respects_direct_transports` exercé `sorafs_cli fetch --transport-policy=direct-only` contre une passerelle Torii simulée, en fournissant un test de fumée pour les ambiances régulées qui doivent être transportées directement. [crates/sorafs_car/tests/sorafs_cli.rs:2733]
+- `fetch_command_respects_direct_transports` exercé `sorafs_cli fetch --transport-policy=direct-only` contre une passerelle Torii simulée, en fournissant un test de fumée pour les ambiances régulées qui doivent être transportées directement. [crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733]
 - `scripts/sorafs_direct_mode_smoke.sh` implique la même commande avec le JSON de politique et la persistance du tableau de bord pour le déploiement automatique.
 
 J'ai parcouru une suite focada antes de publicar atualizacoes :

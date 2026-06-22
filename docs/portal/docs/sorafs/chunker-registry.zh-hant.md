@@ -57,7 +57,7 @@ SoraFS 堆棧通過小型命名空間註冊表協商分塊行為。
 要通過工具檢查註冊表，請運行幫助器 CLI：
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -123,7 +123,7 @@ $ cars run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 清單存根鏡像相同的數據，這在管道中編寫 `--chunker-profile-id` 選擇腳本時很方便。兩個塊存儲 CLI 還接受規範句柄形式 (`--profile=sorafs.sf1@1.0.0`)，因此構建腳本可以避免硬編碼數字 ID：
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

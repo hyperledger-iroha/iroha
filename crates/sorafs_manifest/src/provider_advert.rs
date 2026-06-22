@@ -7,6 +7,9 @@
 use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ed25519_dalek::{
+    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
+};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -1135,6 +1138,40 @@ impl ProviderAdvertV1 {
         self.body.validate()?;
         Ok(())
     }
+
+    /// Verifies the provider signature over the canonical Norito advert body.
+    pub fn verify_signature(&self) -> Result<(), AdvertSignatureError> {
+        match self.signature.algorithm {
+            SignatureAlgorithm::Ed25519 => {}
+            other => return Err(AdvertSignatureError::UnsupportedAlgorithm(other)),
+        }
+
+        if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(AdvertSignatureError::InvalidPublicKeyLength {
+                length: self.signature.public_key.len(),
+            });
+        }
+        if self.signature.signature.len() != SIGNATURE_LENGTH {
+            return Err(AdvertSignatureError::InvalidSignatureLength {
+                length: self.signature.signature.len(),
+            });
+        }
+
+        let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
+        public_key.copy_from_slice(&self.signature.public_key);
+        let verifying_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|err| AdvertSignatureError::InvalidPublicKey(err.to_string()))?;
+
+        let mut signature = [0u8; SIGNATURE_LENGTH];
+        signature.copy_from_slice(&self.signature.signature);
+        let signature = DalekSignature::from_bytes(&signature);
+
+        let body_bytes = norito::to_bytes(&self.body)
+            .map_err(|err| AdvertSignatureError::BodyEncoding(err.to_string()))?;
+        verifying_key
+            .verify(&body_bytes, &signature)
+            .map_err(|err| AdvertSignatureError::Verification(err.to_string()))
+    }
 }
 
 /// Human-friendly accessors useful for monitoring dashboards.
@@ -1152,6 +1189,35 @@ impl ProviderAdvertV1 {
     }
 }
 
+/// Errors raised while verifying a provider advert signature.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum AdvertSignatureError {
+    /// Signature algorithm is not supported by this validator.
+    #[error("unsupported provider advert signature algorithm: {0:?}")]
+    UnsupportedAlgorithm(SignatureAlgorithm),
+    /// Ed25519 public key length is invalid.
+    #[error("ed25519 public key must be 32 bytes, got {length}")]
+    InvalidPublicKeyLength {
+        /// Observed public key byte length.
+        length: usize,
+    },
+    /// Ed25519 signature length is invalid.
+    #[error("ed25519 signature must be 64 bytes, got {length}")]
+    InvalidSignatureLength {
+        /// Observed signature byte length.
+        length: usize,
+    },
+    /// Public key bytes could not be parsed.
+    #[error("invalid ed25519 public key: {0}")]
+    InvalidPublicKey(String),
+    /// Advert body could not be encoded into canonical signature bytes.
+    #[error("failed to encode provider advert body for signature verification: {0}")]
+    BodyEncoding(String),
+    /// Signature verification failed.
+    #[error("provider advert signature verification failed: {0}")]
+    Verification(String),
+}
+
 fn unix_time_now() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1161,6 +1227,7 @@ fn unix_time_now() -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer, SigningKey};
     use norito::{decode_from_bytes, to_bytes};
 
     use super::*;
@@ -1241,6 +1308,19 @@ mod tests {
         }
     }
 
+    fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
+        let mut advert = sample_advert(now);
+        let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
+        let body_bytes = norito::to_bytes(&advert.body).expect("encode advert body");
+        let signature = signing_key.sign(&body_bytes);
+        advert.signature = AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: signature.to_bytes().to_vec(),
+        };
+        advert
+    }
+
     #[test]
     fn advert_roundtrip() {
         let advert = sample_advert(1_700_000_000);
@@ -1250,6 +1330,22 @@ mod tests {
         let bytes = norito::to_bytes(&advert).expect("serialize advert");
         let decoded: ProviderAdvertV1 = norito::decode_from_bytes(&bytes).expect("decode advert");
         assert_eq!(decoded, advert);
+    }
+
+    #[test]
+    fn verify_signature_accepts_signed_advert_body() {
+        let advert = signed_sample_advert(1_700_000_000);
+        advert
+            .verify_signature()
+            .expect("signature should verify over canonical body bytes");
+    }
+
+    #[test]
+    fn verify_signature_rejects_tampered_advert_body() {
+        let mut advert = signed_sample_advert(1_700_000_000);
+        advert.body.qos.max_retrieval_latency_ms += 1;
+        let err = advert.verify_signature().unwrap_err();
+        assert!(matches!(err, AdvertSignatureError::Verification(_)));
     }
 
     #[test]

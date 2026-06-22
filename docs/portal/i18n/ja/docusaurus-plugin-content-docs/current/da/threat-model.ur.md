@@ -228,7 +228,7 @@ _آخری جائزہ: 2026-01-19 -- اگلا شیڈول شدہ جائزہ: 2026-
   `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے 指紋
   スレッドをチェックします
 - PDP/PoTR ストリーミング シミュレーションのプルーフ ストリーム ハーネスの説明:
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ PoR/PDP/PoTR リクエスト フロー
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ PoR/PDP/PoTR リクエスト フロー
   障害シナリオ カバー 脅威モデル 脅威モデル
 - 容量 修理ソーク `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   میں ہیں، جبکہ Sumeragi 浸漬マトリックス `docs/source/sumeragi_soak_matrix.md` میں ہے
