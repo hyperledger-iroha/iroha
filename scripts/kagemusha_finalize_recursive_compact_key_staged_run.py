@@ -63,6 +63,11 @@ def _secret_path_error(path: Path, label: str) -> str | None:
         return f"{label} must not contain secret-looking material"
     if device_lab._contains_control_character(path_text):
         return f"{label} must not contain control characters"
+    if (
+        path_text != path_text.strip()
+        or device_lab._path_has_surrounding_whitespace_component(path)
+    ):
+        return f"{label} must not contain surrounding whitespace"
     if "\\" in path_text:
         return f"{label} must not contain backslashes"
     if ".." in path.parts:
@@ -132,6 +137,15 @@ def validate_directory_path(path: Path, label: str, *, must_exist: bool) -> list
         return ancestor_errors
     if not stat.S_ISDIR(mode):
         return [f"{label} must be a directory"]
+    return []
+
+
+def validate_exit_file_path_shape(path: Path) -> list[str]:
+    """Reject unsafe exit marker path strings before directory metadata."""
+
+    secret_error = _secret_path_error(path, "--exit-file")
+    if secret_error is not None:
+        return [secret_error]
     return []
 
 
@@ -356,6 +370,10 @@ def _cleanup_temp_parent(
             shutil.rmtree(temp_parent.name, dir_fd=parent_fd)
         except OSError:
             return ["staged finalizer temporary directory could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["staged finalizer temporary directory cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -453,9 +471,13 @@ def _unlink_file_if_identity(
         ):
             try:
                 os.unlink(path.name, dir_fd=parent_fd)
-                return []
             except OSError:
                 return [f"{label} rollback cleanup could not remove file"]
+            try:
+                os.fsync(parent_fd)
+            except OSError:
+                return [f"{label} rollback cleanup could not be synced"]
+            return []
     finally:
         os.close(parent_fd)
     return []
@@ -477,9 +499,13 @@ def _unlink_file_if_identity_at(
     if stat.S_ISREG(path_stat.st_mode) and _file_identity(path_stat) == expected_identity:
         try:
             os.unlink(name, dir_fd=parent_fd)
-            return []
         except OSError:
             return [f"{label} rollback cleanup could not remove file"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [f"{label} rollback cleanup could not be synced"]
+        return []
     return []
 
 
@@ -1190,6 +1216,9 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
     """Finalize a completed staged ABI-7 compact keygen run."""
 
     errors: list[str] = []
+    exit_path_errors = validate_exit_file_path_shape(args.exit_file)
+    if exit_path_errors:
+        return 1, None, exit_path_errors
     errors.extend(validate_directory_path(args.staged_artifact_dir, "--staged-artifact-dir", must_exist=True))
     errors.extend(validate_directory_path(args.artifact_dir, "--artifact-dir", must_exist=False))
     exit_code_text, exit_errors = validate_exit_marker(args.exit_file)

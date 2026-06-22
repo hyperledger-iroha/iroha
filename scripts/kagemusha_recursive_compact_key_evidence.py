@@ -32,9 +32,15 @@ def _secret_path_error(path: str | None, label: str) -> str | None:
         return f"{label} must not contain secret-looking material"
     if device_lab._contains_control_character(path):
         return f"{label} must not contain control characters"
+    candidate = Path(path)
+    if (
+        path != path.strip()
+        or device_lab._path_has_surrounding_whitespace_component(candidate)
+    ):
+        return f"{label} must not contain surrounding whitespace"
     if "\\" in path:
         return f"{label} must not contain backslashes"
-    if ".." in Path(path).parts:
+    if ".." in candidate.parts:
         return f"{label} must be canonical"
     return None
 
@@ -235,16 +241,12 @@ def validate_generator_log_path(
     """Reject generator-log paths that could alias unreviewed local bytes."""
 
     errors: list[str] = []
-    secret_error = _secret_path_error(str(generator_log_path), "--generator-log")
-    if secret_error is not None:
-        return [secret_error]
+    shape_errors = validate_generator_log_path_shape(generator_log_path)
+    if shape_errors:
+        return shape_errors
     artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
     if artifact_dir_secret_error is not None:
         return [artifact_dir_secret_error]
-    if generator_log_path.name != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
-        errors.append(
-            f"--generator-log must be named {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
-        )
     try:
         generator_log_parent = generator_log_path.parent.resolve()
         artifact_dir_resolved = artifact_dir.resolve()
@@ -264,6 +266,19 @@ def validate_generator_log_path(
     else:
         errors.extend(file_errors)
     return errors
+
+
+def validate_generator_log_path_shape(generator_log_path: Path) -> list[str]:
+    """Reject unsafe generator-log strings before artifact-directory metadata."""
+
+    secret_error = _secret_path_error(str(generator_log_path), "--generator-log")
+    if secret_error is not None:
+        return [secret_error]
+    if generator_log_path.name != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
+        return [
+            f"--generator-log must be named {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
+        ]
+    return []
 
 
 def _cleanup_validation_temp_output(
@@ -300,6 +315,12 @@ def _cleanup_validation_temp_output(
             return []
         except OSError:
             return ["recursive compact key evidence validation file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [
+                "recursive compact key evidence validation file cleanup could not be synced"
+            ]
     finally:
         os.close(parent_fd)
     return []
@@ -334,16 +355,13 @@ def build_evidence(
     generator_log_path_was_explicit = generator_log_path is not None
     if generator_log_path is None:
         generator_log_path = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
-    generator_log_secret_error = (
-        _secret_path_error(str(generator_log_path), "--generator-log")
+    generator_log_shape_errors = (
+        validate_generator_log_path_shape(generator_log_path)
         if generator_log_path_was_explicit
-        else None
+        else []
     )
     errors = []
-    if generator_log_secret_error is not None:
-        errors.append(generator_log_secret_error)
-    else:
-        errors.extend(validate_artifact_dir_path(artifact_dir))
+    errors.extend(generator_log_shape_errors)
     errors.extend(_validate_generated_at_utc(generated_at_utc))
     generated_at, timestamp_error = readiness.parse_utc_timestamp(
         generated_at_utc,
@@ -358,7 +376,11 @@ def build_evidence(
         )
     )
     errors.extend(readiness.validate_compact_key_command(command))
-    if generator_log_secret_error is None:
+    if errors:
+        return None, errors
+
+    errors.extend(validate_artifact_dir_path(artifact_dir))
+    if not generator_log_shape_errors:
         errors.extend(validate_generator_log_path(artifact_dir, generator_log_path))
     if errors:
         return None, errors
@@ -943,6 +965,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return ["--out could not be removed after parent sync failure"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return ["--out cleanup could not be synced after parent sync failure"]
     return []
 
 
@@ -978,6 +1004,10 @@ def _cleanup_temp_output(
             return []
         except OSError:
             return ["--out temporary file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["--out temporary file cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -1042,13 +1072,46 @@ def main(argv: list[str] | None = None) -> int:
 
     artifact_dir = Path(args.artifact_dir)
     out_path = Path(args.out)
-    path_errors.extend(validate_artifact_dir_path(artifact_dir))
-    path_errors.extend(validate_output_corridor(out_path, artifact_dir))
     if out_path.name != readiness.COMPACT_KEY_EVIDENCE_FILENAME:
         path_errors.append(
             f"--out must be named {readiness.COMPACT_KEY_EVIDENCE_FILENAME}"
         )
-    path_errors.extend(preflight_output_path(out_path, "--out"))
+    if args.generator_log:
+        path_errors.extend(validate_generator_log_path_shape(Path(args.generator_log)))
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    scalar_errors: list[str] = []
+    scalar_errors.extend(_validate_generated_at_utc(args.generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        args.generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        scalar_errors.append(timestamp_error["message"])
+    scalar_errors.extend(
+        _validate_generated_at_future_skew(
+            generated_at,
+            args.max_generated_at_future_skew_seconds,
+        )
+    )
+    scalar_errors.extend(readiness.validate_compact_key_command(args.command))
+    if scalar_errors:
+        for error in scalar_errors:
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    path_errors.extend(validate_output_corridor(out_path, artifact_dir))
+    early_output_errors = preflight_output_path(out_path, "--out")
+    path_errors.extend(early_output_errors)
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    path_errors.extend(validate_artifact_dir_path(artifact_dir))
     if path_errors:
         for error in path_errors:
             print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)

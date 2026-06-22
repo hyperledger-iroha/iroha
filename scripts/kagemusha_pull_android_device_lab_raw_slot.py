@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -143,6 +143,12 @@ ADB_PULL_TAR_COMMAND_HELP = (
     "adb exec-out run-as <package> tar -C files/kagemusha-device-lab "
     "-cf - <slot-id> latest-slot.txt"
 )
+MAX_ADB_COMMAND_DISPLAY_CHARS = 240
+DISRUPTIVE_EXECUTABLE_NAMES = frozenset(("kill", "pkill", "killall"))
+DISRUPTIVE_COMMAND_TOKENS = frozenset(("kill-server", "reconnect", "disconnect"))
+DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
+    ("am", "force-stop"),
+)
 
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -177,6 +183,43 @@ def _safe_detail(value: object, limit: int = 512) -> str:
     return text
 
 
+def _safe_adb_command_display(command: Sequence[str]) -> str:
+    rendered = " ".join(str(token) for token in command)
+    if device_lab.SECRET_RE.search(rendered):
+        return "<redacted-adb-command>"
+    if device_lab._contains_control_character(rendered):
+        return "<unsafe-adb-command>"
+    if len(rendered) > MAX_ADB_COMMAND_DISPLAY_CHARS:
+        return f"{rendered[:MAX_ADB_COMMAND_DISPLAY_CHARS]}..."
+    return rendered
+
+
+def _command_disruption_errors(command: Sequence[str], label: str) -> list[str]:
+    if not command:
+        return [f"{label} command must not be empty"]
+    tokens = [str(token) for token in command]
+    executable = Path(tokens[0]).name
+    if executable in DISRUPTIVE_EXECUTABLE_NAMES:
+        return [
+            f"{label} must not manage other running jobs: "
+            f"{_safe_adb_command_display(tokens)}"
+        ]
+    if any(token in DISRUPTIVE_COMMAND_TOKENS for token in tokens):
+        return [
+            f"{label} must not manage other running jobs: "
+            f"{_safe_adb_command_display(tokens)}"
+        ]
+    for sequence in DISRUPTIVE_TOKEN_SEQUENCES:
+        width = len(sequence)
+        for index in range(0, len(tokens) - width + 1):
+            if tuple(tokens[index : index + width]) == sequence:
+                return [
+                    f"{label} must not manage other running jobs: "
+                    f"{_safe_adb_command_display(tokens)}"
+                ]
+    return []
+
+
 def _single_safe_slot_id(raw_slot_id: str) -> tuple[str | None, list[str]]:
     normalised, errors = device_lab.validate_slot_ids([raw_slot_id])
     if errors:
@@ -204,6 +247,10 @@ def _path_shape_errors(path: Path, label: str) -> list[str]:
         return [f"{label} must not contain secret-looking material"]
     if device_lab._contains_control_character(text):
         return [f"{label} must not contain control characters"]
+    if text != text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        path
+    ):
+        return [f"{label} must not contain surrounding whitespace"]
     if "\\" in text:
         if label == "raw output root path":
             return ["raw output root path must not contain backslashes"]
@@ -631,6 +678,9 @@ def _run_latest_slot_query(
             f"{device_lab_root}/latest-slot.txt",
         ],
     )
+    errors = _command_disruption_errors(command, "latest raw slot ADB query")
+    if errors:
+        return None, errors
     try:
         result = runner(
             command,
@@ -684,6 +734,9 @@ def _run_raw_slot_tar_pull(
             "latest-slot.txt",
         ],
     )
+    errors = _command_disruption_errors(command, "raw slot tar ADB pull")
+    if errors:
+        return None, errors
     try:
         result = runner(
             command,
@@ -980,37 +1033,59 @@ def extract_raw_slot_tar(
 
 def _read_text_file(path: Path, label: str, errors: list[str], max_bytes: int = 64 * 1024) -> str | None:
     try:
-        mode = path.lstat().st_mode
+        expected_stat = path.lstat()
     except FileNotFoundError:
         errors.append(f"{label} is missing")
         return None
     except OSError:
         errors.append(f"{label} metadata could not be read")
         return None
-    if stat.S_ISLNK(mode):
+    if stat.S_ISLNK(expected_stat.st_mode):
         errors.append(f"{label} must not be a symlink")
         return None
-    if not stat.S_ISREG(mode):
+    if not stat.S_ISREG(expected_stat.st_mode):
         errors.append(f"{label} must be a regular file")
         return None
-    try:
-        link_count = path.stat().st_nlink
-    except OSError:
-        errors.append(f"{label} hardlink metadata could not be read")
-        return None
-    if link_count > 1:
+    if expected_stat.st_nlink > 1:
         errors.append(f"{label} must not be hardlinked")
         return None
+    if expected_stat.st_size > max_bytes:
+        errors.append(f"{label} must not exceed {max_bytes} bytes")
+        return None
+    expected_identity = _file_identity(expected_stat)
+    chunks: list[bytes] = []
+    size = 0
     try:
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if (
+                _file_identity(open_stat) != expected_identity
+                or _file_identity(path_stat) != expected_identity
+            ):
+                errors.append(f"{label} changed while being read")
+                return None
+            if not stat.S_ISREG(open_stat.st_mode):
+                errors.append(f"{label} must be a regular file")
+                return None
+            if open_stat.st_nlink > 1:
+                errors.append(f"{label} must not be hardlinked")
+                return None
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > max_bytes:
+                    errors.append(f"{label} must not exceed {max_bytes} bytes")
+                    return None
+                chunks.append(chunk)
+            final_stat = path.lstat()
+            if _file_identity(final_stat) != expected_identity:
+                errors.append(f"{label} changed while being read")
+                return None
     except OSError:
         errors.append(f"{label} could not be read")
         return None
-    if len(data) > max_bytes:
-        errors.append(f"{label} must not exceed {max_bytes} bytes")
-        return None
     try:
-        return data.decode("utf-8")
+        return b"".join(chunks).decode("utf-8")
     except UnicodeDecodeError:
         errors.append(f"{label} could not be read")
         return None
@@ -1157,9 +1232,8 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
                 errors,
             )
         chain_digest = raw_digests[RAW_RESULT_CHAIN_DIGEST_FIELD]
-        chain_file = slot_path / "attestation" / "keymint-certificate-chain.pem"
-        if chain_digest is not None and chain_file.exists():
-            digest = hashlib.sha256(chain_file.read_bytes()).hexdigest()
+        if chain_digest is not None and chain_text is not None:
+            digest = hashlib.sha256(chain_text.encode("utf-8")).hexdigest()
             if chain_digest != digest:
                 errors.append("attestation/result.json certificate-chain SHA-256 mismatch")
         challenge_digest = raw_digests[RAW_RESULT_CHALLENGE_DIGEST_FIELD]
@@ -1289,6 +1363,10 @@ def _cleanup_temp_output(
             return []
         except OSError:
             return [f"{label} temporary output could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [f"{label} temporary output cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -1323,6 +1401,10 @@ def _cleanup_temp_output_at(
         return []
     except OSError:
         return [f"{label} temporary output could not be removed"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} temporary output cleanup could not be synced"]
     return []
 
 
@@ -1353,6 +1435,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return [f"{label} could not be removed after parent sync failure"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} cleanup could not be synced after parent sync failure"]
     return []
 
 
@@ -1914,6 +2000,10 @@ def _remove_created_slot_at(
             shutil.rmtree(name, dir_fd=parent_fd)
         except OSError:
             return ["raw slot partial install could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["raw slot partial install cleanup could not be synced"]
     return []
 
 
@@ -1946,6 +2036,10 @@ def _cleanup_temp_parent(
             shutil.rmtree(temp_parent.name, dir_fd=parent_fd)
         except OSError:
             return ["raw pull temporary directory could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["raw pull temporary directory cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []

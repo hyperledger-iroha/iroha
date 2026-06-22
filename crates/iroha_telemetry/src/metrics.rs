@@ -6690,7 +6690,7 @@ pub struct Metrics {
     pub sumeragi_tx_queue_depth: GenericGauge<AtomicU64>,
     /// Transaction queue capacity observed by consensus.
     pub sumeragi_tx_queue_capacity: GenericGauge<AtomicU64>,
-    /// Queue saturation flag observed by consensus (0 = healthy, 1 = saturated).
+    /// Queue capacity saturation flag observed by consensus (0 = healthy, 1 = saturated).
     pub sumeragi_tx_queue_saturated: GenericGauge<AtomicU64>,
     /// Total pending blocks tracked by consensus.
     pub sumeragi_pending_blocks_total: GenericGauge<AtomicU64>,
@@ -9067,7 +9067,7 @@ impl Default for Metrics {
         .expect("Infallible");
         let sumeragi_tx_queue_saturated = GenericGauge::new(
             "sumeragi_tx_queue_saturated",
-            "Transaction queue saturation flag observed by consensus (0 = healthy, 1 = saturated)",
+            "Transaction queue capacity saturation flag observed by consensus (0 = healthy, 1 = saturated)",
         )
         .expect("Infallible");
         let sumeragi_pending_blocks_total = GenericGauge::new(

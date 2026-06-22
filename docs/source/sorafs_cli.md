@@ -254,6 +254,9 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   whitespace automatically.
 - Alias bindings require `--alias-namespace`, `--alias-name`, and
   `--alias-proof` together. The command fails fast if any component is missing.
+- The pin-registration request includes `manifest_b64`, a base64 copy of the
+  Norito `ManifestV1`, so Torii can validate governance proofs, digest,
+  chunker, content length, and pin policy before queueing the transaction.
 - If `<torii-url>/v1/sorafs/pin/register` is not routed on the target node, the
   CLI automatically derives `chain_id` from the read-side registry endpoints and
   submits the same `RegisterPinManifest` instruction through `/v1/pipeline/transactions`.

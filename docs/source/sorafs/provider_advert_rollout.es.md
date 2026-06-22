@@ -75,7 +75,7 @@ aplican los siguientes requisitos en admision:
 Las siguientes metricas ya se exponen via `iroha_telemetry`:
 
 - `torii_sorafs_admission_total{result,reason}` — cuenta outcomes aceptados,
-  rechazados y warning. Razones incluyen `missing_envelope`, `unknown_capability`,
+  rechazados y warning. Razones incluyen `admission_missing`, `unknown_capabilities`,
   `stale` y `policy_violation`.
 
 Export Grafana: [`docs/source/grafana_sorafs_admission.json`](../grafana_sorafs_admission.json).
@@ -93,9 +93,9 @@ Paneles Grafana recomendados:
 
 | Panel | Query | Notas |
 |-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Grafico apilado para visualizar accept vs warn vs reject. Alertar cuando warn > 0.05 * total (warning) o reject > 0 (critical). |
+| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Grafico apilado para visualizar accept vs warn vs reject. Alertar cuando warn > 0.05 * total (warning) o rejected > 0 (critical). |
 | **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Serie unica que alimenta el umbral del pager (5% warning rate rolling 15 minutos). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Conduce el triage del runbook; adjuntar links a pasos de mitigacion. |
+| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="rejected"}[5m]))` | Conduce el triage del runbook; adjuntar links a pasos de mitigacion. |
 | **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Indica providers perdiendo el deadline de refresh; cross-reference con logs de cache discovery. |
 
 Artefactos CLI para dashboards manuales:
@@ -156,7 +156,7 @@ groups:
             Inspect panel 3 on the sorafs/provider-admission dashboard and
             coordinate advert rotation with the affected operator.
       - alert: SorafsProviderAdvertReject
-        expr: increase(torii_sorafs_admission_total{result="reject"}[5m]) > 0
+        expr: increase(torii_sorafs_admission_total{result="rejected"}[5m]) > 0
         for: 5m
         labels:
           severity: critical
@@ -176,7 +176,7 @@ antes de enviar cambios para asegurar que la sintaxis pasa `promtool check rules
 
 - Capacidad `chunk_range_fetch` faltante -> rechazo con `reason="missing_capability"`.
 - TLVs de capability desconocidas sin `allow_unknown_capabilities=true` -> rechazo
-  con `reason="unknown_capability"`.
+  con `reason="unknown_capabilities"`.
 - `signature_strict=false` -> rechazo (reservado para diagnosticos aislados).
 - `refresh_deadline` expirado -> rechazo.
 

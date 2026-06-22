@@ -88,22 +88,25 @@ config rather than wrapper-local defaults:
   `iroha` / `sorafs_manifest_stub` / `sorafs_tx_stdin_builder` build plus the
   checked-in Taira config bundle into one timestamped
   rollout artifact, building `irohad` with
-  `--features embedded-soracloud-runtime`, and records the git revision in
-  `rollout.manifest.json`.
+  `--features embedded-soracloud-runtime`, running the focused SoraSwap
+  deploy-route router regression before packaging, and recording the git
+  revision plus pre-bundle checks in `rollout.manifest.json`.
 - `scripts/render_taira_edge_nginx_conf.py`: renders the shared-edge nginx
   config directly from the same validator roster used for per-validator
   `config.toml` generation so public Torii ingress cannot drift onto stale
   loopback ports.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
-  checks used by the Taira Codex rollout, including the optional signed write
-  canary for final public cutover.
+  checks used by the Taira Codex rollout, with commit-QC validator health read
+  from `/v1/sumeragi/status` and an optional signed write canary for final
+  public cutover.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
-- `verify_soraswap_rollout.sh`: post-upgrade wrapper that runs the public MCP
-  canary, the SoraFS capacity canary, the SoraSwap nested-call probe, and then the optional
-  `deploy-testnet` / signed `smoke-testnet` / `release-checklist` chain in the
-  canonical order.
+- `verify_soraswap_rollout.sh`: post-upgrade wrapper that first runs the local
+  `iroha_core` router regression for SoraSwap universal contract deploys, then
+  runs the public MCP canary, the SoraFS capacity canary, the SoraSwap
+  nested-call probe, and the optional `deploy-testnet` / signed
+  `smoke-testnet` / `release-checklist` chain in the canonical order.
 - `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
   served `dist/taira-localnet` genesis with seeded Kaigi relay metadata,
   health samples, and one shared local onboarding/faucet signer account, then
@@ -759,6 +762,10 @@ away from the shipped MCP-enabled config:
    - the script refuses a dirty worktree by default and writes
      `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
      `sha256sums.txt`
+   - the script runs `cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib`
+     before packaging so SoraSwap universal contract deploy routing is proven
+     against the exact source checkout; use `--skip-router-regression` only
+     after that exact runtime bundle was already validated from source
    - the bundle now includes both `scripts/render_taira_validator_bundle.py`
      and `scripts/render_taira_edge_nginx_conf.py` so validator config and
      shared-edge nginx can be rendered from the same roster artifact
@@ -817,9 +824,14 @@ away from the shipped MCP-enabled config:
      `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
    - full gate:
      `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
-   - the wrapper runs `check_mcp_rollout.sh`, `make testnet-nested-call-probe`,
+   - the wrapper runs the focused `iroha_core` SoraSwap deploy-route router
+     regression, `check_mcp_rollout.sh`, `check_sorafs_rollout.sh`, the trader
+     app-api CID probe when a bundle is present, `make testnet-nested-call-probe`,
      then the exact `deploy-testnet` / signed `smoke-testnet` /
      `release-checklist` sequence when those deeper flags are enabled
+   - run it from a full `../iroha` source checkout for the default router
+     regression; use `--skip-router-regression` only after that exact runtime
+     bundle was already validated from source
    - the script auto-discovers `${REPO_ROOT}/../soraswap` when the sibling repo
      exists, but `--soraswap-root` is available for non-default layouts
 

@@ -7653,9 +7653,12 @@ fn kagemusha_fold_step_public_inputs_digest_impl(
             return Err("Kagemusha Halo2/IPA proof envelope has the wrong backend tag".to_owned());
         }
         ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
-        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
-            "Kagemusha Halo2/IPA proof public input statement cannot be extracted".to_owned()
-        })?
+        let instance_columns = extract_pasta_instance_columns_bytes(&envelope.proof_bytes)
+            .ok_or_else(|| {
+                "Kagemusha Halo2/IPA proof public input statement cannot be extracted".to_owned()
+            })?;
+        ensure_kagemusha_confidential_v2_public_instance_shape(&instance_columns)?;
+        instance_columns
     } else if iroha_data_model::offline::is_supported_kagemusha_proof_backend(&proof.backend) {
         if envelope.backend != iroha_data_model::zk::BackendTag::Stark {
             return Err("Kagemusha STARK/FRI proof envelope has the wrong backend tag".to_owned());
@@ -7704,6 +7707,30 @@ fn ensure_kagemusha_confidential_v2_envelope_metadata(
     }
     if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
         return Err("Kagemusha fold Halo2/IPA proof schema mismatch".to_owned());
+    }
+    Ok(())
+}
+
+const KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS: usize = 9;
+
+fn ensure_kagemusha_confidential_v2_public_instance_shape(
+    instance_columns: &[Vec<[u8; 32]>],
+) -> Result<(), String> {
+    if instance_columns.len() != KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS {
+        return Err(format!(
+            "Kagemusha fold Halo2/IPA confidential-transfer-v2 proof must expose exactly {} single-row public instance columns; found {} columns",
+            KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS,
+            instance_columns.len()
+        ));
+    }
+    for (column_index, column) in instance_columns.iter().enumerate() {
+        if column.len() != 1 {
+            return Err(format!(
+                "Kagemusha fold Halo2/IPA confidential-transfer-v2 proof must expose exactly {} single-row public instance columns; column {column_index} has {} rows",
+                KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS,
+                column.len()
+            ));
+        }
     }
     Ok(())
 }
@@ -7775,6 +7802,11 @@ fn validate_kagemusha_fold_metadata(steps: &[KagemushaFoldProofStep<'_>]) -> Res
         if step.root_before != expected_root {
             return Err(format!(
                 "Kagemusha fold hop {hop_index} does not continue from the previous root"
+            ));
+        }
+        if step.root_before == step.root_after {
+            return Err(format!(
+                "Kagemusha fold hop {hop_index} must change the Merkle root"
             ));
         }
 
@@ -10541,6 +10573,13 @@ fn validate_kagemusha_recursive_compact_record_envelope_preflight(
         })
         .collect::<Vec<_>>();
     validate_kagemusha_fold_metadata(&steps)?;
+    let step_count = steps.len();
+    if envelopes.len() != step_count {
+        return Err(format!(
+            "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch: expected {step_count}, found {}",
+            envelopes.len()
+        ));
+    }
     validate_kagemusha_hop_verifier_record_set(&steps, &records)?;
     for (hop_index, (step, envelope)) in steps.iter().zip(envelopes.iter()).enumerate() {
         let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, &records)?;
@@ -42742,8 +42781,15 @@ mod kagemusha_folded_real_prover_tests {
             VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID);
         attach_recursive_aggregation_envelope(&mut compact_bundle, &compact_vk_box);
         let compact_record = recursive_compact_record(&compact_vk_box);
-        let semantic_compact_token =
+        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
+        let mut semantic_compact_token =
             recursive_compact_token_shape(&folded_public_inputs, &compact_bundle.recursive_proof);
+        attach_recursive_compact_one_hop_zk1_instance_envelope(
+            &mut semantic_compact_token,
+            &compact_vk_box,
+            &compact_bundle.recursive_proof.public_inputs,
+            dummy_compact_proof.as_slice(),
+        );
 
         let err = preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id(
             &semantic_compact_token,
@@ -42794,7 +42840,6 @@ mod kagemusha_folded_real_prover_tests {
             short_compact_proof.len() < KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
             "test short proof must exercise the ABI-7 compact proof-size floor"
         );
-        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
         let compact_recursive_proof =
             iroha_data_model::offline::KagemushaRecursiveAggregationProof {
                 verifier_key_id: VerifyingKeyId::new(
@@ -43458,6 +43503,84 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             err.contains("Kagemusha recursive compact proof requires at least one hop"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_compact_record_preflight_rejects_pallas_count_mismatch_before_zip() {
+        let (chain_id, asset, first_hop, second_hop, record) =
+            sample_confidential_v2_two_hop_lineage();
+        let mut missing_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: vec![first_hop.as_bundle_step(), second_hop.as_bundle_step()],
+            },
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: first_hop.attachment.vk_ref.clone(),
+                record,
+            }],
+        };
+        let pallas_archive = pallas_open_envelope_archive_for_record_bundle(
+            &missing_record_bundle,
+            "kagemusha-recursive-compact-helper-count-missing",
+        );
+        let mut missing_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_archive).expect("decode helper-count Pallas archive");
+        missing_envelopes.pop();
+        missing_record_bundle.bundle.steps[1].attachment.proof.bytes = vec![0xA7];
+
+        let err = validate_kagemusha_recursive_compact_record_envelope_preflight(
+            &missing_record_bundle,
+            &missing_envelopes,
+            Some(7),
+        )
+        .expect_err("missing helper-level Pallas envelope must reject before zip preflight");
+        assert!(
+            err.contains(
+                "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch: expected 2, found 1"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope")
+                && !err.contains("Kagemusha fold hop proof verification failed"),
+            "helper-level Pallas count mismatch should reject before hop proof decode or verification: {err}"
+        );
+
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut extra_record_bundle = one_hop_record_bundle(chain_id, asset, &hop, &record);
+        let pallas_archive = one_hop_pallas_open_envelope_archive(
+            &extra_record_bundle,
+            "kagemusha-recursive-compact-helper-count-extra",
+        );
+        let mut extra_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_archive)
+                .expect("decode helper-count one-hop Pallas archive");
+        extra_envelopes.push(
+            extra_envelopes
+                .first()
+                .expect("one-hop helper-count archive contains one envelope")
+                .clone(),
+        );
+        extra_record_bundle.bundle.steps[0].attachment.proof.bytes = vec![0xA7];
+
+        let err = validate_kagemusha_recursive_compact_record_envelope_preflight(
+            &extra_record_bundle,
+            &extra_envelopes,
+            Some(7),
+        )
+        .expect_err("extra helper-level Pallas envelope must reject before zip preflight");
+        assert!(
+            err.contains(
+                "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch: expected 1, found 2"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope")
+                && !err.contains("Kagemusha fold hop proof verification failed"),
+            "helper-level extra Pallas count mismatch should reject before hop proof decode or verification: {err}"
         );
     }
 
@@ -46380,9 +46503,21 @@ mod kagemusha_folded_real_prover_tests {
     fn sample_verified_hop(root_before: [u8; 32], root_after: [u8; 32], seed: u8) -> OwnedFoldHop {
         let mut hop = sample_generic_verified_hop(root_before, root_after, seed);
         mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
+            use halo2_proofs::halo2curves::pasta::Fp;
+
             envelope.circuit_id = confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned();
             envelope.public_inputs =
                 confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+            let instance_columns = (0..KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS)
+                .map(|column_index| {
+                    vec![Fp::from(
+                        u64::from(seed)
+                            + u64::try_from(column_index).expect("column index fits u64")
+                            + 1,
+                    )]
+                })
+                .collect::<Vec<_>>();
+            rewrite_zk1_open_verify_envelope_instances(envelope, instance_columns);
         });
         hop
     }
@@ -47653,6 +47788,90 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_public_input_bindings_before_proof_verify() {
+        let assert_binding_rejects =
+            |label: &str, expected: &str, mutate: fn(&mut KagemushaVerifiedFoldBundle)| {
+                let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+                let mut bundle = KagemushaVerifiedFoldBundle {
+                    chain_id,
+                    asset,
+                    steps: vec![hop.as_bundle_step()],
+                };
+                mutate(&mut bundle);
+
+                let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle).expect_err(
+                    "direct public-input binding mismatch must reject before proof verification",
+                );
+                assert!(err.contains(expected), "{label}: unexpected error: {err}");
+                assert!(
+                    !err.contains("Kagemusha fold hop proof verification failed"),
+                    "{label}: direct public-input binding error should come before proof verification: {err}"
+                );
+
+                let id = hop.attachment.vk_ref.clone();
+                let records = [KagemushaHopVerifierRecord {
+                    id: &id,
+                    record: &record,
+                }];
+                let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+                    &bundle, &records,
+                )
+                .expect_err(
+                    "record-backed public-input binding mismatch must reject before proof verification",
+                );
+                assert!(err.contains(expected), "{label}: unexpected error: {err}");
+                assert!(
+                    !err.contains("Kagemusha fold hop proof verification failed"),
+                    "{label}: record-backed public-input binding error should come before proof verification: {err}"
+                );
+            };
+
+        assert_binding_rejects(
+            "wrong chain id",
+            "Kagemusha fold confidential-v2 chain tag mismatch",
+            |bundle| {
+                bundle.chain_id = "kagemusha-fold-wrong-chain"
+                    .parse()
+                    .expect("wrong chain id");
+            },
+        );
+        assert_binding_rejects(
+            "wrong asset definition",
+            "Kagemusha fold confidential-v2 asset tag mismatch",
+            |bundle| {
+                bundle.asset = AssetDefinitionId::new(
+                    DomainId::try_new("offline", "wrong").expect("wrong domain id"),
+                    "kgm-wrong".parse().expect("wrong asset name"),
+                );
+            },
+        );
+        assert_binding_rejects(
+            "metadata root_before splice",
+            "Kagemusha fold confidential-v2 root mismatch",
+            |bundle| {
+                bundle.steps[0].root_before =
+                    fixed_bytes(b"kagemusha-public-input-wrong-root-before");
+            },
+        );
+        assert_binding_rejects(
+            "metadata nullifier splice",
+            "Kagemusha fold confidential-v2 nullifier mismatch",
+            |bundle| {
+                bundle.steps[0].input_nullifiers[0] =
+                    fixed_bytes(b"kagemusha-public-input-wrong-nullifier");
+            },
+        );
+        assert_binding_rejects(
+            "metadata output commitment splice",
+            "Kagemusha fold confidential-v2 output commitment mismatch",
+            |bundle| {
+                bundle.steps[0].output_commitments[0] =
+                    fixed_bytes(b"kagemusha-public-input-wrong-output");
+            },
+        );
+    }
+
+    #[test]
     fn kagemusha_verified_folded_public_inputs_from_bundle_rejects_oversized_hop_proof() {
         let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
         let mut bundle = KagemushaVerifiedFoldBundle {
@@ -47821,6 +48040,49 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             !err.contains("OpenVerifyEnvelope"),
             "record-backed root-continuity error should come before proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_unchanged_root_before_proof_decode() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut step = hop.as_bundle_step();
+        step.root_after = step.root_before;
+        step.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![step],
+        };
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("unchanged root transition must reject before proof decode");
+        assert!(
+            err.contains("must change the Merkle root"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "unchanged-root error should come before proof decoding: {err}"
+        );
+
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err(
+                    "record-backed unchanged root transition must reject before proof decode",
+                );
+        assert!(
+            err.contains("must change the Merkle root"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "record-backed unchanged-root error should come before proof decoding: {err}"
         );
     }
 
@@ -50119,6 +50381,53 @@ mod kagemusha_folded_real_prover_tests {
         let err = kagemusha_fold_step_public_inputs_digest(&empty_instance_column)
             .expect_err("empty Kagemusha proof instance column must reject");
         assert!(err.contains("instance column"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_proof_statement_digest_rejects_noncanonical_halo2_public_instance_shape() {
+        use halo2_proofs::halo2curves::pasta::Fp;
+
+        let (_, _, mut extra_column, _) = sample_confidential_v2_verified_hop();
+        mutate_open_verify_envelope(&mut extra_column.attachment.proof, |envelope| {
+            let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                .expect("confidential-transfer-v2 ZK1 public instances");
+            assert_eq!(
+                columns.len(),
+                KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS
+            );
+            columns.push(vec![Fp::from(10_u64)]);
+            rewrite_zk1_open_verify_envelope_instances(envelope, columns);
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&extra_column.attachment.proof)
+            .expect_err("extra public instance column must reject before proof verification");
+        assert!(
+            err.contains("exactly 9 single-row public instance columns")
+                && err.contains("found 10 columns"),
+            "unexpected error: {err}"
+        );
+
+        let (_, _, mut extra_row, _) = sample_confidential_v2_verified_hop();
+        mutate_open_verify_envelope(&mut extra_row.attachment.proof, |envelope| {
+            let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                .expect("confidential-transfer-v2 ZK1 public instances");
+            assert_eq!(
+                columns.len(),
+                KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS
+            );
+            for (column_index, column) in columns.iter_mut().enumerate() {
+                column.push(Fp::from(
+                    11_u64 + u64::try_from(column_index).expect("column index fits u64"),
+                ));
+            }
+            rewrite_zk1_open_verify_envelope_instances(envelope, columns);
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&extra_row.attachment.proof)
+            .expect_err("multi-row public instance column must reject before proof verification");
+        assert!(
+            err.contains("exactly 9 single-row public instance columns")
+                && err.contains("column 0 has 2 rows"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

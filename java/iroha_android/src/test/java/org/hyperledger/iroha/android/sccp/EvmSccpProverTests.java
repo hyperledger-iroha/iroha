@@ -42,7 +42,9 @@ public final class EvmSccpProverTests {
     rejectsMalformedGroth16ProofTuple();
     buildsContractCallSubmission();
     bscMainnetFacadeRequiresChainId56AndBscTarget();
+    bscTestnetFacadeRequiresChainId97AndBscTarget();
     bscMainnetFacadeBuildsLocalAdmissionSubmission();
+    bscTestnetFacadeBuildsLocalAdmissionSubmission();
     ethereumMainnetFacadeRequiresChainId1AndEthTarget();
     ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot();
     ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary();
@@ -1052,9 +1054,9 @@ public final class EvmSccpProverTests {
           new EvmSccpProver.SubmissionInput(
               evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})));
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("requestHash");
+      threw = ex.getMessage().contains("sourceProofBytes");
     }
-    assert threw : "submission must reject stale wrapped proof-result request context";
+    assert threw : "submission must reject extraneous wrapped proof-result source proof bytes";
 
     final ArrayList<String> mismatchedSignals = new ArrayList<>(proofResult.publicSignalWords());
     mismatchedSignals.set(0, "0x" + repeat("99", 32));
@@ -1220,6 +1222,124 @@ public final class EvmSccpProverTests {
     assert threw : "BSC request helper must reject ETH public inputs";
   }
 
+  private static void bscTestnetFacadeRequiresChainId97AndBscTarget() {
+    final SourceSccpProofs.EvmDestinationBinding binding =
+        BscTestnetSccpProver.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    assert SourceSccpProofs.BSC_TESTNET_NETWORK_ID.equals(binding.networkId)
+        : "BSC testnet binding must default to chain id 97";
+    assert binding.targetDomain == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet binding must target BSC";
+    assert binding.hash.equals(
+            BscTestnetSccpProver.destinationBindingHash(
+                "0x" + repeat("11", 20),
+                "0x" + repeat("22", 20),
+                "0x" + repeat("bb", 32),
+                "0x" + repeat("cc", 32)))
+        : "BSC testnet binding hash helper must match binding";
+
+    final EvmSccpProver.ProofRequest request =
+        BscTestnetSccpProver.buildProofRequest(
+            new EvmSccpProver.ProofRequestInput(
+                samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+                sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
+                new byte[0],
+                repeat("56", 32),
+                binding));
+    assert request.targetDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet request must target BSC";
+    assert binding.hash.equals(request.destinationBindingHash())
+        : "BSC testnet request must bind the BSC testnet destination binding";
+
+    final byte[] proofBytes = sampleGroth16ProofBytes(request.publicInputs());
+    final EvmSccpProver.ProofResult result =
+        BscTestnetSccpProver.wrapProofResult(proofBytes, request);
+    final EvmSccpProver.Submission submission =
+        BscTestnetSccpProver.buildSubmission(new EvmSccpProver.SubmissionInput(result));
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet submission must target BSC";
+    assert Arrays.equals(proofBytes, submission.proofBytes())
+        : "BSC testnet submission must preserve proof bytes";
+
+    boolean threw = false;
+    try {
+      BscTestnetSccpProver.destinationBinding(
+          "0x" + repeat("11", 20),
+          "0x" + repeat("22", 20),
+          "0x" + repeat("bb", 32),
+          "0x" + repeat("cc", 32),
+          SourceSccpProofs.BSC_MAINNET_NETWORK_ID);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 97");
+    }
+    assert threw : "BSC testnet destination helper must reject mainnet network ids";
+
+    final SourceSccpProofs.EvmDestinationBinding mainnetBinding =
+        SourceSccpProofs.bscMainnetDestinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+              sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
+              new byte[0],
+              repeat("56", 32),
+              mainnetBinding));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 97");
+    }
+    assert threw : "BSC testnet request helper must reject mainnet destination bindings";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.wrapProofResult(
+          proofBytes, evmRequestWithDestinationBindingHash(request, "0x" + repeat("99", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("destinationBindingHash");
+    }
+    assert threw : "BSC testnet wrapProofResult must reject forged destinationBindingHash";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildSubmission(
+          new EvmSccpProver.SubmissionInput(evmResultWithProofBase64(result, "AAAA")));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBase64");
+    }
+    assert threw : "BSC testnet submission must reject tampered proofResult";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildProofRequest(
+          sampleProductionProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("target BSC");
+    }
+    assert threw : "BSC testnet request helper must reject ETH public inputs";
+
+    threw = false;
+    try {
+      new BscTestnetSccpProver().prove(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+              sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
+              new byte[0],
+              repeat("56", 32),
+              binding));
+    } catch (final IllegalStateException ex) {
+      threw = ex.getMessage().contains("BSC testnet SCCP Groth16 prover is not linked");
+    }
+    assert threw : "BSC testnet facade must require an app-linked prover";
+  }
+
   private static void bscMainnetFacadeBuildsLocalAdmissionSubmission() {
     final BscMainnetSccp.LocalAdmissionSubmissionInput input =
         new BscMainnetSccp.LocalAdmissionSubmissionInput(
@@ -1363,6 +1483,155 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("proofFamily");
     }
     assert threw : "BSC local admission must reject stale proof families";
+  }
+
+  private static void bscTestnetFacadeBuildsLocalAdmissionSubmission() {
+    final BscTestnetSccpProver.LocalAdmissionSubmissionInput input =
+        new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32));
+    final BscTestnetSccpProver.LocalAdmissionSubmission submission =
+        BscTestnetSccpProver.buildLocalAdmissionSubmission(input);
+    final BscTestnetSccpProver.LocalAdmissionSubmission facadeSubmission =
+        new BscTestnetSccpProver().buildLocalAdmission(input);
+
+    assert BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1.equals(
+            submission.platformPayload())
+        : "BSC testnet local admission platform payload must be local_admission";
+    assert BscTestnetSccpProver.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.equals(
+            submission.envelopeEncoding())
+        : "BSC testnet local admission must use the Norito envelope";
+    assert BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1.equals(
+            submission.verifierEntrypoint())
+        : "BSC testnet local admission must target SubmitBridgeProof";
+    assert submission.sourceDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet local admission source must be BSC";
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_SORA
+        : "BSC testnet local admission target must be SORA";
+    assert submission.arguments().isEmpty()
+        : "BSC testnet local admission must not add call arguments";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "BSC testnet local admission must copy proof bytes";
+    assert Arrays.equals(new byte[] {4, 5, 6}, submission.publicInputsBytes())
+        : "BSC testnet local admission must copy public input bytes";
+    assert Arrays.equals(new byte[] {7, 8, 9}, submission.bundleBytes())
+        : "BSC testnet local admission must copy bundle bytes";
+    assert Arrays.equals(new byte[] {10, 11, 12}, submission.envelopeBytes())
+        : "BSC testnet local admission must copy envelope bytes";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.localAdmission().proofBytes())
+        : "BSC testnet local admission payload must carry proof bytes";
+    assert submission.envelopeHex().equals(facadeSubmission.envelopeHex())
+        : "BSC testnet facade local admission helper must match static helper";
+
+    input.proofBytes()[0] = 99;
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "BSC testnet local admission must not expose mutable proof storage";
+
+    boolean threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              BscTestnetSccpProver.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("BSC -> SORA");
+    }
+    assert threw : "BSC testnet local admission must reject wrong source domains";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {0, 0},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must not be all zero");
+    }
+    assert threw : "BSC testnet local admission must reject all-zero proof bytes";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[0],
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("envelopeBytes must not be empty");
+    }
+    assert threw : "BSC testnet local admission must reject empty envelope bytes";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              BscTestnetSccpProver.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              "abi_tuple_v1",
+              BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("metadata");
+    }
+    assert threw : "BSC testnet local admission must reject stale metadata";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              "debug-proof-family",
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("metadata");
+    }
+    assert threw : "BSC testnet local admission must reject stale proof families";
   }
 
   private static void ethereumMainnetFacadeRequiresChainId1AndEthTarget() {

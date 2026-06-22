@@ -1,0 +1,86 @@
+{
+  "schema": "iroha-sccp-bsc-groth16-material-manifest/v1",
+  "generatedAt": "2026-06-22T09:18:34.433Z",
+  "routeId": "taira_bsc_xor",
+  "assetKey": "xor",
+  "bscNetwork": "testnet",
+  "chain": "bsc-testnet",
+  "chainIdHex": "0x61",
+  "networkIdHex": "0x0000000000000000000000000000000000000000000000000000000000000061",
+  "proofBackend": "evm-groth16-bn254-v1",
+  "proofFamily": "stark-fri-v1",
+  "sourceDomain": 0,
+  "targetDomain": 2,
+  "circuitProfile": "sccp-bsc-signal-binding-v1",
+  "publicInputCount": 9,
+  "publicSignalNames": [
+    "message_id",
+    "payload_hash",
+    "target_domain",
+    "commitment_root",
+    "finality_height",
+    "finality_block_hash",
+    "source_domain",
+    "statement_hash",
+    "destination_binding_hash"
+  ],
+  "verifierKeyHash": "0x1d72dc90fe2840187544b1b2f043164f224c9b33f91da0352c0f3c7fdc8e59ea",
+  "productionReady": false,
+  "productionBlockers": [
+    "circuit profile is only public-signal binding; full SCCP message/finality semantics are not proven",
+    "trusted setup uses a locally generated Powers of Tau file",
+    "phase2 zkey contribution is local single-contributor material",
+    "missing semantic SCCP circuit attestation",
+    "missing circuit security audit attestation",
+    "missing trusted setup ceremony attestation",
+    "missing reproducible build attestation",
+    "R1CS must be at least 65536 bytes for production material",
+    "zkey must be at least 65536 bytes for production material"
+  ],
+  "artifacts": {
+    "circuitSource": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.circom",
+      "sha256": "0x9b66dd2498f1151654dce3376d9dd92a8c7f2f5874117de7286119bcea78b646"
+    },
+    "r1cs": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.r1cs",
+      "sha256": "0x5643950b137ca6b70f57bee526266822e4aa4183e80eeb1d24531481a8a79d98"
+    },
+    "provingKey": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.final.zkey",
+      "sha256": "0xc8a666db4c77707b2fd44aec2066bcb92f75d895e8a601060bee1bcad3bb95a8"
+    },
+    "snarkjsVerificationKey": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.snarkjs-verification-key.json",
+      "sha256": "0x43e349ec69f08f49bc74d601e840df0fd1a1bb2db928594cc54aa60bea36ecb3"
+    },
+    "bscVerifierKey": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/testnet-bsc-groth16-verifier-key.json",
+      "sha256": "0xcd5b4f69600931efd6e87caef4fe8ffb660838573c3177165b8e615d3a1cc808"
+    },
+    "witnessWasm": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1_js/sccp-bsc-signal-binding-v1.wasm",
+      "sha256": "0x52dca28d35e2cbeec424f47d898b65eb76d2cc9b8b1e58a3438d60fc012dfc89"
+    },
+    "symbols": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.sym",
+      "sha256": "0x49b9820d9283abc129ccead518d2317d0a3b9711ca655c924d9bdbc4967a1a48"
+    },
+    "powersOfTau": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/powersOfTau28_hez_08_final.ptau",
+      "sha256": "0xbf1c6dc2aed3560332b6e0b1fcddccd0001a67df50e44c449ccbf8e8c69c042a"
+    }
+  },
+  "trustedSetup": {
+    "localPowersOfTau": true,
+    "localPhase2Contribution": true,
+    "contributionMaterialPersisted": false
+  },
+  "attestations": {
+    "semanticSccpCircuit": null,
+    "circuitSecurity": null,
+    "trustedSetup": null,
+    "reproducibleBuild": null
+  },
+  "nextStep": "Do not deploy this as production. Replace or attest the circuit/setup material, then rebuild the native-prover bundle and route manifest."
+}

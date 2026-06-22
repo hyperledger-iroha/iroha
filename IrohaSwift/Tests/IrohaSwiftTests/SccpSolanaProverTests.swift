@@ -13241,6 +13241,141 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testBscTestnetSccpFacadeRequiresChainId97AndBscTarget() async throws {
+        let verifierAddress = "0x" + String(repeating: "11", count: 20)
+        let bridgeAddress = "0x" + String(repeating: "22", count: 20)
+        let verifierCodeHash = "0x" + String(repeating: "bb", count: 32)
+        let verifierKeyHash = "0x" + String(repeating: "cc", count: 32)
+        let expectedBindingHash = "0x16eb6817844e492f8fea4fc4742b9e464a80ae392f25d5e6fad9960d49414dcc"
+        let binding = try sccpBscTestnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        )
+
+        XCTAssertEqual(sccpBscTestnetChainId, 97)
+        XCTAssertEqual(binding.networkId, sccpBscTestnetNetworkId)
+        XCTAssertEqual(binding.targetDomain, sccpDomainBsc)
+        XCTAssertEqual(binding.hash, expectedBindingHash)
+        XCTAssertEqual(
+            binding.key,
+            "evm:0:2:0000000000000000000000000000000000000000000000000000000000000061:"
+                + "\(verifierAddress):\(bridgeAddress):\(verifierCodeHash):\(verifierKeyHash)"
+        )
+        XCTAssertEqual(
+            binding.hash,
+            try sccpBscTestnetDestinationBindingHash(
+                verifierAddress: verifierAddress,
+                bridgeAddress: bridgeAddress,
+                verifierCodeHash: verifierCodeHash,
+                verifierKeyHash: verifierKeyHash
+            )
+        )
+        XCTAssertNoThrow(try BscTestnetSccp.requireTestnetChainId(sccpBscTestnetChainId))
+        XCTAssertThrowsError(try BscTestnetSccp.requireTestnetChainId(sccpBscMainnetChainId)) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("eth_chainId"))
+        }
+
+        let input = try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            bundleBytes: Self.sampleEvmBundleFixture(targetDomain: sccpDomainBsc).bundleBytes,
+            sourceProofBytes: Data(),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: binding
+        )
+        let request = try buildBscTestnetSccpDestinationProofRequest(input)
+        let proofBytes = Self.sampleEvmGroth16ProofBytes(publicInputs: request.publicInputs)
+        let proofResult = try wrapBscTestnetSccpDestinationProofResult(
+            proofBytes: proofBytes,
+            request: request
+        )
+        let submission = try buildBscTestnetSccpDestinationSubmission(
+            EvmSccpSubmissionInput(proofResult: proofResult)
+        )
+
+        XCTAssertEqual(request.targetDomain, sccpDomainBsc)
+        XCTAssertEqual(request.destinationBinding?.networkId, sccpBscTestnetNetworkId)
+        XCTAssertEqual(proofResult.destinationBindingHash, expectedBindingHash)
+        XCTAssertEqual(submission.targetDomain, sccpDomainBsc)
+        XCTAssertEqual(submission.destinationBindingHash, expectedBindingHash)
+
+        let submitFacade = BscTestnetSccp(outboundSubmitFunction: { outboundSubmission in
+            XCTAssertEqual(outboundSubmission.targetDomain, sccpDomainBsc)
+            XCTAssertEqual(outboundSubmission.proofBytes, proofBytes)
+            XCTAssertEqual(outboundSubmission.destinationBindingHash, expectedBindingHash)
+            return "bsc-testnet-submitted"
+        })
+        let submitted = try await submitFacade.submitOutboundToBsc(EvmSccpSubmissionInput(proofResult: proofResult))
+        XCTAssertEqual(submitted as? String, "bsc-testnet-submitted")
+        do {
+            _ = try await BscTestnetSccp().submitOutboundToBsc(EvmSccpSubmissionInput(proofResult: proofResult))
+            XCTFail("BSC testnet outbound submitter must be app-supplied")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .localProverUnavailable)
+        }
+
+        let prover = BscTestnetSccpProver { request in
+            XCTAssertEqual(request.targetDomain, sccpDomainBsc)
+            XCTAssertEqual(request.destinationBinding?.networkId, sccpBscTestnetNetworkId)
+            return proofBytes
+        }
+        let asyncResult = try await prover.prove(input)
+        XCTAssertEqual(asyncResult.destinationBindingHash, expectedBindingHash)
+
+        XCTAssertThrowsError(try sccpBscTestnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash,
+            networkId: sccpBscMainnetNetworkId
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("networkId"))
+        }
+
+        let mainnetBinding = try sccpBscMainnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        )
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationProofRequest(
+            try EvmSccpProofRequestInput(
+                publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+                bundleBytes: Self.sampleEvmBundleFixture(targetDomain: sccpDomainBsc).bundleBytes,
+                sourceProofBytes: Data(),
+                statementHash: String(repeating: "56", count: 32),
+                destinationBinding: mainnetBinding
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBinding.networkId"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationProofRequest(
+            try Self.sampleProductionEvmProofRequestInput()
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("request.targetDomain"))
+        }
+        let forgedHashInput = EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            bundleBytes: Self.sampleEvmBundleFixture(targetDomain: sccpDomainBsc).bundleBytes,
+            sourceProofBytes: Data(),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: "0x" + String(repeating: "99", count: 32),
+            destinationBinding: binding
+        )
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationProofRequest(forgedHashInput)) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationSubmission(EvmSccpSubmissionInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            proofBytes: proofBytes,
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: binding.hash
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.destinationBinding"))
+        }
+    }
+
     func testBscMainnetSccpBuildsLocalAdmissionSubmission() throws {
         let input = BscMainnetLocalAdmissionSubmissionInput(
             proofBytes: Data([1, 2, 3]),
@@ -13323,6 +13458,102 @@ final class SccpSolanaProverTests: XCTestCase {
         }
         XCTAssertThrowsError(try buildBscMainnetSccpLocalAdmissionSubmission(
             BscMainnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32),
+                proofFamily: "debug-proof-family"
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("localAdmission.metadata"))
+        }
+    }
+
+    func testBscTestnetSccpBuildsLocalAdmissionSubmission() throws {
+        let input = BscTestnetLocalAdmissionSubmissionInput(
+            proofBytes: Data([1, 2, 3]),
+            publicInputsBytes: Data([4, 5, 6]),
+            bundleBytes: Data([7, 8, 9]),
+            envelopeBytes: Data([10, 11, 12]),
+            statementHash: "0x" + String(repeating: "66", count: 32),
+            sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+            sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32)
+        )
+        let submission = try buildBscTestnetSccpLocalAdmissionSubmission(input)
+        let facadeSubmission = try BscTestnetSccp().buildLocalAdmissionSubmission(input)
+
+        XCTAssertEqual(submission.platformPayload, sccpLocalAdmissionSubmissionKindV1)
+        XCTAssertEqual(submission.envelopeEncoding, sccpLocalAdmissionEnvelopeEncodingV1)
+        XCTAssertEqual(submission.verifierEntrypoint, sccpLocalAdmissionEntrypointV1)
+        XCTAssertEqual(submission.sourceDomain, sccpDomainBsc)
+        XCTAssertEqual(submission.targetDomain, sccpDomainSora)
+        XCTAssertTrue(submission.arguments.isEmpty)
+        XCTAssertEqual(submission.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(submission.publicInputsBytes, Data([4, 5, 6]))
+        XCTAssertEqual(submission.bundleBytes, Data([7, 8, 9]))
+        XCTAssertEqual(submission.envelopeBytes, Data([10, 11, 12]))
+        XCTAssertEqual(submission.localAdmission.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(submission.envelopeHex, facadeSubmission.envelopeHex)
+
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32),
+                sourceDomain: sccpDomainEthereum
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("BSC testnet -> SORA"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([0, 0]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32)
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data(),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32)
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .emptyProof)
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32),
+                envelopeEncoding: "abi_tuple_v1"
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("localAdmission.metadata"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
                 proofBytes: Data([1, 2, 3]),
                 publicInputsBytes: Data([4, 5, 6]),
                 bundleBytes: Data([7, 8, 9]),

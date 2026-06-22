@@ -911,8 +911,7 @@ Operational guidance:
 - When bans trigger repeatedly, inspect the offending IP, update policies, and clear bans by restarting Torii if needed.
 
 Refer to `sorafs/provider_advert_rollout.md` for the R0–R3 enforcement
-timeline, Grafana export (`grafana_sorafs_admission.json`), and the canonical
-alert wiring that Observability keeps in sync across environments.
+timeline, Grafana export (`grafana_sorafs_admission.json`), checked-in dashboard (`dashboards/grafana/sorafs_provider_admission.json`), and canonical alert wiring (`dashboards/alerts/sorafs_provider_admission_rules.yml`) that Observability keeps in sync across environments.
 
 ### Torii Norito-RPC Observability
 

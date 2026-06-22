@@ -18,6 +18,7 @@ mod json_utils;
 mod jurisdiction;
 mod list_support;
 mod nexus;
+mod offline;
 mod runtime;
 mod soracloud;
 mod space_directory;
@@ -275,6 +276,9 @@ enum Command {
     /// SORA Taira public testnet diagnostics and canaries
     #[command(subcommand)]
     Taira(taira::Command),
+    /// Offline encoders, reports, and diagnostics
+    #[command(subcommand)]
+    Offline(offline::Command),
     /// Soracloud app platform helpers
     #[command(subcommand)]
     Soracloud(crate::soracloud::Command),
@@ -547,6 +551,7 @@ impl Run for Command {
             Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
             Taira(variant) => Run::run(variant, context),
+            Offline(variant) => Run::run(variant, context),
             Soracloud(variant) => Run::run(variant, context),
         }
     }
@@ -564,8 +569,13 @@ impl Command {
             | Self::Ops(_)
             | Self::Contract(_)
             | Self::Taira(_) => false,
+            Self::Offline(command) => command.allows_fallback_config(),
             Self::Soracloud(command) => command.allows_fallback_config(),
         }
+    }
+
+    fn allows_fallback_config_in_machine_mode(&self) -> bool {
+        matches!(self, Self::Offline(command) if command.allows_fallback_config())
     }
 }
 
@@ -1085,7 +1095,9 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let mut config = match Config::load(load_path) {
         Ok(cfg) => cfg,
         Err(_)
-            if !config_was_explicit && !args.machine && args.command.allows_fallback_config() =>
+            if !config_was_explicit
+                && args.command.allows_fallback_config()
+                && (!args.machine || args.command.allows_fallback_config_in_machine_mode()) =>
         {
             try_fallback_config().map_err(|err| {
                 Report::new(MainError::Config)

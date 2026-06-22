@@ -3378,6 +3378,30 @@ fn oracle_applies_rewards_and_penalties() {
         asset_value(view.world(), &slash_id),
         Numeric::from_str("6").expect("numeric")
     );
+
+    let stats_a = view
+        .world()
+        .oracle_provider_stats()
+        .get(&OracleProviderKey::new(feed_id.clone(), provider_a.clone()))
+        .copied()
+        .expect("provider a stats");
+    let stats_b = view
+        .world()
+        .oracle_provider_stats()
+        .get(&OracleProviderKey::new(feed_id.clone(), provider_b.clone()))
+        .copied()
+        .expect("provider b stats");
+    let stats_c = view
+        .world()
+        .oracle_provider_stats()
+        .get(&OracleProviderKey::new(feed_id.clone(), provider_c.clone()))
+        .copied()
+        .expect("provider c stats");
+    assert_eq!(10_000, stats_a.reputation_score_bps());
+    assert_eq!(10_000, stats_b.reputation_score_bps());
+    assert_eq!(0, stats_c.reputation_score_bps());
+    assert_eq!(10_000, stats_c.adjusted_reputation_score_bps(10_000));
+    assert_eq!(0, stats_a.adjusted_reputation_score_bps(-10_000));
 }
 
 #[test]

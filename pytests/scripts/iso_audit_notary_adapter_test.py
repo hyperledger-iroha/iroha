@@ -282,8 +282,12 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("password_audit_unknown_secret", "audit_unknown_secret"),
             ("%70assword_audit_unknown_leak", "audit_unknown_leak"),
             ("private-key_audit_unknown_leak", "audit_unknown_leak"),
+            ("private--key_audit_unknown_leak", "audit_unknown_leak"),
+            ("private%09key_audit_unknown_leak", "audit_unknown_leak"),
+            ("x--iroha--signature_audit_unknown_leak", "audit_unknown_leak"),
             ("unexpected\x1baudit_key", "\x1b"),
             ("unexpected_audit_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -303,6 +307,100 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey audit identifier",
+            "private--key audit identifier",
+            "private/key audit identifier",
+            "private\\key audit identifier",
+            "private%2fkey audit identifier",
+            "private\u200dkey audit identifier",
+            "private\u0301key audit identifier",
+            "ｐｒｉｖａｔｅｋｅｙ audit identifier",
+            "x--iroha--signature audit identifier",
+            "x/iroha/signature audit identifier",
+            "x%2firoha%2fsignature audit identifier",
+            "x\u200diroha\u200dsignature audit identifier",
+            "x\u0301iroha\u0301signature audit identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ audit identifier",
+            "token%09secret audit identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(ADAPTER._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(ADAPTER._is_secret_looking_key(key))
+
+    def test_separator_smuggled_response_preview_is_secret(self):
+        cases = (
+            "upstream private\tkey audit leak",
+            "upstream private/key audit leak",
+            "upstream private%2fkey audit leak",
+            "upstream private\u200dkey audit leak",
+            "upstream private\u0301key audit leak",
+            "upstream ｐｒｉｖａｔｅｋｅｙ audit leak",
+            "upstream x--iroha--signature audit leak",
+            "upstream x/iroha/signature audit leak",
+            "upstream x%2firoha%2fsignature audit leak",
+            "upstream x\u200diroha\u200dsignature audit leak",
+            "upstream x\u0301iroha\u0301signature audit leak",
+            "upstream ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ audit leak",
+            "upstream token%09secret audit leak",
+        )
+        for preview in cases:
+            with self.subTest(preview=preview):
+                self.assertTrue(ADAPTER._response_preview_looks_secret(preview))
+                self.assertEqual(
+                    ADAPTER.REDACTED_RESPONSE_PREVIEW,
+                    ADAPTER._response_preview(preview.encode("utf-8")),
+                )
+
+    def test_unicode_format_response_preview_is_redacted_without_echo(self):
+        preview = "upstream audit \u202eaudit-bidi-leak"
+
+        self.assertTrue(ADAPTER._contains_unsafe_preview_control(preview))
+        self.assertEqual(
+            ADAPTER.REDACTED_RESPONSE_PREVIEW,
+            ADAPTER._response_preview(preview.encode("utf-8")),
+        )
+        self.assertEqual(ADAPTER.REDACTED_ERROR, ADAPTER._receipt_error(preview))
+        self.assertNotIn(
+            "audit-bidi-leak",
+            ADAPTER._response_preview(preview.encode("utf-8")),
+        )
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=audit-value-secret",
+            "api/key:audit-value-secret",
+            "client/secret=audit-value-secret",
+            "set/cookie:audit-value-secret",
+            "x/iroha/signature: audit-value-secret",
+            "private%2fkey=audit-value-secret",
+            "private\u200dkey=audit-value-secret",
+            "private\u0301key=audit-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=audit-compat-secret",
+            "ａｐｉ／ｋｅｙ:audit-compat-secret",
+            "x\u200diroha\u200dsignature: audit-value-secret",
+            "x\u0301iroha\u0301signature: audit-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: audit-compat-secret",
+            "private%E2%80%8Dkey=audit-value-secret",
+            "private%CC%81key=audit-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(ADAPTER._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=audit-terminator-secret"
@@ -368,15 +466,18 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         self.assertIn("--receipt-di", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-audit\x1bflag"
-        with self.assertRaises(ADAPTER.AdapterError) as caught:
-            ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+        cases = ("--unknown-audit\x1bflag", "--unknown-audit\u202eflag")
+        for hidden in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-audit", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
+                self.assertNotIn("unknown-audit", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dreceipt-dir"
@@ -480,6 +581,88 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertNotIn("notary-source-secret", message)
                     self.assertNotIn(hidden, message)
 
+    def test_persisted_record_unicode_format_controls_are_rejected_without_echo(self):
+        cases = (
+            (
+                "detail",
+                lambda source, value: source.update({"detail": value}),
+                "record.detail",
+            ),
+            (
+                "context",
+                lambda source, value: source["context"].update(
+                    {"source_account_id": value}
+                ),
+                "record.context.source_account_id",
+            ),
+            (
+                "history-detail",
+                lambda source, value: source["status_history"][0].update(
+                    {"detail": value}
+                ),
+                "record.status_history[0].detail",
+            ),
+        )
+        for name, mutate, label in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden = f"notary-{name}-format-leak"
+                    value = f"audit \u202e{hidden}"
+                    record = sample_record()
+                    source = sample_persisted_record(record)
+                    mutate(source, value)
+                    source = with_digest(source, ADAPTER.PERSISTED_RECORD_DIGEST_FIELD)
+                    record[ADAPTER.PERSISTED_RECORD_DIGEST_FIELD] = source[
+                        ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+                    ]
+                    record_path = root / record["filename"]
+                    record_path.write_text(
+                        json.dumps(source, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._verify_persisted_record_source(
+                            record,
+                            record_path,
+                            "record",
+                        )
+
+                    message = str(caught.exception)
+                    self.assertIn(f"{label} must not contain control characters", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(value, message)
+
+    def test_clean_string_helpers_reject_unicode_format_controls_without_echo(self):
+        hidden = "notary-format-leak"
+        value = f"audit \u202e{hidden}"
+        cases = (
+            (
+                "helper",
+                lambda: ADAPTER._require_clean_string(value, "record.detail"),
+                "record.detail must not contain control characters",
+            ),
+            (
+                "nonsecret-helper",
+                lambda: ADAPTER._require_nonsecret_clean_string(
+                    value,
+                    "record.business_message_id",
+                ),
+                "record.business_message_id must not contain control characters",
+            ),
+        )
+        for name, run, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(value, message)
+                self.assertNotIn("\u202e", message)
+                self.assertNotIn(hidden, message)
+
     def test_overlong_clean_metadata_strings_are_rejected_without_echo(self):
         overlong = "M" * (ADAPTER.MAX_CLEAN_STRING_CHARS + 1)
         cases = (
@@ -564,6 +747,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         cases = (
             ("token=notary-path-leak.receipts", "token=notary-path-leak"),
             ("token%3Dnotary-path-leak.receipts", "token=notary-path-leak"),
+            ("private%20key%3Dnotary-path-leak.receipts", "private key=notary-path-leak"),
+            ("private%20key-notary-path-secret.receipts", "private key-notary-path-secret"),
+            ("private/key-notary-path-secret.receipts", "private/key-notary-path-secret"),
+            ("x%2firoha%2fsignature-notary-path-secret.receipts", "x/iroha/signature-notary-path-secret"),
             ("%70assword%253Dnotary-path-leak.receipts", "password=notary-path-leak"),
             ("token-notary-path-secret.receipts", "token-notary-path-secret"),
         )
@@ -660,6 +847,24 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "encoded dot or separator",
             ),
             (
+                "raw format control",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/\u202ereceipt",
+                "control characters",
+            ),
+            (
+                "output format control",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/\u202ereceipt",
+                "control characters",
+            ),
+            (
+                "store format control",
+                lambda raw: ADAPTER._require_clean_path_string(raw, "anchor.store_dir"),
+                "/ops/\u202estore",
+                "control characters",
+            ),
+            (
                 "raw uri prefix",
                 lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
                 "file:out/receipt",
@@ -735,6 +940,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             (
                 "https://notary.local-bank.bank/archive∕debug/anchor",
                 "path must use printable ASCII",
+            ),
+            (
+                "https://notary.local-bank.bank/archive\u202edebug/anchor",
+                "endpoint must not contain control characters",
             ),
             (
                 "https://notary.local-bank.bank/archive%c3%a9/anchor",
@@ -834,15 +1043,26 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertIn("--endpoint requires a URL value", stderr)
 
     def test_url_cli_values_reject_non_ascii_without_echo(self):
-        hidden = "https://notary.local-bank.bank/source\u2215debug"
-        for argv in (["--endpoint", hidden], [f"--endpoint={hidden}"]):
-            with self.subTest(argv=argv):
-                rc, _stdout, stderr = run_main(argv)
+        cases = (
+            (
+                "https://notary.local-bank.bank/source\u2215debug",
+                "--endpoint URL must use printable ASCII",
+            ),
+            (
+                "https://notary.local-bank.bank/source\u202edebug",
+                "--endpoint URL must not contain control characters",
+            ),
+        )
+        for hidden, expected in cases:
+            for argv in (["--endpoint", hidden], [f"--endpoint={hidden}"]):
+                with self.subTest(argv=argv):
+                    rc, _stdout, stderr = run_main(argv)
 
-                self.assertEqual(rc, 2)
-                self.assertIn("--endpoint URL must use printable ASCII", stderr)
-                self.assertNotIn(hidden, stderr)
-                self.assertNotIn("export_dir", stderr)
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn("\u202e", stderr)
+                    self.assertNotIn("export_dir", stderr)
 
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1008,6 +1228,27 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertNotIn(actual_anchor_digest, stderr)
             self.assertNotIn("mismatch", stderr)
             self.assertFalse((export_dir / "receipts").exists())
+
+    def test_digest_mismatch_diagnostics_do_not_echo_hashes(self):
+        index = sample_index()
+        expected_digest = index[ADAPTER.INDEX_DIGEST_FIELD]
+        index["record_count"] += 1
+        actual_digest = ADAPTER.digest_without_field(
+            index,
+            ADAPTER.INDEX_DIGEST_FIELD,
+        )
+
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER.require_digest_matches(
+                index,
+                ADAPTER.INDEX_DIGEST_FIELD,
+                "audit index",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("index_sha256 mismatch", message)
+        self.assertNotIn(expected_digest, message)
+        self.assertNotIn(actual_digest, message)
 
     def test_checked_in_notary_fixture_paths_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1525,6 +1766,11 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("newline", b"notary-token\n", "surrounding whitespace"),
             ("embedded-space", b"notary token", "must not contain whitespace"),
             ("control", b"notary-token\x7f", "must not contain control characters"),
+            (
+                "unicode-format",
+                "notary-token\u200dnotary-token-hidden".encode("utf-8"),
+                "must not contain control characters",
+            ),
             ("non-utf8", b"notary-token\xff", "not UTF-8"),
             (
                 "oversized",
@@ -1555,6 +1801,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(requests, [])
                     self.assertIn(message, stderr)
+                    self.assertNotIn("notary-token-hidden", stderr)
 
     def test_bearer_token_reader_enforces_configured_file_cap(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -2624,14 +2871,15 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 2)
-                    self.assertIn("contains unknown keys: operator_note", stderr)
+                    self.assertIn("contains unknown keys", stderr)
+                    self.assertNotIn("operator_note", stderr)
 
     def test_unknown_or_malformed_audit_index_record_fields_are_rejected(self):
         cases = [
             (
                 "unknown-record-field",
                 lambda record: record.update({"operator_note": "publish anyway"}),
-                "contains unknown keys: operator_note",
+                "contains unknown keys",
             ),
             (
                 "padded-state",
@@ -2990,6 +3238,9 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
     def test_secret_looking_success_response_fails_before_receipt_write(self):
         cases = (
             (b'{"receipt":"private_key=notary-secret"}', "private_key"),
+            (b"Bearer\tnotary-secret", "notary-secret"),
+            (b'{"receipt":"private key notary-secret"}', "private key"),
+            (b'{"receipt":"x iroha signature notary-secret"}', "x iroha signature"),
             (b'{"receipt":"token-notary-response-secret"}', "token-notary"),
         )
         for body, marker in cases:
@@ -3054,6 +3305,18 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         )
         self.assertEqual(
             ADAPTER._receipt_error("upstream password=notary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream Bearer\tnotary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream private key notary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream x iroha signature notary-secret"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(

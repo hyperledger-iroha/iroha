@@ -398,6 +398,40 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(try address.compactNoritoAccountControllerPayload(), expectedCompact.data)
     }
 
+    func testMultisigCompactNoritoControllerUsesFixedVectorCount() throws {
+        let fixture = try loadAddressFixture()
+        let vector = try XCTUnwrap(fixture.cases.positive.first { $0.category == "multisig" })
+        let address = try AccountAddress.parseEncoded(
+            vector.encodings.i105.string,
+            expectedPrefix: vector.encodings.i105.prefix
+        )
+        let memberCount = try XCTUnwrap(vector.controller?.members?.count)
+
+        var controllerReader = OfflineNoritoReader(data: try address.compactNoritoAccountControllerPayload())
+        XCTAssertEqual(try controllerReader.readUInt32LE(), 1)
+        var policyReader = OfflineNoritoReader(data: try controllerReader.readCompactField())
+        XCTAssertEqual(controllerReader.remaining(), 0)
+
+        var versionReader = OfflineNoritoReader(data: try policyReader.readCompactField())
+        XCTAssertEqual(try versionReader.readUInt8(), vector.controller?.version)
+        XCTAssertEqual(versionReader.remaining(), 0)
+
+        var thresholdReader = OfflineNoritoReader(data: try policyReader.readCompactField())
+        XCTAssertEqual(try thresholdReader.readUInt16LE(), vector.controller?.threshold)
+        XCTAssertEqual(thresholdReader.remaining(), 0)
+
+        var membersReader = OfflineNoritoReader(data: try policyReader.readCompactField())
+        XCTAssertEqual(try membersReader.readUInt64LE(), UInt64(memberCount))
+        for _ in 0..<memberCount {
+            var memberReader = OfflineNoritoReader(data: try membersReader.readCompactField())
+            _ = try memberReader.readCompactField()
+            _ = try memberReader.readCompactField()
+            XCTAssertEqual(memberReader.remaining(), 0)
+        }
+        XCTAssertEqual(membersReader.remaining(), 0)
+        XCTAssertEqual(policyReader.remaining(), 0)
+    }
+
     func testComplianceVectorsFixture() throws {
         let fixture = try loadAddressFixture()
         XCTAssertEqual(fixture.formatVersion, 1)

@@ -255,9 +255,10 @@ use sorafs_manifest::{
     },
     repair::{
         RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStatusV1,
-        RepairTicketId, RepairWorkerSignaturePayloadV1,
+        RepairTicketId, RepairWorkerSignaturePayloadV1, SignedAuditorRequestPayloadV1,
+        SignedAuditorRequestV1,
     },
-    validate_chunker_handle, validate_pin_policy,
+    validate_chunker_handle, validate_manifest, validate_pin_policy,
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
@@ -32475,6 +32476,9 @@ pub struct RegisterPinManifestDto {
     pub pin_policy: PinPolicyDto,
     /// Hex-encoded canonical manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
+    /// Optional base64-encoded Norito `ManifestV1` payload for full Torii-side validation.
+    #[norito(default)]
+    pub manifest_b64: Option<String>,
     /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
     pub chunk_digest_sha3_256_hex: String,
     /// Total content length covered by the manifest.
@@ -34370,6 +34374,12 @@ pub async fn handle_post_sorafs_register_manifest(
         parse_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
     let chunk_digest =
         parse_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
+    validate_manifest_payload_matches_request(
+        &req,
+        &manifest_constraints,
+        &manifest_digest_bytes,
+        &manifest_policy,
+    )?;
 
     let chunker_handle = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
         profile_id: descriptor.id.0,
@@ -35349,6 +35359,172 @@ fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Er
         ))
     })?;
     Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn looks_like_signed_auditor_request(value: &json::Value) -> bool {
+    value.get("payload").is_some()
+        || value.get("signature").is_some()
+        || value.get("nonce").is_some()
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_report_json(
+    value: &json::Value,
+) -> Result<RepairReportSubmissionV1, norito::json::Error> {
+    if looks_like_signed_auditor_request(value) {
+        norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
+            .map(RepairReportSubmissionV1::Signed)
+    } else {
+        norito::json::from_value::<RepairReportV1>(value.clone()).map(RepairReportSubmissionV1::Raw)
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_slash_json(
+    value: &json::Value,
+) -> Result<RepairSlashSubmissionV1, norito::json::Error> {
+    if looks_like_signed_auditor_request(value) {
+        norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
+            .map(RepairSlashSubmissionV1::Signed)
+    } else {
+        norito::json::from_value::<RepairSlashProposalV1>(value.clone())
+            .map(RepairSlashSubmissionV1::Raw)
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_report_norito(
+    bytes: &[u8],
+) -> Result<RepairReportSubmissionV1, norito::Error> {
+    match norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes) {
+        Ok(envelope) => Ok(RepairReportSubmissionV1::Signed(envelope)),
+        Err(signed_err) => norito::decode_from_bytes::<RepairReportV1>(bytes)
+            .map(RepairReportSubmissionV1::Raw)
+            .map_err(|raw_err| {
+                norito::Error::Message(format!(
+                    "invalid signed auditor request ({signed_err}) or repair report ({raw_err})"
+                ))
+            }),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_slash_norito(
+    bytes: &[u8],
+) -> Result<RepairSlashSubmissionV1, norito::Error> {
+    match norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes) {
+        Ok(envelope) => Ok(RepairSlashSubmissionV1::Signed(envelope)),
+        Err(signed_err) => norito::decode_from_bytes::<RepairSlashProposalV1>(bytes)
+            .map(RepairSlashSubmissionV1::Raw)
+            .map_err(|raw_err| {
+                norito::Error::Message(format!(
+                    "invalid signed auditor request ({signed_err}) or repair slash proposal ({raw_err})"
+                ))
+            }),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_signed_auditor_request(
+    envelope: SignedAuditorRequestV1,
+) -> Result<SignedAuditorRequestPayloadV1, Error> {
+    envelope
+        .validate()
+        .map_err(|err| conversion_error(format!("invalid signed auditor request: {err}")))?;
+    Ok(envelope.payload)
+}
+
+/// Request body accepted by the repair report auditor endpoint.
+#[cfg(feature = "app_api")]
+pub enum RepairReportSubmissionV1 {
+    /// Legacy raw report body.
+    Raw(RepairReportV1),
+    /// Signed auditor envelope wrapping a report.
+    Signed(SignedAuditorRequestV1),
+}
+
+#[cfg(feature = "app_api")]
+impl RepairReportSubmissionV1 {
+    /// Validate and unwrap the report payload.
+    pub(crate) fn into_report(self) -> Result<RepairReportV1, Error> {
+        match self {
+            Self::Raw(report) => Ok(report),
+            Self::Signed(envelope) => match validate_signed_auditor_request(envelope)? {
+                SignedAuditorRequestPayloadV1::RepairReport(report) => Ok(report),
+                SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
+                    "signed auditor request payload must be `repair_report`".to_string(),
+                )),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl norito::json::JsonDeserialize for RepairReportSubmissionV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = <json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
+        decode_signed_or_raw_repair_report_json(value)
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for RepairReportSubmissionV1 {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        decode_signed_or_raw_repair_report_norito(bytes)
+    }
+}
+
+/// Request body accepted by the repair slash auditor endpoint.
+#[cfg(feature = "app_api")]
+pub enum RepairSlashSubmissionV1 {
+    /// Legacy raw slash proposal body.
+    Raw(RepairSlashProposalV1),
+    /// Signed auditor envelope wrapping a slash proposal.
+    Signed(SignedAuditorRequestV1),
+}
+
+#[cfg(feature = "app_api")]
+impl RepairSlashSubmissionV1 {
+    /// Validate and unwrap the slash proposal payload.
+    pub(crate) fn into_proposal(self) -> Result<RepairSlashProposalV1, Error> {
+        match self {
+            Self::Raw(proposal) => Ok(proposal),
+            Self::Signed(envelope) => match validate_signed_auditor_request(envelope)? {
+                SignedAuditorRequestPayloadV1::SlashProposal(proposal) => Ok(proposal),
+                SignedAuditorRequestPayloadV1::RepairReport(_) => Err(conversion_error(
+                    "signed auditor request payload must be `slash_proposal`".to_string(),
+                )),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl norito::json::JsonDeserialize for RepairSlashSubmissionV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = <json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
+        decode_signed_or_raw_repair_slash_json(value)
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for RepairSlashSubmissionV1 {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        decode_signed_or_raw_repair_slash_norito(bytes)
+    }
 }
 
 #[iroha_futures::telemetry_future]
@@ -36361,6 +36537,72 @@ fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn validate_manifest_payload_matches_request(
+    req: &RegisterPinManifestDto,
+    constraints: &ManifestPinPolicyConstraints,
+    expected_digest: &[u8; 32],
+    expected_policy: &ManifestPinPolicy,
+) -> Result<()> {
+    let Some(manifest_b64) = req.manifest_b64.as_ref() else {
+        if constraints.require_council_signatures {
+            return Err(conversion_error(
+                "manifest_b64 is required when governance requires council signatures".to_owned(),
+            ));
+        }
+        return Ok(());
+    };
+
+    let manifest_bytes = base64::engine::general_purpose::STANDARD
+        .decode(manifest_b64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid base64 in manifest_b64: {err}")))?;
+    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
+        conversion_error(format!("invalid Norito ManifestV1 in manifest_b64: {err}"))
+    })?;
+
+    validate_manifest(&manifest, constraints).map_err(manifest_validation_error)?;
+
+    let digest = manifest
+        .digest()
+        .map_err(|err| conversion_error(format!("failed to digest manifest_b64: {err}")))?;
+    if digest.as_bytes() != expected_digest {
+        return Err(conversion_error(format!(
+            "manifest_b64 digest {} does not match manifest_digest_hex {}",
+            hex::encode(digest.as_bytes()),
+            hex::encode(expected_digest)
+        )));
+    }
+
+    if manifest.chunking.profile_id.0 != req.chunker_profile_id
+        || manifest.chunking.namespace != req.chunker_namespace
+        || manifest.chunking.name != req.chunker_name
+        || manifest.chunking.semver != req.chunker_semver
+        || manifest.chunking.multihash_code != req.chunker_multihash_code
+    {
+        return Err(conversion_error(
+            "manifest_b64 chunker descriptor does not match request chunker fields".to_owned(),
+        ));
+    }
+
+    if manifest.content_length != req.content_length {
+        return Err(conversion_error(format!(
+            "manifest_b64 content_length {} does not match request content_length {}",
+            manifest.content_length, req.content_length
+        )));
+    }
+
+    if manifest.pin_policy.min_replicas != expected_policy.min_replicas
+        || manifest.pin_policy.storage_class != expected_policy.storage_class
+        || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
+    {
+        return Err(conversion_error(
+            "manifest_b64 pin_policy does not match request pin_policy".to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn convert_manifest_policy(
     policy: &ManifestPinPolicy,
 ) -> iroha_data_model::sorafs::pin_registry::PinPolicy {
@@ -36975,6 +37217,93 @@ mod sorafs_pin_tests {
             .expect("manifest")
     }
 
+    fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
+        PinPolicyDto {
+            min_replicas: policy.min_replicas,
+            storage_class: match policy.storage_class {
+                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
+            },
+            retention_epoch: policy.retention_epoch,
+        }
+    }
+
+    fn request_from_manifest(
+        manifest: &ManifestV1,
+        include_manifest_payload: bool,
+    ) -> RegisterPinManifestDto {
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
+        let manifest_b64 = include_manifest_payload.then(|| {
+            let bytes = norito::to_bytes(manifest).expect("encode manifest");
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        });
+
+        RegisterPinManifestDto {
+            authority: dm::AccountId::new(kp.public_key().clone()),
+            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
+            chunker_profile_id: descriptor.id.0,
+            chunker_namespace: descriptor.namespace.to_string(),
+            chunker_name: descriptor.name.to_string(),
+            chunker_semver: descriptor.semver.to_string(),
+            chunker_multihash_code: descriptor.multihash_code,
+            pin_policy: pin_policy_dto_from_manifest(&manifest.pin_policy),
+            manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
+            manifest_b64,
+            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+            content_length: manifest.content_length,
+            submitted_epoch: 5,
+            gas_asset_id: None,
+            alias: None,
+            successor_of_hex: None,
+        }
+    }
+
+    fn handler_context<F>(
+        configure_state: F,
+    ) -> (
+        Arc<iroha_data_model::ChainId>,
+        Arc<iroha_core::queue::Queue>,
+        Arc<iroha_core::state::State>,
+        MaybeTelemetry,
+    )
+    where
+        F: FnOnce(&mut iroha_core::state::State),
+    {
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let mut state = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::default(),
+            kura,
+            query,
+        );
+        configure_state(&mut state);
+        let state = Arc::new(state);
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue_cfg = iroha_config::parameters::actual::Queue::default();
+        let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
+        let chain_id: Arc<iroha_data_model::ChainId> =
+            Arc::new("chain".parse().expect("parse chain id"));
+
+        #[cfg(feature = "telemetry")]
+        let telemetry = MaybeTelemetry::for_tests();
+        #[cfg(not(feature = "telemetry"))]
+        let telemetry = MaybeTelemetry::disabled();
+
+        (chain_id, queue, state, telemetry)
+    }
+
+    fn conversion_message(err: Error) -> String {
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     #[test]
     fn manifest_policy_helpers_round_trip_all_storage_classes() {
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
@@ -37057,57 +37386,9 @@ mod sorafs_pin_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
-            kura,
-            query,
-        ));
-        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-        let queue_cfg = iroha_config::parameters::actual::Queue::default();
-        let queue = std::sync::Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<iroha_data_model::ChainId> =
-            Arc::new("chain".parse().expect("parse chain id"));
-
         let manifest = default_manifest();
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
-        let policy = manifest.pin_policy.clone();
-        let pin_policy_dto = PinPolicyDto {
-            min_replicas: policy.min_replicas,
-            storage_class: match policy.storage_class {
-                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-            },
-            retention_epoch: policy.retention_epoch,
-        };
-        let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-        let req = RegisterPinManifestDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            chunker_profile_id: descriptor.id.0,
-            chunker_namespace: descriptor.namespace.to_string(),
-            chunker_name: descriptor.name.to_string(),
-            chunker_semver: descriptor.semver.to_string(),
-            chunker_multihash_code: descriptor.multihash_code,
-            pin_policy: pin_policy_dto,
-            manifest_digest_hex,
-            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
-            content_length: manifest.content_length,
-            submitted_epoch: 5,
-            gas_asset_id: None,
-            alias: None,
-            successor_of_hex: None,
-        };
-
-        #[cfg(feature = "telemetry")]
-        let telemetry = MaybeTelemetry::for_tests();
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry = MaybeTelemetry::disabled();
+        let req = request_from_manifest(&manifest, false);
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
@@ -37130,6 +37411,112 @@ mod sorafs_pin_tests {
             v.get("submitted_epoch")
                 .and_then(norito::json::Value::as_u64),
             Some(5)
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_validates_manifest_payload() {
+        let manifest = default_manifest();
+        let req = request_from_manifest(&manifest, true);
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+
+        let resp = handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_accepts_legacy_encoded_manifest_payload() {
+        let manifest = default_manifest();
+        let mut req = request_from_manifest(&manifest, true);
+        let legacy_manifest_bytes = manifest
+            .encode_legacy_norito()
+            .expect("legacy manifest encoding");
+        req.manifest_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+
+        let resp = handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_requires_manifest_payload_for_council_policy() {
+        let manifest = default_manifest();
+        let req = request_from_manifest(&manifest, false);
+        let (chain_id, queue, state, telemetry) = handler_context(|state| {
+            state.gov.sorafs_pin_policy.require_council_signatures = true;
+        });
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => {
+                panic!("missing manifest payload must fail when council signatures are required")
+            }
+            Err(err) => err,
+        };
+        let message = conversion_message(err);
+        assert!(
+            message.contains("manifest_b64 is required"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_rejects_manifest_payload_without_required_council_signature()
+    {
+        let mut manifest = default_manifest();
+        manifest.governance.council_signatures.clear();
+        let req = request_from_manifest(&manifest, true);
+        let (chain_id, queue, state, telemetry) = handler_context(|state| {
+            state.gov.sorafs_pin_policy.require_council_signatures = true;
+        });
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => panic!("manifest payload without council signatures must fail"),
+            Err(err) => err,
+        };
+        let message = conversion_message(err);
+        assert!(
+            message.contains("manifest must include at least one council signature"),
+            "unexpected error message: {message}"
         );
     }
 
@@ -37168,6 +37555,7 @@ mod sorafs_pin_tests {
             chunker_multihash_code: descriptor.multihash_code,
             pin_policy: pin_policy_dto,
             manifest_digest_hex,
+            manifest_b64: None,
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
             content_length: manifest.content_length,
             submitted_epoch: 5,
@@ -79576,6 +79964,221 @@ mod subscription_api_tests {
         });
 
         assert!(grants_subscriber_nft_mutation);
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_account_alias_auto_renew_disable_mutates_onboarding_subscription_nft() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let alias_literal = "member@universal";
+        let subscription_domain: DomainId =
+            DomainId::try_new("subscriptions", "universal").unwrap();
+        let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("default nexus fee asset definition id");
+        let billing_trigger_id = {
+            let subscription_id = account_alias_auto_renew_subscription_id(
+                &subscription_domain,
+                &subscriber,
+                alias_literal,
+            )
+            .expect("subscription id");
+            derive_trigger_id("sub_bill_", &subscription_id).expect("billing trigger id")
+        };
+        let now_ms = network_time_ms().expect("network time");
+        let registered_at_ms = now_ms.saturating_sub(1_000);
+        let expires_at_ms = now_ms.saturating_add(60_000);
+        let grace_expires_at_ms = expires_at_ms.saturating_add(60_000);
+        let redemption_expires_at_ms = grace_expires_at_ms.saturating_add(60_000);
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let alias = account::rekey::AccountAlias::from_literal(alias_literal, &dataspace_catalog)
+            .expect("valid account alias");
+        let selector = iroha_core::sns::selector_for_account_alias(&alias, &dataspace_catalog)
+            .expect("account alias selector");
+        let account_address =
+            iroha_data_model::account::AccountAddress::from_account_id(&subscriber)
+                .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            subscriber.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            1,
+            registered_at_ms,
+            expires_at_ms,
+            grace_expires_at_ms,
+            Metadata::default(),
+        );
+        let fee_asset_definition =
+            AssetDefinition::new(fee_asset_definition_id.clone(), NumericSpec::integer())
+                .build(&provider);
+        let domains = vec![
+            Domain::new(DomainId::try_new("universal", "universal").unwrap()).build(&provider),
+            Domain::new(subscription_domain.clone()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.account().clone()).build(&provider),
+            Account::new(subscriber.account().clone()).build(&subscriber),
+        ];
+        let mut world = World::with_assets(domains, accounts, [fee_asset_definition], [], []);
+        iroha_core::sns::seed_default_namespace_policies(&mut world);
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
+        {
+            let app_state = Arc::get_mut(&mut app).expect("unique app state");
+            app_state.uaid_onboarding = Some(crate::AccountOnboardingSigner {
+                authority: provider.clone(),
+                private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
+                allowed_permissions: std::collections::BTreeSet::new(),
+                fee_sponsor_account: None,
+                alias_lease_term_years: 1,
+                alias_auto_renew_enabled: true,
+                alias_auto_renew_retry_backoff_ms: 500,
+                alias_auto_renew_max_failures: 3,
+                alias_auto_renew_subscription_domain: Some(subscription_domain.clone()),
+            });
+        }
+        bind_account_alias_for_test(&app.state, &subscriber, alias_literal);
+
+        let lease_quote = LeaseQuote {
+            selector,
+            pricing_class: 0,
+            payment_asset_id: AssetId::of(fee_asset_definition_id.clone(), provider.clone())
+                .to_string(),
+            payment_asset_definition_id: fee_asset_definition_id,
+            collector_account: provider.clone(),
+            charge_amount: 200,
+            expires_at_ms,
+            grace_expires_at_ms,
+            redemption_expires_at_ms,
+        };
+        let (onboarding_instructions, subscription_id) =
+            build_onboarding_alias_auto_renew_instructions(
+                &provider,
+                &subscriber,
+                &subscription_domain,
+                alias_literal,
+                &lease_quote,
+                1,
+                500,
+                3,
+                200,
+            )
+            .expect("onboarding auto-renew instructions");
+        let onboarding_tx = sign_app_api_transaction(
+            TransactionBuilder::new((*app.chain_id).clone(), provider.clone())
+                .with_instructions(onboarding_instructions),
+            ALICE_KEYPAIR.private_key(),
+            ENDPOINT_ACCOUNTS_ONBOARD,
+        )
+        .expect("sign onboarding auto-renew setup transaction");
+        handle_transaction_with_metrics(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            onboarding_tx,
+            MaybeTelemetry::disabled(),
+            ENDPOINT_ACCOUNTS_ONBOARD,
+        )
+        .await
+        .expect("enqueue onboarding auto-renew setup transaction");
+        let setup_height = u64::try_from(app.state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let applied = crate::test_utils::apply_queued_in_one_block(
+            &app.state,
+            &app.queue,
+            &app.chain_id,
+            setup_height,
+        );
+        assert_eq!(applied, 1, "onboarding setup transaction should apply");
+
+        {
+            let view = app.state.view();
+            let nft = view
+                .world()
+                .nft(&subscription_id)
+                .expect("subscription nft should exist after onboarding setup");
+            assert_eq!(nft.owned_by, subscriber);
+            assert!(
+                view.world()
+                    .triggers()
+                    .time_triggers()
+                    .get(&billing_trigger_id)
+                    .is_some(),
+                "onboarding setup should register billing trigger"
+            );
+        }
+
+        let req = AccountAliasAutoRenewRequestDto {
+            authority: subscriber.to_string(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            enabled: false,
+            term_years: None,
+            max_charge_amount: None,
+        };
+        let resp = handle_post_v1_account_alias_auto_renew(
+            app.clone(),
+            axum::extract::Path((subscriber.to_string(), alias_literal.to_owned())),
+            NoritoJson(req),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("disable auto-renew ok")
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.queued_len(), 1);
+        let json = response_json(resp).await;
+        assert_eq!(json["auto_renew_enabled"].as_bool(), Some(false));
+        assert_eq!(json["status"].as_str(), Some("QUEUED"));
+        let subscription_id_str = subscription_id.to_string();
+        assert_eq!(
+            json["subscription_id"].as_str(),
+            Some(subscription_id_str.as_str())
+        );
+
+        let disable_height = u64::try_from(app.state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let applied = crate::test_utils::apply_queued_in_one_block(
+            &app.state,
+            &app.queue,
+            &app.chain_id,
+            disable_height,
+        );
+        assert_eq!(applied, 1, "disable auto-renew transaction should apply");
+
+        let view = app.state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should still exist");
+        let updated_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(updated_state.status, SubscriptionStatus::Canceled);
+        assert!(!updated_state.cancel_at_period_end);
+        assert_eq!(updated_state.cancel_at_ms, None);
+        assert_eq!(updated_state.subscriber, subscriber);
+        assert!(
+            account_alias_auto_renew_from_metadata(&nft.content)
+                .unwrap()
+                .is_some(),
+            "disable should preserve account-alias auto-renew settings metadata"
+        );
+        assert!(
+            view.world()
+                .triggers()
+                .time_triggers()
+                .get(&billing_trigger_id)
+                .is_none(),
+            "disable should unregister the billing trigger"
+        );
     }
 
     #[test]

@@ -53,6 +53,7 @@ public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
     public let chainTxHash: String
     public let blockHeight: UInt64
     public let issuedAtMs: UInt64
+    public let noteCommitment: String?
     public let issuerSignatureBase64: String
 
     public init(
@@ -68,6 +69,7 @@ public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
         chainTxHash: String,
         blockHeight: UInt64,
         issuedAtMs: UInt64,
+        noteCommitment: String? = nil,
         issuerSignatureBase64: String
     ) throws {
         self.operationId = operationId
@@ -82,6 +84,9 @@ public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
         self.chainTxHash = chainTxHash
         self.blockHeight = blockHeight
         self.issuedAtMs = issuedAtMs
+        self.noteCommitment = noteCommitment?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         self.issuerSignatureBase64 = issuerSignatureBase64
     }
 
@@ -100,6 +105,7 @@ public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
             chainTxHash: container.decode(String.self, forKey: .chainTxHash),
             blockHeight: container.decode(UInt64.self, forKey: .blockHeight),
             issuedAtMs: container.decode(UInt64.self, forKey: .issuedAtMs),
+            noteCommitment: container.decodeIfPresent(String.self, forKey: .noteCommitment),
             issuerSignatureBase64: container.decode(String.self, forKey: .issuerSignatureBase64)
         )
     }
@@ -117,6 +123,7 @@ public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
         case chainTxHash = "chain_tx_hash"
         case blockHeight = "block_height"
         case issuedAtMs = "issued_at_ms"
+        case noteCommitment = "note_commitment"
         case issuerSignatureBase64 = "issuer_signature_base64"
     }
 }
@@ -133,6 +140,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
     public let localRevision: UInt64
     public let localStateHash: String
     public let deviceBinding: ToriiOfflineDeviceBinding
+    public let keyCertificateBindings: [ToriiOfflineDeviceBinding]
     public let deviceProof: ToriiOfflineDeviceProof
 
     public init(
@@ -147,6 +155,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         localRevision: UInt64,
         localStateHash: String,
         deviceBinding: ToriiOfflineDeviceBinding,
+        keyCertificateBindings: [ToriiOfflineDeviceBinding]? = nil,
         deviceProof: ToriiOfflineDeviceProof
     ) {
         self.operationId = operationId
@@ -160,6 +169,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         self.localRevision = localRevision
         self.localStateHash = localStateHash
         self.deviceBinding = deviceBinding
+        self.keyCertificateBindings = keyCertificateBindings ?? [deviceBinding]
         self.deviceProof = deviceProof
     }
 
@@ -175,6 +185,10 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         localRevision = try container.decode(UInt64.self, forKey: .localRevision)
         localStateHash = try container.decode(String.self, forKey: .localStateHash)
         deviceBinding = try container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding)
+        keyCertificateBindings = try container.decodeIfPresent(
+            [ToriiOfflineDeviceBinding].self,
+            forKey: .keyCertificateBindings
+        ) ?? [deviceBinding]
         deviceProof = try container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
         appAttestKeyId = try container.decodeIfPresent(String.self, forKey: .attestationKeyId)
             ?? container.decodeIfPresent(String.self, forKey: .appAttestKeyId)
@@ -187,6 +201,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         try container.encode(accountId, forKey: .accountId)
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
+        try container.encode(appAttestKeyId, forKey: .appAttestKeyId)
         try container.encode(appAttestKeyId, forKey: .attestationKeyId)
         try container.encode(assetDefinitionId, forKey: .assetDefinitionId)
         try container.encodeIfPresent(existingLineageId, forKey: .existingLineageId)
@@ -194,6 +209,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         try container.encode(localRevision, forKey: .localRevision)
         try container.encode(localStateHash, forKey: .localStateHash)
         try container.encode(deviceBinding, forKey: .deviceBinding)
+        try container.encode(keyCertificateBindings, forKey: .keyCertificateBindings)
         try container.encode(deviceProof, forKey: .deviceProof)
     }
 
@@ -210,6 +226,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         case localRevision = "local_revision"
         case localStateHash = "local_state_hash"
         case deviceBinding = "device_binding"
+        case keyCertificateBindings = "key_certificate_bindings"
         case deviceProof = "device_proof"
     }
 }
@@ -254,6 +271,7 @@ public struct ToriiOfflineNoteIssueSettlementRequest: Codable, Equatable, Sendab
     public let localRevision: UInt64
     public let localStateHash: String
     public let deviceBinding: ToriiOfflineDeviceBinding
+    public let keyCertificateBindings: [ToriiOfflineDeviceBinding]?
     public let deviceProof: ToriiOfflineDeviceProof
 
     public init(
@@ -270,6 +288,7 @@ public struct ToriiOfflineNoteIssueSettlementRequest: Codable, Equatable, Sendab
         localRevision: UInt64,
         localStateHash: String,
         deviceBinding: ToriiOfflineDeviceBinding,
+        keyCertificateBindings: [ToriiOfflineDeviceBinding]? = nil,
         deviceProof: ToriiOfflineDeviceProof
     ) throws {
         self.operationId = operationId
@@ -285,6 +304,7 @@ public struct ToriiOfflineNoteIssueSettlementRequest: Codable, Equatable, Sendab
         self.localRevision = localRevision
         self.localStateHash = localStateHash
         self.deviceBinding = deviceBinding
+        self.keyCertificateBindings = keyCertificateBindings ?? [deviceBinding]
         self.deviceProof = deviceProof
     }
 
@@ -302,6 +322,7 @@ public struct ToriiOfflineNoteIssueSettlementRequest: Codable, Equatable, Sendab
         case localRevision = "local_revision"
         case localStateHash = "local_state_hash"
         case deviceBinding = "device_binding"
+        case keyCertificateBindings = "key_certificate_bindings"
         case deviceProof = "device_proof"
     }
 }

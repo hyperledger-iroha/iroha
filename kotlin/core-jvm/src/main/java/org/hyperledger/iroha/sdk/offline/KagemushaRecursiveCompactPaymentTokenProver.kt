@@ -15,15 +15,19 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
             "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch"
         private const val RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT =
             "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch"
-        private val nativeVerifierAvailable: Boolean = loadVerifierLibrary()
-        private val nativeProjectionVerifierAvailable: Boolean = loadProjectionVerifierLibrary()
         private val nativeAvailable: Boolean = loadLibrary()
+        private val nativeVerifierAvailable: Boolean = loadVerifierLibrary()
+        private val nativeProjectionAvailable: Boolean = loadProjectionLibrary()
+        private val nativeProjectionVerifierAvailable: Boolean = loadProjectionVerifierLibrary()
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
 
         @JvmStatic
         fun isVerifierNativeAvailable(): Boolean = nativeVerifierAvailable
+
+        @JvmStatic
+        fun isProjectionNativeAvailable(): Boolean = nativeProjectionAvailable
 
         @JvmStatic
         fun isProjectionVerifierNativeAvailable(): Boolean = nativeProjectionVerifierAvailable
@@ -71,7 +75,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
             bundleArchive: ByteArray?,
         ): ByteArray {
             val bundle = ownedNativeInput(bundleArchive, "bundleArchive")
-            check(nativeAvailable) {
+            check(nativeProjectionAvailable) {
                 "$LIBRARY_NAME ABI 7 recursive compact-token projection is not available in this runtime"
             }
             val tokenArchive = nativeRecursiveSpendCompactPaymentTokenFromBundle(bundle)
@@ -218,10 +222,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                     val verifierRejects = KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
                         nativeVerifyRecursiveCompactPaymentToken(ByteArray(0), ByteArray(0))
                     }
-                    val projectionRejects = KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
-                        nativeRecursiveSpendCompactPaymentTokenFromBundle(ByteArray(0))
-                    }
-                    proverRejects && verifierRejects && projectionRejects
+                    proverRejects && verifierRejects
                 },
                 requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             )
@@ -233,6 +234,18 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                 probeSymbol = {
                     KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
                         nativeVerifyRecursiveCompactPaymentToken(ByteArray(0), ByteArray(0))
+                    }
+                },
+                requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+            )
+
+        private fun loadProjectionLibrary(): Boolean =
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
+                probeSymbol = {
+                    KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
+                        nativeRecursiveSpendCompactPaymentTokenFromBundle(ByteArray(0))
                     }
                 },
                 requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,

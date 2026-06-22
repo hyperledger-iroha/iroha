@@ -627,6 +627,40 @@ public sealed class TransactionBuilderTests
         Assert.Empty(builder.Instructions);
     }
 
+    [Theory]
+    [InlineData(" 40", "100", "publicAmount")]
+    [InlineData("40 ", "100", "publicAmount")]
+    [InlineData("+40", "100", "publicAmount")]
+    [InlineData("-40", "100", "publicAmount")]
+    [InlineData("40.0", "100", "publicAmount")]
+    [InlineData("40", " 100", "currentNoteAmount")]
+    [InlineData("40", "100 ", "currentNoteAmount")]
+    [InlineData("40", "+100", "currentNoteAmount")]
+    [InlineData("40", "-100", "currentNoteAmount")]
+    [InlineData("40", "100.0", "currentNoteAmount")]
+    public void KagemushaRecursiveRedeemMetadataOverloadRejectsMalformedAmountsBeforeNativeBridge(
+        string publicAmount,
+        string currentNoteAmount,
+        string expectedParamName)
+    {
+        var builder = NewTransactionBuilder();
+        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
+
+        var invalid = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount,
+                currentNoteAmount,
+                hasChangeOutput: true));
+
+        Assert.Equal(expectedParamName, invalid.ParamName);
+        Assert.Contains(
+            $"{expectedParamName} must be a decimal integer",
+            invalid.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+    }
+
     [Fact]
     public void KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidLineageBeforeNativeBridge()
     {

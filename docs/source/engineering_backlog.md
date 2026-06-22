@@ -49,8 +49,11 @@ Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
 versions in evidence and production-readiness gates. Archived evidence and
 readiness summary self-digests plus readiness compact canary/trust summary
-references reject all-zero placeholders before digest mismatch diagnostics can
-preserve recomputed digest material. Schema-critical integer
+references reject all-zero placeholders before digest mismatch checks run, and
+digest mismatch diagnostics stay label-only instead of printing expected or
+recomputed SHA-256 values. Archived CRL/OCSP override DER drift diagnostics
+also report only the DER material role and mismatch class instead of printing
+the DER SHA-256 value. Schema-critical integer
 metadata such as versions, receipt status codes, and notary record counts reject
 JSON boolean aliases before evidence can be archived. Receipt status codes are
 also bounded to the HTTP 100-599 range before success-policy checks, while live
@@ -91,17 +94,40 @@ Direct XSD fixture verification and trust-bundle verification `run(args)` calls
 also mirror their CLI path-smuggling guards for manifest/profile-catalog,
 bundle, profile-output, and summary-output paths before manifest or bundle
 loading.
+Direct XSD fixture verification also normalizes license-header whitespace before
+matching restricted Standards Editor redistribution phrases, so line-wrapped,
+tab-separated, or zero-width format-character-obfuscated restricted terms cannot
+be archived as redistributable XSD evidence.
 Direct canary runner, rail-gateway adapter, and audit-notary adapter `run(args)`
 calls now mirror their CLI path-smuggling guards for config/summary,
 inbox/message/receipt/token, and export/receipt/token paths before config,
 inbox, export, or network loading.
+Rail-gateway route construction also rechecks the fixed Torii endpoint map and
+fails closed with a label-only unsupported-message diagnostic if an internal
+caller bypasses sidecar validation before URL construction.
+Receipt-verifier endpoint reconstruction now also rechecks the supported
+receipt-kind boundary and fails closed with a label-only unsupported-kind
+diagnostic if an internal caller bypasses receipt-kind validation before
+summary evidence is assembled.
+Evidence-gate receipt metadata comparison now uses the same label-only
+unsupported-kind fallback if internal compact receipt entries bypass
+receipt-kind validation before direct-archive/canary metadata binding.
+Final readiness archive/canary receipt metadata replay mirrors that guard and
+turns an unsupported internal compact receipt kind into a structured metadata
+blocker instead of comparing only generic receipt fields.
 Live rail/notary diagnostic override flags are also pinned by non-dry-run
 coverage so unused local overrides fail before submit/publication and before
 receipt directories are created.
 Dry-run canary receipt evidence now carries `stage_dry_run` through evidence
 and readiness replay, and direct receipt archives may be partial only when
-stage/digest binding proves the omitted receipt kind belongs to a dry-run
-producer rather than to an executed canary receipt.
+stage/digest binding proves the omitted receipt kind belongs to a partial or
+dry-run canary path rather than to an executed canary receipt. Final readiness
+also replays that archive digest binding from compact summaries, so forged
+partial/dry-run policy flags cannot hide a missing archive receipt for a full
+executed canary. Direct archive coverage and final readiness archive/canary
+receipt blockers report only receipt indexes and mismatch classes for missing,
+unreferenced, relabelled, or metadata-drifted receipt digests, without printing
+raw `receipt_sha256` values.
 Live rail-gateway `--torii-base-url` and audit-notary `--endpoint` flags now
 also reject missing, empty, or flag-looking URL values before argparse parsing.
 Those URL value preflights also reject raw control characters, Unicode
@@ -127,10 +153,15 @@ the terminator can bypass scanning and later be echoed by argparse.
 The same CLIs disable argparse long-option abbreviation, so partial spellings
 such as `--summary-ou` or `--receipt-di` cannot bypass exact preflight flag
 matching or be accepted as production options.
-Secret scanning now also checks repeated percent-decoded forms, so encoded or
-double-encoded secret-looking key/value material is rejected in CLI paths,
-unknown JSON keys, recursive JSON values, compact summary paths, and remote
-response previews/errors without echoing the decoded material.
+Secret scanning now also checks repeated percent-decoded forms and
+separator-normalized identifier forms, including Unicode format and mark
+characters that are removed or treated as separators and Unicode compatibility
+forms that normalize to ASCII labels, so encoded, double-encoded,
+zero-width-obfuscated, combining-mark-obfuscated, fullwidth/compatibility-form,
+or repeated/collapsed whitespace, dot, underscore, hyphen, slash, and backslash
+secret-looking material is rejected in CLI paths, unknown JSON keys, recursive
+JSON values, compact summary paths, and remote response previews/errors without
+echoing the decoded material.
 ISO URL path validators now also reject secret-looking key/value material in
 literal, percent-encoded, or double-encoded path segments before live network
 delivery, archived evidence ingestion, or readiness rollup.
@@ -179,17 +210,40 @@ Raw evidence verification now also rejects `--canary-summary` and
 final readiness blocks forged compact XSD/evidence/canary/trust summary paths
 that point back to those artifacts.
 Canary child stdout/stderr previews now also reject identifier-style
-secret-looking material and unsafe control characters before summary emission.
+secret-looking material and unsafe control characters, including Unicode format
+controls such as bidi overrides, before summary emission.
 XSD `xmllint` diagnostics now redact identifier-style secret-looking validator
-output, key/value secret material, unsafe control characters, and non-ASCII
-material before schema-validation errors are reported.
+output, key/value secret material, unsafe control characters including Unicode
+format controls, and non-ASCII material before schema-validation errors are
+reported.
 Direct evidence receipt-verifier diagnostics now redact key/value and
 identifier-style secret-looking stderr plus unsafe control characters before
 reporting child verifier failures. ISO JSON unknown-key scanners now also hide
-control-bearing key names across live adapters, operator receipts, trust
-bundles, XSD manifests/catalogs, and archive rollups, while recursive
-archive/operator JSON scans reject unsafe control characters in string values
-before field-specific replay.
+control-bearing key names, including names with Unicode format controls, across
+live adapters, operator receipts, trust bundles, XSD manifests/catalogs, and
+archive rollups, while recursive archive/operator JSON scans and receipt
+source-sidecar replay reject unsafe control characters, including Unicode format
+controls, in string values before field-specific replay.
+Timestamp helpers for direct trust-bundle `source.retrieved_at`, operator
+evidence `verified_at`/canary/trust-source windows, receipt `submitted_at` and
+`published_at`, and final readiness compact timestamps also reject Unicode
+format controls locally, so timestamp parsing cannot preserve bidi or zero-width
+text even if validator call order changes.
+Trust-bundle, XSD fixture, operator-evidence, and final production-readiness
+required/optional string helpers now also reject Unicode format controls in
+direct source, source URL, policy, trust-material label, manifest,
+profile-catalog, archive, rail-message ID, reviewed reason, and string-list
+values, matching the recursive unsafe-control scan that catches those markers
+during CLI bundle/loading paths. Live rail/audit adapter raw CLI, URL, output
+path, bearer-token path, and rail message-path helpers now share that
+control-character policy with XSD, operator-evidence, and final readiness raw
+CLI token, numeric/context/profile value, local path, source-path,
+fixture/schema relative-path, receipt-kind, child-command, stage-name, compact
+timestamp, and HTTP URL helpers. Receipt-verifier raw CLI, receipt path, and
+HTTP URL helpers plus canary raw CLI, URL, output/runbook path, runbook string,
+and numeric preflight helpers now use the same policy too. Trust-bundle raw
+CLI, output path, and source-age integer preflight helpers also reject Unicode
+format controls at the raw guard layer.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
@@ -217,6 +271,27 @@ fixtures production evidence or suppress an unreviewed profile-catalog-only
 schema gap; advertised profile-version gaps remain blockers unless the exact
 message definition also has reviewed missing-schema, schema-only, or blocked
 source evidence.
+Blocked schema-source evidence now also requires candidate SHA-256 values to
+stay disjoint from checked-in schema and fixture XML digests, and final
+readiness replays those overlaps as dedicated blockers so a forged
+blocked-source row cannot reuse already accepted schema or fixture bytes as gap
+evidence for another profile version. Final readiness also rejects compact
+summaries whose fixture digest reuses a checked-in schema digest, or whose
+profile-catalog source/embedded-JSON digests reuse schema, fixture,
+blocked-source, or each-other digest roles.
+Direct strict XSD preflight diagnostics now report reviewed missing-schema or
+schema-only gap classes without echoing the reviewed rationale text, and final
+readiness XSD gap blockers/warnings copy only path and message-definition labels
+instead of archived free-form gap reasons.
+The rail gateway adapter, receipt verifier, direct evidence verification, and
+final readiness also reject unsupported receipt-kind and rail-message-type
+values with label-only diagnostics, including stage receipt-kind mismatch
+blockers that no longer print the unexpected archived kind. Unsupported canary
+stage-name diagnostics are also label-only and no longer echo the unexpected
+stage label. Direct evidence replay and final readiness trust blockers now keep
+non-production or unsupported embedded-signature policy values out of
+diagnostics as well. Direct evidence replay also rejects unsupported or
+local-only child command flags without echoing the archived flag text.
 Operator evidence verification now rejects canary summaries whose
 `config_path` still points at checked-in
 `fixtures/iso20022/operator_canary/` runbook templates, and final readiness
@@ -332,7 +407,8 @@ can print a short unsupported family value. Rail sidecar
 `message_type`/`payload_sha256` values plus archived rail receipt
 `message_type` values apply no-echo secret-looking checks before
 unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
-operator-provided marker strings, and rail sidecar `payload_sha256` values
+operator-provided marker strings; payload digest mismatches now report only the
+field label, and rail sidecar `payload_sha256` values
 reject all-zero placeholders before network delivery.
 Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
 receipt verifier, evidence replay, readiness replay, and XSD profile catalog
@@ -381,21 +457,25 @@ receipt verifier rejects successful archived receipts carrying the redacted
 response marker plus archived previews/errors containing the same marker set or
 unsafe control characters.
 Audit-notary anchor publication now also rejects secret-looking audit-index
-identifiers and persisted record-source string values before publication or
-source replay can archive them, and direct receipt verification mirrors that
-rule when replaying archived notary sources.
+identifiers plus persisted record-source string values with secret-looking
+material or Unicode format controls before publication or source replay can
+archive them, and direct receipt verification mirrors that rule when replaying
+archived notary sources.
 Archived receipt source paths, including rail XML/sidecar paths, notary anchor
 paths, and notary store directories, now reject narrow secret-looking
 identifiers, URI/drive prefixes, and percent-encoded path smuggling before
 missing-source or mismatch diagnostics can echo them.
 Live rail sidecars now run the same recursive secret-material scan on known
 fields before unsupported message type, profile, payload digest, or
-rail-message-id validation can echo operator-provided values.
+rail-message-id validation can echo operator-provided values. Archived receipt
+verification mirrors the unsafe-text policy when replaying source sidecar
+`profile` and `rail_message_id` fields.
 Duplicate record, list, digest, OID, archived receipt-reuse, and trust-material
 diagnostics now report field/index labels without echoing the rejected duplicate
 value.
-Rail-gateway and audit-notary bearer-token file failures now also report the
-credential input label instead of echoing runtime token file paths.
+Rail-gateway and audit-notary bearer-token files now reject Unicode format
+controls in decoded token contents, and token-file failures report the credential
+input label instead of echoing runtime token file paths.
 Remaining production work still depends on operator-supplied live rail evidence,
 redistributable schemas, and official trust/revocation bundles.
 
@@ -533,10 +613,11 @@ redistributable schemas, and official trust/revocation bundles.
   public bound propagation that consume those governed selector schedules
   directly. The sample-extraction artifact now carries typed source/output
   ciphertext shape and extracted-coefficient metadata, rejects opaque,
-  wrong-slot-count, bad-component-count, or out-of-range payloads, and crypto
-  can extract the selected RLWE coefficient into a raw LWE-style sample whose
-  decrypt matches the selected `c0 + c1 * s` coefficient under the existing
-  secret polynomial basis, with exact and bounded raw-sample bound propagation.
+  wrong-slot-count, bad-component-count, or out-of-range payloads. Raw
+  LWE-style sample extraction, validation, and exact/bounded raw-sample bound
+  helpers are crate-private, so canonical trace reconstruction can still
+  extract the selected `c0 + c1 * s` coefficient internally without exposing a
+  standalone raw-sample proof-material API.
   Crypto now composes the governed coefficient-to-slot, blind-rotation, and raw
   sample-extraction artifacts into an exact/bounded execution-prefix trace with
   propagated bounds, coefficient-zero diagnostic repack output,
@@ -545,9 +626,10 @@ redistributable schemas, and official trust/revocation bundles.
   exact/bounded coefficient-zero bounds are crate-private, keeping that bridge
   as internal proof material rather than a standalone output API. Deterministic
   exact and bounded raw-sample switch-key material, secret-consistency checks,
-  switch execution, public bound propagation, governed artifact carriage, and
-  artifact-aware full-bootstrap output/bound helpers still run through
-  slot-to-coefficient. Full-bootstrap artifact-bundle validation now requires
+  governed artifact carriage, and artifact-aware full-bootstrap output/bound
+  helpers still run through slot-to-coefficient; standalone switch execution
+  and switch-output bound helpers are crate-private internal trace stages.
+  Full-bootstrap artifact-bundle validation now requires
   executable sample-extraction switch-key material rather than accepting
   metadata-only sample-extraction payloads in the governed bundle. Direct
   no-artifact registered entrypoints now validate preflight, then fail with an
@@ -786,15 +868,19 @@ redistributable schemas, and official trust/revocation bundles.
 	  helpers are now internal; the crypto release-audit validator owns the
 	  governed material/artifact, caller-trusted reviewer id/key, and
 	  caller-pinned package digest gate used by the callable production material
-	  and batch paths, and that gate rejects zero or known placeholder pinned
-		  package digests plus record/manifest digest aliases before stale package
+	  and batch paths, and that gate rejects zero, known placeholder, or
+	  leading-whitespace delayed-placeholder pinned package digests plus
+		  record/manifest digest aliases before stale package
 		  validation or digest comparison can mask the caller-pinned digest error;
 			  Core material and execution proof wrappers pin those rejections
 		  with production-entry tests before native proof generation. Shared
 		  execution-policy validation now also recomputes the embedded release
-		  package digest and rejects stale pinned digests or record/manifest digest
-		  aliases before Core/Torii runtime admission can inherit malformed policy
-		  context; Torii signed FHE job preflight now pins the same reviewer-id
+		  package digest and rejects stale, placeholder, or leading-whitespace
+		  delayed-placeholder pinned digests plus record/manifest digest aliases
+		  before Core/Torii runtime admission can inherit malformed policy
+		  context; Core's full-bootstrap runtime release-audit context pins the
+		  same package-digest sentinel rejection before artifact execution. Torii
+		  signed FHE job preflight now pins the same reviewer-id
 		  and reviewer-key field errors for placeholder reviewer labels and
 		  non-Ed25519 trusted reviewer keys before package validation. The
 	  trusted-reviewer package gates preflight caller-supplied reviewer id/key
@@ -892,7 +978,9 @@ redistributable schemas, and official trust/revocation bundles.
   artifact-backed jobs to carry a policy-pinned release-audit package, package
   digest, trusted reviewer id, and reviewer public key before exact or bounded
   artifact execution can dispatch through the release-audit-gated crypto
-  helpers; the lower Core exact/bounded artifact execution and bound wrappers
+  helpers, and the policy/runtime package-digest gates now reject
+  leading-whitespace delayed-placeholder sentinels before generic mismatch
+  diagnostics; the lower Core exact/bounded artifact execution and bound wrappers
   also fail closed without that runtime context after artifact preflight. The
   raw artifact-aware crypto execution/bound helpers are crate-private, so
   external Core/STARK fixture builders use the release-audited helper surface
@@ -3524,15 +3612,22 @@ redistributable schemas, and official trust/revocation bundles.
   present.
 	  Candidate schema imports fail closed when source provenance is missing,
 	  malformed, digest-drifted, still uses placeholder GitHub repository
-	  coordinates, non-lowercase GitHub owner/repository spelling, or invalid
+	  coordinates, separator-obfuscated or collapsed placeholder repository
+	  components, non-lowercase GitHub owner/repository spelling, or invalid
 	  GitHub owner punctuation such as underscores or edge hyphens, or
-	  repository names without any lowercase alphanumeric characters, all-zero
+	  repository names with edge punctuation, all-zero
 	  Git commit or SHA-256 provenance placeholders,
 	  carries identifier-style secret-looking path material, or when
 	  an XSD contains known restricted Standards Editor redistribution terms, and
 	  checked-in and blocked candidate schema entries reject omitted `source`
 	  separately from explicit null source objects in both direct preflight and
 	  archived readiness replay,
+	  ISO CLI secret preflight rejects percent-decoded identifier-only or key/value
+	  whitespace/dot/underscore/hyphen separated secret key labels before any
+	  summary path is accepted,
+	  live rail/notary response previews and archived receipt previews reject the
+	  same separator-obfuscated secret labels plus regex-only bearer whitespace
+	  forms before receipt evidence can be written or replayed,
 	  the manifest must explicitly record `blocked_schema_sources` as an array even
   when no reviewed restricted source candidates are present, and blocked-source
   records must match a current missing-schema fixture gap or, with a profile
@@ -4059,14 +4154,15 @@ redistributable schemas, and official trust/revocation bundles.
 	  Profile override emission now also rejects local-audit `--allow-record-only`
 		  or `--allow-insecure-source-url` modes and placeholder source provenance
 		  (`dummy`, `fake`, `placeholder`, `replace-before-production`, `sample`,
-		  `template`, or reserved hosts such as `example.com`, `example.net`,
+		  `template`, including separator- or compatibility-obfuscated variants, or reserved hosts such as `example.com`, `example.net`,
 		  `example.org`, `example.invalid`, and `operator-canary.bank`), leaving those bundles summary-only
 		  until real rail source metadata is supplied.
 		  It also requires an explicit `--max-source-age-days` freshness budget and
 		  leaves stale source packages summary-only instead of writing profile
 		  overrides. The digest-bound trust summary records that budget so evidence
 			  and readiness can reject omitted, malformed, or weaker source-freshness
-			  policy, and recompute whether `profile_json_emittable` still matches the
+			  policy, reject separator- or compatibility-obfuscated trust-source placeholder markers,
+			  and recompute whether `profile_json_emittable` still matches the
 			  archived source evidence.
 		  Local-audit trust-bundle overrides now also reject unused
 		  `--allow-record-only`, `--allow-insecure-source-url`, and
@@ -4199,7 +4295,8 @@ redistributable schemas, and official trust/revocation bundles.
   canary summaries at evidence-verification time and across distinct evidence
   summaries at readiness time, duplicate archived trust profile IDs, copied
   compact trust profile JSON digests, all-zero trust bundle/profile JSON/pin/DER
-  digests, and bundle digests across summaries with
+  digests, profile JSON or bundle digests reused as compact trust material, and
+  bundle digests across summaries with
   label-only diagnostics, rejects non-canonical archived trust profile IDs or unknown
   rail IDs, requires each canary rail receipt profile to have matching compact
   trust material for the same profile ID and environment, with same-rail binding
@@ -4364,11 +4461,18 @@ redistributable schemas, and official trust/revocation bundles.
 	  whitespace-padded compact strings or paths, unknown compact evidence fields,
   repeated or copied compact canary/trust summaries, nested receipt-summary
   tampering, non-canonical compact receipt paths, duplicate receipt paths or
-  receipt digests, weak trust profiles, duplicate compact trust profile IDs,
+  receipt digests, receipt/response/source digest role reuse inside compact
+  receipt entries and receipt-verifier stdout, weak trust profiles, duplicate
+  compact trust profile IDs,
   copied compact trust profile JSON digests, or bundle digests across trust
   summaries, all-zero compact trust bundle/profile JSON/DER proof digests,
   non-canonical compact trust profile IDs or unknown rail IDs,
   missing or malformed compact trust `bundle_sha256`,
+  public-key/certificate SHA-256 pin role reuse in trust bundles, profile
+  catalogs, and evidence replay, trust pin reuse against CRL/OCSP DER proof
+  material,
+  evidence-gate bundle digest role reuse against compact DER proof material,
+  final-readiness profile JSON or bundle digest role reuse against compact DER proof material,
   record-only trust policy,
   disabled CRL/OCSP revocation checks, and missing required revocation
   material, omitted revoked-certificate or certificate-policy compact trust
@@ -4448,10 +4552,10 @@ redistributable schemas, and official trust/revocation bundles.
   provider fetches and manual aggregate replacement. The MVP keeps deterministic
   committee/leader derivation and quorum checks, but does not yet schedule
   leaders at runtime.
-- Add provider rating weights and governance-driven reputation adjustments once
-  enough provider stats are available from live feed history. Current
-  aggregation remains equal-weight median/percentile with deterministic
-  provider counters.
+- Wire provider rating weights into governance-approved fetch/leader scheduling
+  once policy is finalised. Live provider counters now expose deterministic
+  inlier-share reputation scores and clamped governance deltas, but current
+  aggregation remains equal-weight median/percentile.
 
 ## FASTPQ GPU acceleration follow-ups
 
@@ -5051,8 +5155,8 @@ redistributable schemas, and official trust/revocation bundles.
   - The crate-local sweep is green as of 2026-04-24 with `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`.
   - When validation budget allows, carry the alias-routing and Torii telemetry slices through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
 - Broaden validation for the new canonical account-alias lease flow beyond the focused onboarding and executor checks.
-  - The onboarding auto-renew path now grants the subscriber `CanModifyNftMetadata` for the subscription NFT before trigger registration; rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
-  - Add or rerun focused coverage for user-signed enable/disable mutation flows and the SNS subscription auto-renew billing path in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, not just the onboarding enqueue path.
+  - The onboarding auto-renew grant remains covered by `onboarding_alias_auto_renew_grants_subscriber_metadata_mutation`, and the Torii `alias_auto_renew` filter now also applies a subscriber-signed `/auto-renew` disable against an onboarding-shaped subscription NFT.
+  - The SNS subscription auto-renew billing path was rerun with `cargo test -p iroha_core subscription_bill_account_alias_auto_renew_ --lib -- --nocapture`, covering both renewal/reschedule and missing-alias suspension branches.
   - Once the alias lease slice is stable under those focused reruns, fold it into the next broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor.
 - Keep the Sumeragi main-loop broad corridor attached to future consensus
   changes.
@@ -6568,9 +6672,11 @@ redistributable schemas, and official trust/revocation bundles.
     the memory-only WSV sidecar changes, including DA restart/rehydration and
     the mode-cutover and vote-QC regressions exposed by the first workspace
     rerun.
-  - Add a multi-block replay fixture that replays committed blocks into a fresh
-    state and compares canonical WSV snapshot bytes against the originally
-    committed WSV.
+  - The replay validation fixture now replays multiple route-sensitive legacy
+    blocks into a fresh state and compares canonical WSV snapshot bytes against
+    the originally committed WSV, covering account, domain, alias, and asset
+    mutations on the replay-specific validation entrypoint even when the final
+    optional WSV checkpoint sidecar is adversarially drifted.
   - The real 4-peer restart integration test now commits route-sensitive
     asset, account, alias, and domain-owned state, removes optional sidecar
     metadata, rebuilds from Kura, and compares the restarted peers' rebuilt
@@ -6585,25 +6691,84 @@ redistributable schemas, and official trust/revocation bundles.
     committed state-root path.
   - If operators need a network-authenticated replay proof, promote the WSV root
     from a local Kura sidecar into block-committed or certificate-bound metadata.
-- Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.
-  - Add an integration test proving a user-signed enable/disable update can mutate the subscription NFT created by onboarding.
-  - If a non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.
-- Add a live multi-peer multisig test for previously unregistered signatories.
-  - Start from the existing materialization coverage in `integration_tests/tests/multisig.rs`.
-  - Add a case where a signatory is materialized by registration and then successfully authors `MultisigPropose` / `MultisigApprove` on the network.
-  - Assert transaction-authority shape and final instruction execution, not only account materialization.
+- Carry alias auto-renew mutation coverage into the next broad Torii corridor.
+  - Added focused Torii coverage proving a subscriber-signed disable update can mutate the onboarding-created account-alias auto-renew subscription NFT, mark it canceled, preserve auto-renew settings metadata, and unregister the billing trigger.
+  - If a remaining non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.
+- Carry the materialized-signatory multisig authoring coverage into the next broader integration corridor.
+  - Added a 4-peer `integration_tests/tests/multisig.rs` regression where `MultisigRegister` materializes a previously unregistered signatory and that signatory successfully authors `MultisigPropose` on the network.
+  - The same test asserts single-key proposal and approval transaction-authority shape, submits approval from an existing signatory, and waits for the proposed metadata write to execute after quorum.
 - Extend and burn down the translation metadata audit backlog.
-  - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
-    English-only frontier formal and 2026-05-03 process-hardening updates so
+  - Restored
     `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
-    can be restored for formal docs.
+    for formal docs by marking the stale translated
+    `docs/formal/sumeragi/README.*.md` files as `needs-review` with current
+    source metadata instead of falsely advertising them as `complete`.
+  - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
+    English-only frontier formal and 2026-05-03 process-hardening updates, then
+    move each locale back to `complete` with a real review date.
   - The Sumeragi frontier model, process invariants, mutation suite, TLC
-    cross-check, and longer nightly bound are wired, and CI now publishes a JSON
-    metadata report for the stale translated formal READMEs; the remaining
-    formal-doc task is translation refresh only.
-  - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
+    cross-check, and longer nightly bound are wired; the remaining formal-doc
+    task is translation refresh only.
+  - The metadata checker no longer treats source-only generated English pages
+    as translations, and new portal translation stubs now include
+    `source_hash`, `source_last_modified`, and `translation_last_reviewed:
+    null`; existing `docs/source` and `docs/portal` translated pages still need
+    metadata backfill before those trees can join the CI gate.
+  - Clean the existing `docs/source` and `docs/portal` metadata debt, including
+    files missing `source_hash` and `translation_last_reviewed`, before adding
+    those trees to the CI gate. The latest audit has 18,156 errors after the
+    source-only false positives are excluded.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
-- Add a recorded capture gate for the default `sora-temple` petal styles.
-  - Use `petal score-styles` with a published style set, profile, seed, and minimum success ratio.
-  - Record the JSON baseline in `status.md` and keep the default style honest under aggressive capture.
-  - Only add a stronger default variant if the current `sora-temple` family cannot meet the agreed gate.
+- Carry Petal renderer-specific capture gates beyond the core PNG/Katakana
+  encode, PNG `eval-capture`, PNG `simulate-realtime`, and
+  `score-styles` report.
+  - Added deterministic core capture scoring for Petal Stream payloads, with a
+    default profile baseline of 12/12 successful decode attempts
+    (`success_ratio_bps=10000`) against the `9500` basis-point production gate
+    and an adversarial low-contrast profile pinned at 0/4 attempts.
+  - Wired `iroha offline petal score-styles` to the scorer for the published
+    `sora-temple-default` style set with explicit profile, seed,
+    `--min-success-ratio-bps`, and `--target-effective-bps` report metadata.
+  - Added the deterministic `sora-temple-expanded` style set, which scores the
+    default `sora-temple` candidate and a `sora-temple-high-contrast` hardening
+    candidate that widens dark/light luminance separation while preserving
+    capture attempts and jitter.
+  - Wired `iroha offline petal encode --format png --channel binary-grid` to
+    render the decode-critical Petal grid as a deterministic single-frame PNG
+    with an `iroha.offline.petal.encode.v1` manifest.
+  - Wired `iroha offline petal encode --format png --channel katakana-base94
+    --style sora-temple-command` to render deterministic RGB command tiles that
+    preserve decode-critical center luminance and solid calibration cells.
+  - Wired `iroha offline petal encode --format gif --channel binary-grid`
+    behind the existing `offline-visual-codecs` feature to emit a deterministic
+    GIF and the same encode manifest, while default builds fail closed with a
+    feature-enable diagnostic.
+  - Wired `iroha offline petal encode --format gif --channel katakana-base94
+    --style sora-temple-command` behind the same feature to emit deterministic
+    animated command tiles in a single GIF manifest entry.
+  - Added bounded `encode --animation-frames` support: PNG writes one
+    deterministic file per frame, and GIF writes a single animated file whose
+    manifest entry records the internal encoded frame count.
+  - Wired `iroha offline petal eval-capture` to replay binary-grid or
+    Katakana-base94 PNG frames through deterministic cell-center sampling,
+    decode them with the Petal sample decoder, and fail closed with early-abort
+    accounting when the success gate becomes unreachable.
+  - Added opt-in `eval-capture --perturb-capture` support, which re-renders the
+    sampled binary grid through the deterministic capture profile for
+    seed/profile-stable per-frame capture attempts.
+  - Added bounded deterministic cell-grid capture models for downscale,
+    box-blur, horizontal motion blur, seeded sensor noise, and exposure offset
+    so aggressive capture assumptions can be replayed without host-dependent
+    image-processing libraries.
+  - Wired `iroha offline petal simulate-realtime` to replay binary-grid or
+    Katakana-base94 PNG frames in deterministic loop/source order, report every
+    attempt, and write the first recovered payload only after a successful
+    decode.
+  - Added opt-in `simulate-realtime --perturb-capture` support, expanding
+    replay attempts across loop, source-frame, and capture-attempt indices.
+  - Recorded the CLI JSON baseline in `status.md`: `recommended_style=sora-temple`,
+    `capture_success_ratio_bps=10000`, `resolved_grid_size=33`,
+    `effective_payload_bits_per_second=5376`, and `overall_score_bps=10000`.
+  - Remaining work is renderer-specific: add Katakana preset support, GIF
+    replay, and renderer-specific Katakana style scoring beyond the binary-grid
+    default and high-contrast hardening candidates.

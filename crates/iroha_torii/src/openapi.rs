@@ -4445,7 +4445,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Register paid pin manifest.",
-            "Submit a SoraFS manifest registration transaction. The request must include `content_length`; execution collects the public pin fee and records the committed fee receipt on-chain.",
+            "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),

@@ -8194,7 +8194,7 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_se
 /// Returns [`BfvError`] when the switch key or raw sample is malformed, the raw
 /// sample does not match the key metadata, or registered RNS key switching
 /// fails.
-pub fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -8237,7 +8237,7 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exac
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the switch key
 /// or raw sample is malformed, the raw sample does not match the key metadata,
 /// or registered target-limb RNS key switching fails.
-pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -8289,7 +8289,7 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_regis
 /// Returns [`BfvError`] when the key shape is malformed, the raw sample bound
 /// exceeds centered capacity, or the propagated output bound exceeds centered
 /// capacity.
-pub fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     raw_sample_bound: u128,
@@ -8334,7 +8334,7 @@ fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_boun
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the key shape
 /// is malformed, the raw sample bound exceeds decoding capacity, or the
 /// propagated output bound exceeds decoding capacity.
-pub fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     raw_sample_noise_bound: u128,
@@ -8661,6 +8661,7 @@ pub(crate) fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_
 /// # Errors
 /// Returns [`BfvError`] when the raw sample is malformed or the raw sample bound
 /// exceeds centered residual capacity.
+#[cfg(test)]
 pub(crate) fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -8694,6 +8695,7 @@ fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the raw sample
 /// is malformed, or the raw sample bound exceeds rounded decoding capacity.
+#[cfg(test)]
 pub(crate) fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -16426,7 +16428,7 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
 /// # Errors
 /// Returns [`BfvError`] when the transform, ciphertext, required Galois keys, or
 /// registered RNS profile are invalid.
-pub fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -16471,7 +16473,7 @@ pub fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
 /// # Errors
 /// Returns [`BfvError`] when bounded-noise capacity, transform material,
 /// ciphertext, required Galois keys, or registered RNS profile validation fails.
-pub fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -16524,7 +16526,7 @@ pub fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_ba
 /// exceeds centered residual capacity, required Galois keys are missing or
 /// malformed, or any intermediate/output bound exceeds centered residual
 /// capacity.
-pub fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     transform: &BfvFullBootstrapLinearTransformV1,
@@ -16574,7 +16576,7 @@ pub fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
 /// material is malformed, the input bound exceeds rounded decoding capacity,
 /// required Galois keys are missing or malformed, or any intermediate/output
 /// bound exceeds rounded decoding capacity.
-pub fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     transform: &BfvFullBootstrapLinearTransformV1,
@@ -16641,7 +16643,7 @@ pub fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
 /// # Errors
 /// Returns [`BfvError`] when blind-rotation material, ciphertext, required
 /// Galois keys, or registered RNS profile validation fails.
-pub fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -16696,7 +16698,7 @@ pub fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
 /// # Errors
 /// Returns [`BfvError`] when bounded-noise capacity, blind-rotation material,
 /// ciphertext, required Galois keys, or registered RNS profile validation fails.
-pub fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -16771,7 +16773,7 @@ pub fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basi
 /// input bound exceeds centered residual capacity, required Galois keys are
 /// missing or malformed, or any intermediate/output bound exceeds centered
 /// residual capacity.
-pub fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     key: &BfvFullBootstrapBlindRotationKeyV1,
@@ -16832,7 +16834,7 @@ pub fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
 /// blind-rotation material is malformed, the input bound exceeds rounded
 /// decoding capacity, required Galois keys are missing or malformed, or any
 /// intermediate/output bound exceeds rounded decoding capacity.
-pub fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     key: &BfvFullBootstrapBlindRotationKeyV1,

@@ -353,6 +353,7 @@ fn validate_telemetry(fixture: &MultiPeerFixture, path: &Path) {
         failure_rate_ewma: f64,
         token_health: f64,
         staking_weight: f64,
+        reputation_score_bps: u64,
         penalty: bool,
         last_updated: u64,
     }
@@ -384,6 +385,10 @@ fn validate_telemetry(fixture: &MultiPeerFixture, path: &Path) {
                     .get("staking_weight")
                     .and_then(Value::as_f64)
                     .expect("staking_weight"),
+                reputation_score_bps: entry
+                    .get("reputation_score_bps")
+                    .and_then(Value::as_u64)
+                    .expect("reputation_score_bps"),
                 penalty: entry
                     .get("penalty")
                     .and_then(Value::as_bool)
@@ -419,6 +424,14 @@ fn validate_telemetry(fixture: &MultiPeerFixture, path: &Path) {
         assert_eq!(
             record.staking_weight.expect("fixture staking_weight"),
             expected_row.staking_weight
+        );
+        assert_eq!(
+            u64::from(
+                record
+                    .reputation_score_bps
+                    .expect("fixture reputation_score_bps")
+            ),
+            expected_row.reputation_score_bps
         );
         assert_eq!(record.penalty, expected_row.penalty);
         assert_eq!(

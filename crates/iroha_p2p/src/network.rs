@@ -627,6 +627,10 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     fn topic(&self) -> message::Topic {
         self.payload.topic()
     }
+
+    fn priority(&self) -> message::Priority {
+        self.priority
+    }
 }
 
 fn peer_message_channel<T: Pload>(
@@ -10938,6 +10942,11 @@ pub mod message {
         /// Return the logical topic of the message for scheduling.
         fn topic(&self) -> Topic {
             Topic::Other
+        }
+
+        /// Return the explicit delivery priority carried by the message.
+        fn priority(&self) -> Priority {
+            Priority::Low
         }
     }
 

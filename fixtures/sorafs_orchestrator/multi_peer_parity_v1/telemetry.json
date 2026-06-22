@@ -6,6 +6,7 @@
     "failure_rate_ewma": 0.0,
     "token_health": 0.9,
     "staking_weight": 1.0,
+    "reputation_score_bps": 10000,
     "penalty": false,
     "last_updated_unix": 1724999880
   },
@@ -16,6 +17,7 @@
     "failure_rate_ewma": 0.02,
     "token_health": 0.9,
     "staking_weight": 1.0,
+    "reputation_score_bps": 10000,
     "penalty": false,
     "last_updated_unix": 1724999880
   },
@@ -26,6 +28,7 @@
     "failure_rate_ewma": 0.04,
     "token_health": 0.9,
     "staking_weight": 1.0,
+    "reputation_score_bps": 10000,
     "penalty": false,
     "last_updated_unix": 1724999880
   },
@@ -36,6 +39,7 @@
     "failure_rate_ewma": 0.06,
     "token_health": 0.9,
     "staking_weight": 1.0,
+    "reputation_score_bps": 10000,
     "penalty": false,
     "last_updated_unix": 1724999880
   }

@@ -196,6 +196,8 @@ function buildTelemetryEntries() {
       tokenHealth: entry.token_health,
       staking_weight: entry.staking_weight,
       stakingWeight: entry.staking_weight,
+      reputation_score_bps: entry.reputation_score_bps,
+      reputationScoreBps: entry.reputation_score_bps,
       penalty: entry.penalty,
       last_updated_unix: lastUpdated ?? entry.last_updated_unix,
       lastUpdatedUnix: lastUpdated ?? entry.last_updated_unix,

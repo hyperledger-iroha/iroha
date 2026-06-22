@@ -2956,6 +2956,209 @@ object SccpBsc {
     }
 }
 
+/** BSC testnet SCCP Groth16 helpers with chain-id and domain checks baked in. */
+object SccpBscTestnet {
+    const val DOMAIN_SORA: Int = SccpEvm.DOMAIN_SORA
+    const val DOMAIN_BSC: Int = SccpEvm.DOMAIN_BSC
+    const val TESTNET_CHAIN_ID: Long = SccpSourceProofs.BSC_TESTNET_CHAIN_ID
+    const val TESTNET_NETWORK_ID: String = SccpSourceProofs.BSC_TESTNET_NETWORK_ID
+    const val LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: String = "norito:sccp-local-admission:v1"
+    const val LOCAL_ADMISSION_SUBMISSION_KIND_V1: String = "local_admission"
+    const val LOCAL_ADMISSION_ENTRYPOINT_V1: String = "SubmitBridgeProof"
+    const val STARK_FRI_PROOF_FAMILY_V1: String = "stark-fri-v1"
+
+    @JvmStatic
+    fun requireTestnetChainId(chainId: Long) {
+        require(chainId == TESTNET_CHAIN_ID) {
+            "BSC testnet SCCP requires eth_chainId == 97"
+        }
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun destinationBinding(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = TESTNET_NETWORK_ID,
+    ): SccpSourceProofs.EvmDestinationBinding =
+        SccpSourceProofs.bscTestnetDestinationBinding(
+            verifierAddress = verifierAddress,
+            bridgeAddress = bridgeAddress,
+            verifierCodeHash = verifierCodeHash,
+            verifierKeyHash = verifierKeyHash,
+            networkId = networkId,
+        )
+
+    @JvmStatic
+    @JvmOverloads
+    fun destinationBindingHash(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = TESTNET_NETWORK_ID,
+    ): String = destinationBinding(
+        verifierAddress = verifierAddress,
+        bridgeAddress = bridgeAddress,
+        verifierCodeHash = verifierCodeHash,
+        verifierKeyHash = verifierKeyHash,
+        networkId = networkId,
+    ).hash
+
+    @JvmStatic
+    fun buildProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest {
+        require(input.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC testnet proof requests must target BSC"
+        }
+        val destinationBinding = input.destinationBinding
+            ?: throw IllegalArgumentException("BSC testnet proof requests require destinationBinding")
+        require(destinationBinding.targetDomain == DOMAIN_BSC) {
+            "BSC testnet destinationBinding must target BSC"
+        }
+        require(destinationBinding.networkId == TESTNET_NETWORK_ID) {
+            "BSC testnet destinationBinding.networkId must be chain id 97"
+        }
+        val destinationBindingHash = SccpEvm.requireDestinationBindingHashForProofRequest(
+            publicInputs = input.publicInputs,
+            destinationBinding = destinationBinding,
+            backend = input.backend,
+            sourceDomain = input.sourceDomain,
+        )
+        require(input.destinationBindingHash == destinationBindingHash) {
+            "destinationBindingHash must match BSC testnet destinationBinding"
+        }
+        return SccpEvm.buildProofRequest(input)
+    }
+
+    @JvmStatic
+    fun wrapProofResult(proofBytes: ByteArray, request: EvmSccpProofRequest): EvmSccpProofResult {
+        require(request.targetDomain == DOMAIN_BSC && request.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC testnet proof results must target BSC"
+        }
+        require(request.destinationBinding?.networkId == TESTNET_NETWORK_ID) {
+            "BSC testnet proof results require chain id 97 destinationBinding"
+        }
+        require(request.destinationBinding.hash == request.destinationBindingHash) {
+            "destinationBindingHash must match BSC testnet destinationBinding"
+        }
+        return SccpEvm.wrapProofResult(proofBytes, request)
+    }
+
+    @JvmStatic
+    fun buildSubmission(input: EvmSccpSubmissionInput): EvmSccpSubmission {
+        require(input.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC testnet submissions must target BSC"
+        }
+        val proofResult = input.proofResult
+            ?: throw IllegalArgumentException(
+                "BSC testnet submissions require a wrapped proofResult with destinationBinding",
+            )
+        require(proofResult.publicInputs.targetDomain == DOMAIN_BSC) {
+            "BSC testnet proofResult must target BSC"
+        }
+        val destinationBinding = proofResult.destinationBinding
+            ?: throw IllegalArgumentException("BSC testnet proofResult requires destinationBinding")
+        require(destinationBinding.networkId == TESTNET_NETWORK_ID) {
+            "BSC testnet proofResult requires chain id 97 destinationBinding"
+        }
+        require(destinationBinding.hash == proofResult.destinationBindingHash) {
+            "BSC testnet proofResult destinationBindingHash must match destinationBinding"
+        }
+        return SccpEvm.buildSubmission(input)
+    }
+
+    @JvmStatic
+    fun buildLocalAdmissionSubmission(
+        input: BscTestnetLocalAdmissionSubmissionInput,
+    ): BscTestnetLocalAdmissionSubmission {
+        require(input.sourceDomain == DOMAIN_BSC && input.targetDomain == DOMAIN_SORA) {
+            "BSC testnet local-admission submissions must route BSC -> SORA"
+        }
+        require(input.envelopeEncoding == LOCAL_ADMISSION_ENVELOPE_ENCODING_V1) {
+            "BSC testnet local-admission envelopeEncoding is not canonical"
+        }
+        require(input.submissionKind == LOCAL_ADMISSION_SUBMISSION_KIND_V1) {
+            "BSC testnet local-admission submissionKind is not canonical"
+        }
+        require(input.verifierEntrypoint == LOCAL_ADMISSION_ENTRYPOINT_V1) {
+            "BSC testnet local-admission verifierEntrypoint is not canonical"
+        }
+        require(input.proofFamily == STARK_FRI_PROOF_FAMILY_V1) {
+            "BSC testnet local-admission proofFamily is not canonical"
+        }
+        require(input.verifierBackend == SccpEvm.GROTH16_BN254_PROOF_BACKEND_V1) {
+            "BSC testnet local-admission verifierBackend is not canonical"
+        }
+        val proofBytes = requireNativeRecursiveBytes(input.proofBytes, "proofBytes")
+        val publicInputsBytes = requireNativeRecursiveBytes(
+            input.publicInputsBytes,
+            "publicInputsBytes",
+        )
+        val bundleBytes = requireNativeRecursiveBytes(input.bundleBytes, "bundleBytes")
+        val envelopeBytes = requireNativeRecursiveBytes(input.envelopeBytes, "envelopeBytes")
+        val statementHash = normalizeNonZeroHex32(input.statementHash, "statementHash")
+        val sourceVerifierMaterialHash = normalizeNonZeroHex32(
+            input.sourceVerifierMaterialHash,
+            "sourceVerifierMaterialHash",
+        )
+        val sourceAdapterEngineDeploymentHash = normalizeNonZeroHex32(
+            input.sourceAdapterEngineDeploymentHash,
+            "sourceAdapterEngineDeploymentHash",
+        )
+        val localAdmission = BscTestnetLocalAdmissionPayload(
+            proofBytes = proofBytes,
+            publicInputsBytes = publicInputsBytes,
+            bundleBytes = bundleBytes,
+            statementHash = statementHash,
+            sourceVerifierMaterialHash = sourceVerifierMaterialHash,
+            sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash,
+        )
+        return BscTestnetLocalAdmissionSubmission(
+            version = 1,
+            proofFamily = input.proofFamily,
+            verifierBackend = input.verifierBackend,
+            platformPayload = LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+            envelopeEncoding = LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+            submissionKind = LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+            verifierEntrypoint = LOCAL_ADMISSION_ENTRYPOINT_V1,
+            sourceDomain = DOMAIN_BSC,
+            targetDomain = DOMAIN_SORA,
+            statementHash = statementHash,
+            sourceVerifierMaterialHash = sourceVerifierMaterialHash,
+            sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash,
+            localAdmission = localAdmission,
+            proofBytes = proofBytes,
+            publicInputsBytes = publicInputsBytes,
+            bundleBytes = bundleBytes,
+            envelopeBytes = envelopeBytes,
+        )
+    }
+
+    private fun requireNativeRecursiveBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.isNotEmpty()) { "$label must not be empty" }
+        require(copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        require(copy.size <= SccpEvm.NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+            "$label must be at most ${SccpEvm.NATIVE_RECURSIVE_MAX_PROOF_BYTES} bytes"
+        }
+        return copy
+    }
+
+    private fun normalizeNonZeroHex32(value: String, field: String): String {
+        require(value.startsWith("0x") && value.length == 66) {
+            "$field must be 32 bytes of canonical lowercase 0x hex"
+        }
+        val text = value.substring(2)
+        require(text.all { it in '0'..'9' || it in 'a'..'f' }) {
+            "$field must be 32 bytes of canonical lowercase 0x hex"
+        }
+        require(text.any { it != '0' }) { "$field must not be zero" }
+        return "0x$text"
+    }
+}
+
 /** Input for Ethereum mainnet -> SORA local-admission submission packaging. */
 data class EthereumMainnetLocalAdmissionSubmissionInput(
     val proofBytes: ByteArray,
@@ -3099,6 +3302,92 @@ class BscMainnetLocalAdmissionSubmission(
     val sourceVerifierMaterialHash: String,
     val sourceAdapterEngineDeploymentHash: String,
     val localAdmission: BscMainnetLocalAdmissionPayload,
+    proofBytes: ByteArray,
+    publicInputsBytes: ByteArray,
+    bundleBytes: ByteArray,
+    envelopeBytes: ByteArray,
+) {
+    private val proofBytesStorage: ByteArray = proofBytes.copyOf()
+    private val publicInputsBytesStorage: ByteArray = publicInputsBytes.copyOf()
+    private val bundleBytesStorage: ByteArray = bundleBytes.copyOf()
+    private val envelopeBytesStorage: ByteArray = envelopeBytes.copyOf()
+
+    val arguments: List<EvmSccpSubmissionArgument> = emptyList()
+    val proofBytesHex: String = "0x" + localHexLower(proofBytes)
+    val publicInputsBytesHex: String = "0x" + localHexLower(publicInputsBytes)
+    val bundleBytesHex: String = "0x" + localHexLower(bundleBytes)
+    val envelopeHex: String = "0x" + localHexLower(envelopeBytes)
+
+    val proofBytes: ByteArray
+        get() = proofBytesStorage.copyOf()
+
+    val publicInputsBytes: ByteArray
+        get() = publicInputsBytesStorage.copyOf()
+
+    val bundleBytes: ByteArray
+        get() = bundleBytesStorage.copyOf()
+
+    val envelopeBytes: ByteArray
+        get() = envelopeBytesStorage.copyOf()
+}
+
+/** Input for BSC testnet -> SORA local-admission submission packaging. */
+data class BscTestnetLocalAdmissionSubmissionInput(
+    val proofBytes: ByteArray,
+    val publicInputsBytes: ByteArray,
+    val bundleBytes: ByteArray,
+    val envelopeBytes: ByteArray,
+    val statementHash: String,
+    val sourceVerifierMaterialHash: String,
+    val sourceAdapterEngineDeploymentHash: String,
+    val sourceDomain: Int = SccpBscTestnet.DOMAIN_BSC,
+    val targetDomain: Int = SccpBscTestnet.DOMAIN_SORA,
+    val proofFamily: String = SccpBscTestnet.STARK_FRI_PROOF_FAMILY_V1,
+    val verifierBackend: String = SccpEvm.GROTH16_BN254_PROOF_BACKEND_V1,
+    val envelopeEncoding: String = SccpBscTestnet.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+    val submissionKind: String = SccpBscTestnet.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+    val verifierEntrypoint: String = SccpBscTestnet.LOCAL_ADMISSION_ENTRYPOINT_V1,
+)
+
+/** BSC testnet local-admission payload mirrored from the core SCCP package. */
+class BscTestnetLocalAdmissionPayload(
+    val version: Int = 1,
+    proofBytes: ByteArray,
+    publicInputsBytes: ByteArray,
+    bundleBytes: ByteArray,
+    val statementHash: String,
+    val sourceVerifierMaterialHash: String,
+    val sourceAdapterEngineDeploymentHash: String,
+) {
+    private val proofBytesStorage: ByteArray = proofBytes.copyOf()
+    private val publicInputsBytesStorage: ByteArray = publicInputsBytes.copyOf()
+    private val bundleBytesStorage: ByteArray = bundleBytes.copyOf()
+
+    val proofBytes: ByteArray
+        get() = proofBytesStorage.copyOf()
+
+    val publicInputsBytes: ByteArray
+        get() = publicInputsBytesStorage.copyOf()
+
+    val bundleBytes: ByteArray
+        get() = bundleBytesStorage.copyOf()
+}
+
+/** BSC testnet -> SORA local-admission package ready for Torii bridge-proof submission. */
+class BscTestnetLocalAdmissionSubmission(
+    val version: Int,
+    val proofFamily: String,
+    val verifierBackend: String,
+    val platformPayload: String,
+    val envelopeEncoding: String,
+    val submissionKind: String,
+    val verifierEntrypoint: String,
+    val sourceDomain: Int,
+    val targetDomain: Int,
+    val statementHash: String,
+    val sourceVerifierMaterialHash: String,
+    val sourceAdapterEngineDeploymentHash: String,
+    val localAdmission: BscTestnetLocalAdmissionPayload,
     proofBytes: ByteArray,
     publicInputsBytes: ByteArray,
     bundleBytes: ByteArray,

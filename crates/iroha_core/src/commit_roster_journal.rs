@@ -340,6 +340,19 @@ impl CommitRosterJournal {
     /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written or
     /// [`CommitRosterJournalError::Encode`] when encoding fails.
     pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
+        self.persist_with_durability(true)
+    }
+
+    /// Persist the journal without forcing the file and parent directory to stable storage.
+    ///
+    /// Commit-roster entries are recovery hints backed by the durable block store and by retained
+    /// sidecars. The live commit path uses this variant so a slow filesystem sync cannot stall
+    /// consensus while still keeping the journal loadable after normal writes.
+    pub fn persist_buffered(&mut self) -> Result<(), CommitRosterJournalError> {
+        self.persist_with_durability(false)
+    }
+
+    fn persist_with_durability(&mut self, durable: bool) -> Result<(), CommitRosterJournalError> {
         if self.path.as_os_str().is_empty() {
             return Ok(());
         }
@@ -404,11 +417,17 @@ impl CommitRosterJournal {
                 })?;
             file.write_all(&bytes)
                 .and_then(|()| file.flush())
-                .and_then(|()| file.sync_data())
                 .map_err(|source| CommitRosterJournalError::Write {
                     path: tmp_path.clone(),
                     source,
                 })?;
+            if durable {
+                file.sync_data()
+                    .map_err(|source| CommitRosterJournalError::Write {
+                        path: tmp_path.clone(),
+                        source,
+                    })?;
+            }
         }
         if let Err(source) = fs::rename(&tmp_path, &self.path) {
             if source.kind() == io::ErrorKind::AlreadyExists {
@@ -429,11 +448,13 @@ impl CommitRosterJournal {
                 });
             }
         }
-        if let Some(parent) = self.path.parent() {
-            sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
-                path: parent.to_path_buf(),
-                source,
-            })?;
+        if durable {
+            if let Some(parent) = self.path.parent() {
+                sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
         }
         Ok(())
     }
@@ -606,6 +627,23 @@ mod tests {
                 stake_snapshot: None,
             }
         );
+    }
+
+    #[test]
+    fn journal_buffered_persist_roundtrips_entries() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert.clone(), checkpoint.clone(), None);
+        journal.persist_buffered().expect("persist buffered");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
+        let snapshot = loaded
+            .get(cert.height, cert.subject_block_hash)
+            .expect("snapshot must be present");
+        assert_eq!(snapshot.commit_qc, cert);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint);
     }
 
     #[test]

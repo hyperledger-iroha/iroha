@@ -32,6 +32,7 @@ import re
 import secrets
 import stat
 import sys
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,10 +76,10 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(
-        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
         re.IGNORECASE,
     ),
-    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
 ]
 
 
@@ -99,8 +100,59 @@ def _secret_scan_values(raw: str) -> tuple[str, ...]:
 def _contains_secret_material(value: str) -> bool:
     return any(
         pattern.search(candidate)
-        for candidate in _secret_scan_values(value)
+        for raw_candidate in _secret_scan_values(value)
+        for candidate in _secret_value_forms(raw_candidate)
         for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _secret_value_forms(value: str) -> tuple[str, ...]:
+    return _secret_base_forms(value)
+
+
+def _secret_base_forms(value: str) -> tuple[str, ...]:
+    folded = value.casefold()
+    forms: list[str] = []
+    for candidate in (
+        folded,
+        unicodedata.normalize("NFKC", folded).casefold(),
+        unicodedata.normalize("NFKD", folded).casefold(),
+    ):
+        without_obfuscation = "".join(
+            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
+        )
+        obfuscation_spaced = "".join(
+            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
+        )
+        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
+    return tuple(dict.fromkeys(forms))
+
+
+def _is_secret_obfuscation_char(ch: str) -> bool:
+    category = unicodedata.category(ch)
+    return category == "Cf" or category.startswith("M")
+
+
+def _secret_identifier_forms(value: str) -> tuple[str, ...]:
+    forms: list[str] = []
+    for candidate in _secret_base_forms(value):
+        forms.extend(
+            (
+                candidate,
+                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
+                re.sub(r"[\s_./\\-]+", "", candidate),
+            )
+        )
+    return tuple(dict.fromkeys(forms))
+
+
+def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
+    candidate_forms = _secret_identifier_forms(value)
+    return any(
+        marker_form in candidate_form
+        for marker in markers
+        for marker_form in _secret_identifier_forms(marker)
+        for candidate_form in candidate_forms
     )
 
 
@@ -108,25 +160,49 @@ def _contains_secret_identifier_material(value: str) -> bool:
     strong_markers = (
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     paired_markers = ("authorization", "bearer", "token", "cookie")
     return any(
-        any(marker in lowered for marker in strong_markers)
-        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
-        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+        _contains_secret_marker(candidate, strong_markers)
+        or (
+            _contains_secret_marker(candidate, ("secret",))
+            and _contains_secret_marker(candidate, paired_markers)
+        )
+        for candidate in _secret_scan_values(value)
     )
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
@@ -254,7 +330,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise TrustBundleError(
             f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
         )
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _has_unsafe_control(raw):
         raise TrustBundleError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise TrustBundleError(f"{label} must not have surrounding whitespace")
@@ -285,7 +361,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise TrustBundleError(
             f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
         )
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _has_unsafe_control(raw):
         raise TrustBundleError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise TrustBundleError(f"{label} must not have surrounding whitespace")
@@ -325,7 +401,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        if _has_unsafe_control(arg):
             raise TrustBundleError("CLI argument must not contain control characters")
         if any(ord(ch) > 0x7E for ch in arg):
             raise TrustBundleError("CLI argument must use printable ASCII")
@@ -354,7 +430,7 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 
 
 def _reject_raw_positive_int_cli_value(raw: str, flag: str) -> None:
-    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if raw != raw.strip() or _has_unsafe_control(raw):
         raise TrustBundleError(f"{flag} must be a positive integer")
     if any(ord(ch) > 0x7E for ch in raw):
         raise TrustBundleError(f"{flag} must use printable ASCII")
@@ -596,17 +672,8 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise TrustBundleError(f"{label} contains unknown keys")
-        raise TrustBundleError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise TrustBundleError(f"{label} contains unknown keys")
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -617,35 +684,57 @@ def _is_secret_looking_key(value: Any) -> bool:
         "secret",
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "cookie",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     return any(
-        marker in candidate.lower()
+        _contains_secret_marker(candidate, markers)
         for candidate in _secret_scan_values(str(value))
-        for marker in markers
     )
 
 
 def _is_control_bearing_key(value: Any) -> bool:
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+    return _has_unsafe_control(str(value))
 
 
 def _contains_unsafe_json_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 
@@ -699,8 +788,11 @@ def _check_no_secret_material(value: Any, path: str = "$") -> None:
             raise TrustBundleError(f"{path} contains secret-looking material")
 
 
-def _has_ascii_control(value: str) -> bool:
-    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+def _has_unsafe_control(value: str) -> bool:
+    return any(
+        ord(char) < 0x20 or ord(char) == 0x7F or unicodedata.category(char) == "Cf"
+        for char in value
+    )
 
 
 def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
@@ -734,9 +826,9 @@ def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
         index += 3
 
 
-def _reject_ascii_control(value: str, label: str) -> None:
-    if _has_ascii_control(value):
-        raise TrustBundleError(f"{label} must not contain ASCII control characters")
+def _reject_unsafe_control(value: str, label: str) -> None:
+    if _has_unsafe_control(value):
+        raise TrustBundleError(f"{label} must not contain control characters")
 
 
 def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
@@ -768,7 +860,7 @@ def _required_string(
         raise TrustBundleError(f"{label}.{key} must be a non-empty string")
     if max_chars is not None and len(raw) > max_chars:
         raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
-    _reject_ascii_control(raw, f"{label}.{key}")
+    _reject_unsafe_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
     return raw
@@ -810,7 +902,7 @@ def _optional_string(
         raise TrustBundleError(f"{label}.{key} must be a non-empty string when provided")
     if max_chars is not None and len(raw) > max_chars:
         raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
-    _reject_ascii_control(raw, f"{label}.{key}")
+    _reject_unsafe_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
     return raw
@@ -1234,6 +1326,8 @@ def _parse_timestamp(value: str, label: str) -> dt.datetime:
         raise TrustBundleError(
             f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
         )
+    if _has_unsafe_control(value):
+        raise TrustBundleError(f"{label} must not contain control characters")
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
         parsed = dt.datetime.fromisoformat(normalized)
@@ -1256,7 +1350,7 @@ def _validate_source_url(
 ) -> None:
     if len(url) > MAX_SOURCE_URL_CHARS:
         raise TrustBundleError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
-    _reject_ascii_control(url, label)
+    _reject_unsafe_control(url, label)
     _reject_url_percent_encoding_smuggling(url, label)
     if any(ch.isspace() for ch in url):
         raise TrustBundleError(f"{label} must not contain whitespace")
@@ -1339,9 +1433,39 @@ def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.I
     return embedded is not None and not embedded.is_global
 
 
+def _trust_source_placeholder_forms(value: str) -> tuple[str, str, str]:
+    folded_forms = []
+    separated_forms = []
+    squeezed_forms = []
+    for candidate in (
+        value,
+        unicodedata.normalize("NFKC", value),
+        unicodedata.normalize("NFKD", value),
+    ):
+        folded = candidate.casefold()
+        folded_forms.append(folded)
+        separated_forms.append(" ".join(re.sub(r"[^a-z0-9]+", " ", folded).split()))
+        squeezed_forms.append("".join(ch for ch in folded if ch.isalnum()))
+    return (
+        " ".join(dict.fromkeys(folded_forms)),
+        " ".join(dict.fromkeys(separated_forms)),
+        " ".join(dict.fromkeys(squeezed_forms)),
+    )
+
+
 def _trust_source_text_is_placeholder(value: str) -> bool:
-    lowered = value.lower()
-    return any(marker in lowered for marker in PLACEHOLDER_TRUST_SOURCE_MARKERS)
+    folded, separated, squeezed = _trust_source_placeholder_forms(value)
+    for marker in PLACEHOLDER_TRUST_SOURCE_MARKERS:
+        marker_folded, marker_separated, marker_squeezed = (
+            _trust_source_placeholder_forms(marker)
+        )
+        if (
+            marker_folded in folded
+            or marker_separated in separated
+            or marker_squeezed in squeezed
+        ):
+            return True
+    return False
 
 
 def _trust_source_url_uses_placeholder_host(url: str) -> bool:
@@ -1721,6 +1845,23 @@ def verify_bundle(
         x509_trust_anchor_sha256_pins + trusted_certificate_sha256,
         revoked_certificate_sha256,
         f"{path}.trusted/revoked certificate pins",
+    )
+    _reject_overlap(
+        raw_public_pins + legacy_public_pins,
+        x509_trust_anchor_sha256_pins
+        + trusted_certificate_sha256
+        + revoked_certificate_sha256,
+        f"{path}.public-key/certificate SHA-256 pins",
+    )
+    _reject_overlap(
+        raw_public_pins
+        + legacy_public_pins
+        + x509_trust_anchor_sha256_pins
+        + trusted_certificate_sha256
+        + revoked_certificate_sha256,
+        [entry["sha256"] for entry in crls]
+        + [entry["sha256"] for entry in ocsp_responses],
+        f"{path}.trust pin/revocation DER SHA-256 roles",
     )
 
     crl_required = _required_bool(bundle, "x509_require_crl_revocation_check", str(path))

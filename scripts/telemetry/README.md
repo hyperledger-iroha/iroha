@@ -44,10 +44,11 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   gaps during nightly treasury runs.
 - `validate_drill_log.sh [path]`: verifies that the drill log header matches the
   expected schema and that every row uses an allowed status.
-- `test_sorafs_fetch_alerts.sh`: runs `promtool test rules` against the SoraFS
-  fetch (`dashboards/alerts/tests/sorafs_fetch_rules.test.yml`) and SoraNet
-  privacy (`dashboards/alerts/tests/soranet_privacy_rules.test.yml`) alert suites
-  so both rule sets stay in sync with their dashboards.
+- SoraFS alert suites can be checked directly with `promtool test rules`; the
+  fetch (`dashboards/alerts/tests/sorafs_fetch_rules.test.yml`), provider
+  admission (`dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml`),
+  and SoraNet privacy (`dashboards/alerts/tests/soranet_privacy_rules.test.yml`)
+  suites keep their rule sets in sync with the dashboards.
 - `run_privacy_dp.py`: generates deterministic differential-privacy calibration
   artefacts (`artifacts/soranet_privacy_dp/`) and the accompanying notebook
   under `notebooks/`. CI can execute this script to keep the published ε/δ

@@ -2067,6 +2067,7 @@ struct PyTelemetryEntry {
     failure_rate_ewma: Option<f64>,
     token_health: Option<f64>,
     staking_weight: Option<f64>,
+    reputation_score_bps: Option<u16>,
     penalty: Option<bool>,
     last_updated_unix: Option<u64>,
 }
@@ -2259,21 +2260,32 @@ fn py_provider_metadata_to_internal(
     Ok(provider_metadata)
 }
 
-fn telemetry_snapshot_from_py(entries: &[PyTelemetryEntry]) -> TelemetrySnapshot {
+fn telemetry_snapshot_from_py(entries: &[PyTelemetryEntry]) -> PyResult<TelemetrySnapshot> {
     let records = entries
         .iter()
-        .map(|entry| ProviderTelemetry {
-            provider_id: entry.provider_id.clone(),
-            qos_score: entry.qos_score,
-            latency_p95_ms: entry.latency_p95_ms,
-            failure_rate_ewma: entry.failure_rate_ewma,
-            token_health: entry.token_health,
-            staking_weight: entry.staking_weight,
-            penalty: entry.penalty.unwrap_or(false),
-            last_updated_unix: entry.last_updated_unix,
+        .map(|entry| {
+            if entry
+                .reputation_score_bps
+                .is_some_and(|score| score > 10_000)
+            {
+                return Err(PyValueError::new_err(
+                    "telemetry reputation_score_bps must be in 0..=10000",
+                ));
+            }
+            Ok(ProviderTelemetry {
+                provider_id: entry.provider_id.clone(),
+                qos_score: entry.qos_score,
+                latency_p95_ms: entry.latency_p95_ms,
+                failure_rate_ewma: entry.failure_rate_ewma,
+                token_health: entry.token_health,
+                staking_weight: entry.staking_weight,
+                reputation_score_bps: entry.reputation_score_bps,
+                penalty: entry.penalty.unwrap_or(false),
+                last_updated_unix: entry.last_updated_unix,
+            })
         })
-        .collect::<Vec<_>>();
-    TelemetrySnapshot::from_records(records)
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(TelemetrySnapshot::from_records(records))
 }
 
 #[derive(Clone, FromPyObject)]
@@ -3072,12 +3084,10 @@ fn sorafs_multi_fetch_local_py(
         }
     }
 
-    let telemetry_snapshot = options
-        .telemetry
-        .as_ref()
-        .map_or_else(TelemetrySnapshot::default, |entries| {
-            telemetry_snapshot_from_py(entries)
-        });
+    let telemetry_snapshot = options.telemetry.as_ref().map_or_else(
+        || Ok(TelemetrySnapshot::default()),
+        |entries| telemetry_snapshot_from_py(entries),
+    )?;
     let telemetry_provided = options
         .telemetry
         .as_ref()
@@ -15481,6 +15491,28 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_telemetry_reputation_score_rejects_out_of_range_bps() {
+        ensure_python();
+        let entries = [PyTelemetryEntry {
+            provider_id: "alpha-id".to_string(),
+            qos_score: Some(95.0),
+            latency_p95_ms: Some(45.0),
+            failure_rate_ewma: Some(0.05),
+            token_health: Some(0.9),
+            staking_weight: Some(1.1),
+            reputation_score_bps: Some(10_001),
+            penalty: Some(false),
+            last_updated_unix: Some(1_700_000_000),
+        }];
+
+        let err = match telemetry_snapshot_from_py(&entries) {
+            Ok(_) => panic!("out-of-range reputation_score_bps should be rejected"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("reputation_score_bps"));
+    }
+
+    #[test]
     fn sorafs_multi_fetch_local_returns_scoreboard_and_filters_providers() {
         ensure_python();
         let tempdir = tempdir().expect("tempdir");
@@ -15524,6 +15556,7 @@ mod tests {
                     failure_rate_ewma: Some(0.05),
                     token_health: Some(0.9),
                     staking_weight: Some(1.1),
+                    reputation_score_bps: Some(9_200),
                     penalty: Some(false),
                     last_updated_unix: Some(u64::MAX / 2),
                 },
@@ -15534,6 +15567,7 @@ mod tests {
                     failure_rate_ewma: Some(0.2),
                     token_health: Some(0.6),
                     staking_weight: Some(1.0),
+                    reputation_score_bps: Some(3_000),
                     penalty: Some(true),
                     last_updated_unix: Some(u64::MAX / 2),
                 },

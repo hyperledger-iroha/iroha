@@ -747,12 +747,15 @@ export const SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-source-adapter
 export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1: "fastpq-lane-balanced";
 export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1: "evm-groth16-bn254-v1";
 export const SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1: "sccp-native-evm-groth16-prover-bundle-v1";
+export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-parity-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-testnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-parity-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
@@ -4281,6 +4284,8 @@ export interface EthereumMainnetNativeEvmProverBundleInputBase {
   native_sdk_artifacts?: readonly EthereumMainnetNativeEvmProverBundleSdkArtifactInput[];
   sdkArtifacts?: readonly EthereumMainnetNativeEvmProverBundleSdkArtifactInput[];
   sdk_artifacts?: readonly EthereumMainnetNativeEvmProverBundleSdkArtifactInput[];
+  crossSdkParityArtifact?: string;
+  cross_sdk_parity_artifact?: string;
   crossSdkFixtureParityArtifact?: string;
   cross_sdk_fixture_parity_artifact?: string;
   nativeProverSelfTestArtifact?: string;
@@ -4342,6 +4347,7 @@ export interface EthereumMainnetNativeEvmProverBundle {
   readonly remoteProverRequired: false;
   readonly browserImplementation: "pure-typescript";
   readonly nativeSdkArtifacts: readonly Readonly<EthereumMainnetNativeEvmProverBundleSdkArtifact>[];
+  readonly crossSdkParityArtifact: string;
   readonly crossSdkFixtureParityArtifact: string;
   readonly nativeProverSelfTestArtifact: string;
   readonly auditHashes: Readonly<EthereumMainnetNativeEvmProverAuditHashes>;
@@ -4386,8 +4392,12 @@ export interface EthereumMainnetNativeEvmProverParitySdkResultInput {
   torii_submit_payload_hash?: string;
 }
 
+export type EthereumMainnetNativeEvmProverParitySchema =
+  | typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1
+  | typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+
 export interface EthereumMainnetNativeEvmProverParityFixtureInput {
-  schema?: typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  schema?: EthereumMainnetNativeEvmProverParitySchema;
   domain?: SccpDomainIdInput;
   chain?: "eth";
   proofBackend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
@@ -4441,7 +4451,7 @@ export interface EthereumMainnetNativeEvmProverParitySdkResult {
 }
 
 export interface EthereumMainnetNativeEvmProverParityFixture {
-  readonly schema: typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly schema: EthereumMainnetNativeEvmProverParitySchema;
   readonly domain: number;
   readonly chain: "eth";
   readonly proofBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
@@ -4472,6 +4482,21 @@ export function parseEthereumMainnetNativeEvmProverParityFixture(
   json: string,
   nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
 ): EthereumMainnetNativeEvmProverParityFixture;
+
+export type EthereumMainnetNativeEvmProverParityReportInput =
+  EthereumMainnetNativeEvmProverParityFixtureInput;
+export type EthereumMainnetNativeEvmProverParityReport =
+  EthereumMainnetNativeEvmProverParityFixture;
+
+export function validateEthereumMainnetNativeEvmProverParityReport(
+  fixture: EthereumMainnetNativeEvmProverParityReportInput,
+  nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
+): EthereumMainnetNativeEvmProverParityReport;
+
+export function parseEthereumMainnetNativeEvmProverParityReport(
+  json: string,
+  nativeProverBundle: EthereumMainnetNativeEvmProverBundleInput,
+): EthereumMainnetNativeEvmProverParityReport;
 
 export interface EthereumMainnetNativeEvmProverSelfTestSdkResultInput {
   requestHash?: string;
@@ -4637,6 +4662,10 @@ export interface EthereumMainnetNativeEvmProverArtifactsInput {
   proving_key_bytes?: BinaryLike;
   verifierKeyBytes?: BinaryLike;
   verifier_key_bytes?: BinaryLike;
+  crossSdkParityBytes?: BinaryLike;
+  cross_sdk_parity_bytes?: BinaryLike;
+  parityReportBytes?: BinaryLike;
+  parity_report_bytes?: BinaryLike;
   crossSdkFixtureParityBytes?: BinaryLike;
   cross_sdk_fixture_parity_bytes?: BinaryLike;
   parityFixtureBytes?: BinaryLike;
@@ -4659,6 +4688,8 @@ export interface EthereumMainnetNativeEvmProverArtifacts {
   readonly provingKeyHash: string;
   readonly verifierKeyHash: string;
   readonly verifierKeyArtifactHash: string;
+  readonly crossSdkParityHash: string;
+  readonly crossSdkParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>;
   readonly crossSdkFixtureParityHash: string;
   readonly crossSdkFixtureParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTestHash: string;
@@ -4688,6 +4719,7 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
 export interface EthereumMainnetNativeEvmProverArtifactResolverMetadata {
   readonly path: string;
   readonly label:
+    | "crossSdkParityBytes"
     | "crossSdkFixtureParityBytes"
     | "implementationBytes"
     | "nativeProverSelfTestBytes"
@@ -4695,6 +4727,7 @@ export interface EthereumMainnetNativeEvmProverArtifactResolverMetadata {
     | "provingKeyBytes"
     | "verifierKeyBytes";
   readonly role:
+    | "crossSdkParityArtifact"
     | "crossSdkFixtureParityArtifact"
     | "implementationArtifact"
     | "nativeProverSelfTestArtifact"
@@ -4809,12 +4842,15 @@ export type BscTestnetNativeEvmProverParitySdkResultInput =
   EthereumMainnetNativeEvmProverParitySdkResultInput;
 export type BscTestnetNativeEvmProverParitySdkResult =
   EthereumMainnetNativeEvmProverParitySdkResult;
+export type BscTestnetNativeEvmProverParitySchema =
+  | typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1
+  | typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
 
 export interface BscTestnetNativeEvmProverParityFixtureInput extends Omit<
   EthereumMainnetNativeEvmProverParityFixtureInput,
   "schema" | "chain"
 > {
-  schema?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  schema?: BscTestnetNativeEvmProverParitySchema;
   chain?: "bsc-testnet";
 }
 
@@ -4822,7 +4858,7 @@ export interface BscTestnetNativeEvmProverParityFixture extends Omit<
   EthereumMainnetNativeEvmProverParityFixture,
   "schema" | "chain"
 > {
-  readonly schema: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly schema: BscTestnetNativeEvmProverParitySchema;
   readonly chain: "bsc-testnet";
 }
 
@@ -4835,6 +4871,21 @@ export function parseBscTestnetNativeEvmProverParityFixture(
   json: string,
   nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
 ): BscTestnetNativeEvmProverParityFixture;
+
+export type BscTestnetNativeEvmProverParityReportInput =
+  BscTestnetNativeEvmProverParityFixtureInput;
+export type BscTestnetNativeEvmProverParityReport =
+  BscTestnetNativeEvmProverParityFixture;
+
+export function validateBscTestnetNativeEvmProverParityReport(
+  fixture: BscTestnetNativeEvmProverParityReportInput,
+  nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
+): BscTestnetNativeEvmProverParityReport;
+
+export function parseBscTestnetNativeEvmProverParityReport(
+  json: string,
+  nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
+): BscTestnetNativeEvmProverParityReport;
 
 export type BscTestnetNativeEvmProverSelfTestSdkResultInput =
   EthereumMainnetNativeEvmProverSelfTestSdkResultInput;
@@ -4869,9 +4920,13 @@ export function parseBscTestnetNativeEvmProverSelfTestFixture(
 
 export interface BscTestnetNativeEvmProverArtifacts extends Omit<
   EthereumMainnetNativeEvmProverArtifacts,
-  "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+  | "nativeProverBundle"
+  | "crossSdkParity"
+  | "crossSdkFixtureParity"
+  | "nativeProverSelfTest"
 > {
   readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
+  readonly crossSdkParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
   readonly crossSdkFixtureParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
 }
@@ -5043,12 +5098,15 @@ export type BscMainnetNativeEvmProverParitySdkResultInput =
   EthereumMainnetNativeEvmProverParitySdkResultInput;
 export type BscMainnetNativeEvmProverParitySdkResult =
   EthereumMainnetNativeEvmProverParitySdkResult;
+export type BscMainnetNativeEvmProverParitySchema =
+  | typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1
+  | typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
 
 export interface BscMainnetNativeEvmProverParityFixtureInput extends Omit<
   EthereumMainnetNativeEvmProverParityFixtureInput,
   "schema" | "chain"
 > {
-  schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  schema?: BscMainnetNativeEvmProverParitySchema;
   chain?: "bsc-mainnet";
 }
 
@@ -5056,7 +5114,7 @@ export interface BscMainnetNativeEvmProverParityFixture extends Omit<
   EthereumMainnetNativeEvmProverParityFixture,
   "schema" | "chain"
 > {
-  readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly schema: BscMainnetNativeEvmProverParitySchema;
   readonly chain: "bsc-mainnet";
 }
 
@@ -5082,9 +5140,13 @@ export interface BscMainnetNativeEvmProverSelfTestFixture extends Omit<
 }
 export interface BscMainnetNativeEvmProverArtifacts extends Omit<
   EthereumMainnetNativeEvmProverArtifacts,
-  "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+  | "nativeProverBundle"
+  | "crossSdkParity"
+  | "crossSdkFixtureParity"
+  | "nativeProverSelfTest"
 > {
   readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
+  readonly crossSdkParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
   readonly crossSdkFixtureParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
 }
@@ -5226,6 +5288,21 @@ export function parseBscMainnetNativeEvmProverParityFixture(
   json: string,
   nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
 ): BscMainnetNativeEvmProverParityFixture;
+
+export type BscMainnetNativeEvmProverParityReportInput =
+  BscMainnetNativeEvmProverParityFixtureInput;
+export type BscMainnetNativeEvmProverParityReport =
+  BscMainnetNativeEvmProverParityFixture;
+
+export function validateBscMainnetNativeEvmProverParityReport(
+  fixture: BscMainnetNativeEvmProverParityReportInput,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverParityReport;
+
+export function parseBscMainnetNativeEvmProverParityReport(
+  json: string,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverParityReport;
 
 export function validateBscMainnetNativeEvmProverSelfTestFixture(
   fixture: BscMainnetNativeEvmProverSelfTestFixtureInput,
@@ -5850,6 +5927,89 @@ export class EvmSccpProver {
   ): Promise<EvmSccpProofResult>;
 }
 
+export type EvmGroth16Bn254ProofBEncoding = "proof-json" | "solidity";
+export type EvmGroth16Bn254FieldLike =
+  | string
+  | number
+  | bigint
+  | BinaryLike;
+export type EvmGroth16Bn254G1PointLike =
+  | readonly [EvmGroth16Bn254FieldLike, EvmGroth16Bn254FieldLike, ...unknown[]]
+  | {
+      x: EvmGroth16Bn254FieldLike;
+      y: EvmGroth16Bn254FieldLike;
+    };
+export type EvmGroth16Bn254G2PointLike =
+  | readonly [
+      EvmGroth16Bn254FieldLike,
+      EvmGroth16Bn254FieldLike,
+      EvmGroth16Bn254FieldLike,
+      EvmGroth16Bn254FieldLike,
+      ...unknown[],
+    ]
+  | readonly [
+      readonly [EvmGroth16Bn254FieldLike, EvmGroth16Bn254FieldLike],
+      readonly [EvmGroth16Bn254FieldLike, EvmGroth16Bn254FieldLike],
+      ...unknown[],
+    ]
+  | {
+      x: readonly [EvmGroth16Bn254FieldLike, EvmGroth16Bn254FieldLike];
+      y: readonly [EvmGroth16Bn254FieldLike, EvmGroth16Bn254FieldLike];
+    }
+  | {
+      x0: EvmGroth16Bn254FieldLike;
+      x1: EvmGroth16Bn254FieldLike;
+      y0: EvmGroth16Bn254FieldLike;
+      y1: EvmGroth16Bn254FieldLike;
+    };
+export interface EvmGroth16Bn254StructuredProof {
+  pi_a?: EvmGroth16Bn254G1PointLike;
+  piA?: EvmGroth16Bn254G1PointLike;
+  a?: EvmGroth16Bn254G1PointLike;
+  pi_b?: EvmGroth16Bn254G2PointLike;
+  piB?: EvmGroth16Bn254G2PointLike;
+  b?: EvmGroth16Bn254G2PointLike;
+  pi_c?: EvmGroth16Bn254G1PointLike;
+  piC?: EvmGroth16Bn254G1PointLike;
+  c?: EvmGroth16Bn254G1PointLike;
+}
+export interface EvmGroth16Bn254AdapterProveResult
+  extends Omit<EvmSccpProveResult, "proof"> {
+  proof?: BinaryLike | EvmGroth16Bn254StructuredProof;
+  publicSignals?: readonly EvmGroth16Bn254FieldLike[];
+  public_signals?: readonly EvmGroth16Bn254FieldLike[];
+}
+export type EvmGroth16Bn254AdapterProveFn = (
+  request: EvmSccpProofRequest,
+  options?: Record<string, unknown>,
+) =>
+  | EvmGroth16Bn254AdapterProveResult
+  | BinaryLike
+  | Promise<EvmGroth16Bn254AdapterProveResult | BinaryLike>;
+export type EvmGroth16Bn254ProofAdapterOptions =
+  SccpProverWitnessProviderOption<
+    EvmSccpWitnessProvider,
+    EvmSccpProofRequestInput
+  > &
+    SccpProverProveOption<EvmGroth16Bn254AdapterProveFn> & {
+      proofBEncoding?: EvmGroth16Bn254ProofBEncoding;
+      proof_b_encoding?: EvmGroth16Bn254ProofBEncoding;
+      bEncoding?: EvmGroth16Bn254ProofBEncoding;
+      b_encoding?: EvmGroth16Bn254ProofBEncoding;
+    };
+
+export class EvmGroth16Bn254ProofAdapter {
+  constructor(options?: EvmGroth16Bn254ProofAdapterOptions);
+  buildRequest(
+    input: EvmSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<EvmSccpProofRequest>;
+  prove(
+    input: EvmSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<EvmSccpProofResult>;
+}
+
 export type BscMainnetSccpProofRequestInput = EvmSccpProofRequestInput;
 export type BscMainnetSccpProofRequest = EvmSccpProofRequest;
 export type BscMainnetSccpProofResult = EvmSccpProofResult;
@@ -5857,6 +6017,8 @@ export type BscMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
   ({ proofResult: EvmSccpProofResult } | { proof_result: EvmSccpProofResult });
 export type BscMainnetSccpSubmission = EvmSccpSubmission;
 export type BscMainnetSccpProverOptions = EvmSccpProverOptions;
+export type BscMainnetGroth16Bn254ProofAdapterOptions =
+  EvmGroth16Bn254ProofAdapterOptions;
 export type BscTestnetSccpProofRequestInput = EvmSccpProofRequestInput;
 export type BscTestnetSccpProofRequest = EvmSccpProofRequest;
 export type BscTestnetSccpProofResult = EvmSccpProofResult;
@@ -5864,6 +6026,8 @@ export type BscTestnetSccpSubmissionInput = EvmSccpSubmissionInput &
   ({ proofResult: EvmSccpProofResult } | { proof_result: EvmSccpProofResult });
 export type BscTestnetSccpSubmission = EvmSccpSubmission;
 export type BscTestnetSccpProverOptions = EvmSccpProverOptions;
+export type BscTestnetGroth16Bn254ProofAdapterOptions =
+  EvmGroth16Bn254ProofAdapterOptions;
 
 export class BscMainnetSccpProver {
   constructor(options?: BscMainnetSccpProverOptions);
@@ -5877,8 +6041,32 @@ export class BscMainnetSccpProver {
   ): Promise<BscMainnetSccpProofResult>;
 }
 
+export class BscMainnetGroth16Bn254ProofAdapter {
+  constructor(options?: BscMainnetGroth16Bn254ProofAdapterOptions);
+  buildRequest(
+    input: BscMainnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscMainnetSccpProofRequest>;
+  prove(
+    input: BscMainnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscMainnetSccpProofResult>;
+}
+
 export class BscTestnetSccpProver {
   constructor(options?: BscTestnetSccpProverOptions);
+  buildRequest(
+    input: BscTestnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscTestnetSccpProofRequest>;
+  prove(
+    input: BscTestnetSccpProofRequestInput,
+    options?: Record<string, unknown>,
+  ): Promise<BscTestnetSccpProofResult>;
+}
+
+export class BscTestnetGroth16Bn254ProofAdapter {
+  constructor(options?: BscTestnetGroth16Bn254ProofAdapterOptions);
   buildRequest(
     input: BscTestnetSccpProofRequestInput,
     options?: Record<string, unknown>,

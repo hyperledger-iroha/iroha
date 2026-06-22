@@ -30,11 +30,38 @@ def _secret_key_path_error(path: Path, label: str) -> str | None:
         return f"{label} path must not contain secret-looking material"
     if device_lab._contains_control_character(path_text):
         return f"{label} path must not contain control characters"
+    if (
+        path_text != path_text.strip()
+        or device_lab._path_has_surrounding_whitespace_component(path)
+    ):
+        return f"{label} path must not contain surrounding whitespace"
     if "\\" in path_text:
         return f"{label} path must not contain backslashes"
     if ".." in path.parts:
         return f"{label} path must be canonical"
     return None
+
+
+def _explicit_output_arg_errors(output: str | None) -> list[str]:
+    """Reject unsafe explicit --output strings before slot metadata is read."""
+
+    if output is None:
+        return []
+    candidate = Path(output)
+    if (
+        output != output.strip()
+        or device_lab._path_has_surrounding_whitespace_component(candidate)
+    ):
+        return ["signed evidence output path must not contain surrounding whitespace"]
+    if device_lab.SECRET_RE.search(output):
+        return ["signed evidence output path must not contain secret-looking material"]
+    if device_lab._contains_control_character(output):
+        return ["signed evidence output path must not contain control characters"]
+    if "\\" in output:
+        return ["signed evidence output path must not contain backslashes"]
+    if ".." in candidate.parts:
+        return ["signed evidence output path must be canonical"]
+    return []
 
 
 def _validate_json_output_path(path: Path, label: str) -> list[str]:
@@ -45,6 +72,11 @@ def _validate_json_output_path(path: Path, label: str) -> list[str]:
         return [f"{label} must not contain secret-looking material"]
     if device_lab._contains_control_character(path_text):
         return [f"{label} must not contain control characters"]
+    if (
+        path_text != path_text.strip()
+        or device_lab._path_has_surrounding_whitespace_component(path)
+    ):
+        return [f"{label} must not contain surrounding whitespace"]
     if "\\" in path_text:
         return [f"{label} must not contain backslashes"]
     if ".." in path.parts:
@@ -229,6 +261,11 @@ def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:
         return [f"{label} must not contain secret-looking material"]
     if device_lab._contains_control_character(path_text):
         return [f"{label} must not contain control characters"]
+    if (
+        path_text != path_text.strip()
+        or device_lab._path_has_surrounding_whitespace_component(path)
+    ):
+        return [f"{label} must not contain surrounding whitespace"]
     if "\\" in path_text:
         return [f"{label} must not contain backslashes"]
     if ".." in path.parts:
@@ -597,6 +634,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return [f"{label} could not be removed after parent sync failure"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} cleanup could not be synced after parent sync failure"]
     return []
 
 
@@ -633,6 +674,10 @@ def _cleanup_temp_output(
             return []
         except OSError:
             return [f"{label} temporary file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [f"{label} temporary file cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -795,6 +840,28 @@ def _validate_metadata_exactness_for_signing(
             errors.append(
                 "slot.json attestation_certificate_chain_path must not contain control characters"
             )
+    apk_relative = metadata.get("offline_wallet_apk_path")
+    if (
+        isinstance(apk_relative, str)
+        and apk_relative
+        and apk_relative == apk_relative.strip()
+        and not device_lab._contains_control_character(apk_relative)
+        and not device_lab.SECRET_RE.search(apk_relative)
+    ):
+        normalised_apk_relative = device_lab._normalise_safe_relative_path(
+            apk_relative,
+            errors,
+            "slot.json offline_wallet_apk_path",
+        )
+        apk_path_is_under_evidence = (
+            normalised_apk_relative is not None
+            and device_lab._safe_relative_path_is_child_of(
+                normalised_apk_relative,
+                "evidence",
+            )
+        )
+        if normalised_apk_relative is not None and not apk_path_is_under_evidence:
+            errors.append("slot.json offline_wallet_apk_path must stay under evidence/")
 
 
 def _signer_public_key_sha256(public_key_path: Path, errors: list[str]) -> str | None:
@@ -992,7 +1059,12 @@ def _normalise_output_path(
     if raw_output is None:
         metadata_output = metadata.get("signed_evidence_artifact_path")
         if isinstance(metadata_output, str) and metadata_output:
-            if metadata_output != metadata_output.strip():
+            if (
+                metadata_output != metadata_output.strip()
+                or device_lab._path_has_surrounding_whitespace_component(
+                    Path(metadata_output)
+                )
+            ):
                 errors.append(
                     "slot.json signed_evidence_artifact_path must not contain surrounding whitespace"
                 )
@@ -1008,6 +1080,10 @@ def _normalise_output_path(
     if raw_output != raw_output.strip():
         errors.append("signed evidence output path must not contain surrounding whitespace")
         return None
+    candidate = Path(raw_output)
+    if device_lab._path_has_surrounding_whitespace_component(candidate):
+        errors.append("signed evidence output path must not contain surrounding whitespace")
+        return None
     if device_lab._contains_control_character(raw_output):
         errors.append("signed evidence output path must not contain control characters")
         return None
@@ -1018,7 +1094,6 @@ def _normalise_output_path(
         errors.append("signed evidence output path must not contain backslashes")
         return None
 
-    candidate = Path(raw_output)
     if candidate.is_absolute():
         if ".." in candidate.parts:
             errors.append("signed evidence output path must be canonical")
@@ -1061,7 +1136,7 @@ def _normalise_output_path(
     if relative in {"slot.json", "sha256sum.txt"}:
         errors.append("signed evidence output path must not overwrite slot metadata")
         return None
-    if relative.split("/", 1)[0] != "evidence":
+    if not device_lab._safe_relative_path_is_child_of(relative, "evidence"):
         errors.append("signed evidence output path must stay under evidence/")
         return None
     if relative != DEFAULT_SIGNED_EVIDENCE_PATH:
@@ -1095,7 +1170,7 @@ def _attestation_certificate_chain_bytes_for_harness(
     )
     if relative is None:
         return None
-    if relative.split("/", 1)[0] != "attestation":
+    if not device_lab._safe_relative_path_is_child_of(relative, "attestation"):
         errors.append(
             "slot.json attestation_certificate_chain_path must stay under attestation/"
         )
@@ -1471,16 +1546,7 @@ def sign_slot_evidence(
             *device_lab._slot_path_boundary_errors(slot_path),  # type: ignore[attr-defined]
             _secret_key_path_error(private_key_path, "private key"),
             _secret_key_path_error(public_key_path, "signer public key"),
-            (
-                "signed evidence output path must not contain secret-looking material"
-                if output is not None and device_lab.SECRET_RE.search(output)
-                else None
-            ),
-            (
-                "signed evidence output path must not contain control characters"
-                if output is not None and device_lab._contains_control_character(output)
-                else None
-            ),
+            *_explicit_output_arg_errors(output),
             (
                 "signer key id must be non-empty and must not contain secret-looking material"
                 if not signer_key_id.strip() or device_lab.SECRET_RE.search(signer_key_id)

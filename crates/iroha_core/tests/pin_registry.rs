@@ -1,7 +1,7 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
+use std::{collections::BTreeSet, convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
@@ -479,6 +479,41 @@ fn register_manifest_rejects_unknown_chunker_profile() {
 }
 
 #[test]
+fn register_manifest_rejects_policy_above_governance_replica_ceiling() {
+    let mut state = make_state();
+    state.gov.sorafs_pin_policy.max_replicas_ceiling = Some(2);
+
+    assert_governed_policy_rejection(
+        state,
+        default_policy(),
+        "pin policy exceeds maximum replicas 2",
+    );
+}
+
+#[test]
+fn register_manifest_rejects_policy_beyond_governance_retention_ceiling() {
+    let mut state = make_state();
+    state.gov.sorafs_pin_policy.max_retention_epoch = Some(30);
+
+    let mut policy = default_policy();
+    policy.retention_epoch = 31;
+    assert_governed_policy_rejection(state, policy, "pin retention epoch must be <= 30");
+}
+
+#[test]
+fn register_manifest_rejects_storage_class_outside_governance_allowlist() {
+    let mut state = make_state();
+    state.gov.sorafs_pin_policy.allowed_storage_classes =
+        Some(BTreeSet::from([StorageClass::Cold]));
+
+    assert_governed_policy_rejection(
+        state,
+        default_policy(),
+        "storage class `Hot` is not permitted by policy",
+    );
+}
+
+#[test]
 fn register_manifest_rejects_unknown_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
@@ -854,6 +889,63 @@ fn seed_pin_fee_balance(
     Mint::asset_numeric(Numeric::new(amount, 0), asset_id)
         .execute(&alice(), tx)
         .expect("mint SoraFS public pin fee balance");
+}
+
+fn pin_fee_balance(
+    tx: &iroha_core::state::StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Numeric {
+    let asset_id = AssetId::new(tx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
+    tx.world()
+        .assets()
+        .get(&asset_id)
+        .map_or_else(Numeric::zero, |value| value.clone().into_inner())
+}
+
+fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_message: &str) {
+    let mut block = state.block(block_header(1));
+    let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
+    let alice_balance_before = pin_fee_balance(&tx, &alice());
+    let treasury_account = tx.gov.sorafs_pin_fee_treasury_account.clone();
+    let treasury_balance_before = pin_fee_balance(&tx, &treasury_account);
+
+    let err = RegisterPinManifest {
+        digest: default_digest(),
+        chunker: default_chunker(),
+        chunk_digest_sha3_256: default_chunk_digest(),
+        content_length: default_content_length(),
+        policy,
+        submitted_epoch: 5,
+        alias: None,
+        successor_of: None,
+    }
+    .execute(&alice(), &mut tx)
+    .expect_err("governance policy must reject manifest registration");
+
+    match err {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message,
+        )) => assert!(
+            message.contains(expected_message),
+            "expected `{expected_message}` in policy rejection, got {message}"
+        ),
+        other => panic!("expected invalid parameter error, received {other:?}"),
+    }
+    assert!(
+        tx.world().pin_manifests().get(&default_digest()).is_none(),
+        "rejected manifest policy must not store registry state"
+    );
+    assert_eq!(
+        pin_fee_balance(&tx, &alice()),
+        alice_balance_before,
+        "rejected manifest policy must not charge the submitter"
+    );
+    assert_eq!(
+        pin_fee_balance(&tx, &treasury_account),
+        treasury_balance_before,
+        "rejected manifest policy must not credit the treasury"
+    );
 }
 
 fn default_block_header() -> iroha_data_model::block::BlockHeader {

@@ -83,6 +83,11 @@ def _secret_path_error(path: Path, label: str) -> str | None:
         return f"{label} must not contain secret-looking material"
     if device_lab._contains_control_character(path_text):
         return f"{label} must not contain control characters"
+    if (
+        path_text != path_text.strip()
+        or device_lab._path_has_surrounding_whitespace_component(path)
+    ):
+        return f"{label} must not contain surrounding whitespace"
     if "\\" in path_text:
         return f"{label} must not contain backslashes"
     if ".." in path.parts:
@@ -172,6 +177,24 @@ def validate_output_file_path(path: Path, label: str, *, replace: bool) -> list[
         return [f"{label} must not be hardlinked"]
     if not replace:
         return [f"{label} already exists; refuse to overwrite without --replace"]
+    return []
+
+
+def validate_exit_file_path_shape(path: Path) -> list[str]:
+    """Reject unsafe exit marker path strings before staged metadata reads."""
+
+    secret_error = _secret_path_error(path, "--exit-file")
+    if secret_error is not None:
+        return [secret_error]
+    return []
+
+
+def validate_elapsed_seconds_file_path_shape(path: Path) -> list[str]:
+    """Reject unsafe elapsed-seconds path strings before staged metadata reads."""
+
+    secret_error = _secret_path_error(path, "--elapsed-seconds-file")
+    if secret_error is not None:
+        return [secret_error]
     return []
 
 
@@ -325,6 +348,7 @@ def _unlink_file_if_identity(
     *,
     changed_message: str,
     failure_message: str,
+    sync_failure_message: str | None = None,
 ) -> list[str]:
     try:
         parent_fd = os.open(path.parent, _directory_open_flags())
@@ -337,6 +361,7 @@ def _unlink_file_if_identity(
             expected_identity,
             changed_message=changed_message,
             failure_message=failure_message,
+            sync_failure_message=sync_failure_message,
         )
     finally:
         os.close(parent_fd)
@@ -349,6 +374,7 @@ def _unlink_file_if_identity_at(
     *,
     changed_message: str,
     failure_message: str,
+    sync_failure_message: str | None = None,
 ) -> list[str]:
     try:
         path_stat = os.stat(
@@ -372,6 +398,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return [failure_message]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [sync_failure_message or failure_message]
     return []
 
 
@@ -396,6 +426,7 @@ def _unlink_output_for_replace(path: Path, label: str) -> list[str]:
         expected_identity,
         changed_message=f"{label} changed before cleanup",
         failure_message=f"{label} could not be replaced",
+        sync_failure_message=f"{label} cleanup could not be synced",
     )
 
 
@@ -411,6 +442,7 @@ def _cleanup_temp_output(
         expected_identity,
         changed_message=f"{label} temporary output changed before cleanup",
         failure_message=f"{label} temporary output could not be removed",
+        sync_failure_message=f"{label} temporary output cleanup could not be synced",
     )
 
 
@@ -429,6 +461,14 @@ def _repo_root_errors(repo_root: Path) -> list[str]:
 
 def _preflight_paths(args: argparse.Namespace) -> tuple[Path | None, list[str]]:
     errors: list[str] = []
+    exit_path_errors = validate_exit_file_path_shape(args.exit_file)
+    if exit_path_errors:
+        return None, exit_path_errors
+    elapsed_path_errors = validate_elapsed_seconds_file_path_shape(
+        args.elapsed_seconds_file
+    )
+    if elapsed_path_errors:
+        return None, elapsed_path_errors
     if args.replace and args.resume_key_artifacts:
         errors.append("--replace and --resume-key-artifacts cannot be combined")
     key_phase_replace = args.replace or args.resume_key_artifacts
@@ -645,6 +685,7 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
                     installed_identity,
                     changed_message=f"{label} changed before rollback cleanup",
                     failure_message=f"{label} rollback cleanup could not remove file",
+                    sync_failure_message=f"{label} rollback cleanup could not be synced",
                 )
             return [f"{label} parent metadata could not be read", *cleanup_errors]
         if _file_identity(current_parent_stat) != parent_identity:
@@ -656,6 +697,7 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
                     installed_identity,
                     changed_message=f"{label} changed before rollback cleanup",
                     failure_message=f"{label} rollback cleanup could not remove file",
+                    sync_failure_message=f"{label} rollback cleanup could not be synced",
                 )
             return [f"{label} parent directory changed before sync", *cleanup_errors]
         sync_errors = _sync_output_parent_fd(
@@ -672,6 +714,7 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
                     installed_identity,
                     changed_message=f"{label} changed before rollback cleanup",
                     failure_message=f"{label} rollback cleanup could not remove file",
+                    sync_failure_message=f"{label} rollback cleanup could not be synced",
                 )
             return [*sync_errors, *cleanup_errors]
         tmp_path = None
@@ -899,6 +942,7 @@ def _install_log_temp(temp_log: Path, final_log: Path, label: str, *, replace: b
                     installed_identity,
                     changed_message=f"{label} changed before rollback cleanup",
                     failure_message=f"{label} rollback cleanup could not remove file",
+                    sync_failure_message=f"{label} rollback cleanup could not be synced",
                 )
             return [f"{label} parent metadata could not be read", *cleanup_errors]
         if _file_identity(current_log_parent_stat) != log_parent_identity:
@@ -910,6 +954,7 @@ def _install_log_temp(temp_log: Path, final_log: Path, label: str, *, replace: b
                     installed_identity,
                     changed_message=f"{label} changed before rollback cleanup",
                     failure_message=f"{label} rollback cleanup could not remove file",
+                    sync_failure_message=f"{label} rollback cleanup could not be synced",
                 )
             return [f"{label} parent directory changed before sync", *cleanup_errors]
         sync_errors = _sync_output_parent_fd(
@@ -926,6 +971,7 @@ def _install_log_temp(temp_log: Path, final_log: Path, label: str, *, replace: b
                     installed_identity,
                     changed_message=f"{label} changed before rollback cleanup",
                     failure_message=f"{label} rollback cleanup could not remove file",
+                    sync_failure_message=f"{label} rollback cleanup could not be synced",
                 )
             return [*sync_errors, *cleanup_errors]
     except OSError:

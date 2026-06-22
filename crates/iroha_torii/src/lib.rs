@@ -330,8 +330,8 @@ use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
 use sorafs_manifest::repair::{
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairReportV1, RepairSlashProposalV1, RepairTicketId,
-    RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairTicketId, RepairWorkerActionV1,
+    RepairWorkerSignaturePayloadV1,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
@@ -15611,7 +15611,7 @@ fn filter_non_authoritative_global_list_rows(
                     .and_then(|object| object.get("asset"))
                     .and_then(Value::as_str)
                     .unwrap_or("<unknown>");
-                iroha_logger::warn!(
+                iroha_logger::debug!(
                     dataspace_id = %route.dataspace_id,
                     asset,
                     "suppressing non-authoritative global asset row from routed Torii merge"
@@ -15697,7 +15697,7 @@ fn filter_non_authoritative_global_portfolio_rows(
                             })
                             .and_then(Value::as_str)
                             .unwrap_or("<unknown>");
-                        iroha_logger::warn!(
+                        iroha_logger::debug!(
                             dataspace_id = %route.dataspace_id,
                             asset = asset_literal,
                             "suppressing non-authoritative global asset row from portfolio merge"
@@ -28988,7 +28988,7 @@ async fn handler_post_sorafs_repair_report(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(report): NoritoJson<RepairReportV1>,
+    NoritoJson(submission): NoritoJson<crate::routing::RepairReportSubmissionV1>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -29020,6 +29020,7 @@ async fn handler_post_sorafs_repair_report(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let report = submission.into_report()?;
     match crate::routing::handle_post_sorafs_repair_report(
         app.telemetry.clone(),
         app.sorafs_node.clone(),
@@ -29041,7 +29042,7 @@ async fn handler_post_sorafs_repair_slash(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(proposal): NoritoJson<RepairSlashProposalV1>,
+    NoritoJson(submission): NoritoJson<crate::routing::RepairSlashSubmissionV1>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -29073,6 +29074,7 @@ async fn handler_post_sorafs_repair_slash(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let proposal = submission.into_proposal()?;
     match crate::routing::handle_post_sorafs_repair_slash(
         app.telemetry.clone(),
         app.sorafs_node.clone(),
@@ -55457,8 +55459,12 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_routes() {
-        let local_keypair = KeyPair::random();
-        let remote_keypair = KeyPair::random();
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let remote_keypair = checked_torii_test_ed25519_keypair(
+            0x59,
+            "derive authoritative-lane remote fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
 
@@ -55526,8 +55532,12 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn authoritative_lane_peers_do_not_fall_back_to_commit_topology_for_npos_core_lane() {
-        let local_keypair = KeyPair::random();
-        let remote_keypair = KeyPair::random();
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let remote_keypair = checked_torii_test_ed25519_keypair(
+            0x59,
+            "derive authoritative-lane remote fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
 
@@ -55602,8 +55612,12 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is_empty() {
-        let local_keypair = KeyPair::random();
-        let _remote_keypair = KeyPair::random();
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let remote_keypair = checked_torii_test_ed25519_keypair(
+            0x59,
+            "derive authoritative-lane remote fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
 
         let mut app = mk_app_state_for_tests();
@@ -55617,7 +55631,7 @@ pub(crate) mod tests_runtime_handlers {
             );
             let remote_peer = Peer::new(
                 "127.0.0.1:10002".parse().expect("valid remote address"),
-                _remote_keypair.public_key().clone(),
+                remote_keypair.public_key().clone(),
             );
             online_tx
                 .send(HashSet::from([local_peer, remote_peer]))
@@ -55671,8 +55685,12 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn authoritative_lane_peers_do_not_fall_back_for_npos_non_core_lane() {
-        let local_keypair = KeyPair::random();
-        let remote_keypair = KeyPair::random();
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let remote_keypair = checked_torii_test_ed25519_keypair(
+            0x59,
+            "derive authoritative-lane remote fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
 
@@ -55747,10 +55765,24 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane() {
-        let local_validator_keypair = KeyPair::random();
-        let remote_validator_keypair = KeyPair::random();
-        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let remote_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5a,
+            "derive authoritative-lane local validator fixture key",
+        );
+        let remote_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5b,
+            "derive authoritative-lane remote validator fixture key",
+        );
+        let local_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5c,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane local peer fixture key",
+        );
+        let remote_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5d,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane remote peer fixture key",
+        );
         let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
         let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
         let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
@@ -55864,10 +55896,24 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filtering() {
-        let local_validator_keypair = KeyPair::random();
-        let remote_validator_keypair = KeyPair::random();
-        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let remote_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5a,
+            "derive authoritative-lane local validator fixture key",
+        );
+        let remote_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5b,
+            "derive authoritative-lane remote validator fixture key",
+        );
+        let local_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5c,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane local peer fixture key",
+        );
+        let remote_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5d,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane remote peer fixture key",
+        );
         let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
         let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
         let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
@@ -55985,10 +56031,24 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[tokio::test]
     async fn incoming_proxy_reads_execute_locally_even_when_local_authority_is_stale() {
-        let local_validator_keypair = KeyPair::random();
-        let remote_validator_keypair = KeyPair::random();
-        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let remote_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5a,
+            "derive authoritative-lane local validator fixture key",
+        );
+        let remote_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5b,
+            "derive authoritative-lane remote validator fixture key",
+        );
+        let local_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5c,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane local peer fixture key",
+        );
+        let remote_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5d,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane remote peer fixture key",
+        );
         let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
         let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
         let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
@@ -56086,7 +56146,13 @@ pub(crate) mod tests_runtime_handlers {
         let read_request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
             route,
-            vec![AccountId::new(KeyPair::random().public_key().clone()).to_string()],
+            vec![
+                checked_torii_test_account_id(
+                    0x67,
+                    "derive authoritative-lane proxied read account fixture key",
+                )
+                .to_string(),
+            ],
             None,
             Vec::new(),
         ));
@@ -56125,10 +56191,21 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
-        let local_keypair = KeyPair::random();
-        let authoritative_validator_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let fallback_keypair = KeyPair::random();
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
+        let fallback_keypair = checked_torii_test_ed25519_keypair(
+            0x60,
+            "derive authoritative-lane fallback peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_validator =
             AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -56222,9 +56299,17 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_peers_are_offline()
     {
-        let local_keypair = KeyPair::random();
-        let authoritative_validator_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_validator =
             AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -56289,9 +56374,17 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_torii_url_is_present()
      {
-        let local_keypair = KeyPair::random();
-        let authoritative_validator_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_validator =
             AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -56363,9 +56456,17 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_when_manifest_authoritative_peers_are_offline()
      {
-        let local_keypair = KeyPair::random();
-        let authoritative_validator_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_validator =
             AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -56447,8 +56548,12 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
-        let local_keypair = KeyPair::random();
-        let fallback_keypair = KeyPair::random();
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let fallback_keypair = checked_torii_test_ed25519_keypair(
+            0x60,
+            "derive authoritative-lane fallback peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
 
@@ -56519,13 +56624,35 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn torii_proxy_candidate_peers_exclude_sender_and_visited_peers() {
-        let local_keypair = KeyPair::random();
-        let authoritative_validator_keypair = KeyPair::random();
-        let sender_validator_keypair = KeyPair::random();
-        let visited_validator_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let sender_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let visited_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let sender_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x63,
+            "derive authoritative-lane sender validator fixture key",
+        );
+        let visited_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x65,
+            "derive authoritative-lane visited validator fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
+        let sender_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x64,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane sender peer fixture key",
+        );
+        let visited_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x66,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane visited peer fixture key",
+        );
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_validator =
             AccountId::new(authoritative_validator_keypair.public_key().clone());
