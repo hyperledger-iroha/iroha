@@ -15611,7 +15611,7 @@ fn filter_non_authoritative_global_list_rows(
                     .and_then(|object| object.get("asset"))
                     .and_then(Value::as_str)
                     .unwrap_or("<unknown>");
-                iroha_logger::warn!(
+                iroha_logger::debug!(
                     dataspace_id = %route.dataspace_id,
                     asset,
                     "suppressing non-authoritative global asset row from routed Torii merge"
@@ -15697,7 +15697,7 @@ fn filter_non_authoritative_global_portfolio_rows(
                             })
                             .and_then(Value::as_str)
                             .unwrap_or("<unknown>");
-                        iroha_logger::warn!(
+                        iroha_logger::debug!(
                             dataspace_id = %route.dataspace_id,
                             asset = asset_literal,
                             "suppressing non-authoritative global asset row from portfolio merge"

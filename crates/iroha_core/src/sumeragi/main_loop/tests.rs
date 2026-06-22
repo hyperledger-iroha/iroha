@@ -39661,8 +39661,8 @@ async fn known_block_commit_qc_recovery_uses_cert_only_fetch_for_local_payload()
         .get(&block_hash)
         .expect("local-payload commit-QC recovery should track the missing commit-QC request");
     assert!(
-        request.retry_window >= actor.targeted_payload_rescue_cooldown(),
-        "local-payload commit-QC recovery should retain the targeted rescue cadence"
+        request.retry_window >= actor.local_payload_commit_qc_recovery_retry_window(),
+        "local-payload commit-QC recovery should use the certificate-only retry cadence"
     );
     assert_eq!(
         after.missing_block_fetch_total,
@@ -39680,6 +39680,106 @@ async fn known_block_commit_qc_recovery_uses_cert_only_fetch_for_local_payload()
             .iter()
             .all(|entry| entry.msg_kind != Some("FetchBlockBody")),
         "local-payload commit-QC recovery should not request a block body"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_throttles_cert_only_retry_past_payload_cadence() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    let targets = actor.effective_commit_topology();
+
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_commit_qc_only_retry_throttle",
+        ),
+        "initial local-payload commit-QC recovery should emit a cert-only fetch"
+    );
+    let retry_window = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("missing commit-QC request retained")
+        .retry_window;
+    let payload_cadence = actor.targeted_payload_rescue_cooldown();
+    assert!(
+        retry_window > payload_cadence,
+        "cert-only commit-QC recovery must be slower than payload rescue"
+    );
+    let initial_attempts = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("missing commit-QC request retained")
+        .attempts;
+
+    let early = Instant::now();
+    {
+        let request = actor
+            .pending
+            .missing_commit_qc_requests
+            .get_mut(&block_hash)
+            .expect("missing commit-QC request retained");
+        request.last_requested = early
+            .checked_sub(payload_cadence.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(early);
+    }
+    assert!(
+        !actor.retry_known_block_commit_qc_requests(early, None),
+        "cert-only retry must remain in backoff at the old payload-rescue cadence"
+    );
+    assert_eq!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .get(&block_hash)
+            .expect("missing commit-QC request retained")
+            .attempts,
+        initial_attempts,
+        "early cert-only retry should not emit another fetch"
+    );
+
+    let due = Instant::now();
+    {
+        let request = actor
+            .pending
+            .missing_commit_qc_requests
+            .get_mut(&block_hash)
+            .expect("missing commit-QC request retained");
+        request.last_requested = due
+            .checked_sub(retry_window.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(due);
+    }
+    assert!(
+        actor.retry_known_block_commit_qc_requests(due, None),
+        "cert-only retry should resume after its own retry window"
+    );
+    assert_eq!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .get(&block_hash)
+            .expect("missing commit-QC request retained")
+            .attempts,
+        initial_attempts.saturating_add(1),
+        "due cert-only retry should emit exactly one additional fetch"
     );
 
     harness.shutdown.send();
@@ -39737,8 +39837,8 @@ async fn known_block_commit_qc_recovery_treats_valid_pending_override_as_local_p
         .get(&block_hash)
         .expect("valid pending override should track the missing commit-QC request");
     assert!(
-        request.retry_window >= actor.targeted_payload_rescue_cooldown(),
-        "valid pending override should use the local-payload retry cadence"
+        request.retry_window >= actor.local_payload_commit_qc_recovery_retry_window(),
+        "valid pending override should use the local-payload certificate retry cadence"
     );
     assert_eq!(
         after.missing_block_fetch_total,
@@ -40275,7 +40375,7 @@ async fn known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload()
         .frontier_slot_lag_window()
         .checked_mul(2)
         .unwrap_or_else(|| actor.frontier_slot_lag_window())
-        .max(actor.targeted_payload_rescue_cooldown())
+        .max(actor.local_payload_commit_qc_recovery_retry_window())
         .saturating_add(Duration::from_millis(1));
     let stale_at = Instant::now()
         .checked_sub(stale_window)
@@ -40369,7 +40469,7 @@ async fn known_block_commit_qc_stall_keeps_local_payload_out_of_fallback_reancho
         .frontier_slot_lag_window()
         .checked_mul(2)
         .unwrap_or_else(|| actor.frontier_slot_lag_window())
-        .max(actor.targeted_payload_rescue_cooldown())
+        .max(actor.local_payload_commit_qc_recovery_retry_window())
         .saturating_add(Duration::from_millis(1));
     let stale_at = Instant::now()
         .checked_sub(stale_window)
@@ -55657,6 +55757,140 @@ async fn rebroadcast_stalled_rbc_payloads_skips_ready_repair_after_delivery_when
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_uses_ready_only_repair_below_quorum_after_delivery() {
+    let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
+    let key = insert_active_pending_block(&mut harness.actor, 0);
+    let pending_block = harness
+        .actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block")
+        .block
+        .clone();
+    let payload = super::proposals::block_payload_bytes(&pending_block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+        .expect("rbc session");
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &pending_block,
+        &roster,
+        &harness.key_pairs,
+    );
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(required > 1, "test requires local READY below quorum");
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_peer = harness.actor.common_config.peer.id().clone();
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+    assert!(session.record_ready(local_idx, vec![0xA1]));
+    assert!(session.ready_signatures.len() < required);
+    session.sent_ready = true;
+    assert!(session.record_deliver(local_idx, vec![0xD1, 0xD2]));
+
+    let expected_ready_targets: BTreeSet<_> =
+        Actor::rbc_missing_ready_peers(&session, &signature_topology)
+            .into_iter()
+            .filter(|peer| *peer != local_peer)
+            .collect();
+    assert!(
+        !expected_ready_targets.is_empty(),
+        "test requires remote READY repair targets"
+    );
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let _ = take_background_log(&background_log);
+    let progress = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(progress, "expected targeted READY repair progress");
+
+    let entries = take_background_log(&background_log);
+    let targeted_ready_peers: BTreeSet<_> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("RbcReady"),
+                peer: Some(peer),
+            } => Some(peer.clone()),
+            _ => None,
+        })
+        .collect();
+    let heavy_repair_count = entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.msg_kind,
+                Some("RbcInit" | "RbcChunk" | "RbcChunkCompact" | "BlockBodyResponse")
+            ) || (entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver"))
+        })
+        .count();
+
+    assert_eq!(
+        targeted_ready_peers, expected_ready_targets,
+        "below-quorum delivered sessions should repair with READY evidence only"
+    );
+    assert_eq!(
+        heavy_repair_count, 0,
+        "below-quorum delivered sessions should not send body or DELIVER repair"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&key),
+        "READY-only repair should arm the READY cooldown"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .targeted_payload_rescue_last_sent
+            .contains_key(&key),
+        "READY-only repair should not arm the payload rescue cooldown"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_rebroadcast_last_sent
+            .contains_key(&key),
+        "READY-only repair should not arm the DELIVER cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_wakes_commit_pipeline_after_complete_delivery() {
     let mut harness = test_actor_harness(4).await;
     let background_log = attach_background_log(&mut harness.actor);
@@ -55920,6 +56154,127 @@ async fn rebroadcast_stalled_rbc_payloads_slows_delivered_ready_repair_during_co
     assert_eq!(
         ready_targets, expected_ready_targets,
         "READY repair should resume for missing remote senders after the extended cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_slows_deliver_during_commit_qc_recovery() {
+    let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
+    let key = insert_active_pending_block(&mut harness.actor, 0);
+    let pending_block = harness
+        .actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block")
+        .block
+        .clone();
+    let payload = super::proposals::block_payload_bytes(&pending_block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+        .expect("rbc session");
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &pending_block,
+        &roster,
+        &harness.key_pairs,
+    );
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+    for (idx, _peer) in signature_topology.as_ref().iter().enumerate() {
+        let idx = u32::try_from(idx).expect("sender fits u32");
+        session.record_ready(idx, vec![u8::try_from(idx).expect("index fits u8")]);
+    }
+    assert!(session.ready_signatures.len() >= required);
+    session.sent_ready = true;
+    assert!(session.record_deliver(local_idx, vec![0xD1, 0xD2]));
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let now = Instant::now();
+    let base_deliver_cooldown = harness.actor.rbc_deliver_rebroadcast_cooldown();
+    let extended_deliver_cooldown = harness.actor.rbc_deliver_commit_qc_recovery_cooldown();
+    assert!(
+        extended_deliver_cooldown > base_deliver_cooldown,
+        "commit-QC recovery must extend full DELIVER rebroadcast cooldown"
+    );
+    let recently_delivered = now
+        .checked_sub(base_deliver_cooldown + Duration::from_millis(10))
+        .unwrap_or(now);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .deliver_rebroadcast_last_sent
+        .insert(key, recently_delivered);
+
+    let _ = take_background_log(&background_log);
+    let _ = harness.actor.rebroadcast_stalled_rbc_payloads(now);
+    let entries = take_background_log(&background_log);
+    let deliver_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        })
+        .count();
+    assert_eq!(
+        deliver_broadcasts, 0,
+        "commit-QC recovery should not repeatedly broadcast full DELIVER at the base cooldown"
+    );
+
+    let due_deliver = now
+        .checked_sub(extended_deliver_cooldown + Duration::from_millis(10))
+        .unwrap_or(now);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .deliver_rebroadcast_last_sent
+        .insert(key, due_deliver);
+
+    let _ = take_background_log(&background_log);
+    let progress = harness.actor.rebroadcast_stalled_rbc_payloads(now);
+    assert!(
+        progress,
+        "full DELIVER repair should resume after the extended cooldown"
+    );
+    let entries = take_background_log(&background_log);
+    let deliver_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        })
+        .count();
+    assert_eq!(
+        deliver_broadcasts, 1,
+        "expected one full DELIVER broadcast after the extended cooldown"
     );
 
     harness.shutdown.send();
@@ -190246,6 +190601,138 @@ async fn reschedule_rearms_vote_backed_quorum_timeout_after_rbc_sender_activity_
         "stale owner rearm should emit vote-backed retransmit work"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_does_not_refresh_stale_vote_backed_slot_with_synthetic_body_available() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires at least three votes for commit quorum"
+    );
+    let seeded = seed_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view_idx,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test requires a stale sub-quorum vote-backed slot"
+    );
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let hard_cap = super::saturating_mul_duration(
+        actor
+            .frontier_recovery_window()
+            .max(quorum_timeout)
+            .max(actor.rebroadcast_cooldown())
+            .max(Duration::from_millis(1)),
+        2,
+    );
+    let now = Instant::now();
+    let stale_at = now
+        .checked_sub(hard_cap.saturating_add(Duration::from_millis(10)))
+        .unwrap_or(now);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = stale_at;
+    pending.touch_progress(stale_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.phase_tracker.start_new_round(height, stale_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stale_at);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view_idx,
+        block_hash,
+        stale_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        false,
+        None,
+        None,
+    ));
+    let slot = actor.frontier_slot.as_mut().expect("frontier slot seeded");
+    slot.repair_state.last_reason = Some("quorum_timeout");
+    slot.repair_state.quorum_timeout_rebroadcasted = true;
+    slot.quorum_progress.votes_observed = true;
+    slot.quorum_progress.last_vote_at = Some(stale_at);
+    slot.timers.last_progress_at = stale_at;
+    slot.timers.last_updated_at = stale_at;
+    slot.timers.lag_window_started_at = Some(stale_at);
+
+    assert!(
+        actor.exact_frontier_vote_backed_quorum_timeout_hard_cap_elapsed(height, view_idx, now),
+        "test setup must start with an exhausted vote-backed exact frontier owner"
+    );
+    assert!(
+        actor.reschedule_stale_pending_blocks_with_now(now, None),
+        "stale vote-backed quorum-timeout owner should rotate instead of being refreshed by local pending-body bookkeeping"
+    );
+    assert!(
+        actor
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current_view| current_view > view_idx),
+        "synthetic body availability from a retained pending block must not prevent the second quorum-timeout rotation"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot retained after rotation");
+    assert!(
+        slot.body_present(),
+        "quorum reschedule should still make the locally retained body visible to the slot"
+    );
+    assert_eq!(
+        slot.timers.last_progress_at, stale_at,
+        "synthetic body availability must not refresh stale vote-backed owner progress"
+    );
+    assert!(
+        !slot.repair_state.quorum_timeout_rebroadcasted,
+        "view rotation should consume the previously armed quorum-timeout rebroadcast latch"
+    );
+    let posts = take_background_log(&background_log);
+    assert!(
+        !posts.is_empty(),
+        "quorum reschedule should still emit vote-backed retransmit work before rotating"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
