@@ -2378,7 +2378,10 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
       }),
     /publicAmount|u128|canonical/,
   );
-  for (const changeOutput of [Buffer.alloc(31, 1), Buffer.alloc(32)]) {
+  for (const [changeOutput, errorPattern] of [
+    [Buffer.alloc(31, 1), /changeOutput must be 32 bytes/],
+    [Buffer.alloc(32), /changeOutput must be non-zero/],
+  ]) {
     assert.throws(
       () =>
         encodeKagemushaRecursiveSpendRedeemRequest({
@@ -2388,7 +2391,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           redeemProof,
           changeOutput,
         }),
-      /changeOutput/,
+      errorPattern,
     );
   }
   assert.throws(

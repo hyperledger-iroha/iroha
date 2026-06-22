@@ -1432,6 +1432,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-domain-vectors",
     ),
     (
+        "SDK redeem change-output fixed32 negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-fixed32-vectors",
+    ),
+    (
         "SDK redeem change-output relationship negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-relationships",
     ),
@@ -4626,7 +4630,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
         "for (amount in listOf(",
-        "        for (changeOutput in listOf",
+        "        for ((changeOutput, expectedMessage) in listOf(",
         (
             "SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)",
             '""',
@@ -4665,6 +4669,20 @@ def check_recursive_compact_surface(texts, errors):
             "U128_MAX_PLUS_ONE",
         ),
         "Kotlin typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        "        for ((changeOutput, expectedMessage) in listOf(",
+        "        val missingChangeOutput = assertFailsWith<IllegalArgumentException> {",
+        (
+            "ByteArray(31) { 1 } to \"changeOutput must be exactly 32 bytes\"",
+            "ByteArray(32) to \"changeOutput must be non-zero\"",
+            "val invalidChangeOutput = assertFailsWith<IllegalArgumentException>",
+            "assertEquals(expectedMessage, invalidChangeOutput.message)",
+        ),
+        "Kotlin typed recursive spend redeem change-output fixed32 tests",
         errors,
     )
     require_block_contains(
@@ -4740,7 +4758,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
         "for (final String amount :\n        new String[] {",
-        "    for (final byte[] changeOutput",
+        "    for (final Object[] invalidChangeOutput",
         (
             "new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(",
             "repeat((byte) 0x04, 32), repeat((byte) 0x05, 32), amount",
@@ -4780,6 +4798,20 @@ def check_recursive_compact_surface(texts, errors):
             '"340282366920938463463374607431768211456"',
         ),
         "Android Java typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        "    for (final Object[] invalidChangeOutput :",
+        '    assertThrows(\n        "changeOutput is required when publicAmount is less than current note amount",',
+        (
+            'repeat((byte) 0x01, 31), "changeOutput must be exactly 32 bytes"',
+            'new byte[32], "changeOutput must be non-zero"',
+            "(String) invalidChangeOutput[1]",
+            "(byte[]) invalidChangeOutput[0]",
+        ),
+        "Android Java typed recursive spend redeem change-output fixed32 tests",
         errors,
     )
     require_block_contains(
@@ -9277,10 +9309,23 @@ def check_javascript(texts, errors):
     require_block_contains(
         texts,
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
-        "  for (const changeOutput of [Buffer.alloc(31, 1), Buffer.alloc(32)]) {",
+        "  for (const [changeOutput, errorPattern] of [",
+        "  assert.throws(\n    () =>\n      encodeKagemushaRecursiveSpendRedeemRequest({\n        bundle: sharedRecursiveSpendArchive(\"init_bundle\"),",
+        (
+            "[Buffer.alloc(31, 1), /changeOutput must be 32 bytes/]",
+            "[Buffer.alloc(32), /changeOutput must be non-zero/]",
+            "changeOutput,",
+            "errorPattern",
+        ),
+        "JavaScript typed recursive spend redeem change-output fixed32 tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  assert.throws(\n    () =>\n      encodeKagemushaRecursiveSpendRedeemRequest({\n        bundle: sharedRecursiveSpendArchive(\"init_bundle\"),",
         "  const blockHeightEncoders = [",
         (
-            "/changeOutput/",
             "/changeOutput is required/",
             "/publicAmount must not exceed/",
             'for (const publicAmount of ["7", "8"])',
@@ -9961,6 +10006,18 @@ def check_javascript(texts, errors):
             "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
         ),
         "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend redeem rejects invalid change-output relationships before native dispatch",
+            "[Buffer.alloc(31, 1), /changeOutput must be 32 bytes/]",
+            "[Buffer.alloc(32), /changeOutput must be non-zero/]",
+            "errorPattern",
+        ),
+        "JavaScript package dist recursive spend redeem change-output fixed32 coverage",
         errors,
     )
     require_contains(
@@ -11405,10 +11462,22 @@ def check_python(texts, errors):
     require_block_contains(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
-        '    for change_output in (b"\\x01" * 31, b"\\x00" * 32):',
+        "    for change_output, error_match in (",
+        '    with pytest.raises(ValueError, match="change_output is required"):',
+        (
+            '(b"\\x01" * 31, "change_output must be exactly 32 bytes")',
+            '(b"\\x00" * 32, "change_output must be non-zero")',
+            "match=error_match",
+        ),
+        "Python typed recursive spend redeem change-output fixed32 tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        '    with pytest.raises(ValueError, match="change_output is required"):',
         '    with pytest.raises(ValueError, match="lineage_verifier_key"):',
         (
-            'match="change_output"',
             'match="change_output is required"',
             'match="public_amount must not exceed"',
             'for public_amount in ("7", "8"):',
@@ -12298,10 +12367,23 @@ def check_swift(texts, errors):
     require_block_contains(
         texts,
         request_codecs_test,
+        "        for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32)] {",
         '        assertRedeemRequestInvalidField("changeOutput") {',
+        (
+            "Data(repeating: 1, count: 31)",
+            "Data(repeating: 0, count: 32)",
+            'assertRedeemRequestInvalidField("changeOutput")',
+            'publicAmount: "7"',
+        ),
+        "Swift typed recursive spend redeem change-output fixed32 tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        '        assertRedeemRequestInvalidField("changeOutput") {\n            try KagemushaRecursiveSpendRedeemRequest(\n                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),\n                recipient: Self.sampleRecipient(),\n                publicAmount: "6"',
         "        func assertVerifyRequestInvalidField(",
         (
-            'publicAmount: "6"',
             'assertRedeemRequestInvalidField("publicAmount")',
             'publicAmount: "8"',
             'publicAmount: "7"',
@@ -27560,6 +27642,66 @@ if mode == "--negative-control-sdk-redeem-change-output-relationships":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK redeem change-output relationship drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            "Data(repeating: 0, count: 32)",
+            "Data(repeating: 1, count: 32)",
+            "Swift typed recursive spend redeem change-output fixed32 tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "/changeOutput must be non-zero/",
+            "/changeOutput must be nonempty/",
+            "JavaScript typed recursive spend redeem change-output fixed32 tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            "change_output must be non-zero",
+            "change_output must be nonempty",
+            "Python typed recursive spend redeem change-output fixed32 tests",
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            "changeOutput must be non-zero",
+            "changeOutput must be nonempty",
+            "Kotlin typed recursive spend redeem change-output fixed32 tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            "changeOutput must be non-zero",
+            "changeOutput must be nonempty",
+            "Android Java typed recursive spend redeem change-output fixed32 tests",
+        ),
+        "javascript/iroha_js/test/package_dist.test.js": (
+            "/changeOutput must be non-zero/",
+            "/changeOutput must be nonempty/",
+            "JavaScript package dist recursive spend redeem change-output fixed32 coverage",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate redeem change-output fixed32 vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK redeem change-output fixed32 vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK redeem change-output fixed32 vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK redeem change-output fixed32 vector drift was not detected"
     )
 
 if mode == "--negative-control-sdk-redeem-lineage-preflight":

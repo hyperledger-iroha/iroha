@@ -1091,8 +1091,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 )
             }
         }
-        for (changeOutput in listOf(ByteArray(31) { 1 }, ByteArray(32))) {
-            assertFailsWith<IllegalArgumentException> {
+        for ((changeOutput, expectedMessage) in listOf(
+            ByteArray(31) { 1 } to "changeOutput must be exactly 32 bytes",
+            ByteArray(32) to "changeOutput must be non-zero",
+        )) {
+            val invalidChangeOutput = assertFailsWith<IllegalArgumentException> {
                 RedeemSpendRequest(
                     bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
                     recipient = sampleRecipient(),
@@ -1101,6 +1104,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     changeOutput = changeOutput,
                 )
             }
+            assertEquals(expectedMessage, invalidChangeOutput.message)
         }
         val missingChangeOutput = assertFailsWith<IllegalArgumentException> {
             RedeemSpendRequest(

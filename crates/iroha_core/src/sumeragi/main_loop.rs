@@ -22397,6 +22397,9 @@ impl Actor {
         &mut self,
         msg: &super::InboundBlockMessage,
     ) -> bool {
+        if matches!(msg.message, BlockMessage::Qc(_)) {
+            return false;
+        }
         let Some((kind, height, view)) =
             super::SumeragiHandle::committed_height_fields(&msg.message)
         else {

@@ -11584,6 +11584,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-bundle-proof-public-input-vectors",
     "--negative-control-sdk-bundle-current-note-vectors",
     "--negative-control-sdk-accumulator-domain-vectors",
+    "--negative-control-sdk-redeem-change-output-fixed32-vectors",
     "--negative-control-sdk-redeem-change-output-relationships",
     "--negative-control-sdk-redeem-lineage-preflight",
     "--negative-control-sdk-redeem-lineage-witness-shape",
@@ -14221,7 +14222,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkAccumulatorDomainVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-domain-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":'),
   );
   assert.match(
     sdkAccumulatorDomainVectorBranch,
@@ -14252,6 +14253,40 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorDomainVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator domain vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkRedeemChangeOutputFixed32Branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Data\(repeating: 0, count: 32\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/changeOutput must be non-zero\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?change_output must be non-zero[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?changeOutput must be non-zero[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?changeOutput must be non-zero[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/changeOutput must be non-zero\//u,
+    "SDK redeem change-output fixed32 negative control must mutate non-C# SDK zero change-output vectors and package dist",
+  );
+  assert.doesNotMatch(
+    sdkRedeemChangeOutputFixed32Branch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK redeem change-output fixed32 negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK redeem change-output fixed32 negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem change-output fixed32 vector drift was not detected for/u,
+    "SDK redeem change-output fixed32 negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK redeem change-output fixed32 vector drift was not detected"\s*\)/u,
+    "SDK redeem change-output fixed32 negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkRedeemChangeOutputFixed32Branch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK redeem change-output fixed32 negative control must not unconditionally pass after run_checks",
   );
   const sdkRedeemChangeOutputRelationshipBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),

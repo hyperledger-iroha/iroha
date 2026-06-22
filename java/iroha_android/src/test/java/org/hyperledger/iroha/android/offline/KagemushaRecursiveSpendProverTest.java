@@ -2206,8 +2206,13 @@ public final class KagemushaRecursiveSpendProverTest {
                   null,
                   null));
     }
-    for (final byte[] changeOutput : new byte[][] {repeat((byte) 0x01, 31), new byte[32]}) {
+    for (final Object[] invalidChangeOutput :
+        new Object[][] {
+          {repeat((byte) 0x01, 31), "changeOutput must be exactly 32 bytes"},
+          {new byte[32], "changeOutput must be non-zero"}
+        }) {
       assertThrows(
+          (String) invalidChangeOutput[1],
           () ->
               new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
                   sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
@@ -2215,7 +2220,7 @@ public final class KagemushaRecursiveSpendProverTest {
                   "7",
                   syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
                   null,
-                  changeOutput,
+                  (byte[]) invalidChangeOutput[0],
                   null,
                   null));
     }

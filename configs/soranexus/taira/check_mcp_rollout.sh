@@ -16,6 +16,8 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+POST_CANARY_STATUS_RECHECK_ATTEMPTS="${POST_CANARY_STATUS_RECHECK_ATTEMPTS:-10}"
+POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SECONDS:-2}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
@@ -714,8 +716,9 @@ check_status_snapshot_with_retry() {
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     if check_status_snapshot "$label" "$status_url" "$allow_pending_commit_qc"; then
       return 0
+    else
+      rc=$?
     fi
-    rc=$?
     if [[ $rc -eq 10 ]]; then
       return 10
     fi
@@ -739,8 +742,9 @@ check_sumeragi_snapshot_with_retry() {
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     if check_sumeragi_snapshot "$label" "$sumeragi_url" "$allow_pending_commit_qc"; then
       return 0
+    else
+      rc=$?
     fi
-    rc=$?
     if [[ $rc -eq 10 ]]; then
       return 10
     fi
@@ -1276,21 +1280,29 @@ run_write_canary() {
 }
 
 recheck_status_targets_after_write_canary() {
-  local idx label root_url attempt
+  local idx label root_url
 
   for idx in "${!CHECKED_LABELS[@]}"; do
     label="${CHECKED_LABELS[$idx]}"
     root_url="${CHECKED_ROOTS[$idx]}"
-    for ((attempt = 1; attempt <= 10; attempt++)); do
-      if check_status_snapshot "$label" "${root_url}/status" 0; then
-        break
-      fi
-      if [[ $attempt -eq 10 ]]; then
-        echo "${label}: /status still did not publish a commit QC snapshot after the signed write canary" >&2
-        exit 1
-      fi
-      sleep 2
-    done
+    if ! check_status_snapshot_with_retry \
+      "$label" \
+      "${root_url}/status" \
+      0 \
+      "$POST_CANARY_STATUS_RECHECK_ATTEMPTS" \
+      "$POST_CANARY_STATUS_RECHECK_DELAY_SECONDS"; then
+      echo "${label}: /status still did not publish a healthy snapshot after the signed write canary" >&2
+      exit 1
+    fi
+    if ! check_sumeragi_snapshot_with_retry \
+      "$label" \
+      "${root_url}/v1/sumeragi/status" \
+      0 \
+      "$POST_CANARY_STATUS_RECHECK_ATTEMPTS" \
+      "$POST_CANARY_STATUS_RECHECK_DELAY_SECONDS"; then
+      echo "${label}: /v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary" >&2
+      exit 1
+    fi
   done
 }
 

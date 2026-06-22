@@ -3214,8 +3214,11 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
                     0x7B,
                 ),
             )
-    for change_output in (b"\x01" * 31, b"\x00" * 32):
-        with pytest.raises(ValueError, match="change_output"):
+    for change_output, error_match in (
+        (b"\x01" * 31, "change_output must be exactly 32 bytes"),
+        (b"\x00" * 32, "change_output must be non-zero"),
+    ):
+        with pytest.raises(ValueError, match=error_match):
             kagemusha.KagemushaRecursiveSpendRedeemRequest(
                 bundle=_shared_recursive_spend_archive("init_bundle"),
                 recipient=_recursive_spend_recipient(),

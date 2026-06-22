@@ -4135,6 +4135,24 @@ test("package dist Kagemusha recursive spend redeem rejects invalid change-outpu
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
     0x65,
   );
+  for (const [changeOutput, errorPattern] of [
+    [Buffer.alloc(31, 1), /changeOutput must be 32 bytes/],
+    [Buffer.alloc(32), /changeOutput must be non-zero/],
+  ]) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recipient: "dist-recipient",
+          publicAmount: "7",
+          redeemProof,
+          lineageWitness,
+          changeOutput,
+          lineageVerifierRecord: verifierRecord,
+        }),
+      errorPattern,
+    );
+  }
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendRedeemRequest({
