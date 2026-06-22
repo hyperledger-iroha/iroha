@@ -389,37 +389,70 @@ fn has_catalog_trusted_setup_fragment(label: &str, compact: &str) -> bool {
         .any(|fragment| compact.contains(fragment))
 }
 
+const CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS: &[&str] = &[
+    "debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace",
+];
+const CATALOG_DEVELOPER_ONLY_EXACT_TOKENS: &[&str] = &[
+    "test",
+    "dummy",
+    "fake",
+    "stub",
+    "sample",
+    "placeholder",
+    "todo",
+    "draft",
+];
+const CATALOG_DEVELOPER_ONLY_COMPACT_FRAGMENTS: &[&str] = &[
+    "notforproduction",
+    "notproduction",
+    "notproductionready",
+    "notready",
+    "replacebeforeproduction",
+    "replacebeforemainnet",
+    "draftonly",
+];
+
 fn has_catalog_developer_only_fragment(label: &str) -> bool {
+    let compact = label
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>();
+    if CATALOG_DEVELOPER_ONLY_COMPACT_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
+    {
+        return true;
+    }
+
     let mut letter_run = String::new();
     for token in label
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
     {
-        if ["debug", "mock", "fixture", "dev"]
+        if CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS
             .iter()
             .any(|marker| token.contains(marker))
-            || ["test", "dummy", "fake", "stub", "sample", "placeholder"].contains(&token)
+            || CATALOG_DEVELOPER_ONLY_EXACT_TOKENS.contains(&token)
         {
             return true;
         }
         if token.len() == 1 {
             letter_run.push_str(token);
         } else {
-            if ["debug", "mock", "fixture", "dev"]
+            if CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS
                 .iter()
                 .any(|marker| letter_run.contains(marker))
-                || ["test", "dummy", "fake", "stub", "sample", "placeholder"]
-                    .contains(&letter_run.as_str())
+                || CATALOG_DEVELOPER_ONLY_EXACT_TOKENS.contains(&letter_run.as_str())
             {
                 return true;
             }
             letter_run.clear();
         }
     }
-    ["debug", "mock", "fixture", "dev"]
+    CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS
         .iter()
         .any(|marker| letter_run.contains(marker))
-        || ["test", "dummy", "fake", "stub", "sample", "placeholder"].contains(&letter_run.as_str())
+        || CATALOG_DEVELOPER_ONLY_EXACT_TOKENS.contains(&letter_run.as_str())
 }
 
 #[cfg(feature = "json")]
@@ -507,6 +540,8 @@ pub enum OpenVerifyEnvelopeValidationError {
     ZeroVerifierKeyHash,
     /// The public-input metadata is empty.
     EmptyPublicInputs,
+    /// The public-input metadata is present but contains only zero bytes.
+    AllZeroPublicInputs,
     /// The public-input metadata exceeds configured bounds.
     PublicInputsTooLarge {
         /// Observed public-input metadata length.
@@ -516,6 +551,8 @@ pub enum OpenVerifyEnvelopeValidationError {
     },
     /// The proof byte payload is empty.
     EmptyProofBytes,
+    /// The proof byte payload is present but contains only zero bytes.
+    AllZeroProofBytes,
     /// The proof byte payload exceeds configured bounds.
     ProofBytesTooLarge {
         /// Observed proof byte length.
@@ -558,11 +595,17 @@ impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
             Self::EmptyPublicInputs => {
                 write!(f, "OpenVerifyEnvelope public inputs are empty")
             }
+            Self::AllZeroPublicInputs => {
+                write!(f, "OpenVerifyEnvelope public inputs must not be all zeros")
+            }
             Self::PublicInputsTooLarge { len, max } => write!(
                 f,
                 "OpenVerifyEnvelope public inputs length {len} exceeds maximum {max}"
             ),
             Self::EmptyProofBytes => write!(f, "OpenVerifyEnvelope proof bytes are empty"),
+            Self::AllZeroProofBytes => {
+                write!(f, "OpenVerifyEnvelope proof bytes must not be all zeros")
+            }
             Self::ProofBytesTooLarge { len, max } => write!(
                 f,
                 "OpenVerifyEnvelope proof bytes length {len} exceeds maximum {max}"
@@ -700,6 +743,9 @@ impl OpenVerifyEnvelope {
                 max: bounds.max_public_input_bytes,
             });
         }
+        if self.public_inputs.iter().all(|byte| *byte == 0) {
+            return Err(OpenVerifyEnvelopeValidationError::AllZeroPublicInputs);
+        }
         if self.proof_bytes.is_empty() {
             return Err(OpenVerifyEnvelopeValidationError::EmptyProofBytes);
         }
@@ -708,6 +754,9 @@ impl OpenVerifyEnvelope {
                 len: self.proof_bytes.len(),
                 max: bounds.max_proof_bytes,
             });
+        }
+        if self.proof_bytes.iter().all(|byte| *byte == 0) {
+            return Err(OpenVerifyEnvelopeValidationError::AllZeroProofBytes);
         }
         if !bounds.allow_aux && !self.aux.is_empty() {
             return Err(OpenVerifyEnvelopeValidationError::NonEmptyAux);
@@ -1302,6 +1351,13 @@ mod tests {
             "halo2/ipa:m-o-c-k-proof",
             "halo2/ipa:dev-fixture",
             "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:todo-proof",
+            "halo2/ipa:t-o-d-o-proof",
+            "halo2/ipa:draft-proof",
+            "halo2/ipa:d-r-a-f-t-proof",
+            "halo2/ipa:pending-audit",
+            "halo2/ipa:replace-before-production",
+            "halo2/ipa:not-for-production",
             "halo2/ipa:placeholder",
             "halo2/ipa:p-l-a-c-e-h-o-l-d-e-r",
             "halo2/ipa:production-ready",
@@ -1334,6 +1390,13 @@ mod tests {
             "stark/fri/prod-powers-of-tau",
             "stark/fri/dev-fixture",
             "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/todo",
+            "stark/fri/t-o-d-o",
+            "stark/fri/draft-only",
+            "stark/fri/d-r-a-f-t",
+            "stark/fri/pending-audit",
+            "stark/fri/replace-before-mainnet",
+            "stark/fri/not-production-ready",
             "stark/fri/placeholder",
             "stark/fri/p-l-a-c-e-h-o-l-d-e-r",
             "stark/fri/production-ready",
@@ -1433,15 +1496,16 @@ mod tests {
     #[test]
     fn open_verify_envelope_admission_validation_rejects_adversarial_shapes() {
         use OpenVerifyEnvelopeValidationError::{
-            EmptyCircuitId, EmptyProofBytes, EmptyPublicInputs, NonEmptyAux, ProofBytesTooLarge,
-            PublicInputsTooLarge, UnsupportedBackend, ZeroVerifierKeyHash,
+            AllZeroProofBytes, AllZeroPublicInputs, EmptyCircuitId, EmptyProofBytes,
+            EmptyPublicInputs, NonEmptyAux, ProofBytesTooLarge, PublicInputsTooLarge,
+            UnsupportedBackend, ZeroVerifierKeyHash,
         };
 
         let cases: [(
             &str,
             fn(&mut OpenVerifyEnvelope),
             OpenVerifyEnvelopeValidationError,
-        ); 8] = [
+        ); 11] = [
             (
                 "unsupported backend",
                 |env| env.backend = BackendTag::Unsupported,
@@ -1463,6 +1527,16 @@ mod tests {
                 EmptyPublicInputs,
             ),
             (
+                "all-zero public inputs",
+                |env| env.public_inputs = vec![0; 3],
+                AllZeroPublicInputs,
+            ),
+            (
+                "oversized all-zero public inputs",
+                |env| env.public_inputs = vec![0; 4],
+                PublicInputsTooLarge { len: 4, max: 3 },
+            ),
+            (
                 "oversized public inputs",
                 |env| env.public_inputs = vec![0xAA; 4],
                 PublicInputsTooLarge { len: 4, max: 3 },
@@ -1471,6 +1545,11 @@ mod tests {
                 "empty proof bytes",
                 |env| env.proof_bytes.clear(),
                 EmptyProofBytes,
+            ),
+            (
+                "all-zero proof bytes",
+                |env| env.proof_bytes = vec![0; 4],
+                AllZeroProofBytes,
             ),
             (
                 "oversized proof bytes",

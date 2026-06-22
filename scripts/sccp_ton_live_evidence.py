@@ -26,6 +26,43 @@ import sccp_ton_destination_evidence as evidence  # noqa: E402
 Urlopen = Callable[..., Any]
 TON_ACCOUNT_STATES_MAX_RESPONSE_BYTES = 1024 * 1024
 TON_ACCOUNT_STATES_MAX_ERROR_BYTES = 4096
+PUBLIC_SUMMARY_FIELDS = (
+    "source_domain",
+    "domain",
+    "chain",
+    "verifier_plan",
+    "verifier_identity",
+    "verifier_code_hash",
+    "anchor_id",
+    "destination_binding_key",
+    "destination_binding_hash",
+    "expected_destination_binding_hash_matches",
+    "code_boc_root_hash",
+    "code_boc_hash_matches",
+    "code_boc_base64",
+    "code_boc_base64_sha256",
+    "account_status",
+    "source_verifier_material_hash",
+    "source_adapter_engine_deployment_hash",
+    "route_allowlist_id",
+    "route_allowlist_hash",
+    "expected_route_allowlist_hash",
+    "expected_route_allowlist_hash_matches",
+    "route_canary",
+    "verifier_contract_address",
+    "account_address",
+    "account_state_hash",
+    "last_transaction_lt",
+    "last_transaction_hash",
+    "code_boc_present",
+    "expected_verifier_code_hash_matches",
+    "expected_account_state_hash_matches",
+    "destination_toml_ready",
+    "full_toml_ready",
+    "toml_ready",
+    "offline_evidence_args",
+    "offline_toml_sha256",
+)
 
 
 def _hex(raw: bytes) -> str:
@@ -722,6 +759,14 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _public_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: summary[field]
+        for field in PUBLIC_SUMMARY_FIELDS
+        if field in summary
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -736,7 +781,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.toml:
             print(render_toml(args, live), end="")
         else:
-            print(json.dumps(_summary(args, live), sort_keys=True, indent=2))
+            print(
+                json.dumps(
+                    _public_summary(_summary(args, live)),
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,

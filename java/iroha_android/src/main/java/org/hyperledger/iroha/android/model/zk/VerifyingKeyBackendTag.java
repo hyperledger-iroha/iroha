@@ -343,6 +343,22 @@ public enum VerifyingKeyBackendTag {
 
   private static boolean isDeveloperOnlyBackendLabel(final String raw) {
     final String label = trimWhitespace(raw).toLowerCase(Locale.ROOT);
+    final String compact = compactAscii(label);
+    final String[] compactFragments = {
+      "notforproduction",
+      "notproduction",
+      "notproductionready",
+      "notready",
+      "replacebeforeproduction",
+      "replacebeforemainnet",
+      "draftonly"
+    };
+    for (final String fragment : compactFragments) {
+      if (compact.contains(fragment)) {
+        return true;
+      }
+    }
+
     final StringBuilder letterRun = new StringBuilder();
     for (final String token : label.split("[^a-z0-9]+")) {
       if (token.isEmpty()) {
@@ -378,12 +394,18 @@ public enum VerifyingKeyBackendTag {
         || value.contains("mock")
         || value.contains("fixture")
         || value.contains("dev")
+        || value.contains("todo")
+        || value.contains("draft")
+        || value.contains("pending")
+        || value.contains("replace")
         || value.equals("test")
         || value.equals("dummy")
         || value.equals("fake")
         || value.equals("stub")
         || value.equals("sample")
-        || value.equals("placeholder");
+        || value.equals("placeholder")
+        || value.equals("todo")
+        || value.equals("draft");
   }
 
   private static boolean isStarkFriProductionBackendLabel(final String backend) {

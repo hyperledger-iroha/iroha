@@ -10104,6 +10104,11 @@ Temporal properties:
   exclusive outcome, witness, live-commit gate, timer/gate, vote-budget,
   classifier, residual-gate, continuation-seed, and delivered-pending handoff
   obligations into one continuation envelope.
+- The aggregate `RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` theorem
+  composes the full first-delivery outcome surface: DELIVER provenance, ready
+  quorum exit, certified finality, non-final delivered wait-state entry,
+  consensus-frame preservation, finality/pending timer-gate splits, and the
+  commit-evidence continuation envelope.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
@@ -10486,6 +10491,12 @@ Temporal properties:
 - `RbcDeliveredFinalityPostGstPostStateIsTerminal` proves the post-GST branch
   explicitly: delivered-state finality reaches committed+GST terminal
   quiescence with every action gate disabled.
+- The aggregate `RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope`
+  theorem composes the delivered-state commit-vote finality obligations into
+  one certified-commit envelope covering commit-vote provenance, current-view
+  commitment, certificate witness installation, latch/artifact coupling,
+  delivered RBC evidence preservation, exact action frames, committed
+  post-state invariants, and the pre/post-GST gate split.
 - `RbcDeliveredNeverEnablesRbcProgress` proves that a delivered RBC session
   keeps INIT, CHUNK, READY, DELIVER, and Byzantine RBC-fault gates closed, so
   delivered RBC evidence cannot be reopened by RBC-side progress.
@@ -10772,6 +10783,12 @@ Temporal properties:
   composes the named delivered-pending complete wait-state closure,
   commit-vote, prepare-vote, timeout/NewView, NewView-vote, proposal, GST,
   stutter, and branch-classifier obligations into one continuation envelope.
+- The aggregate `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope`
+  theorem composes the full delivered-state lifecycle surface: delivered
+  evidence stability, no commit certificate before finality, certified
+  commit-vote finality, closed RBC/fault progress gates, delivered-pending
+  handoff coverage, complete spec-step handoff behavior, and the named
+  delivered-pending wait-state action envelope.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation
@@ -10791,6 +10808,11 @@ Temporal properties:
   states, partial READY evidence stays below commit quorum, ready-quorum and
   delivered states keep commit-quorum READY evidence, and corrupted retained
   READY counters are explicitly invalidated by the digest flag.
+- The aggregate `RbcLifecycleAlwaysMatchesEndToEndEnvelope` theorem composes
+  the RBC end-to-end lifecycle surface: progress mutation provenance, live
+  evidence handoff confinement, Byzantine corruption/repair, CHUNK/READY/DELIVER
+  availability, first-delivery outcome, and delivered-state consensus/finality
+  continuation behavior.
 
 Frontier recovery invariants:
 - `TypeInvariant`

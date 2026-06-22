@@ -25333,6 +25333,14 @@ function solanaFullLightClientGateHashForMaterialAndDeployment(
       32,
     ),
   );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.adapterVerifierVkHash, "adapterVerifierVkHash", 32),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.deploymentReceiptHash, "deploymentReceiptHash", 32),
+  );
   for (const [index, role] of auditRoles.entries()) {
     out = writeString(out, role.verifierId, "solanaAuditVerifierId");
     out = concatBytes(
@@ -30637,6 +30645,14 @@ function tonFullLightClientGateHashForMaterialAndDeployment(
       "sourceAdapterDeploymentHash",
       32,
     ),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.adapterVerifierVkHash, "adapterVerifierVkHash", 32),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.deploymentReceiptHash, "deploymentReceiptHash", 32),
   );
   for (const role of [
     TON_FULL_LIGHT_CLIENT_AUDIT_ROLES.masterchainConfig,
@@ -41353,6 +41369,14 @@ export function sccpSolanaFullLightClientGateHash(input) {
       32,
     ),
   );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.adapterVerifierVkHash, "adapterVerifierVkHash", 32),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.deploymentReceiptHash, "deploymentReceiptHash", 32),
+  );
   for (const [verifierId, verifierHash] of verifierPairs) {
     out = writeBytes(out, textEncoder.encode(verifierId));
     out = concatBytes(
@@ -41434,6 +41458,14 @@ export function sccpTonFullLightClientGateHash(input) {
       "sourceAdapterDeploymentHash",
       32,
     ),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.adapterVerifierVkHash, "adapterVerifierVkHash", 32),
+  );
+  out = concatBytes(
+    out,
+    hexToBytes(deployment.deploymentReceiptHash, "deploymentReceiptHash", 32),
   );
   for (const [verifierId, verifierHash] of verifierPairs) {
     out = writeBytes(out, textEncoder.encode(verifierId));

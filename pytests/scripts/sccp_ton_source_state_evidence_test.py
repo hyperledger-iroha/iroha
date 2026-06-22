@@ -17,7 +17,7 @@ TON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR = (
     "61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
 )
 TON_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR = (
-    "c32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596"
+    "5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48"
 )
 
 
@@ -398,6 +398,10 @@ def test_ton_source_record_hashes_match_rust_vectors():
         module.ton_full_light_client_gate_hash(args).hex()
         == TON_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR
     )
+    gate_hash = module.ton_full_light_client_gate_hash(args)
+    replayed_receipt = SimpleNamespace(**vars(args))
+    replayed_receipt.deployment_receipt_hash = bytes.fromhex("ab" * 32)
+    assert module.ton_full_light_client_gate_hash(replayed_receipt) != gate_hash
 
 
 def test_ton_direct_record_hashes_reject_zero_production_hashes():

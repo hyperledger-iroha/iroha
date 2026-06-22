@@ -598,11 +598,28 @@ fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
 }
 
+#[cfg(any(test, feature = "telemetry"))]
+fn checked_routing_fixture_keypair(
+    seed: u8,
+    algorithm: Algorithm,
+    context: &'static str,
+) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], algorithm).expect(context)
+}
+
+#[cfg(test)]
+#[test]
+fn checked_routing_fixture_keypair_rejects_all_zero_seed_material() {
+    assert!(
+        KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked routing fixtures must reject invalid Ed25519 seed material"
+    );
+}
+
 #[cfg(test)]
 fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> {
     use std::{borrow::Cow, time::Duration};
 
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, Level, account::AccountId, isi::Log, transaction::TransactionBuilder,
     };
@@ -610,7 +627,11 @@ fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> 
     let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
         .parse()
         .expect("valid chain id");
-    let keypair = KeyPair::random();
+    let keypair = checked_routing_fixture_keypair(
+        0xe1,
+        Algorithm::Ed25519,
+        "derive dummy accepted transaction fixture key",
+    );
     let authority = AccountId::new(keypair.public_key().clone());
     let mut builder = TransactionBuilder::new(chain_id, authority);
     builder.set_creation_time(Duration::from_millis(0));
@@ -3517,7 +3538,12 @@ impl MaybeTelemetry {
             let metrics = iroha_telemetry::metrics::global_or_default();
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
-            let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+            let local_peer_keypair = checked_routing_fixture_keypair(
+                0xe2,
+                Algorithm::Ed25519,
+                "derive telemetry fixture peer key",
+            );
+            let local_peer_id = PeerId::new(local_peer_keypair.public_key().clone());
             let world = World::default();
             let mut world_block = world.block();
             let peers = world_block.peers_mut_for_testing().get_mut();
@@ -4771,7 +4797,11 @@ mod signed_query_verification_tests {
 
     #[test]
     fn verified_signed_query_returns_authenticated_payload() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_routing_fixture_keypair(
+            0xe3,
+            Algorithm::Ed25519,
+            "derive signed query fixture key",
+        );
         let authority = AccountId::new(key_pair.public_key().clone());
         let signed = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
             .with_authority(authority.clone())
@@ -4789,8 +4819,16 @@ mod signed_query_verification_tests {
 
     #[test]
     fn verify_signed_query_rejects_mismatched_authority() {
-        let signer = KeyPair::random();
-        let other = KeyPair::random();
+        let signer = checked_routing_fixture_keypair(
+            0xe4,
+            Algorithm::Ed25519,
+            "derive signed query signer fixture key",
+        );
+        let other = checked_routing_fixture_keypair(
+            0xe5,
+            Algorithm::Ed25519,
+            "derive signed query other authority fixture key",
+        );
         let mut signed = signed_find_abi_version(&signer);
         signed.payload.authority = AccountId::new(other.public_key().clone());
 
@@ -10051,6 +10089,23 @@ mod sccp_message_backend_tests {
         }
     }
 
+    #[test]
+    fn routing_sccp_signer_fixture_keypairs_use_checked_seed_derivation() {
+        for seed_byte in [0x41, 0x42, 0x43] {
+            let seed = vec![seed_byte; 32];
+            let key_pair = checked_routing_fixture_keypair(
+                seed.clone(),
+                Algorithm::Ed25519,
+                "derive Torii routing SCCP signer fixture key",
+            );
+            let expected = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+                .expect("direct checked SCCP signer fixture key derivation");
+
+            assert_eq!(key_pair.public_key(), expected.public_key());
+            assert_eq!(key_pair.private_key(), expected.private_key());
+        }
+    }
+
     fn sample_signed_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
         let keypairs = [
             checked_routing_fixture_keypair(
@@ -11098,7 +11153,11 @@ mod sccp_message_backend_tests {
             message.contains("expected_destination_binding_hash_hex does not match")
         }));
 
-        let signer = KeyPair::random();
+        let signer = checked_routing_fixture_keypair(
+            vec![0x41; 32],
+            Algorithm::Ed25519,
+            "derive TRON destination artifact fixture signer key",
+        );
         let artifact = sccp_message_artifact_for_destination_material(
             &bundle,
             &signer,
@@ -11177,7 +11236,11 @@ mod sccp_message_backend_tests {
         let material = sccp_destination_query_material_for_bundle(&bundle, &fields, true)
             .expect("TRON destination material");
         let binding = material.destination_binding.expect("TRON binding");
-        let signer = KeyPair::random();
+        let signer = checked_routing_fixture_keypair(
+            vec![0x42; 32],
+            Algorithm::Ed25519,
+            "derive TRON Groth16 missing-proof fixture signer key",
+        );
 
         let err = sccp_message_artifact_for_destination_material(
             &bundle,
@@ -11996,7 +12059,11 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn bridge_message_submit_dto_forwards_destination_proof_fields() {
-        let authority_key = KeyPair::random();
+        let authority_key = checked_routing_fixture_keypair(
+            vec![0x43; 32],
+            Algorithm::Ed25519,
+            "derive bridge-message DTO fixture authority key",
+        );
         let dto = BridgeMessageSubmitDto {
             authority: iroha_data_model::account::AccountId::of(authority_key.public_key().clone()),
             private_key: None,
@@ -15176,12 +15243,19 @@ mod zk_roots_selector_tests {
     use super::*;
     use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
     use http_body_util::BodyExt as _;
-    use iroha_crypto::KeyPair;
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
 
     fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(
+            super::checked_routing_fixture_keypair(
+                0xe6,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive zk roots selector fixture authority key",
+            )
+            .public_key()
+            .clone(),
+        );
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
@@ -17402,7 +17476,6 @@ mod multisig_guard_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::{MultisigMember, MultisigPolicy},
         isi::CustomInstruction,
@@ -17415,7 +17488,11 @@ mod multisig_guard_tests {
     fn direct_multisig_signing_rejected_during_admission() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let chain_id: ChainId = "multisig-direct-sign-guard".parse().unwrap();
-        let signer_keypair = KeyPair::random();
+        let signer_keypair = super::checked_routing_fixture_keypair(
+            0xe7,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive direct multisig fixture signer key",
+        );
         let policy = MultisigPolicy::new(
             1,
             vec![MultisigMember::new(signer_keypair.public_key().clone(), 1).unwrap()],
@@ -17447,7 +17524,11 @@ mod multisig_guard_tests {
     fn single_signatory_with_multisig_role_is_not_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let chain_id: ChainId = "multisig-role-guard".parse().unwrap();
-        let signer = KeyPair::random();
+        let signer = super::checked_routing_fixture_keypair(
+            0xe8,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive multisig role fixture signer key",
+        );
         let signatory_id = AccountId::new(signer.public_key().clone());
 
         let role_id: RoleId = "MULTISIG_SIGNATORY/test/0".parse().unwrap();
@@ -17477,7 +17558,11 @@ mod multisig_guard_tests {
     fn multisig_authority_with_custom_instruction_envelope_is_not_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let chain_id: ChainId = "multisig-custom-envelope-guard".parse().unwrap();
-        let signer_keypair = KeyPair::random();
+        let signer_keypair = super::checked_routing_fixture_keypair(
+            0xe9,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive multisig custom-envelope fixture signer key",
+        );
         let policy = MultisigPolicy::new(
             1,
             vec![MultisigMember::new(signer_keypair.public_key().clone(), 1).unwrap()],
@@ -23557,11 +23642,23 @@ fn multisig_approval_entry(
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
     use super::*;
-    use iroha_crypto::KeyPair;
 
     fn sample_account_id() -> iroha_data_model::account::AccountId {
-        let keypair = KeyPair::random();
-        iroha_data_model::account::AccountId::new(keypair.public_key().clone())
+        checked_multisig_contract_account_id(
+            0xea,
+            "derive multisig contract-call fixture account key",
+        )
+    }
+
+    fn checked_multisig_contract_account_id(
+        seed: u8,
+        context: &'static str,
+    ) -> iroha_data_model::account::AccountId {
+        iroha_data_model::account::AccountId::new(
+            super::checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
     }
 
     #[test]
@@ -23688,7 +23785,13 @@ mod multisig_contract_call_tests {
                 .parse()
                 .expect("contract address");
         let sponsor = iroha_data_model::account::AccountId::of(
-            iroha_crypto::KeyPair::random().public_key().clone(),
+            super::checked_routing_fixture_keypair(
+                0xeb,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive multisig contract-call metadata sponsor key",
+            )
+            .public_key()
+            .clone(),
         );
         let sponsor = sponsor.to_string();
 
@@ -23832,6 +23935,14 @@ mod contract_payload_normalization_tests {
     };
 
     use super::*;
+
+    fn checked_payload_account_id(seed: u8, context: &'static str) -> AccountId {
+        AccountId::new(
+            super::checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
 
     fn int_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
@@ -23985,7 +24096,9 @@ seiyaku ZkIvmPayloadNormalizeTest {
 "#,
             )
             .expect("compile payload normalization contract");
-        let sender = AccountId::new(KeyPair::random().public_key().clone()).to_string();
+        let sender =
+            checked_payload_account_id(0xec, "derive contract payload normalization sender key")
+                .to_string();
         let settlement_asset =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
         let mut metadata = Metadata::default();
@@ -24024,7 +24137,8 @@ seiyaku ZkIvmPayloadNormalizeTest {
     #[test]
     fn normalize_contract_payload_accepts_contract_address_for_account_id_fields() {
         let descriptor = account_id_descriptor();
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_payload_account_id(0xed, "derive contract payload normalization authority key");
         let contract_address = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
@@ -24105,7 +24219,7 @@ mod multisig_selector_tests {
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{State, World},
     };
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         ValidationFail,
         account::{MultisigMember, MultisigPolicy},
@@ -24129,6 +24243,18 @@ mod multisig_selector_tests {
     use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
+
+    fn checked_multisig_selector_keypair(seed: u8, context: &'static str) -> KeyPair {
+        super::checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+    }
+
+    fn checked_multisig_selector_account_id(seed: u8, context: &'static str) -> dm::AccountId {
+        dm::AccountId::new(
+            checked_multisig_selector_keypair(seed, context)
+                .public_key()
+                .clone(),
+        )
+    }
 
     fn alias_selector(alias: &str) -> MultisigAccountSelectorDto {
         MultisigAccountSelectorDto {
@@ -24286,8 +24412,10 @@ mod multisig_selector_tests {
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{label_name}@{domain_id}");
 
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one =
+            checked_multisig_selector_keypair(0x60, "derive multisig selector signer one key");
+        let signer_two =
+            checked_multisig_selector_keypair(0x61, "derive multisig selector signer two key");
         let signer_one_id = dm::AccountId::new(signer_one.public_key().clone());
         let signer_two_id = dm::AccountId::new(signer_two.public_key().clone());
 
@@ -24415,7 +24543,8 @@ mod multisig_selector_tests {
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{label_name}@{domain_id}");
 
-        let signer = KeyPair::random();
+        let signer =
+            checked_multisig_selector_keypair(0x62, "derive quorum-one multisig selector key");
         let signer_id = dm::AccountId::new(signer.public_key().clone());
         let policy = MultisigPolicy::new(
             1,
@@ -24461,11 +24590,13 @@ mod multisig_selector_tests {
     }
 
     fn overlong_multisig_test_world() -> (World, dm::AccountId, dm::AccountId, String) {
-        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_multisig_selector_account_id(0x63, "derive overlong multisig authority key");
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&authority);
 
-        let viewer_key = KeyPair::random();
+        let viewer_key =
+            checked_multisig_selector_keypair(0x64, "derive overlong multisig viewer key");
         let viewer_id = dm::AccountId::new(viewer_key.public_key().clone());
         let filler_members = (0..160_u16)
             .map(|seed| {
@@ -24605,8 +24736,10 @@ mod multisig_selector_tests {
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{label_name}@{domain_id}");
 
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one =
+            checked_multisig_selector_keypair(0x65, "derive multisig contract signer one key");
+        let signer_two =
+            checked_multisig_selector_keypair(0x66, "derive multisig contract signer two key");
         let signer_one_id = dm::AccountId::new(signer_one.public_key().clone());
         let signer_two_id = dm::AccountId::new(signer_two.public_key().clone());
 
@@ -24800,8 +24933,9 @@ mod multisig_selector_tests {
         let err = resolve_multisig_account_selector(
             state.as_ref(),
             &MultisigAccountSelectorDto {
-                multisig_account_id: Some(dm::AccountId::new(
-                    KeyPair::random().public_key().clone(),
+                multisig_account_id: Some(checked_multisig_selector_account_id(
+                    0x67,
+                    "derive invalid dual-field selector account key",
                 )),
                 multisig_account_alias: Some("cbdc@banka.universal".to_owned()),
             },
@@ -24843,7 +24977,8 @@ mod multisig_selector_tests {
     #[tokio::test]
     async fn multisig_spec_rejects_alias_bound_non_multisig_account() {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
-        let keypair = KeyPair::random();
+        let keypair =
+            checked_multisig_selector_keypair(0x68, "derive non-multisig alias fixture key");
         let scoped = dm::AccountId::new(keypair.public_key().clone());
         let authority = scoped.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -24872,7 +25007,10 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn contract_call_accepts_contract_address_target() {
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_multisig_selector_keypair(
+            0x69,
+            "derive contract-call address target authority key",
+        );
         let authority = dm::AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let state = build_state(World::with([], [authority_account], []));
@@ -24924,7 +25062,8 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn contract_call_rejects_missing_target() {
-        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_multisig_selector_account_id(0x6a, "derive missing-target authority key");
         let result = handle_post_contract_call(
             Arc::new("contract-call-missing-target".parse().expect("chain id")),
             build_queue(),
@@ -24973,7 +25112,8 @@ mod multisig_selector_tests {
             &derived_universal_contract_address(&authority_account_id, 1),
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
-        let outsider = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let outsider =
+            checked_multisig_selector_account_id(0x6b, "derive multisig outsider signer key");
 
         let err = handle_post_contract_call_multisig_propose(
             Arc::new("multisig-selector-test".parse().expect("chain id")),
@@ -25012,8 +25152,14 @@ mod multisig_selector_tests {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
 
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one = checked_multisig_selector_keypair(
+            0x6c,
+            "derive metadata-missing multisig signer one key",
+        );
+        let signer_two = checked_multisig_selector_keypair(
+            0x6d,
+            "derive metadata-missing multisig signer two key",
+        );
         let signer_one_id = dm::AccountId::new(signer_one.public_key().clone());
         let signer_two_id = dm::AccountId::new(signer_two.public_key().clone());
 
@@ -26407,7 +26553,10 @@ mod multisig_selector_tests {
             _alias_literal,
             active_hash,
         ) = multisig_test_world();
-        let stale_multisig_account_id = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let stale_multisig_account_id = checked_multisig_selector_account_id(
+            0x6e,
+            "derive stale multisig signatory-index fixture key",
+        );
         world.smart_contract_state_mut_for_testing().insert(
             multisig_signatory_index_contract_key(&signer_two_id),
             norito::to_bytes(&BTreeSet::from([
@@ -26471,7 +26620,8 @@ mod multisig_selector_tests {
         assert_eq!(response.item.status, "COLLECTING_SIGNATURES");
         assert!(response.item.spec.signatories.contains_key(&signer_two_id));
 
-        let hidden_viewer = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let hidden_viewer =
+            checked_multisig_selector_account_id(0x6f, "derive hidden approvals viewer key");
         let result = handle_post_multisig_approvals_get(
             state,
             MultisigApprovalsViewerScope {
@@ -26552,9 +26702,13 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn asset_transfer_control_get_returns_stored_state_and_usage() {
-        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_multisig_selector_account_id(0x70, "derive asset-transfer authority key");
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
-        let scoped_account_id = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let scoped_account_id = checked_multisig_selector_account_id(
+            0x71,
+            "derive asset-transfer controlled account key",
+        );
         let controlled_account_id: dm::AccountId = scoped_account_id.clone().into();
         let asset_definition_id = test_asset_definition_id();
         let definition =
@@ -27096,7 +27250,8 @@ seiyaku BlobPayloadNormalizeTest {
         .expect_err("malformed public key must be rejected");
         assert!(expect_conversion(err).contains("invalid public_key_hex"));
 
-        let other_keypair = KeyPair::random();
+        let other_keypair =
+            checked_multisig_selector_keypair(0x72, "derive mismatched detached public key");
         let other_public_key_hex = hex::encode(
             other_keypair
                 .public_key()
@@ -31535,7 +31690,6 @@ mod multisig_native_norito_dto_tests {
     use super::{
         IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::{AccountController, AccountId},
         smart_contract::ContractAlias,
@@ -31558,7 +31712,15 @@ mod multisig_native_norito_dto_tests {
 
     #[test]
     fn multisig_contract_call_propose_native_norito_flattens_selector() {
-        let signer = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = AccountId::new(
+            super::checked_routing_fixture_keypair(
+                0x73,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive native Norito multisig DTO fixture signer key",
+            )
+            .public_key()
+            .clone(),
+        );
         let request = MultisigContractCallProposeDto {
             selector: MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -35963,7 +36125,11 @@ mod repair_worker_tests {
                 .data_dir(temp_dir.path().join("storage"))
                 .build();
             let node = sorafs_node::NodeHandle::new(config);
-            let signer = KeyPair::random();
+            let signer = checked_routing_fixture_keypair(
+                0x74,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive repair worker state transition signer fixture",
+            );
             let report_a = report("REP-460", [0x10; 32], [0x20; 32], 1_700_500_000);
             let report_b = report("REP-461", [0x11; 32], [0x21; 32], 1_700_500_100);
 
@@ -36132,7 +36298,11 @@ mod repair_worker_tests {
                 .data_dir(temp_dir.path().join("storage"))
                 .build();
             let node = sorafs_node::NodeHandle::new(config);
-            let signer = KeyPair::random();
+            let signer = checked_routing_fixture_keypair(
+                0x75,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive repair worker alias rejection signer fixture",
+            );
             let report = report("REP-462", [0x12; 32], [0x23; 32], 1_700_500_200);
 
             node.enqueue_repair_report(&report).expect("enqueue report");
@@ -36562,7 +36732,11 @@ mod deploy_tests {
         // Build minimal program and request
         let prog = minimal_ivm_program(1);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_routing_fixture_keypair(
+            0x76,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive contract deploy fixture authority key",
+        );
         let req = DeployContractDto {
             authority: iroha_data_model::account::AccountId::of(kp.public_key().clone()),
             private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
@@ -36623,7 +36797,7 @@ mod soradns_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{KeyPair, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::{
         block::BlockHeader,
         events::data::{DataEvent, soradns::SoradnsDirectoryEvent},
@@ -36645,7 +36819,11 @@ mod soradns_tests {
     }
 
     fn sample_record() -> ResolverDirectoryRecordV1 {
-        let keys = KeyPair::random();
+        let keys = checked_routing_fixture_keypair(
+            0x77,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive SoraDNS directory fixture builder key",
+        );
         ResolverDirectoryRecordV1 {
             root_hash: [0x11; 32],
             record_version: DIRECTORY_RECORD_VERSION_V1,
@@ -36766,6 +36944,10 @@ mod sorafs_pin_tests {
     use iroha_data_model::prelude as dm;
 
     use super::*;
+
+    fn checked_pin_keypair(seed: u8, context: &'static str) -> iroha_crypto::KeyPair {
+        checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+    }
 
     fn default_manifest() -> ManifestV1 {
         use sorafs_manifest::{ManifestBuilder, PinPolicy};
@@ -36902,7 +37084,7 @@ mod sorafs_pin_tests {
             },
             retention_epoch: policy.retention_epoch,
         };
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
         let req = RegisterPinManifestDto {
             authority,
@@ -36973,7 +37155,7 @@ mod sorafs_pin_tests {
             },
             retention_epoch: policy.retention_epoch,
         };
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_pin_keypair(0x79, "derive pin manifest alias fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
         let proof_bytes = b"alias-proof";
         let req = RegisterPinManifestDto {
@@ -37069,6 +37251,10 @@ mod sorafs_capacity_tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn checked_capacity_keypair(seed: u8, context: &'static str) -> iroha_crypto::KeyPair {
+        checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+    }
 
     fn sample_capacity_declaration() -> CapacityDeclarationV1 {
         CapacityDeclarationV1 {
@@ -37356,7 +37542,14 @@ mod sorafs_capacity_tests {
         let before = telemetry.metrics().await.torii_signature_limit_total.get();
 
         // Build a multisig transaction with more signatures than the default cap (16).
-        let signers: Vec<_> = (0..17).map(|_| iroha_crypto::KeyPair::random()).collect();
+        let signers: Vec<_> = (0_u8..17)
+            .map(|offset| {
+                checked_capacity_keypair(
+                    0x80 + offset,
+                    "derive capacity signature-limit fixture signer key",
+                )
+            })
+            .collect();
         let members = signers
             .iter()
             .map(|kp| dm::MultisigMember::new(kp.public_key().clone(), 1).expect("member is valid"))
@@ -37366,7 +37559,7 @@ mod sorafs_capacity_tests {
 
         let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.into())
             .with_instructions([dm::Log::new(dm::Level::INFO, "too many signatures".into())])
-            .sign_multisig(signers.iter().map(KeyPair::private_key));
+            .sign_multisig(signers.iter().map(iroha_crypto::KeyPair::private_key));
 
         let result = handle_transaction_with_metrics(
             Arc::clone(&chain_id),
@@ -37406,7 +37599,7 @@ mod sorafs_capacity_tests {
         let declaration = sample_capacity_declaration();
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
         let metadata = vec![MetadataEntryDto {
             key: "label".into(),
@@ -37626,7 +37819,7 @@ mod sorafs_capacity_tests {
         let dispute = sample_capacity_dispute();
         let dispute_bytes = norito::to_bytes(&dispute).expect("encode dispute");
         let dispute_b64 = base64::engine::general_purpose::STANDARD.encode(&dispute_bytes);
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_capacity_keypair(0x92, "derive capacity dispute fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
 
         let req = RegisterCapacityDisputeDto {
@@ -37697,7 +37890,7 @@ mod sorafs_capacity_tests {
         let declaration = sample_capacity_declaration();
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_capacity_keypair(0x93, "derive capacity schedule fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
 
         let register_req = RegisterCapacityDeclarationDto {
@@ -37762,7 +37955,7 @@ mod sorafs_capacity_tests {
         let declaration = sample_capacity_declaration();
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_capacity_keypair(0x94, "derive capacity complete fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
 
         let register_req = RegisterCapacityDeclarationDto {
@@ -37892,7 +38085,7 @@ mod sorafs_capacity_tests {
         seed_capacity_declaration(&node);
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
         let req = RecordCapacityTelemetryDto {
             authority,
@@ -37951,7 +38144,7 @@ mod sorafs_capacity_tests {
         let (node, _dir) = sorafs_node_with_temp_storage();
         seed_capacity_declaration(&node);
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_capacity_keypair(0x96, "derive invalid capacity telemetry fixture key");
         let authority = dm::AccountId::new(kp.public_key().clone());
         let req = RecordCapacityTelemetryDto {
             authority,
@@ -42262,7 +42455,6 @@ fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
 mod address_metrics_tests {
     use std::sync::{LazyLock, Mutex, MutexGuard};
 
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::{
             AccountAddress, AccountId,
@@ -42432,7 +42624,11 @@ mod address_metrics_tests {
 
     fn i105_literal(domain_label: &str) -> String {
         let _domain = DomainId::try_new(domain_label, "universal").expect("domain parses");
-        let kp = KeyPair::random();
+        let kp = checked_routing_fixture_keypair(
+            0x97,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive account literal metric fixture key",
+        );
         let account = AccountId::new(kp.public_key().clone());
         account.to_string()
     }
@@ -44305,10 +44501,36 @@ mod tx_query_filter_tests {
         GenericHashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]))
     }
 
+    #[track_caller]
     fn account_with_key() -> (dm::AccountId, KeyPair) {
-        let kp = KeyPair::random();
+        let caller = std::panic::Location::caller();
+        let mut seed = [0x98; 32];
+        seed[0..8].copy_from_slice(&(caller.line() as u64).to_le_bytes());
+        seed[8..16].copy_from_slice(&(caller.column() as u64).to_le_bytes());
+        for (index, byte) in caller.file().bytes().enumerate() {
+            let slot = 16 + (index % 16);
+            seed[slot] ^= byte.rotate_left((index % 8) as u32);
+        }
+        let kp = KeyPair::try_from_seed(seed.to_vec(), iroha_crypto::Algorithm::Ed25519)
+            .expect("derive transaction-query call-site fixture key");
         let account = dm::AccountId::new(kp.public_key().clone());
         (account, kp)
+    }
+
+    #[test]
+    fn account_with_key_uses_checked_callsite_seed_derivation() {
+        let (first, first_keypair) = account_with_key();
+        let (second, second_keypair) = account_with_key();
+
+        assert_eq!(
+            first,
+            dm::AccountId::new(first_keypair.public_key().clone())
+        );
+        assert_eq!(
+            second,
+            dm::AccountId::new(second_keypair.public_key().clone())
+        );
+        assert_ne!(first, second);
     }
 
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
@@ -44692,10 +44914,8 @@ mod tx_query_filter_tests {
 
     #[test]
     fn filter_authority_eq_matches() {
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
-        let a = dm::AccountId::new(kp_a.public_key().clone());
-        let b = dm::AccountId::new(kp_b.public_key().clone());
+        let (a, kp_a) = account_with_key();
+        let (b, kp_b) = account_with_key();
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
         let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
 
@@ -44711,10 +44931,8 @@ mod tx_query_filter_tests {
     fn tx_predicate_from_filter_applies_without_feature() {
         use iroha_data_model::query::dsl_fast::EvaluatePredicate;
 
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
-        let a = dm::AccountId::new(kp_a.public_key().clone());
-        let b = dm::AccountId::new(kp_b.public_key().clone());
+        let (a, kp_a) = account_with_key();
+        let (b, kp_b) = account_with_key();
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
         let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
 
@@ -44781,8 +44999,7 @@ mod tx_query_filter_tests {
         );
         assert!(filter_tx(&expr, &tx));
 
-        let other_kp = KeyPair::random();
-        let other_account = dm::AccountId::new(other_kp.public_key().clone());
+        let (other_account, _) = account_with_key();
         let other_id = dm::AssetId::new(asset_def, other_account);
         let expr_miss = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("asset_id".into()),
@@ -45147,6 +45364,23 @@ mod explorer_lookup_tests {
 
     use super::*;
 
+    fn checked_explorer_lookup_keypair(
+        seed: u8,
+        algorithm: Algorithm,
+        context: &'static str,
+    ) -> KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
+    fn checked_explorer_lookup_account(
+        seed: u8,
+        context: &'static str,
+    ) -> (dm::AccountId, KeyPair) {
+        let keypair = checked_explorer_lookup_keypair(seed, Algorithm::Ed25519, context);
+        let account = dm::AccountId::new(keypair.public_key().clone());
+        (account, keypair)
+    }
+
     #[derive(
         crate::json_macros::JsonDeserialize,
         norito::derive::NoritoDeserialize,
@@ -45172,8 +45406,8 @@ mod explorer_lookup_tests {
         ));
 
         let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
-        let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = dm::AccountId::new(authority_key.public_key().clone());
+        let (authority, authority_key) =
+            checked_explorer_lookup_account(0x20, "derive explorer lookup authority fixture key");
         let mut hashes = Vec::new();
         let mut txs = Vec::new();
         for (index, instructions) in instruction_batches.into_iter().enumerate() {
@@ -45186,7 +45420,11 @@ mod explorer_lookup_tests {
             txs.push(AcceptedTransaction::new_unchecked(Cow::Owned(signed)));
         }
 
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_explorer_lookup_keypair(
+            0x21,
+            Algorithm::BlsNormal,
+            "derive explorer lookup block leader fixture key",
+        );
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(txs)
             .chain(0, state.view().latest_block().as_deref())
@@ -45222,8 +45460,10 @@ mod explorer_lookup_tests {
         ));
 
         let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
-        let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = dm::AccountId::new(authority_key.public_key().clone());
+        let (authority, authority_key) = checked_explorer_lookup_account(
+            0x22,
+            "derive Kura-only explorer authority fixture key",
+        );
         let mut builder = dm::TransactionBuilder::new(chain, authority);
         builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
         let signed = builder
@@ -45231,7 +45471,11 @@ mod explorer_lookup_tests {
             .sign(authority_key.private_key());
         let target_hash = signed.hash_as_entrypoint();
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_explorer_lookup_keypair(
+            0x23,
+            Algorithm::BlsNormal,
+            "derive Kura-only explorer block leader fixture key",
+        );
         let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx])
             .chain(0, state.view().latest_block().as_deref())
@@ -45396,14 +45640,10 @@ mod explorer_lookup_tests {
         use axum::{Router, routing::get};
         use tower::ServiceExt;
 
-        let (alice, _) = {
-            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            (dm::AccountId::new(kp.public_key().clone()), kp)
-        };
-        let (bob, _) = {
-            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            (dm::AccountId::new(kp.public_key().clone()), kp)
-        };
+        let (alice, _) =
+            checked_explorer_lookup_account(0x24, "derive explorer instructions alice fixture key");
+        let (bob, _) =
+            checked_explorer_lookup_account(0x25, "derive explorer instructions bob fixture key");
         let def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb");
         let alice_asset = dm::AssetId::new(def.clone(), alice.clone());
@@ -45495,10 +45735,10 @@ mod explorer_lookup_tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
         use tower::ServiceExt;
 
-        let (multisig, _) = {
-            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            (dm::AccountId::new(kp.public_key().clone()), kp)
-        };
+        let (multisig, _) = checked_explorer_lookup_account(
+            0x26,
+            "derive explorer instructions multisig fixture key",
+        );
         let custom: dm::InstructionBox =
             MultisigPropose::new(multisig.clone(), Vec::new(), None).into();
         let (state, tx_hash) = build_state_with_single_transaction(vec![custom]);
@@ -45719,7 +45959,7 @@ mod tx_query_integration_smoke {
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::Algorithm;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
 
@@ -45728,10 +45968,30 @@ mod tx_query_integration_smoke {
 
     const TEST_ACCOUNT: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
-    fn account_with_key() -> (dm::AccountId, KeyPair) {
-        let kp = KeyPair::random();
+    fn checked_smoke_keypair(
+        seed: u8,
+        algorithm: iroha_crypto::Algorithm,
+        context: &'static str,
+    ) -> KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
+    fn checked_smoke_account(seed: u8, context: &'static str) -> (dm::AccountId, KeyPair) {
+        let kp = checked_smoke_keypair(seed, iroha_crypto::Algorithm::Ed25519, context);
         let account = dm::AccountId::new(kp.public_key().clone());
         (account, kp)
+    }
+
+    fn checked_smoke_account_id(seed: u8, context: &'static str) -> AccountId {
+        AccountId::new(
+            checked_smoke_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn account_with_key() -> (dm::AccountId, KeyPair) {
+        checked_smoke_account(0x40, "derive transaction query smoke fixture account key")
     }
 
     #[must_use]
@@ -45918,7 +46178,7 @@ mod tx_query_integration_smoke {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
-        let viewer = AccountId::new(KeyPair::random().public_key().clone());
+        let viewer = checked_smoke_account_id(0x41, "derive visible-query viewer fixture key");
         let env = crate::filter::QueryEnvelope {
             query: Some("VisibleTransactions".to_owned()),
             filter: None,
@@ -46071,7 +46331,11 @@ mod tx_query_integration_smoke {
         ));
 
         // Prepare world: domain + account
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_smoke_keypair(
+            0x42,
+            Algorithm::BlsNormal,
+            "derive asset-filter setup block leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -46080,12 +46344,20 @@ mod tx_query_integration_smoke {
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_exec = checked_smoke_keypair(
+            0x43,
+            Algorithm::Ed25519,
+            "derive asset-filter executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_actor = checked_smoke_keypair(
+            0x44,
+            Algorithm::Ed25519,
+            "derive asset-filter actor fixture key",
+        );
         let actor_id = dm::AccountId::new(kp_actor.public_key().clone());
         dm::Register::account(dm::Account::new(actor_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -46119,7 +46391,11 @@ mod tx_query_integration_smoke {
             .sign(kp_actor.private_key());
         let tx_log = AcceptedTransaction::new_unchecked(Cow::Owned(signed_log));
 
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x45,
+            Algorithm::BlsNormal,
+            "derive asset-filter transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx_asset, tx_log])
             .chain(0, state.view().latest_block().as_deref())
@@ -46177,7 +46453,11 @@ mod tx_query_integration_smoke {
             query,
         ));
 
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_smoke_keypair(
+            0x46,
+            Algorithm::BlsNormal,
+            "derive recipient-filter setup block leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -46187,11 +46467,23 @@ mod tx_query_integration_smoke {
         let mut stx0 = st_block0.transaction();
 
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_exec = checked_smoke_keypair(
+            0x47,
+            Algorithm::Ed25519,
+            "derive recipient-filter executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
-        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_alice = checked_smoke_keypair(
+            0x48,
+            Algorithm::Ed25519,
+            "derive recipient-filter alice fixture key",
+        );
         let alice_id = dm::AccountId::new(kp_alice.public_key().clone());
-        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_bob = checked_smoke_keypair(
+            0x49,
+            Algorithm::Ed25519,
+            "derive recipient-filter bob fixture key",
+        );
         let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
         let def_id: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
@@ -46245,7 +46537,11 @@ mod tx_query_integration_smoke {
         let entry_hash = format!("{}", signed_transfer.hash_as_entrypoint());
         let transfer_tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed_transfer));
 
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x4A,
+            Algorithm::BlsNormal,
+            "derive recipient-filter transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![transfer_tx])
             .chain(0, state.view().latest_block().as_deref())
@@ -46329,7 +46625,11 @@ mod tx_query_integration_smoke {
             query,
         ));
 
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_smoke_keypair(
+            0x4B,
+            Algorithm::BlsNormal,
+            "derive contract-activity setup block leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -46387,7 +46687,11 @@ mod tx_query_integration_smoke {
         let entry_hash = format!("{}", signed.hash_as_entrypoint());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
 
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x4C,
+            Algorithm::BlsNormal,
+            "derive contract-activity transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx])
             .chain(0, state.view().latest_block().as_deref())
@@ -46449,7 +46753,11 @@ mod tx_query_integration_smoke {
         // Prepare world: domain + two accounts
         // Apply domain + accounts in a state transaction, then insert an empty
         // transactions block before committing to satisfy state invariants.
-        let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader0 = checked_smoke_keypair(
+            0x4D,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive sorted account-query setup block leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -46459,12 +46767,20 @@ mod tx_query_integration_smoke {
         let mut stx = st_block0.transaction();
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         // Execute with a placeholder authority; in this test we don't enforce on-chain permissions
-        let kp_exec = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_exec = checked_smoke_keypair(
+            0x4E,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive sorted account-query executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx)
             .ok();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_a = checked_smoke_keypair(
+            0x4F,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive sorted account-query authority fixture key",
+        );
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
         dm::Register::account(dm::Account::new(acc_a.account().clone()))
@@ -46520,7 +46836,11 @@ mod tx_query_integration_smoke {
         let tx_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
         // Build one block containing both transactions and commit
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x50,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive sorted account-query transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx_a, tx_b, tx_c])
             .chain(0, state.view().latest_block().as_deref())
@@ -46640,7 +46960,11 @@ mod tx_query_integration_smoke {
         ));
 
         // Register domain + operator + target account
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_smoke_keypair(
+            0x51,
+            Algorithm::BlsNormal,
+            "derive fetch-size setup block leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -46648,12 +46972,20 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_exec = checked_smoke_keypair(
+            0x52,
+            Algorithm::Ed25519,
+            "derive fetch-size executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_actor = checked_smoke_keypair(
+            0x53,
+            Algorithm::Ed25519,
+            "derive fetch-size actor fixture key",
+        );
         let actor_id = dm::AccountId::new(kp_actor.public_key().clone());
         dm::Register::account(dm::Account::new(actor_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -46678,7 +47010,11 @@ mod tx_query_integration_smoke {
                 .sign(kp_actor.private_key());
             accepted.push(AcceptedTransaction::new_unchecked(Cow::Owned(signed)));
         }
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x54,
+            Algorithm::BlsNormal,
+            "derive fetch-size transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(accepted)
             .chain(0, state.view().latest_block().as_deref())
@@ -46729,7 +47065,6 @@ mod tx_query_integration_smoke {
     async fn multi_sort_and_mixed_eq_ne_filter() {
         // Enable detailed filter debug for this test only
         let _debug_env = DebugEnvGuard::enable();
-        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::prelude as dm;
         // State and topology
         let kura = Kura::blank_kura_for_testing();
@@ -46741,11 +47076,23 @@ mod tx_query_integration_smoke {
         ));
 
         // Ensure domain and accounts exist before committing txs
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_a = checked_smoke_keypair(
+            0x55,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive mixed-filter account A fixture key",
+        );
+        let kp_b = checked_smoke_keypair(
+            0x56,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive mixed-filter account B fixture key",
+        );
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
-        let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader0 = checked_smoke_keypair(
+            0x57,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive mixed-filter setup block leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -46753,7 +47100,11 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let kp_seed = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_seed = checked_smoke_keypair(
+            0x58,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive mixed-filter executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_seed.public_key().clone());
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -46796,7 +47147,11 @@ mod tx_query_integration_smoke {
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
 
         // Commit the block with both transactions
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x59,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive mixed-filter transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2])
             .chain(0, state.view().latest_block().as_deref())
@@ -46880,7 +47235,6 @@ mod tx_query_integration_smoke {
             block::{BlockBuilder, ValidBlock},
             tx::AcceptedTransaction,
         };
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
 
         let kura = Kura::blank_kura_for_testing();
@@ -46892,7 +47246,11 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp = checked_smoke_keypair(
+            0x5A,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive requested-format account fixture key",
+        );
         let account = dm::AccountId::new(kp.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(chain_id.clone(), account.clone());
         builder.set_creation_time(core::time::Duration::from_millis(1000));
@@ -46901,7 +47259,11 @@ mod tx_query_integration_smoke {
             .sign(kp.private_key());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
 
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x5B,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive requested-format block leader fixture key",
+        );
         let unverified = BlockBuilder::new(vec![tx])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
@@ -46952,7 +47314,6 @@ mod tx_query_integration_smoke {
 
     #[tokio::test]
     async fn authority_and_timestamp_bounds_filter_local_and_handler() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -46963,8 +47324,16 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_a = checked_smoke_keypair(
+            0x5C,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive authority-bounds account A fixture key",
+        );
+        let kp_b = checked_smoke_keypair(
+            0x5D,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive authority-bounds account B fixture key",
+        );
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         let acc_b_str = acc_b
@@ -46995,7 +47364,11 @@ mod tx_query_integration_smoke {
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2.clone()));
 
         // Commit block
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x5E,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive authority-bounds block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2])
             .chain(0, state.view().latest_block().as_deref())
@@ -47064,7 +47437,6 @@ mod tx_query_integration_smoke {
 
     #[tokio::test]
     async fn or_union_matches_both_authority_or_timestamp() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -47076,7 +47448,11 @@ mod tx_query_integration_smoke {
 
         // Build two transactions: A at 1500ms, A at 900ms
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let kp_a = checked_smoke_keypair(
+            0x5F,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive OR-union account fixture key",
+        );
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_a_str = acc_a
             .to_account_address()
@@ -47103,7 +47479,11 @@ mod tx_query_integration_smoke {
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
         // Commit block
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x60,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive OR-union block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2])
             .chain(0, state.view().latest_block().as_deref())
@@ -47175,7 +47555,6 @@ mod tx_query_integration_smoke {
     #[cfg(feature = "tx_predicates")]
     #[tokio::test]
     async fn tx_predicates_parity_matches_all_filter() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -47186,8 +47565,12 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let kp_a = checked_smoke_keypair(
+            0x61,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate all-filter account fixture key",
+        );
+        let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
 
         let (_max_clock_drift, _tx_limits) = {
@@ -47209,7 +47592,11 @@ mod tx_query_integration_smoke {
             .sign(kp_a.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x62,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive tx-predicate all-filter block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2])
             .chain(0, state.view().latest_block().as_deref())
@@ -47272,7 +47659,6 @@ mod tx_query_integration_smoke {
     #[cfg(feature = "tx_predicates")]
     #[tokio::test]
     async fn tx_predicates_parity_deep_boolean_and_large_sets() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -47283,10 +47669,22 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let kp_a = checked_smoke_keypair(
+            0x63,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate deep account A fixture key",
+        );
+        let kp_b = checked_smoke_keypair(
+            0x64,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate deep account B fixture key",
+        );
+        let kp_c = checked_smoke_keypair(
+            0x65,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate deep account C fixture key",
+        );
+        let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         let acc_c = dm::AccountId::new(kp_c.public_key().clone());
@@ -47334,7 +47732,11 @@ mod tx_query_integration_smoke {
         let tx4 = AcceptedTransaction::new_unchecked(Cow::Owned(signed4));
 
         // Commit block
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x66,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive tx-predicate deep block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2, tx3, tx4])
             .chain(0, state.view().latest_block().as_deref())
@@ -47420,7 +47822,6 @@ mod tx_query_integration_smoke {
     #[cfg(feature = "tx_predicates")]
     #[tokio::test]
     async fn tx_predicates_parity_authority_equality_sets() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
 
         let kura = Kura::blank_kura_for_testing();
@@ -47432,10 +47833,22 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let kp_a = checked_smoke_keypair(
+            0x67,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate authority-set account A fixture key",
+        );
+        let kp_b = checked_smoke_keypair(
+            0x68,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate authority-set account B fixture key",
+        );
+        let kp_c = checked_smoke_keypair(
+            0x69,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate authority-set account C fixture key",
+        );
+        let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         let acc_c = dm::AccountId::new(kp_c.public_key().clone());
@@ -47472,7 +47885,11 @@ mod tx_query_integration_smoke {
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(tx3));
 
         // Commit block with all three
-        let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_smoke_keypair(
+            0x6A,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive tx-predicate authority-set block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = iroha_core::block::BlockBuilder::new(vec![tx1, tx2, tx3])
             .chain(0, state.view().latest_block().as_deref())
@@ -47589,7 +48006,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(crate::filter::FilterExpr::Nin(
                 crate::filter::FieldPath("authority".into()),
-                vec![norito::json::Value::String(acc_a_str)],
+                vec![norito::json::Value::String(acc_a_str.clone())],
             )),
             select: None,
             aggregate: None,
@@ -47620,7 +48037,6 @@ mod tx_query_integration_smoke {
     #[cfg(feature = "tx_predicates")]
     #[tokio::test]
     async fn tx_predicates_parity_entrypoint_hash_sets() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
 
         let kura = Kura::blank_kura_for_testing();
@@ -47632,8 +48048,12 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random();
-        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let kp_a = checked_smoke_keypair(
+            0x6B,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate entrypoint-hash account fixture key",
+        );
+        let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
 
@@ -47661,8 +48081,12 @@ mod tx_query_integration_smoke {
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
 
         // Commit
-        let leader = KeyPair::random();
-        let _topo = Topology::new(vec![dm::peer::PeerId::new(leader.public_key().clone())]);
+        let leader = checked_smoke_keypair(
+            0x6C,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive tx-predicate entrypoint-hash block leader fixture key",
+        );
+        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
@@ -47773,7 +48197,7 @@ mod tx_query_integration_smoke {
             filter: Some(crate::filter::FilterExpr::In(
                 crate::filter::FieldPath("entrypoint_hash".into()),
                 vec![
-                    norito::json::Value::String(entry1),
+                    norito::json::Value::String(entry1.clone()),
                     norito::json::Value::String(entry2),
                 ],
             )),
@@ -47836,7 +48260,6 @@ mod tx_query_integration_smoke {
     #[cfg(feature = "tx_predicates")]
     #[tokio::test]
     async fn tx_predicates_parity_exists_is_null_entrypoint_and_result() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
 
         let kura = Kura::blank_kura_for_testing();
@@ -47848,9 +48271,13 @@ mod tx_query_integration_smoke {
         ));
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random();
-        let dom: dm::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let acc_a = dm::account::AccountId::new(kp_a.public_key().clone());
+        let kp_a = checked_smoke_keypair(
+            0x6D,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive tx-predicate nullability account fixture key",
+        );
+        let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
 
         let (_max_clock_drift, _tx_limits) = {
@@ -47860,16 +48287,14 @@ mod tx_query_integration_smoke {
         };
 
         // A: success, A: failure
-        let mut b1 =
-            dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(100));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 =
-            dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(200));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -47880,8 +48305,11 @@ mod tx_query_integration_smoke {
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
 
         // Commit
-        let leader = KeyPair::random();
-        let topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let leader = checked_smoke_keypair(
+            0x6E,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive tx-predicate nullability block leader fixture key",
+        );
         let unverified = BlockBuilder::new(vec![tx1, tx2])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
@@ -47890,9 +48318,8 @@ mod tx_query_integration_smoke {
         let valid: ValidBlock = unverified
             .validate_and_record_transactions(&mut st_block)
             .unpack(|_| {});
-        let _committed = valid.clone().commit(&_topo).unpack(|_| {}).unwrap();
-        st_block.commit();
-        kura.store_block(committed).expect("store block");
+        let committed = valid.clone().commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
         // Exists(entrypoint_hash) => 2 (always present)
         let env_exists_entry = crate::filter::QueryEnvelope {
@@ -48041,7 +48468,6 @@ mod tx_query_integration_smoke {
 
     #[tokio::test]
     async fn or_multi_field_with_ties_and_sorting() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
         // State
         let kura = Kura::blank_kura_for_testing();
@@ -48054,13 +48480,20 @@ mod tx_query_integration_smoke {
 
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_b = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
-            .expect("derive account transaction filter fixture key");
+        let kp_b = checked_smoke_keypair(
+            0x6F,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive multi-field account transaction filter fixture key",
+        );
         let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         // Pre-register the domain and the successful authority (account B).
         {
-            let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+            let leader0 = checked_smoke_keypair(
+                0x70,
+                iroha_crypto::Algorithm::BlsNormal,
+                "derive multi-field preregistration block leader fixture key",
+            );
             let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
             let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
                 .chain(0, state.view().latest_block().as_deref())
@@ -48128,7 +48561,11 @@ mod tx_query_integration_smoke {
         let tx_fail_e = AcceptedTransaction::new_unchecked(Cow::Owned(signed_e));
 
         // Commit block with all four
-        let leader = KeyPair::random();
+        let leader = checked_smoke_keypair(
+            0x71,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive multi-field transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx_success, tx_fail_c, tx_fail_d, tx_fail_e])
             .chain(0, state.view().latest_block().as_deref())
@@ -48221,7 +48658,6 @@ mod tx_query_integration_smoke {
 
     #[tokio::test]
     async fn stable_ordering_with_multiple_keys() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
         // State
         let kura = Kura::blank_kura_for_testing();
@@ -48234,13 +48670,21 @@ mod tx_query_integration_smoke {
 
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random();
+        let kp_a = checked_smoke_keypair(
+            0x72,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive stable-ordering account transaction fixture key",
+        );
         let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
 
         // Pre-register domain and accounts so A exists; B and C will attempt invalid ops later
         {
-            let leader0 = KeyPair::random();
+            let leader0 = checked_smoke_keypair(
+                0x73,
+                iroha_crypto::Algorithm::BlsNormal,
+                "derive stable-ordering preregistration block leader fixture key",
+            );
             let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
             let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
                 .chain(0, state.view().latest_block().as_deref())
@@ -48302,7 +48746,11 @@ mod tx_query_integration_smoke {
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
         // Commit block
-        let leader = KeyPair::random();
+        let leader = checked_smoke_keypair(
+            0x74,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive stable-ordering transaction block leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2, tx3])
             .chain(0, state.view().latest_block().as_deref())
@@ -48452,6 +48900,22 @@ mod app_api_integration_tests {
         crate::json_value(value)
     }
 
+    fn checked_app_api_keypair(
+        seed: u8,
+        algorithm: iroha_crypto::Algorithm,
+        context: &'static str,
+    ) -> iroha_crypto::KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
+    fn checked_app_api_account_id(seed: u8, context: &'static str) -> AccountId {
+        AccountId::new(
+            checked_app_api_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
+
     fn state_with_assets(
         domain_id: DomainId,
         authority: AccountId,
@@ -48479,10 +48943,11 @@ mod app_api_integration_tests {
     #[test]
     fn collect_projected_account_assets_reads_only_scoped_account_assets() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
 
-        let alice_id = AccountId::new(KeyPair::random().public_key().clone());
-        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+        let alice_id =
+            checked_app_api_account_id(0x75, "derive projected account assets Alice fixture key");
+        let bob_id =
+            checked_app_api_account_id(0x76, "derive projected account assets Bob fixture key");
         let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
@@ -48527,9 +48992,8 @@ mod app_api_integration_tests {
 
     #[test]
     fn accumulate_asset_holder_quantity_respects_scope_filter() {
-        use iroha_crypto::KeyPair;
-
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id =
+            checked_app_api_account_id(0x77, "derive asset holder quantity fixture account key");
         let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
         let asset_def = AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
         let global_asset_id = AssetId::new(asset_def.clone(), account_id.clone());
@@ -48563,10 +49027,10 @@ mod app_api_integration_tests {
 
     #[test]
     fn asset_holder_filter_account_candidates_extracts_safe_exact_constraints() {
-        use iroha_crypto::KeyPair;
-
-        let alice_id = AccountId::new(KeyPair::random().public_key().clone());
-        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+        let alice_id =
+            checked_app_api_account_id(0x78, "derive asset holder candidate Alice fixture key");
+        let bob_id =
+            checked_app_api_account_id(0x79, "derive asset holder candidate Bob fixture key");
         let expr = FilterExpr::And(vec![
             FilterExpr::In(
                 FieldPath("account_id".into()),
@@ -48649,7 +49113,6 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn tx_query_sorted_total_counts_matches() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -48660,8 +49123,16 @@ mod app_api_integration_tests {
 
         // Build three transactions with distinct timestamps
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
+        let kp_a = checked_app_api_keypair(
+            0x7A,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive sorted transaction count account A fixture key",
+        );
+        let kp_b = checked_app_api_keypair(
+            0x7B,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive sorted transaction count account B fixture key",
+        );
         let acc_a = AccountId::new(kp_a.public_key().clone());
         let acc_b = AccountId::new(kp_b.public_key().clone());
         let account_literal = acc_b.to_string();
@@ -48690,7 +49161,11 @@ mod app_api_integration_tests {
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(tx3));
 
         // Commit
-        let leader = KeyPair::random();
+        let leader = checked_app_api_keypair(
+            0x7C,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive sorted transaction count block leader fixture key",
+        );
         let _topo = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx1, tx2, tx3])
             .chain(0, state.view().latest_block().as_deref())
@@ -49055,9 +49530,10 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn account_assets_query_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id = checked_app_api_account_id(
+            0x7D,
+            "derive account assets query pagination fixture account key",
+        );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
@@ -49121,9 +49597,10 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn account_assets_query_sort_by_quantity_desc() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id = checked_app_api_account_id(
+            0x7E,
+            "derive account assets query sort fixture account key",
+        );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
@@ -49236,9 +49713,8 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn domains_query_respects_desc_sort() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id =
+            checked_app_api_account_id(0x7F, "derive domains query fixture authority key");
         let alpha: DomainId = DomainId::try_new("alpha", "universal").unwrap();
         let omega: DomainId = DomainId::try_new("omega", "universal").unwrap();
         let gamma: DomainId = DomainId::try_new("gamma", "universal").unwrap();
@@ -49463,9 +49939,10 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn account_assets_get_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id = checked_app_api_account_id(
+            0x80,
+            "derive account assets GET pagination fixture account key",
+        );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
@@ -49523,9 +50000,10 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn account_assets_get_filters_by_asset_and_scope() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id = checked_app_api_account_id(
+            0x81,
+            "derive account assets GET filter fixture account key",
+        );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
@@ -49599,11 +50077,10 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn account_assets_routes_return_dataspace_scoped_asset_holder_without_account_record() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let authority_kp = KeyPair::random();
-        let holder_kp = KeyPair::random();
-        let authority_id: AccountId = AccountId::new(authority_kp.public_key().clone());
-        let holder_id: AccountId = AccountId::new(holder_kp.public_key().clone());
+        let authority_id =
+            checked_app_api_account_id(0x82, "derive dataspace-scoped asset authority key");
+        let holder_id =
+            checked_app_api_account_id(0x83, "derive dataspace-scoped asset holder key");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kina_def = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let dataspace_scope = iroha_data_model::asset::AssetBalanceScope::Dataspace(
@@ -49704,9 +50181,10 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn account_assets_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
-        use iroha_crypto::KeyPair;
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id = checked_app_api_account_id(
+            0x84,
+            "derive account assets GET limit validation fixture account key",
+        );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let assets = vec![Asset::new(
@@ -50017,10 +50495,11 @@ mod app_api_integration_tests {
     async fn confidential_asset_transitions_reports_pending_window_metadata() {
         let _guard = app_query_limits_guard();
         use axum::routing::get;
-        use iroha_crypto::KeyPair;
 
-        let kp = KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alice_id = checked_app_api_account_id(
+            0x85,
+            "derive confidential asset transition fixture account key",
+        );
 
         let vk_hash = Hash::new(b"vk-set-hash");
         let transition_id = Hash::new(b"transition-window");
@@ -50574,10 +51053,8 @@ mod app_api_integration_tests {
     }
 
     fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
-        let kp_a = iroha_crypto::KeyPair::random();
-        let kp_b = iroha_crypto::KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp_a.public_key().clone());
-        let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
+        let alice_id = checked_app_api_account_id(0x86, "derive asset holder fixture Alice key");
+        let bob_id = checked_app_api_account_id(0x87, "derive asset holder fixture Bob key");
 
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def: AssetDefinitionId =
@@ -50618,16 +51095,13 @@ mod app_api_integration_tests {
 
     fn build_asset_holder_aggregate_fixture_state()
     -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
-        let kp_a = iroha_crypto::KeyPair::random();
-        let kp_b = iroha_crypto::KeyPair::random();
-        let kp_c = iroha_crypto::KeyPair::random();
-        let kp_d = iroha_crypto::KeyPair::random();
-        let kp_e = iroha_crypto::KeyPair::random();
-        let alice_id: AccountId = AccountId::new(kp_a.public_key().clone());
-        let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
-        let hbl_settlement_id: AccountId = AccountId::new(kp_c.public_key().clone());
-        let ubl_settlement_id: AccountId = AccountId::new(kp_d.public_key().clone());
-        let ubl_user_id: AccountId = AccountId::new(kp_e.public_key().clone());
+        let alice_id = checked_app_api_account_id(0x88, "derive aggregate asset holder Alice key");
+        let bob_id = checked_app_api_account_id(0x89, "derive aggregate asset holder Bob key");
+        let hbl_settlement_id =
+            checked_app_api_account_id(0x8A, "derive HBL settlement asset holder key");
+        let ubl_settlement_id =
+            checked_app_api_account_id(0x8B, "derive UBL settlement asset holder key");
+        let ubl_user_id = checked_app_api_account_id(0x8C, "derive UBL user asset holder key");
 
         let domain_id: DomainId = DomainId::try_new("aggregate-holders", "universal").unwrap();
         let pkr_def: AssetDefinitionId =
@@ -50853,7 +51327,7 @@ mod app_api_integration_tests {
                 .expect("compute manifest digest for registry seed")
                 .into(),
         );
-        let issuer = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let issuer = checked_app_api_account_id(0x8D, "derive projection registry issuer key");
         let policy = iroha_data_model::sorafs::pin_registry::PinPolicy::default();
         let content_length = manifest.content_length;
         let amount_nano = state.view().world().sorafs_pricing().public_pin_fee_nano(
@@ -51192,17 +51666,28 @@ mod query_endpoint_tests {
     use super::*; // Router::oneshot
     // avoid depending on test samples here
 
+    fn checked_query_endpoint_keypair(
+        seed: u8,
+        algorithm: iroha_crypto::Algorithm,
+        context: &'static str,
+    ) -> iroha_crypto::KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
     // NOTE: end-to-end /query handler test omitted; exercised by integration tests.
 
     #[tokio::test]
     async fn handle_queries_iterable_assets_non_empty() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
             parameters::QueryParams,
         };
-        let alice_keypair = KeyPair::random();
+        let alice_keypair = checked_query_endpoint_keypair(
+            0x8E,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive iterable assets query fixture authority key",
+        );
         let alice_id: AccountId = AccountId::new(alice_keypair.public_key().clone());
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
@@ -51267,14 +51752,17 @@ mod query_endpoint_tests {
 
     #[tokio::test]
     async fn handle_queries_rejects_fetch_size_above_max() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
             parameters::{FetchSize, MAX_FETCH_SIZE, QueryParams},
         };
 
-        let alice_keypair = KeyPair::random();
+        let alice_keypair = checked_query_endpoint_keypair(
+            0x8F,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive oversized fetch-size query fixture authority key",
+        );
         let alice_id: AccountId = AccountId::new(alice_keypair.public_key().clone());
 
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -51327,13 +51815,20 @@ mod query_endpoint_tests {
 
     #[tokio::test]
     async fn handle_queries_rejects_invalid_signature() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::query::{
             QueryRequest, prelude::SingularQueryBox, runtime::prelude::FindAbiVersion,
         };
 
-        let authority_key = KeyPair::random();
-        let signer_key = KeyPair::random();
+        let authority_key = checked_query_endpoint_keypair(
+            0x90,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive invalid signature query authority fixture key",
+        );
+        let signer_key = checked_query_endpoint_keypair(
+            0x91,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive invalid signature query signer fixture key",
+        );
         let authority = AccountId::new(authority_key.public_key().clone());
 
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -51527,7 +52022,11 @@ mod query_endpoint_tests {
             .expect("execute verify-proof");
         stx.apply();
         // Record a minimal transactions block for commit invariants, then commit state
-        let leader = iroha_crypto::KeyPair::random();
+        let leader = checked_query_endpoint_keypair(
+            0x92,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive proof roundtrip block leader fixture key",
+        );
         let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
@@ -52482,7 +52981,11 @@ mod governance_stream_tests {
     };
 
     fn sample_account() -> AccountId {
-        let keypair = KeyPair::random();
+        let keypair = checked_routing_fixture_keypair(
+            0x93,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive governance stream fixture account key",
+        );
         AccountId::new(keypair.public_key().clone())
     }
 
@@ -55426,7 +55929,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
 
 #[cfg(test)]
 mod status_tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey};
+    use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
     use iroha_data_model::{
         DataSpaceId, LaneId,
         block::consensus::{
@@ -55439,6 +55942,14 @@ mod status_tests {
     use iroha_p2p::ConsensusConfigCaps;
 
     use super::*;
+
+    fn checked_status_peer(seed: u8, context: &'static str) -> PeerId {
+        PeerId::new(
+            checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
 
     #[test]
     fn status_snapshot_json_includes_vrf_fields() {
@@ -55717,7 +56228,10 @@ mod status_tests {
     fn status_snapshot_json_includes_commit_qc_and_quorum() {
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
-        let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let validator_set = vec![checked_status_peer(
+            0x94,
+            "derive status commit-QC validator fixture peer key",
+        )];
         let validator_set_hash = HashOf::new(&validator_set);
         let snap = sumeragi::StatusSnapshot {
             commit_qc: sumeragi::status::QcSnapshot {
@@ -56541,7 +57055,7 @@ mod status_tests {
 
     #[test]
     fn status_snapshot_json_includes_rbc_mismatch_entries() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_status_peer(0x95, "derive status RBC mismatch fixture peer key");
         let peer_label = peer.to_string();
         let entry = status::RbcMismatchEntry {
             peer_id: peer,
@@ -59469,6 +59983,10 @@ mod cursor_mode_tests {
         req.sign(signer)
     }
 
+    fn checked_cursor_mode_keypair(seed: u8, context: &'static str) -> iroha_crypto::KeyPair {
+        checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+    }
+
     #[tokio::test]
     async fn stored_mode_insufficient_gas_rejected() {
         let mut s = make_minimal_state();
@@ -59477,7 +59995,8 @@ mod cursor_mode_tests {
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp = iroha_crypto::KeyPair::random();
+        let kp =
+            checked_cursor_mode_keypair(0x96, "derive stored cursor insufficient-gas fixture key");
         let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
@@ -59514,7 +60033,8 @@ mod cursor_mode_tests {
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp = iroha_crypto::KeyPair::random();
+        let kp =
+            checked_cursor_mode_keypair(0x97, "derive stored cursor sufficient-gas fixture key");
         let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
@@ -59548,7 +60068,7 @@ mod cursor_mode_tests {
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_cursor_mode_keypair(0x98, "derive stored cursor continue fixture key");
         let authority = AccountId::new(kp.public_key().clone());
         let cursor = seed_stored_cursor(&state.query_handle, &authority, 250);
         let signed = iroha_data_model::query::QueryRequest::Continue(cursor)
@@ -59585,7 +60105,7 @@ mod cursor_mode_tests {
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_cursor_mode_keypair(0x99, "derive ephemeral cursor fixture key");
         let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
@@ -59619,7 +60139,7 @@ mod transaction_ingress_overload_tests {
         queue::Queue,
         state::{State, World},
     };
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::Algorithm;
     use iroha_data_model::prelude::*;
     use iroha_logger::Level;
 
@@ -59637,6 +60157,10 @@ mod transaction_ingress_overload_tests {
                 label.to_owned(),
             ))])
             .sign(key_pair.private_key())
+    }
+
+    fn checked_transaction_ingress_keypair(seed: u8, context: &'static str) -> KeyPair {
+        checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
     }
 
     #[tokio::test]
@@ -59657,7 +60181,9 @@ mod transaction_ingress_overload_tests {
             events,
         ));
         let chain_id: Arc<ChainId> = Arc::new("overload-chain".parse().expect("valid chain id"));
-        let first = signed_log_transaction(&chain_id, &KeyPair::random(), "first");
+        let first_key_pair =
+            checked_transaction_ingress_keypair(0x9A, "derive first ingress fixture signer key");
+        let first = signed_log_transaction(&chain_id, &first_key_pair, "first");
         handle_transaction(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
@@ -59669,7 +60195,9 @@ mod transaction_ingress_overload_tests {
 
         queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
 
-        let second = signed_log_transaction(&chain_id, &KeyPair::random(), "second");
+        let second_key_pair =
+            checked_transaction_ingress_keypair(0x9B, "derive second ingress fixture signer key");
+        let second = signed_log_transaction(&chain_id, &second_key_pair, "second");
         handle_transaction(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
@@ -59719,7 +60247,11 @@ mod lane_admission_metrics_tests {
         let chain_id: Arc<ChainId> = Arc::new("metrics_chain".parse().expect("valid chain id"));
         let telemetry = MaybeTelemetry::for_tests();
 
-        let key_pair = iroha_crypto::KeyPair::random();
+        let key_pair = checked_routing_fixture_keypair(
+            0x9C,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive lane admission metrics fixture signer key",
+        );
         let account_id = AccountId::new(key_pair.public_key().clone());
         let instruction = Log::new(Level::INFO, "ingress-metric".to_string());
         let tx = TransactionBuilder::new(chain_id.as_ref().clone(), account_id)
@@ -59827,7 +60359,11 @@ mod hot_path_load_profile_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "load profile; run explicitly with --ignored --nocapture"]
     async fn torii_hot_path_load_profile() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_routing_fixture_keypair(
+            0x9D,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive hot-path query profile fixture key",
+        );
         for _ in 0..VERIFY_WARMUP_SAMPLES {
             let signed_query = signed_find_abi_version(&key_pair);
             let verified = verify_signed_query_request(signed_query).expect("query verifies");
@@ -59958,7 +60494,11 @@ mod hot_path_load_profile_tests {
         let tx_queue = Arc::new(Queue::from_config(queue_cfg, events));
         let chain_id: Arc<ChainId> =
             Arc::new("torii_load_profile_chain".parse().expect("valid chain id"));
-        let tx_key_pair = KeyPair::random();
+        let tx_key_pair = checked_routing_fixture_keypair(
+            0x9E,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive hot-path transaction profile fixture key",
+        );
         let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
         let tx_telemetry = direct_metrics_telemetry();
         for index in 0..TX_WARMUP_SAMPLES {
@@ -65370,7 +65910,6 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         smartcontracts::Execute,
         state::{State, World},
     };
-    use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
     use nonzero_ext::nonzero;
 
@@ -65380,8 +65919,16 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         LiveQueryStore::start_test(),
     ));
 
-    let initiator_keys = KeyPair::random();
-    let counterparty_keys = KeyPair::random();
+    let initiator_keys = checked_routing_fixture_keypair(
+        0x9F,
+        Algorithm::Ed25519,
+        "derive repo agreement fixture initiator key",
+    );
+    let counterparty_keys = checked_routing_fixture_keypair(
+        0xA0,
+        Algorithm::Ed25519,
+        "derive repo agreement fixture counterparty key",
+    );
     let initiator_id: AccountId = AccountId::new(initiator_keys.public_key().clone());
     let counterparty_id: AccountId = AccountId::new(counterparty_keys.public_key().clone());
     let authority_id = initiator_id.clone();
@@ -65458,7 +66005,11 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     }
 
     stx.apply();
-    let leader = KeyPair::random();
+    let leader = checked_routing_fixture_keypair(
+        0xA1,
+        Algorithm::Ed25519,
+        "derive repo agreement fixture block leader key",
+    );
     let _topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
         iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
     ]);
@@ -66639,7 +67190,6 @@ mod account_permissions_json_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::Account, nexus::DataSpaceId, permission::Permissions, prelude::AccountId,
     };
@@ -66677,7 +67227,15 @@ mod account_permissions_json_tests {
 
     #[tokio::test]
     async fn account_permissions_handler_preserves_structured_payloads() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(
+            checked_routing_fixture_keypair(
+                0xA2,
+                Algorithm::Ed25519,
+                "derive account permissions fixture authority key",
+            )
+            .public_key()
+            .clone(),
+        );
         let state = test_state_with_permissions(&authority);
         let authority_literal = authority.to_string();
 
@@ -70416,7 +70974,7 @@ fn bindings_for_dataspace(
 mod space_directory_manifest_helper_tests {
     use std::sync::Arc;
 
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash};
     use iroha_data_model::{
         account::AccountId,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
@@ -70455,6 +71013,14 @@ mod space_directory_manifest_helper_tests {
             .await
             .expect("response body should be readable");
         norito::json::from_slice(&body).expect("response body should decode as JSON")
+    }
+
+    fn checked_space_directory_account(seed: u8, context: &'static str) -> AccountId {
+        AccountId::new(
+            checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
     }
 
     #[test]
@@ -70576,9 +71142,12 @@ mod space_directory_manifest_helper_tests {
     fn bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings() {
         let dataspace = DataSpaceId::new(7);
         let other_dataspace = DataSpaceId::new(8);
-        let primary_account = AccountId::new(KeyPair::random().public_key().clone());
-        let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
-        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+        let primary_account =
+            checked_space_directory_account(0xA3, "derive space-directory primary binding key");
+        let secondary_account =
+            checked_space_directory_account(0xA4, "derive space-directory secondary binding key");
+        let other_account =
+            checked_space_directory_account(0xA5, "derive space-directory other binding key");
 
         let mut bindings = UaidDataspaceBindings::default();
         bindings.bind_account(dataspace, primary_account.clone());
@@ -70704,9 +71273,12 @@ mod space_directory_manifest_helper_tests {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5A; Hash::LENGTH]));
         let primary_dataspace = DataSpaceId::new(7);
         let secondary_dataspace = DataSpaceId::new(9);
-        let primary_account = AccountId::new(KeyPair::random().public_key().clone());
-        let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
-        let tertiary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let primary_account =
+            checked_space_directory_account(0xA6, "derive space-directory sorted primary key");
+        let secondary_account =
+            checked_space_directory_account(0xA7, "derive space-directory sorted secondary key");
+        let tertiary_account =
+            checked_space_directory_account(0xA8, "derive space-directory sorted tertiary key");
 
         let mut bindings = UaidDataspaceBindings::default();
         bindings.bind_account(primary_dataspace, secondary_account.clone());
@@ -70800,7 +71372,8 @@ mod space_directory_manifest_helper_tests {
     #[tokio::test]
     async fn manifest_entry_to_json_includes_alias_hash_status_lifecycle_and_accounts() {
         let dataspace = DataSpaceId::new(7);
-        let account = AccountId::new(KeyPair::random().public_key().clone());
+        let account =
+            checked_space_directory_account(0xA9, "derive space-directory manifest entry key");
         let mut bindings = UaidDataspaceBindings::default();
         bindings.bind_account(dataspace, account.clone());
 
@@ -70989,7 +71562,8 @@ mod space_directory_manifest_helper_tests {
         let active_dataspace = DataSpaceId::new(7);
         let pending_dataspace = DataSpaceId::new(8);
         let revoked_dataspace = DataSpaceId::new(9);
-        let revoked_account = AccountId::new(KeyPair::random().public_key().clone());
+        let revoked_account =
+            checked_space_directory_account(0xAA, "derive space-directory revoked binding key");
 
         let mut active_manifest = AssetPermissionManifest {
             dataspace: active_dataspace,
@@ -71096,7 +71670,8 @@ mod space_directory_manifest_helper_tests {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x58; Hash::LENGTH]));
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
-        let account = AccountId::new(KeyPair::random().public_key().clone());
+        let account =
+            checked_space_directory_account(0xAB, "derive space-directory filtered binding key");
 
         let mut first_manifest = AssetPermissionManifest {
             dataspace: first_dataspace,
@@ -71170,7 +71745,8 @@ mod space_directory_manifest_helper_tests {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x57; Hash::LENGTH]));
         let active_dataspace = DataSpaceId::new(7);
         let revoked_dataspace = DataSpaceId::new(8);
-        let account = AccountId::new(KeyPair::random().public_key().clone());
+        let account =
+            checked_space_directory_account(0xAC, "derive space-directory prefilter binding key");
 
         let mut active_manifest = AssetPermissionManifest {
             dataspace: active_dataspace,
@@ -71259,29 +71835,33 @@ mod accounts_query_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::Algorithm;
     use iroha_data_model::prelude as dm;
 
     use super::*;
+
+    fn checked_accounts_query_authority(seed: u8, context: &'static str) -> dm::AccountId {
+        dm::AccountId::new(
+            checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
 
     #[tokio::test]
     async fn accounts_query_streams_without_sort() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let exec_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let exec_authority =
+            checked_accounts_query_authority(0xB0, "derive accounts-query executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
         let mut accounts = vec![dm::Account::new(exec_id.account().clone()).build(&exec_authority)];
-        for _ in 0..5 {
-            let authority = dm::AccountId::new(
-                KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                    .public_key()
-                    .clone(),
+        for seed in 0xB1..=0xB5 {
+            let authority = checked_accounts_query_authority(
+                seed,
+                "derive accounts-query streamed account key",
             );
             let account_id = authority.clone();
             accounts.push(dm::Account::new(account_id.account().clone()).build(&authority));
@@ -71328,19 +71908,13 @@ mod accounts_query_tests {
         let query = LiveQueryStore::start_test();
         let domain_id: dm::DomainId =
             DomainId::try_new("aliases", "universal").expect("valid domain");
-        let exec_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let exec_authority =
+            checked_accounts_query_authority(0xB6, "derive accounts-query alias executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
 
-        let labelled_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let labelled_authority =
+            checked_accounts_query_authority(0xB7, "derive accounts-query labelled account key");
         let account_id = labelled_authority.clone();
         let label = dm::AccountAlias::new(
             "primary".parse().expect("valid label name"),
@@ -71518,19 +72092,13 @@ mod accounts_query_tests {
         let query = LiveQueryStore::start_test();
         let domain_id: dm::DomainId =
             DomainId::try_new("aliases-list", "universal").expect("valid domain");
-        let exec_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let exec_authority =
+            checked_accounts_query_authority(0xB8, "derive accounts-list alias executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
 
-        let labelled_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let labelled_authority =
+            checked_accounts_query_authority(0xB9, "derive accounts-list labelled account key");
         let account_id = labelled_authority.clone();
         let label = dm::AccountAlias::new(
             "primary".parse().expect("valid label name"),
@@ -71622,25 +72190,16 @@ mod accounts_query_tests {
         let query = LiveQueryStore::start_test();
         let domain_id: dm::DomainId =
             DomainId::try_new("aggregate-aliases", "universal").expect("valid domain");
-        let exec_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let exec_authority =
+            checked_accounts_query_authority(0xBA, "derive accounts-aggregate executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id).build(&exec_authority);
 
-        let hbl_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let hbl_authority =
+            checked_accounts_query_authority(0xBB, "derive accounts-aggregate hbl account key");
         let hbl_id = hbl_authority.clone();
-        let ubl_authority = dm::AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let ubl_authority =
+            checked_accounts_query_authority(0xBC, "derive accounts-aggregate ubl account key");
         let ubl_id = ubl_authority.clone();
 
         let state = Arc::new(State::new_for_testing(
@@ -71745,13 +72304,22 @@ mod asset_definitions_query_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{Registrable as _, prelude as dm};
 
     use super::*;
 
+    fn checked_asset_definition_authority(seed: u8, context: &'static str) -> dm::AccountId {
+        dm::AccountId::new(
+            checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
+
     fn state_with_asset_definitions() -> Arc<CoreState> {
-        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority =
+            checked_asset_definition_authority(0xC0, "derive asset-definition fixture authority");
         let domain_id: dm::DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
@@ -72014,7 +72582,10 @@ mod asset_definitions_query_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn asset_definition_sort_key_orders_alias_binding_bound_at_desc() {
-        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_asset_definition_authority(
+            0xC1,
+            "derive asset-definition sort fixture authority",
+        );
         let older = AssetDefinitionListItem {
             definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
                 "550e8400e29b41d4a7164466554400dd",
@@ -74227,6 +74798,14 @@ mod explorer_asset_definition_econometrics_tests {
 
     use super::*;
 
+    fn checked_econometrics_keypair(
+        seed: u8,
+        algorithm: Algorithm,
+        context: &'static str,
+    ) -> KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
     #[tokio::test]
     async fn explorer_asset_definition_econometrics_aggregates_velocity_and_issuance() {
         let kura = Kura::blank_kura_for_testing();
@@ -74239,7 +74818,11 @@ mod explorer_asset_definition_econometrics_tests {
 
         // Setup world state (domain/accounts/asset definition + initial balances) without relying
         // on transaction permissions/executor behavior.
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_econometrics_keypair(
+            0xD0,
+            Algorithm::BlsNormal,
+            "derive econometrics bootstrap leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -74249,13 +74832,29 @@ mod explorer_asset_definition_econometrics_tests {
         let mut stx0 = st_block0.transaction();
 
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_exec = checked_econometrics_keypair(
+            0xD1,
+            Algorithm::Ed25519,
+            "derive econometrics executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
-        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_alice = checked_econometrics_keypair(
+            0xD2,
+            Algorithm::Ed25519,
+            "derive econometrics Alice fixture key",
+        );
         let alice_id = dm::AccountId::new(kp_alice.public_key().clone());
-        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_bob = checked_econometrics_keypair(
+            0xD3,
+            Algorithm::Ed25519,
+            "derive econometrics Bob fixture key",
+        );
         let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
-        let kp_carol = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_carol = checked_econometrics_keypair(
+            0xD4,
+            Algorithm::Ed25519,
+            "derive econometrics Carol fixture key",
+        );
         let carol_id = dm::AccountId::new(kp_carol.public_key().clone());
 
         let def_id: dm::AssetDefinitionId =
@@ -74382,7 +74981,11 @@ mod explorer_asset_definition_econometrics_tests {
             .sign(kp_bob.private_key());
         let tx_burn = AcceptedTransaction::new_unchecked(Cow::Owned(signed_burn));
 
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_econometrics_keypair(
+            0xD5,
+            Algorithm::BlsNormal,
+            "derive econometrics transfer leader fixture key",
+        );
         let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx_mint, tx_transfer, tx_batch, tx_burn])
             .chain(0, state.view().latest_block().as_deref())
@@ -74536,6 +75139,10 @@ mod explorer_asset_definition_snapshot_tests {
 
     use super::*;
 
+    fn checked_snapshot_keypair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
+        checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
     #[tokio::test]
     async fn explorer_asset_definition_snapshot_computes_distribution_metrics() {
         let kura = Kura::blank_kura_for_testing();
@@ -74548,7 +75155,11 @@ mod explorer_asset_definition_snapshot_tests {
 
         // Setup world state (domain/accounts/asset definition + balances) without relying
         // on transaction permissions/executor behavior.
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_snapshot_keypair(
+            0xE0,
+            Algorithm::BlsNormal,
+            "derive snapshot distribution leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -74558,11 +75169,23 @@ mod explorer_asset_definition_snapshot_tests {
         let mut stx0 = st_block0.transaction();
 
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_exec = checked_snapshot_keypair(
+            0xE1,
+            Algorithm::Ed25519,
+            "derive snapshot distribution executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
-        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_alice = checked_snapshot_keypair(
+            0xE2,
+            Algorithm::Ed25519,
+            "derive snapshot distribution Alice fixture key",
+        );
         let alice_id = dm::AccountId::new(kp_alice.public_key().clone());
-        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_bob = checked_snapshot_keypair(
+            0xE3,
+            Algorithm::Ed25519,
+            "derive snapshot distribution Bob fixture key",
+        );
         let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
 
         let def_id: dm::AssetDefinitionId =
@@ -74718,7 +75341,11 @@ mod explorer_asset_definition_snapshot_tests {
             query,
         ));
 
-        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader0 = checked_snapshot_keypair(
+            0xE4,
+            Algorithm::BlsNormal,
+            "derive snapshot quantile leader fixture key",
+        );
         let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
@@ -74728,11 +75355,23 @@ mod explorer_asset_definition_snapshot_tests {
         let mut stx0 = st_block0.transaction();
 
         let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_exec = checked_snapshot_keypair(
+            0xE5,
+            Algorithm::Ed25519,
+            "derive snapshot quantile executor fixture key",
+        );
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
-        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_alice = checked_snapshot_keypair(
+            0xE6,
+            Algorithm::Ed25519,
+            "derive snapshot quantile Alice fixture key",
+        );
         let alice_id = dm::AccountId::new(kp_alice.public_key().clone());
-        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_bob = checked_snapshot_keypair(
+            0xE7,
+            Algorithm::Ed25519,
+            "derive snapshot quantile Bob fixture key",
+        );
         let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
 
         let def_id: dm::AssetDefinitionId =
@@ -75043,8 +75682,24 @@ fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
 #[cfg(all(test, feature = "app_api"))]
 #[test]
 fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
-    let first = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
-    let second = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+    let first = AccountId::new(
+        checked_routing_fixture_keypair(
+            0xF0,
+            Algorithm::Ed25519,
+            "derive account-filter first candidate fixture key",
+        )
+        .public_key()
+        .clone(),
+    );
+    let second = AccountId::new(
+        checked_routing_fixture_keypair(
+            0xF1,
+            Algorithm::Ed25519,
+            "derive account-filter second candidate fixture key",
+        )
+        .public_key()
+        .clone(),
+    );
     let exact = FilterExpr::Eq(
         FieldPath("id".to_owned()),
         norito::json::Value::from(first.to_string()),
@@ -80276,7 +80931,15 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn defs_filter_projection_matches_name_alias_and_metadata_passthrough() {
-        let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let authority = AccountId::new(
+            checked_routing_fixture_keypair(
+                0xF2,
+                Algorithm::Ed25519,
+                "derive asset-definition projection authority fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
         let definition = AssetDefinition::numeric(AssetDefinitionId::new(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
@@ -84531,7 +85194,15 @@ mod tests {
     #[test]
     fn sumeragi_telemetry_endpoint_returns_snapshot() {
         Runtime::new().expect("runtime").block_on(async {
-            let peer = iroha_data_model::peer::PeerId::new(KeyPair::random().public_key().clone());
+            let peer = iroha_data_model::peer::PeerId::new(
+                checked_routing_fixture_keypair(
+                    0xF3,
+                    Algorithm::Ed25519,
+                    "derive Sumeragi telemetry fixture peer key",
+                )
+                .public_key()
+                .clone(),
+            );
             let availability_before = status::availability_snapshot();
             status::record_availability_vote(4, &peer);
             status::record_qc_latency("availability", 123);

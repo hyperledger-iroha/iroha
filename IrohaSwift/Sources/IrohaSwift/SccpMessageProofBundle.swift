@@ -69,7 +69,7 @@ func requireSccpSourceProofMatchesBundle(
         return
     }
     guard sourceProofBytes == finalityProofBytes else {
-        throw SccpMessageProofBundleError.invalid("sourceProofBytes must match bundleBytes and publicInputs")
+        throw SccpMessageProofBundleError.invalid("sourceProofBytes must match bundleBytes finality proof")
     }
     let sourceProof = try decodeSccpBundleSourceProofSummary(sourceProofBytes, field: "sourceProofBytes")
     let normalizedFinalityBlockHash = try requireSccpBundleNonZeroHex32(

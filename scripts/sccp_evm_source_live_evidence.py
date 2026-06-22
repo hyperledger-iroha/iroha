@@ -32,6 +32,14 @@ EXPECTED_RPC_CHAIN_IDS = {
     SCCP_DOMAIN_BSC: 56,
 }
 EVM_SOURCE_ALLOWED_BLOCK_TAGS = frozenset(("latest", "safe", "finalized"))
+PUBLIC_SUMMARY_FIELDS = (
+    "read_only",
+    "block_tag",
+    "source_bridge",
+    "source_records",
+    "offline_evidence_args",
+    "offline_toml_sha256",
+)
 
 
 def default_block_tag_for_domain(domain: int) -> str:
@@ -1732,7 +1740,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
 
 
 def _public_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in summary.items() if not key.startswith("_")}
+    return {key: summary[key] for key in PUBLIC_SUMMARY_FIELDS if key in summary}
 
 
 def main(argv: list[str] | None = None) -> int:

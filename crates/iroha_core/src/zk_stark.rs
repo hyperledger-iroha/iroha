@@ -1619,6 +1619,45 @@ mod tests {
             .expect("opening binds to first FRI layer");
         }
 
+        let mut retargeted_opening_index = air.openings.first().expect("AIR opening").clone();
+        let original_opening_index =
+            usize::try_from(retargeted_opening_index.index).expect("opening index fits usize");
+        retargeted_opening_index.index =
+            u32::try_from((original_opening_index + 1) % domain).expect("domain fits u32");
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(&params, air, &retargeted_opening_index)
+                .expect_err("opening index retarget must fail before root replay"),
+            "opening Merkle path index mismatch"
+        );
+
+        let mut retargeted_row_path = air.openings.first().expect("AIR opening").clone();
+        retargeted_row_path.row_path.dirs[0] ^= 1;
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(&params, air, &retargeted_row_path)
+                .expect_err("row Merkle path retarget must fail before root replay"),
+            "opening Merkle path index mismatch"
+        );
+
+        let mut retargeted_next_row_path = air.openings.first().expect("AIR opening").clone();
+        retargeted_next_row_path.next_row_path.dirs[0] ^= 1;
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(&params, air, &retargeted_next_row_path)
+                .expect_err("next-row Merkle path retarget must fail before root replay"),
+            "opening Merkle path index mismatch"
+        );
+
+        let mut retargeted_composition_path = air.openings.first().expect("AIR opening").clone();
+        retargeted_composition_path.composition_path.dirs[0] ^= 1;
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(
+                &params,
+                air,
+                &retargeted_composition_path
+            )
+            .expect_err("composition Merkle path retarget must fail before root replay"),
+            "opening Merkle path index mismatch"
+        );
+
         let mut tampered = envelope;
         let tampered_air = tampered.proof.air.as_mut().expect("AIR section");
         tampered_air.openings[0].row[0] ^= 1;
@@ -1642,10 +1681,24 @@ mod tests {
                 "stark/fri/custom-zero-air:test".to_owned(),
                 public_digest,
                 rows.clone(),
-                noncanonical_composition,
+                noncanonical_composition.clone(),
             )
             .expect_err("non-canonical composition values must be rejected"),
             "STARK AIR composition contains non-canonical field element"
+        );
+        assert!(
+            stark_merkle_root_from_field_values_v1(&params, &noncanonical_composition).is_none(),
+            "explicit AIR composition roots must reject non-canonical field elements"
+        );
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &rows,
+                &noncanonical_composition,
+            ),
+            "explicit AIR verification must reject non-canonical caller composition values"
         );
 
         let mut noncanonical_rows = rows;
@@ -2005,6 +2058,12 @@ mod tests {
 
     fn bfv_full_bootstrap_stark_test_prover_input_material()
     -> iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
+        bfv_full_bootstrap_stark_test_prover_input_material_for_slot(0)
+    }
+
+    fn bfv_full_bootstrap_stark_test_prover_input_material_for_slot(
+        slot_index: u32,
+    ) -> iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
         let params = iroha_crypto::ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, _relinearization_key) =
             iroha_crypto::keygen_from_seed(&params, b"zk-stark-bfv-full-bootstrap-keygen")
@@ -2056,32 +2115,67 @@ mod tests {
                 .expect("Galois key")
             })
             .collect::<Vec<_>>();
+        let reviewer_key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xC3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("fixture seed derives release reviewer keypair");
+        let audit_report_bytes = iroha_crypto::bfv_full_bootstrap_release_audit_report_bytes_v1(
+            b"external-review-approved: zk-stark BFV full-bootstrap execution release report v1",
+        )
+        .expect("build full-bootstrap release audit report bytes");
+        let audit_evidence_archive_bytes =
+            iroha_crypto::bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                b"external-review-archive: zk-stark BFV full-bootstrap execution release archive v1",
+            )
+            .expect("build full-bootstrap release audit archive bytes");
+        let release_audit_package = iroha_crypto::bfv_full_bootstrap_release_audit_package_v1(
+            &params,
+            &material,
+            &artifacts,
+            &audit_report_bytes,
+            &audit_evidence_archive_bytes,
+            "sora-zk-audit-wg-2026",
+            reviewer_key_pair.private_key(),
+        )
+        .expect("build full-bootstrap release audit package");
+        let release_audit_package_digest =
+            iroha_crypto::bfv_full_bootstrap_release_audit_package_digest_v1(
+                &release_audit_package,
+            )
+            .expect("digest full-bootstrap release audit package");
         let output =
-            iroha_crypto::full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+            iroha_crypto::full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
                 &params,
                 &bootstrap_key,
                 &artifacts,
                 &galois_keys,
                 &input,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
             )
-            .expect("artifact-aware full-bootstrap output");
+            .expect("release-audited artifact-aware full-bootstrap output");
         let input_bound = iroha_crypto::bfv_encrypted_zero_refresh_residual_multiple_bound(&params)
             .expect("input residual bound");
         let output_bound =
-            iroha_crypto::bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+            iroha_crypto::bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
                 &params,
                 &bootstrap_key,
                 &artifacts,
                 &galois_keys,
                 input_bound,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
             )
-            .expect("artifact-aware full-bootstrap output bound");
+            .expect("release-audited artifact-aware full-bootstrap output bound");
         let claim = iroha_crypto::bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1(
             &params,
             &bootstrap_key,
             &artifacts,
             &galois_keys,
-            0,
+            slot_index,
             input,
             output,
             iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
@@ -2183,7 +2277,231 @@ mod tests {
             &expected_params
         ));
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        let witness = &material.proof_input_material.witness_material;
+        assert!(
+            verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must accept a generated native AIR envelope without private trace rows"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]),
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject zero statement hashes before envelope replay"
+        );
+        let placeholder_statement_hash =
+            iroha_crypto::Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                placeholder_statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject placeholder statement hashes before envelope replay"
+        );
+        let delayed_placeholder_statement_preimage = [
+            b" \n\t".as_slice(),
+            b"full-bootstrap material before placeholder: ".as_slice(),
+            b"pending BFV full-bootstrap execution witness digest".as_slice(),
+        ]
+        .concat();
+        let delayed_placeholder_statement_hash =
+            iroha_crypto::Hash::new(&delayed_placeholder_statement_preimage);
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                delayed_placeholder_statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject leading-whitespace delayed placeholder statement hashes before envelope replay"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                material.proof_input_material.statement_hash,
+                u32::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1),
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject out-of-range public slot headers before envelope replay"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                iroha_crypto::Hash::new(b"stale BFV full-bootstrap public statement hash"),
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must bind the statement hash"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index.saturating_add(1),
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must bind the public slot index"
+        );
+        let alternate_bound_mode = match witness.bound_mode {
+            iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
+                iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise
+            }
+            iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => {
+                iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple
+            }
+        };
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index,
+                alternate_bound_mode,
+            ),
+            "public-padding BFV verifier must bind the public bound mode"
+        );
         let air = env.proof.air.as_ref().expect("BFV AIR section");
+        let domain_size = 1_usize << usize::from(env.params.n_log2);
+        let public_padding_context = StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+            statement_hash: material.proof_input_material.statement_hash,
+            slot_index: witness.slot_index,
+            bound_mode: witness.bound_mode,
+        };
+        assert!(
+            stark_air_context_matches_statement(
+                &env.params,
+                air,
+                domain_size,
+                public_padding_context
+            ),
+            "private BFV public-padding context must accept the canonical STARK parameter profile"
+        );
+        let mut stale_public_padding_params = env.params.clone();
+        stale_public_padding_params.domain_tag = bfv_full_bootstrap_stark_air_params_v1(
+            iroha_crypto::Hash::new(b"alternate BFV full-bootstrap context statement"),
+        )
+        .domain_tag;
+        assert!(
+            !stark_air_context_matches_statement(
+                &stale_public_padding_params,
+                air,
+                domain_size,
+                public_padding_context,
+            ),
+            "private BFV public-padding context must reject statement-bound domain-tag drift"
+        );
+        let mut drifted_public_padding_params = env.params.clone();
+        drifted_public_padding_params.hash_fn = STARK_HASH_POSEIDON2_V1;
+        assert!(
+            !stark_air_context_matches_statement(
+                &drifted_public_padding_params,
+                air,
+                domain_size,
+                public_padding_context,
+            ),
+            "private BFV public-padding context must reject canonical parameter-profile drift"
+        );
+        let zero_statement_hash = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let zero_public_digest = [0_u8; iroha_crypto::Hash::LENGTH];
+        let zero_statement_context = StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+            statement_hash: zero_statement_hash,
+            slot_index: witness.slot_index,
+            bound_mode: witness.bound_mode,
+        };
+        let mut zero_digest_air = air.clone();
+        zero_digest_air.public_digest = zero_public_digest;
+        assert!(
+            !stark_air_context_matches_statement(
+                &env.params,
+                &zero_digest_air,
+                domain_size,
+                zero_statement_context,
+            ),
+            "private BFV public-padding context must reject zero statement hashes even when the AIR digest matches"
+        );
+        let first_public_opening = air.openings.first().expect("BFV AIR public opening");
+        assert!(
+            stark_air_composition_value_for_context(
+                zero_statement_context,
+                usize::try_from(first_public_opening.index).expect("opening index fits usize"),
+                domain_size,
+                &zero_public_digest,
+                &first_public_opening.row,
+                &first_public_opening.next_row,
+            )
+            .is_none(),
+            "private BFV public-padding context must not replay openings under a zero statement hash"
+        );
+        let placeholder_public_digest: [u8; iroha_crypto::Hash::LENGTH] =
+            placeholder_statement_hash.into();
+        let placeholder_statement_context =
+            StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+                statement_hash: placeholder_statement_hash,
+                slot_index: witness.slot_index,
+                bound_mode: witness.bound_mode,
+            };
+        let mut placeholder_digest_air = air.clone();
+        placeholder_digest_air.public_digest = placeholder_public_digest;
+        assert!(
+            !stark_air_context_matches_statement(
+                &env.params,
+                &placeholder_digest_air,
+                domain_size,
+                placeholder_statement_context,
+            ),
+            "private BFV public-padding context must reject placeholder statement hashes even when the AIR digest matches"
+        );
+        assert!(
+            stark_air_composition_value_for_context(
+                placeholder_statement_context,
+                usize::try_from(first_public_opening.index).expect("opening index fits usize"),
+                domain_size,
+                &placeholder_public_digest,
+                &first_public_opening.row,
+                &first_public_opening.next_row,
+            )
+            .is_none(),
+            "private BFV public-padding context must not replay openings under a placeholder statement hash"
+        );
+        let delayed_placeholder_public_digest: [u8; iroha_crypto::Hash::LENGTH] =
+            delayed_placeholder_statement_hash.into();
+        let delayed_placeholder_statement_context =
+            StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+                statement_hash: delayed_placeholder_statement_hash,
+                slot_index: witness.slot_index,
+                bound_mode: witness.bound_mode,
+            };
+        let mut delayed_placeholder_digest_air = air.clone();
+        delayed_placeholder_digest_air.public_digest = delayed_placeholder_public_digest;
+        assert!(
+            !stark_air_context_matches_statement(
+                &env.params,
+                &delayed_placeholder_digest_air,
+                domain_size,
+                delayed_placeholder_statement_context,
+            ),
+            "private BFV public-padding context must reject leading-whitespace delayed placeholder statement hashes even when the AIR digest matches"
+        );
+        assert!(
+            stark_air_composition_value_for_context(
+                delayed_placeholder_statement_context,
+                usize::try_from(first_public_opening.index).expect("opening index fits usize"),
+                domain_size,
+                &delayed_placeholder_public_digest,
+                &first_public_opening.row,
+                &first_public_opening.next_row,
+            )
+            .is_none(),
+            "private BFV public-padding context must not replay openings under a leading-whitespace delayed placeholder statement hash"
+        );
         let opening_indices = air
             .openings
             .iter()
@@ -2204,6 +2522,55 @@ mod tests {
             )
             .expect("BFV sampled opening is a canonical public padding row");
         }
+
+        let mut duplicate_opening_env = env.clone();
+        {
+            let duplicate_air = duplicate_opening_env
+                .proof
+                .air
+                .as_mut()
+                .expect("BFV AIR section");
+            duplicate_air.openings[1] = duplicate_air.openings[0].clone();
+        }
+        let duplicate_opening_bytes =
+            norito::to_bytes(&duplicate_opening_env).expect("encode duplicate BFV AIR opening");
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &duplicate_opening_bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject duplicated sampled public openings"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&duplicate_opening_bytes, &material),
+            "artifact-bound BFV verifier must reject duplicated sampled public openings"
+        );
+
+        let mut truncated_opening_env = env.clone();
+        truncated_opening_env
+            .proof
+            .air
+            .as_mut()
+            .expect("BFV AIR section")
+            .openings
+            .pop();
+        let truncated_opening_bytes =
+            norito::to_bytes(&truncated_opening_env).expect("encode truncated BFV AIR openings");
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &truncated_opening_bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject truncated sampled public openings"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&truncated_opening_bytes, &material),
+            "artifact-bound BFV verifier must reject truncated sampled public openings"
+        );
 
         let mut unsafe_generic_air = None;
         for attempt in 0..BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS {
@@ -2267,6 +2634,15 @@ mod tests {
             !verify_stark_fri_bfv_full_bootstrap_air_envelope(&unsafe_bytes, &material),
             "BFV native AIR verifier must reject generic proofs that open private rows: {unsafe_indices:?}"
         );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &unsafe_bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject generic proofs that open private rows: {unsafe_indices:?}"
+        );
 
         let mut stale_domain = env.clone();
         stale_domain.params.domain_tag = bfv_full_bootstrap_stark_air_params_v1(
@@ -2301,6 +2677,15 @@ mod tests {
             &tampered_opening_bytes,
             &material
         ));
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &tampered_opening_bytes,
+                material.proof_input_material.statement_hash,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject drifted public row openings"
+        );
     }
 
     #[test]
@@ -2793,6 +3178,56 @@ mod tests {
             &mut swapped_proof_keys.verifier_key,
         );
         assert_rejected_material("swapped BFV native proof keys", swapped_proof_keys);
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_rejects_valid_cross_statement_material_replay() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material_for_slot(0);
+        let alternate_material = bfv_full_bootstrap_stark_test_prover_input_material_for_slot(1);
+        iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+            &alternate_material,
+        )
+        .expect("alternate BFV prover material is internally valid");
+        assert_ne!(
+            material.proof_input_material.statement_hash,
+            alternate_material.proof_input_material.statement_hash,
+            "alternate slot must bind a distinct BFV statement hash"
+        );
+        assert_ne!(
+            material.arithmetic_trace_material_digest,
+            alternate_material.arithmetic_trace_material_digest,
+            "alternate slot must bind distinct trace material"
+        );
+        assert_ne!(
+            material.arithmetic_air_evaluation_material_digest,
+            alternate_material.arithmetic_air_evaluation_material_digest,
+            "alternate slot must bind distinct AIR evaluation material"
+        );
+
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+        let alternate_bytes =
+            prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&alternate_material)
+                .expect("alternate BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &alternate_bytes,
+            &alternate_material,
+        ));
+        assert_ne!(
+            bytes, alternate_bytes,
+            "statement-specific BFV native AIR envelopes must differ"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&bytes, &alternate_material),
+            "valid BFV native AIR envelope must not replay against another valid statement package"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&alternate_bytes, &material),
+            "alternate BFV native AIR envelope must not replay against the original statement package"
+        );
     }
 
     fn zk_ace_test_account(seed: u8) -> iroha_data_model::account::AccountId {
@@ -3750,13 +4185,35 @@ pub(crate) fn stark_synthesize_fri_envelope_from_field_values_v1(
         .ok()
 }
 
-/// Verify that one native AIR opening is bound to its trace and composition roots.
+/// Verify that one native AIR opening is bound to its Merkle path indices and roots.
 pub(crate) fn validate_stark_air_opening_commitment_roots_v1(
     params: &StarkFriParamsV1,
     air: &StarkAirProofV1,
     opening: &StarkAirOpeningV1,
 ) -> Result<(), &'static str> {
     validate_stark_opening_commitment_params_v1(params)?;
+    let domain_size = 1_usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or("opening domain size overflow")?;
+    let opening_index = usize::try_from(opening.index).map_err(|_| "opening index out of range")?;
+    if opening_index >= domain_size {
+        return Err("opening index out of range");
+    }
+    let expected_depth = log2_usize(domain_size).ok_or("opening Merkle path depth mismatch")?;
+    let limits = StarkVerifierLimits::default();
+    if !merkle_path_depth_ok(&opening.row_path, expected_depth, &limits)
+        || !merkle_path_depth_ok(&opening.next_row_path, expected_depth, &limits)
+        || !merkle_path_depth_ok(&opening.composition_path, expected_depth, &limits)
+    {
+        return Err("opening Merkle path depth mismatch");
+    }
+    let next_index = (opening_index + 1) % domain_size;
+    if merkle_path_index(&opening.row_path) != Some(opening_index)
+        || merkle_path_index(&opening.next_row_path) != Some(next_index)
+        || merkle_path_index(&opening.composition_path) != Some(opening_index)
+    {
+        return Err("opening Merkle path index mismatch");
+    }
     let row_leaf = stark_air_trace_leaf_hash(params, &opening.row).ok_or("row leaf hash failed")?;
     if !merkle_verify_hash(params, &air.trace_root, &row_leaf, &opening.row_path) {
         return Err("row Merkle root mismatch");
@@ -3932,6 +4389,11 @@ struct StarkAirExplicitVerificationContext<'a> {
 #[derive(Clone, Copy)]
 enum StarkAirVerificationContext<'a> {
     Binding,
+    BfvFullBootstrapPublicPadding {
+        statement_hash: iroha_crypto::Hash,
+        slot_index: u32,
+        bound_mode: iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1,
+    },
     ZkAce {
         public_inputs: &'a iroha_data_model::zk::ZkAcePublicInputsV1,
     },
@@ -3946,6 +4408,9 @@ impl StarkAirVerificationContext<'_> {
     fn trace_width(self) -> usize {
         match self {
             Self::Binding => stark_air_trace_width(),
+            Self::BfvFullBootstrapPublicPadding { .. } => {
+                usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
+            }
             Self::ZkAce { .. } => zk_ace_air_trace_width(),
             Self::Explicit(explicit) => explicit.rows.first().map(Vec::len).unwrap_or(usize::MAX),
         }
@@ -4258,6 +4723,33 @@ fn stark_air_composition_value_for_context(
         StarkAirVerificationContext::Binding => {
             stark_air_composition_value(index, domain_size, public_digest, row, next_row)
         }
+        StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+            statement_hash,
+            slot_index,
+            bound_mode,
+        } => {
+            if !bfv_full_bootstrap_statement_hash_is_admissible(
+                statement_hash,
+                slot_index,
+                bound_mode,
+            ) {
+                return None;
+            }
+            if *public_digest != <[u8; iroha_crypto::Hash::LENGTH]>::from(statement_hash) {
+                return None;
+            }
+            let opening_index = u32::try_from(index).ok()?;
+            iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                opening_index,
+                row,
+                next_row,
+                statement_hash,
+                slot_index,
+                bound_mode,
+            )
+            .ok()?;
+            Some(Fq::zero())
+        }
         StarkAirVerificationContext::ZkAce { public_inputs } => {
             if domain_size == 0
                 || row.len() != zk_ace_air_trace_width()
@@ -4301,6 +4793,17 @@ fn stark_air_context_matches_statement(
 ) -> bool {
     match context {
         StarkAirVerificationContext::Binding => true,
+        StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+            statement_hash,
+            slot_index,
+            bound_mode,
+        } => {
+            let expected_params = bfv_full_bootstrap_stark_air_params_v1(statement_hash);
+            bfv_full_bootstrap_statement_hash_is_admissible(statement_hash, slot_index, bound_mode)
+                && bfv_full_bootstrap_stark_air_params_match_v1(params, &expected_params)
+                && air.circuit_id == iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+                && air.public_digest == <[u8; iroha_crypto::Hash::LENGTH]>::from(statement_hash)
+        }
         StarkAirVerificationContext::ZkAce { .. } => {
             air.circuit_id == iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
         }
@@ -4335,6 +4838,20 @@ fn stark_air_context_matches_statement(
             air.composition_root == composition_root
         }
     }
+}
+
+fn bfv_full_bootstrap_statement_hash_is_admissible(
+    statement_hash: iroha_crypto::Hash,
+    slot_index: u32,
+    bound_mode: iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1,
+) -> bool {
+    iroha_crypto::bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+        u32::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1),
+        statement_hash,
+        slot_index,
+        bound_mode,
+    )
+    .is_ok()
 }
 
 fn stark_air_query_roots(roots: &[[u8; 32]], air: Option<&StarkAirProofV1>) -> Vec<[u8; 32]> {
@@ -4930,20 +5447,22 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     )
 }
 
-/// Build a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope.
+/// Build a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope for Core internals.
 ///
 /// The proof is synthesized from validated
 /// [`iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1`]. The
 /// wrapper binds the native STARK domain tag to the BFV execution statement
 /// hash and retries deterministic transcript labels until all sampled openings
-/// are public padding rows.
+/// are public padding rows. Public production proof generation must use the
+/// Soracloud release/audit-aware entry points, which validate caller-owned
+/// governed artifacts before reaching this crate-scoped helper.
 ///
 /// # Errors
 ///
 /// Returns an error when the BFV prover input material is invalid, the STARK
 /// envelope cannot be built, or no deterministic transcript label yields the
 /// canonical duplicate-free public opening set.
-pub fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
+pub(crate) fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
     material: &iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<Vec<u8>, String> {
     iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)
@@ -5007,6 +5526,103 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
     )
 }
 
+/// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data.
+///
+/// This verifier-facing check does not require the private row-major trace. It
+/// validates the STARK/FRI envelope, the statement-bound BFV domain tag, the
+/// canonical BFV circuit/profile, duplicate-free public padding openings, and
+/// zero public-padding composition samples. Callers that hold governed trace
+/// material should still use [`verify_stark_fri_bfv_full_bootstrap_air_envelope`]
+/// for the stronger artifact-bound replay.
+#[must_use]
+pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+    bytes: &[u8],
+    statement_hash: iroha_crypto::Hash,
+    slot_index: u32,
+    bound_mode: iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1,
+) -> bool {
+    verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+        bytes,
+        &StarkVerifierLimits::default(),
+        statement_hash,
+        slot_index,
+        bound_mode,
+    )
+}
+
+/// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data with limits.
+#[must_use]
+pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    bytes: &[u8],
+    limits: &StarkVerifierLimits,
+    statement_hash: iroha_crypto::Hash,
+    slot_index: u32,
+    bound_mode: iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1,
+) -> bool {
+    if !bfv_full_bootstrap_statement_hash_is_admissible(statement_hash, slot_index, bound_mode) {
+        return false;
+    }
+    if !verify_stark_fri_envelope_with_context(
+        bytes,
+        limits,
+        StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
+            statement_hash,
+            slot_index,
+            bound_mode,
+        },
+    ) {
+        return false;
+    }
+    let env: StarkVerifyEnvelopeV1 = match norito::decode_from_bytes(bytes) {
+        Ok(env) => env,
+        Err(_) => return false,
+    };
+    if !bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(&env.transcript_label) {
+        return false;
+    }
+    let expected_params = bfv_full_bootstrap_stark_air_params_v1(statement_hash);
+    if !bfv_full_bootstrap_stark_air_params_match_v1(&env.params, &expected_params) {
+        return false;
+    }
+    let public_digest: [u8; 32] = statement_hash.into();
+    let Some(air) = env.proof.air.as_ref() else {
+        return false;
+    };
+    if air.circuit_id != iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+        || air.public_digest != public_digest
+        || usize::from(air.trace_width)
+            != usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
+        || air.openings.len()
+            != usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1)
+    {
+        return false;
+    }
+    let opening_indices = air
+        .openings
+        .iter()
+        .map(|opening| opening.index)
+        .collect::<Vec<_>>();
+    if iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
+        &opening_indices,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    air.openings.iter().all(|opening| {
+        opening.composition_value == 0
+            && iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                opening.index,
+                &opening.row,
+                &opening.next_row,
+                statement_hash,
+                slot_index,
+                bound_mode,
+            )
+            .is_ok()
+    })
+}
+
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof envelope with limits.
 ///
 /// Generic STARK verification is only the first stage. This BFV wrapper also
@@ -5027,6 +5643,16 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     }
     let statement_hash = material.proof_input_material.statement_hash;
     let public_digest: [u8; 32] = statement_hash.into();
+    let witness = &material.proof_input_material.witness_material;
+    if !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+        bytes,
+        limits,
+        statement_hash,
+        witness.slot_index,
+        witness.bound_mode,
+    ) {
+        return false;
+    }
     if !verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
         bytes,
         limits,
@@ -5074,7 +5700,6 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     {
         return false;
     }
-    let witness = &material.proof_input_material.witness_material;
     air.openings.iter().all(|opening| {
         iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
             opening.index,

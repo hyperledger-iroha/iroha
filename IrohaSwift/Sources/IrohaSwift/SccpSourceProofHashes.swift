@@ -998,6 +998,8 @@ public func sccpSolanaFullLightClientGateHash(
     sourceProofAppendDataVector(Data(sccpSolanaMainnetGenesisHash.utf8), to: &out)
     try out.append(sourceProofBytesFromHex32(materialHash, field: "sourceVerifierMaterialHash"))
     try out.append(sourceProofBytesFromHex32(deploymentHash, field: "sourceAdapterDeploymentHash"))
+    out.append(adapterVerifierVkHashData)
+    out.append(deploymentReceiptHashData)
     for (verifierId, _, verifierHash) in verifierHashes {
         sourceProofAppendDataVector(Data(verifierId.utf8), to: &out)
         out.append(verifierHash)
@@ -1141,6 +1143,8 @@ public func sccpTonFullLightClientGateHash(
     out.append(material.sourceStateVerifierHash)
     try out.append(sourceProofBytesFromHex32(materialHash, field: "sourceVerifierMaterialHash"))
     try out.append(sourceProofBytesFromHex32(deploymentHash, field: "sourceAdapterDeploymentHash"))
+    out.append(auditExistingAdapterVerifierVkHash)
+    out.append(auditExistingDeploymentReceiptHash)
     for (verifierId, _, verifierHash) in verifierHashes {
         sourceProofAppendDataVector(Data(verifierId.utf8), to: &out)
         out.append(verifierHash)

@@ -3790,9 +3790,28 @@ fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
     .any(|token| compact.contains(token))
 }
 
-const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
-const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] =
-    &["test", "dummy", "fake", "stub", "sample", "placeholder"];
+const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &[
+    "debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace",
+];
+const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] = &[
+    "test",
+    "dummy",
+    "fake",
+    "stub",
+    "sample",
+    "placeholder",
+    "todo",
+    "draft",
+];
+const DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS: &[&str] = &[
+    "notforproduction",
+    "notproduction",
+    "notproductionready",
+    "notready",
+    "replacebeforeproduction",
+    "replacebeforemainnet",
+    "draftonly",
+];
 const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
@@ -3860,6 +3879,14 @@ fn is_developer_only_compact_backend_run(run: &str) -> bool {
 #[must_use]
 pub fn is_developer_only_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
+    let compact = compact_ascii_lowercase_label(&backend);
+    if DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
+    {
+        return true;
+    }
+
     let mut letter_run = String::new();
     for token in backend
         .split(|ch: char| !ch.is_ascii_alphanumeric())
@@ -21817,10 +21844,24 @@ mod debug_backend_tests {
             "stark/fri/d-e-v",
             "stark/fri/test",
             "stark/fri/t-e-s-t",
+            "stark/fri/todo",
+            "stark/fri/t-o-d-o",
+            "stark/fri/draft-only",
+            "stark/fri/d-r-a-f-t",
+            "stark/fri/pending-audit",
+            "stark/fri/replace-before-mainnet",
+            "stark/fri/not-production-ready",
             "stark/fri/placeholder",
             "miden-stark:dev-fixture",
             "halo2/ipa:dev-fixture",
             "halo2/ipa:dev",
+            "halo2/ipa:todo-proof",
+            "halo2/ipa:t-o-d-o-proof",
+            "halo2/ipa:draft-proof",
+            "halo2/ipa:d-r-a-f-t-proof",
+            "halo2/ipa:pending-audit",
+            "halo2/ipa:replace-before-production",
+            "halo2/ipa:not-for-production",
             "halo2/ipa:dummy",
             "halo2/ipa:f-a-k-e",
             "halo2/ipa:stub",
@@ -22456,14 +22497,15 @@ mod stark_backend_tag_tests {
 mod stark_prover_tests {
     use super::{
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
-        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, normalize_stark_fri_circuit_id_for_backend,
-        prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
-        stark_binding_air_terms, stark_open_verify_air_public_digest_current,
-        stark_open_verify_domain_tag_current, verify_backend_with_timing,
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1,
+        normalize_stark_fri_circuit_id_for_backend, prove_stark_fri_ivm_execution_envelope,
+        prove_stark_fri_open_verify_envelope, stark_binding_air_terms,
+        stark_open_verify_air_public_digest_current, stark_open_verify_domain_tag_current,
+        verify_backend_with_timing,
     };
     use crate::zk_stark::{
-        STARK_HASH_SHA256_V1, StarkCompositionValueV1, StarkFriParamsV1, StarkFriVerifyingKeyV1,
-        StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+        STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkCompositionValueV1, StarkFriParamsV1,
+        StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
         ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
     };
     use iroha_crypto::Hash;
@@ -22970,73 +23012,91 @@ mod stark_prover_tests {
 
     #[test]
     fn prove_stark_open_verify_envelope_rejects_bfv_full_bootstrap_circuit_aliases() {
-        let backend = iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1;
         let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
-        let prefixed_alias = format!("{backend}:{canonical}");
-        let slash_alias = format!("{backend}/{canonical}");
-        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
-            let vk_box = VerifyingKeyBox::new(
-                backend.to_owned(),
-                norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
-            );
-            let err = prove_stark_fri_open_verify_envelope(
-                backend,
-                &circuit_id,
-                &vk_box,
-                b"bfv:generic-schema:v1",
-                vec![vec![[0x55; 32]]],
-            )
-            .expect_err("generic STARK prover must not target BFV full-bootstrap aliases");
-            assert!(
-                err.contains("BFV full-bootstrap"),
-                "unexpected BFV alias rejection for {circuit_id}: {err}"
-            );
+        for backend in [
+            ZK_BACKEND_STARK_FRI_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            let prefixed_alias = format!("{backend}:{canonical}");
+            let slash_alias = format!("{backend}/{canonical}");
+            for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+                let vk_payload = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                    blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    merkle_arity: 2,
+                    hash_fn: if backend.contains("/poseidon2-") {
+                        STARK_HASH_POSEIDON2_V1
+                    } else {
+                        STARK_HASH_SHA256_V1
+                    },
+                };
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
+                );
+                let err = prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"bfv:generic-schema:v1",
+                    vec![vec![[0x55; 32]]],
+                )
+                .expect_err("generic STARK prover must not target BFV full-bootstrap aliases");
+                assert!(
+                    err.contains("BFV full-bootstrap"),
+                    "unexpected BFV alias rejection for {backend} / {circuit_id}: {err}"
+                );
+            }
         }
     }
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_bfv_full_bootstrap_alias_generic_binding_air() {
-        let backend = iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1;
         let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
-        let prefixed_alias = format!("{backend}:{canonical}");
-        let slash_alias = format!("{backend}/{canonical}");
-        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
-            let vk_box = VerifyingKeyBox::new(
-                backend.to_owned(),
-                norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
-            );
-            let proof = weak_stark_open_verify_proof(
-                backend,
-                &circuit_id,
-                &vk_box,
-                b"bfv:forged-generic-schema:v1".to_vec(),
-                vec![vec![[0x66; 32]]],
-            );
-            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
-            assert!(
-                !report.ok,
-                "BFV full-bootstrap alias {circuit_id} must not verify as generic binding AIR"
-            );
+        for backend in [
+            ZK_BACKEND_STARK_FRI_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            let prefixed_alias = format!("{backend}:{canonical}");
+            let slash_alias = format!("{backend}/{canonical}");
+            for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+                let vk_payload = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                    blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    merkle_arity: 2,
+                    hash_fn: if backend.contains("/poseidon2-") {
+                        STARK_HASH_POSEIDON2_V1
+                    } else {
+                        STARK_HASH_SHA256_V1
+                    },
+                };
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
+                );
+                let proof = weak_stark_open_verify_proof(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"bfv:forged-generic-schema:v1".to_vec(),
+                    vec![vec![[0x66; 32]]],
+                );
+                let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+                assert!(
+                    !report.ok,
+                    "BFV full-bootstrap alias {backend} / {circuit_id} must not verify as generic binding AIR"
+                );
+            }
         }
     }
 
@@ -23170,7 +23230,7 @@ mod stark_prover_tests {
     #[test]
     fn verify_stark_open_verify_envelope_rejects_noncanonical_outer_shape() {
         let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
-        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 7] = [
             ("backend tag", |outer| {
                 outer.backend = BackendTag::Halo2IpaPasta
             }),
@@ -23178,6 +23238,9 @@ mod stark_prover_tests {
             ("zero verifier-key hash", |outer| outer.vk_hash = [0u8; 32]),
             ("empty public inputs", |outer| outer.public_inputs.clear()),
             ("empty proof bytes", |outer| outer.proof_bytes.clear()),
+            ("all-zero proof bytes", |outer| {
+                outer.proof_bytes = vec![0u8; 16]
+            }),
             ("auxiliary bytes", |outer| {
                 outer.aux = b"side-channel".to_vec()
             }),
@@ -73783,9 +73846,31 @@ mod preverified_key_tests {
                 PreverifyResult::MalformedProof,
             ),
             (
+                "invalid_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id = "halo2/ipa:::preverify-test".to_owned();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "oversized_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id = "a"
+                        .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
                 "empty_public_inputs",
                 mutate_preverify_envelope(proof.clone(), |envelope| {
                     envelope.public_inputs.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "all_zero_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = vec![0; 4];
                 }),
                 PreverifyResult::MalformedProof,
             ),
@@ -73804,6 +73889,13 @@ mod preverified_key_tests {
                 "empty_proof_bytes",
                 mutate_preverify_envelope(proof.clone(), |envelope| {
                     envelope.proof_bytes.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "all_zero_proof_bytes",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.proof_bytes = vec![0; 16];
                 }),
                 PreverifyResult::MalformedProof,
             ),

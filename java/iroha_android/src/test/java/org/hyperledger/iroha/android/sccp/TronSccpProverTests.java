@@ -6,10 +6,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Collections;
+import java.util.function.Consumer;
 import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class TronSccpProverTests {
+  private static final String TEST_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA =
+      "iroha_sccp::SccpSourceChainProofEnvelopeV1";
+
   private TronSccpProverTests() {}
 
   public static void main(final String[] args) {
@@ -227,6 +236,7 @@ public final class TronSccpProverTests {
 
     final SampleBundleFixture nonSoraBundle =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_ETH, 327L);
+    threw = false;
     try {
       TronSccpProver.buildProofRequest(
           new TronSccpProver.ProofRequestInput(
@@ -241,6 +251,29 @@ public final class TronSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
     }
     assert threw : "TRON proof requests must bind non-SORA source proofs to bundle finality proofs";
+
+    threw = false;
+    final SampleBundleFixture replaySourceFixture =
+        sampleBundleFixture(SourceSccpProofs.DOMAIN_ETH, 328L);
+    final SampleBundleFixture replayBoundSourceFixture =
+        sampleBundleFixture(
+            SourceSccpProofs.DOMAIN_ETH,
+            327L,
+            testCanonicalSccpSourceProofBytes(SourceSccpProofs.DOMAIN_ETH, nonSoraBundle));
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              replayBoundSourceFixture.publicInputs,
+              replayBoundSourceFixture.bundleBytes,
+              testCanonicalSccpSourceProofBytes(SourceSccpProofs.DOMAIN_ETH, replaySourceFixture),
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
+    }
+    assert threw : "TRON proof requests must reject replayed canonical source proof bytes";
 
     threw = false;
     try {
@@ -992,6 +1025,12 @@ public final class TronSccpProverTests {
     return out;
   }
 
+  private static byte[] filledBytes(final int length, final int value) {
+    final byte[] out = new byte[length];
+    Arrays.fill(out, (byte) value);
+    return out;
+  }
+
   private static String stripHex(final String value) {
     return value.startsWith("0x") ? value.substring(2) : value;
   }
@@ -1212,6 +1251,11 @@ public final class TronSccpProverTests {
   }
 
   private static SampleBundleFixture sampleBundleFixture(final int sourceDomain, final long nonce) {
+    return sampleBundleFixture(sourceDomain, nonce, new byte[] {0x01, 0x02, 0x03});
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(
+      final int sourceDomain, final long nonce, final byte[] finalityProofBytes) {
     final int senderCodec = sourceDomain == TronSccpProver.DOMAIN_SORA ? 1 : 2;
     final String sender =
         sourceDomain == TronSccpProver.DOMAIN_SORA
@@ -1264,7 +1308,7 @@ public final class TronSccpProverTests {
     writeTestBytes(bundle, commitmentBytes);
     writeTestBytes(bundle, merkleProof.toByteArray());
     writeTestBytes(bundle, payloadBytes);
-    writeTestBytes(bundle, new byte[] {0x01, 0x02, 0x03});
+    writeTestBytes(bundle, finalityProofBytes);
 
     return new SampleBundleFixture(
         new TronSccpProver.PublicInputsInput(
@@ -1276,6 +1320,233 @@ public final class TronSccpProverTests {
             "19",
             repeat("44", 32)),
         bundle.toByteArray());
+  }
+
+  private static final class TestSccpSourceChainProofEnvelope {
+    final int sourceDomain;
+    final int targetDomain;
+    final String sourceChain;
+    final int sourceProofPlan;
+    final int finalityModel;
+    final String messageId;
+    final String payloadHash;
+    final String sourceEventDigest;
+    final String commitmentRoot;
+    final long finalityHeight;
+    final String finalityBlockHash;
+    final String finalizedHeaderHash;
+    final String receiptOrMessageRoot;
+    final byte[] consensusProofBytes;
+    final byte[] messageInclusionProofBytes;
+    final List<byte[]> inclusionBranch;
+
+    TestSccpSourceChainProofEnvelope(
+        final int sourceDomain,
+        final int targetDomain,
+        final String sourceChain,
+        final int sourceProofPlan,
+        final int finalityModel,
+        final String messageId,
+        final String payloadHash,
+        final String sourceEventDigest,
+        final String commitmentRoot,
+        final long finalityHeight,
+        final String finalityBlockHash,
+        final String finalizedHeaderHash,
+        final String receiptOrMessageRoot,
+        final byte[] consensusProofBytes,
+        final byte[] messageInclusionProofBytes,
+        final List<byte[]> inclusionBranch) {
+      this.sourceDomain = sourceDomain;
+      this.targetDomain = targetDomain;
+      this.sourceChain = sourceChain;
+      this.sourceProofPlan = sourceProofPlan;
+      this.finalityModel = finalityModel;
+      this.messageId = messageId;
+      this.payloadHash = payloadHash;
+      this.sourceEventDigest = sourceEventDigest;
+      this.commitmentRoot = commitmentRoot;
+      this.finalityHeight = finalityHeight;
+      this.finalityBlockHash = finalityBlockHash;
+      this.finalizedHeaderHash = finalizedHeaderHash;
+      this.receiptOrMessageRoot = receiptOrMessageRoot;
+      this.consensusProofBytes = consensusProofBytes;
+      this.messageInclusionProofBytes = messageInclusionProofBytes;
+      this.inclusionBranch = inclusionBranch;
+    }
+  }
+
+  private static final TypeAdapter<TestSccpSourceChainProofEnvelope>
+      TEST_SOURCE_CHAIN_PROOF_ADAPTER =
+          new TypeAdapter<TestSccpSourceChainProofEnvelope>() {
+            @Override
+            public void encode(
+                final NoritoEncoder encoder, final TestSccpSourceChainProofEnvelope value) {
+              writeTestNoritoField(encoder, child -> child.writeUInt(1, 8));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.sourceDomain, 32));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.targetDomain, 32));
+              writeTestNoritoField(encoder, child -> writeTestNoritoString(child, value.sourceChain));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.sourceProofPlan, 32));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityModel, 32));
+              writeTestNoritoField(encoder, child -> child.writeBytes(hexBytes(stripHex(value.messageId))));
+              writeTestNoritoField(encoder, child -> child.writeBytes(hexBytes(stripHex(value.payloadHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.sourceEventDigest))));
+              writeTestNoritoField(encoder, child -> child.writeBytes(hexBytes(stripHex(value.commitmentRoot))));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityHeight, 64));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalizedHeaderHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.receiptOrMessageRoot))));
+              writeTestNoritoField(
+                  encoder, child -> writeTestNoritoRawByteVec(child, value.consensusProofBytes));
+              writeTestNoritoField(
+                  encoder,
+                  child -> writeTestNoritoRawByteVec(child, value.messageInclusionProofBytes));
+              writeTestNoritoField(
+                  encoder, child -> writeTestNoritoRawByteVecSequence(child, value.inclusionBranch));
+            }
+
+            @Override
+            public TestSccpSourceChainProofEnvelope decode(final NoritoDecoder decoder) {
+              throw new UnsupportedOperationException("test source proof decoding is not used");
+            }
+          };
+
+  private static byte[] testCanonicalSccpSourceProofBytes(
+      final int sourceDomain, final SampleBundleFixture bundle) {
+    final TronSccpProver.PublicInputsInput publicInputs = bundle.publicInputs;
+    return NoritoCodec.encode(
+        new TestSccpSourceChainProofEnvelope(
+            sourceDomain,
+            publicInputs.targetDomain(),
+            testSourceChainKeyForDomain(sourceDomain),
+            testSourceProofPlanForDomain(sourceDomain),
+            testFinalityModelForDomain(sourceDomain),
+            publicInputs.messageId(),
+            publicInputs.payloadHash(),
+            testSccpSourceEventDigest(
+                sourceDomain,
+                publicInputs.targetDomain(),
+                publicInputs.messageId(),
+                publicInputs.payloadHash()),
+            publicInputs.commitmentRoot(),
+            Long.parseLong(publicInputs.finalityHeight()),
+            publicInputs.finalityBlockHash(),
+            "0x" + repeat("55", 32),
+            "0x" + repeat("66", 32),
+            new byte[] {0x71, 0x72},
+            new byte[] {0x73, 0x74},
+            Collections.singletonList(filledBytes(32, 0x75))),
+        TEST_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA,
+        TEST_SOURCE_CHAIN_PROOF_ADAPTER);
+  }
+
+  private static String testSccpSourceEventDigest(
+      final int sourceDomain, final int targetDomain, final String messageId, final String payloadHash) {
+    final ByteArrayOutputStream payload = new ByteArrayOutputStream();
+    payload.write(1);
+    writeTestU32Le(payload, sourceDomain);
+    writeTestU32Le(payload, targetDomain);
+    writeTestRawBytes(payload, hexBytes(stripHex(messageId)));
+    writeTestRawBytes(payload, hexBytes(stripHex(payloadHash)));
+    return "0x"
+        + hexLower(
+            Blake2b.digest256(
+                concatTestBytes(
+                    "sccp:source:event:v1".getBytes(StandardCharsets.UTF_8),
+                    payload.toByteArray())));
+  }
+
+  private static String testSourceChainKeyForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return "eth";
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return "bsc";
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return "sol";
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return "ton";
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return "tron";
+    }
+    throw new IllegalArgumentException("unsupported source domain");
+  }
+
+  private static int testSourceProofPlanForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return 1;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return 2;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return 3;
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return 4;
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return 5;
+    }
+    throw new IllegalArgumentException("unsupported source domain");
+  }
+
+  private static int testFinalityModelForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return 0;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return 1;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return 2;
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return 3;
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return 4;
+    }
+    throw new IllegalArgumentException("unsupported source domain");
+  }
+
+  private static void writeTestNoritoField(
+      final NoritoEncoder encoder, final Consumer<NoritoEncoder> writePayload) {
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayload.accept(child);
+    final byte[] payload = child.toByteArray();
+    encoder.writeLength(payload.length, true);
+    encoder.writeBytes(payload);
+  }
+
+  private static void writeTestNoritoString(final NoritoEncoder encoder, final String value) {
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    encoder.writeLength(bytes.length, true);
+    encoder.writeBytes(bytes);
+  }
+
+  private static void writeTestNoritoRawByteVec(final NoritoEncoder encoder, final byte[] value) {
+    encoder.writeLength(value.length, false);
+    encoder.writeBytes(value);
+  }
+
+  private static void writeTestNoritoRawByteVecSequence(
+      final NoritoEncoder encoder, final List<byte[]> values) {
+    encoder.writeLength(values.size(), false);
+    for (final byte[] value : values) {
+      final NoritoEncoder child = encoder.childEncoder();
+      writeTestNoritoRawByteVec(child, value);
+      final byte[] payload = child.toByteArray();
+      encoder.writeLength(payload.length, true);
+      encoder.writeBytes(payload);
+    }
   }
 
   private static void writeTestBytes(final ByteArrayOutputStream out, final byte[] value) {
