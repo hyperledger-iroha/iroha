@@ -235,6 +235,17 @@ Query APIs cover:
 The CLI mirrors these as `iroha soracles query
 feeds|feed|history|provider-stats|disputes|dispute|changes|change|twitter-bindings`.
 
+Provider stats expose deterministic reputation helpers for governance and
+off-chain schedulers. `OracleProviderStats::total_outcomes()` counts inliers,
+outliers, connector errors, and no-shows; `reputation_score_bps()` returns the
+integer inlier share in basis points (`0..=10000`), treating providers with no
+observed outcomes as neutral `10000`. `adjusted_reputation_score_bps(delta)`
+applies a signed governance delta and clamps the result to `0..=10000`.
+Rewards and slashes remain separate accounting counters and are not counted
+again in the score. Aggregation itself remains equal-weight median/percentile
+for the current ABI; reputation-weighted scheduling or aggregation requires a
+future governance policy.
+
 ## Committee and Leader Selection (OR-2)
 
 Committee draws are deterministic and scoped to `(feed_id, feed_config_version,

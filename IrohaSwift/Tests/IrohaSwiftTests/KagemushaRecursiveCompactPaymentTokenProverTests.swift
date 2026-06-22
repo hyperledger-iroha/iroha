@@ -318,6 +318,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         XCTAssertEqual(output, archive)
     }
 
+    func testProjectionRejectsEmptyBundleArchiveBeforeBridgeCall() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .recursiveSpendCompactPaymentTokenFromBundle(
+                    bundleArchive: Data(),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native projection body must not run for empty bundle archives")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyBundleArchive
+            )
+        }
+    }
+
     func testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall() {
         let validArchive = validKagemushaNoritoArchive()
         for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
@@ -422,6 +440,92 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         }
     }
 
+    func testProjectionNilNativeOutputIsBridgeUnavailable() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .recursiveSpendCompactPaymentTokenFromBundle(
+                    bundleArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .bridgeUnavailable
+            )
+        }
+    }
+
+    func testProjectionRejectsEmptyNativeOutput() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .recursiveSpendCompactPaymentTokenFromBundle(
+                    bundleArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    Data()
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .proofRejected
+            )
+        }
+    }
+
+    func testProjectionRejectsEmptyPayloadNativeOutput() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .recursiveSpendCompactPaymentTokenFromBundle(
+                    bundleArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    emptyPayloadKagemushaNoritoArchive()
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyCompactTokenPayload
+            )
+        }
+    }
+
+    func testProjectionNativeRejectionIsProofRejected() {
+        enum LocalError: Error {
+            case rejected
+        }
+
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .recursiveSpendCompactPaymentTokenFromBundle(
+                    bundleArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    throw NativeBridgeError.kagemushaProve
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .proofRejected
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .recursiveSpendCompactPaymentTokenFromBundle(
+                    bundleArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    throw LocalError.rejected
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .proofRejected
+            )
+        }
+    }
+
     private func malformedKagemushaNoritoArchives(_ validArchive: Data) -> [(String, Data)] {
         var compressed = validArchive
         compressed[22] = 0x01
@@ -465,6 +569,67 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             }
 
         XCTAssertEqual(output, archive)
+    }
+
+    func testProjectionVerifierRejectsEmptyCompactTokenArchiveBeforeBridgeCall() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjection(
+                    compactTokenArchive: Data(),
+                    verifierRecordArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native projection verifier body must not run for empty compact tokens")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyCompactTokenArchive
+            )
+        }
+    }
+
+    func testProjectionVerifierRejectsMalformedCompactTokenArchiveBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .verifyRecursiveSpendCompactPaymentTokenProjection(
+                        compactTokenArchive: malformedArchive,
+                        verifierRecordArchive: validArchive,
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native projection verifier body must not run for malformed compact tokens")
+                        return true
+                    },
+                "compact token archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidCompactTokenArchive
+                )
+            }
+        }
+    }
+
+    func testProjectionVerifierRejectsEmptyPayloadCompactTokenArchiveBeforeBridgeCall() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjection(
+                    compactTokenArchive: emptyPayloadKagemushaNoritoArchive(),
+                    verifierRecordArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native projection verifier body must not run for empty compact-token payloads")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyCompactTokenPayload
+            )
+        }
     }
 
     func testProjectionVerifierRejectsMalformedVerifierRecordBeforeBridgeCall() {
@@ -594,8 +759,81 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                     bridgeAvailable: true
                 ) {
                     false
-                }
+            }
         )
+    }
+
+    func testProjectionVerifierNilNativeResultIsBridgeUnavailable() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjection(
+                    compactTokenArchive: validKagemushaNoritoArchive(),
+                    verifierRecordArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .bridgeUnavailable
+            )
+        }
+    }
+
+    func testProjectionVerifierNativeRecursiveCompactUnavailableIsDistinctFromRejection() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjection(
+                    compactTokenArchive: validKagemushaNoritoArchive(),
+                    verifierRecordArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    throw NativeBridgeError.kagemushaRecursiveCompactUnavailable
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .recursiveCompactUnavailable
+            )
+        }
+    }
+
+    func testProjectionVerifierNativeRejectionIsVerificationRejected() {
+        enum LocalError: Error {
+            case rejected
+        }
+
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjection(
+                    compactTokenArchive: validKagemushaNoritoArchive(),
+                    verifierRecordArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    throw NativeBridgeError.kagemushaProve
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .verificationRejected
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjection(
+                    compactTokenArchive: validKagemushaNoritoArchive(),
+                    verifierRecordArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    throw LocalError.rejected
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .verificationRejected
+            )
+        }
     }
 
     func testNilNativeOutputIsBridgeUnavailable() {

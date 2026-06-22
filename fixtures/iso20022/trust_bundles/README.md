@@ -21,10 +21,11 @@ list-typed material field as an array even when it is intentionally empty, and
 omit `--allow-synthetic-der`. Only real-material bundles can emit profile
 overrides with `--emit-profile-json`; synthetic-template validation is
 summary-only, and profile emission also rejects local-audit source URL
-overrides, record-only policy overrides, and placeholder source metadata such as `dummy`,
-`fake`, `placeholder`, `replace-before-production`, `sample`, `template`, or
-reserved hosts like `.example`, `example.com`, `example.net`, `example.org`,
-and `example.invalid`.
+overrides, record-only policy overrides, and placeholder source metadata such
+as `dummy`, `fake`, `placeholder`, `replace-before-production`, `sample`,
+`template`, including separator- or compatibility-obfuscated forms, or reserved
+hosts like `.example`, `example.com`, `example.net`, `example.org`, and
+`example.invalid`.
 Profile emission requires an explicit `--max-source-age-days` freshness budget
 and rejects stale `source.retrieved_at` values under that budget. The summary
 records that budget so evidence and readiness gates can reject omitted,

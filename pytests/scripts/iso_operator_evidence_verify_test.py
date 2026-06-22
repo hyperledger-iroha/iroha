@@ -536,8 +536,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             ("password_evidence_unknown_secret", "evidence_unknown_secret"),
             ("%70assword_evidence_unknown_leak", "evidence_unknown_leak"),
             ("private-key_evidence_unknown_leak", "evidence_unknown_leak"),
+            ("private--key_evidence_unknown_leak", "evidence_unknown_leak"),
+            ("private%09key_evidence_unknown_leak", "evidence_unknown_leak"),
+            ("x--iroha--signature_evidence_unknown_leak", "evidence_unknown_leak"),
             ("unexpected\x1bevidence_key", "\x1b"),
             ("unexpected_evidence_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -559,6 +563,77 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_receipt_metadata_helper_rejects_unsupported_kind_without_echo(self):
+        secret_kind = "token=evidence-receipt-kind-secret"
+        receipt = {
+            "receipt_kind": secret_kind,
+            "ok": True,
+            "status_code": 202,
+            "response_body_sha256": "1" * 64,
+            "endpoint_requires_insecure_http": False,
+        }
+
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "unsupported receipt_kind") as ctx:
+            EVIDENCE._receipt_entry_content_metadata(receipt)
+
+        self.assertNotIn(secret_kind, str(ctx.exception))
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey evidence identifier",
+            "private--key evidence identifier",
+            "private/key evidence identifier",
+            "private\\key evidence identifier",
+            "private%2fkey evidence identifier",
+            "private\u200dkey evidence identifier",
+            "private\u0301key evidence identifier",
+            "ｐｒｉｖａｔｅｋｅｙ evidence identifier",
+            "x--iroha--signature evidence identifier",
+            "x/iroha/signature evidence identifier",
+            "x%2firoha%2fsignature evidence identifier",
+            "x\u200diroha\u200dsignature evidence identifier",
+            "x\u0301iroha\u0301signature evidence identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ evidence identifier",
+            "token%09secret evidence identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(EVIDENCE._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(EVIDENCE._is_secret_looking_key(key))
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=evidence-value-secret",
+            "api/key:evidence-value-secret",
+            "client/secret=evidence-value-secret",
+            "set/cookie:evidence-value-secret",
+            "x/iroha/signature: evidence-value-secret",
+            "private%2fkey=evidence-value-secret",
+            "private\u200dkey=evidence-value-secret",
+            "private\u0301key=evidence-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=evidence-compat-secret",
+            "ａｐｉ／ｋｅｙ:evidence-compat-secret",
+            "x\u200diroha\u200dsignature: evidence-value-secret",
+            "x\u0301iroha\u0301signature: evidence-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: evidence-compat-secret",
+            "private%E2%80%8Dkey=evidence-value-secret",
+            "private%CC%81key=evidence-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(EVIDENCE._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=evidence-terminator-secret"
@@ -622,15 +697,20 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertIn("--summary-ou", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-evidence\x1bflag"
-        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
-            EVIDENCE._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+        cases = (
+            ("--unknown-evidence\x1bflag", "\x1b"),
+            ("--unknown-evidence\u202eflag", "\u202e"),
+        )
+        for hidden, marker in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._preflight_raw_cli_secrets([hidden], {"--summary-out"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-evidence", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(marker, message)
+                self.assertNotIn("unknown-evidence", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dsummary-out"
@@ -662,6 +742,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         cases = (
             ("token=evidence-path-leak.summary.json", "token=evidence-path-leak"),
             ("token%3Devidence-path-leak.summary.json", "token=evidence-path-leak"),
+            ("private%20key%3Devidence-path-leak.summary.json", "private key=evidence-path-leak"),
+            ("private%20key-evidence-path-secret.summary.json", "private key-evidence-path-secret"),
+            ("private/key-evidence-path-secret.summary.json", "private/key-evidence-path-secret"),
+            ("x%2firoha%2fsignature-evidence-path-secret.summary.json", "x/iroha/signature-evidence-path-secret"),
             ("%70assword%253Devidence-path-leak.summary.json", "password=evidence-path-leak"),
             ("token-evidence-path-secret.summary.json", "token-evidence-path-secret"),
         )
@@ -795,6 +879,24 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 f"no longer than {EVIDENCE.MAX_LOCAL_PATH_CHARS} characters",
             ),
             (
+                "raw format-control",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/summary\u202e.json",
+                "control characters",
+            ),
+            (
+                "output format-control",
+                lambda raw: EVIDENCE._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/summary\u202e.json",
+                "control characters",
+            ),
+            (
+                "input format-control",
+                lambda raw: EVIDENCE._reject_path_smuggling(raw, "config_path"),
+                "/ops/iso/canary\u202e.json",
+                "control characters",
+            ),
+            (
                 "raw encoded dot",
                 lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
                 "out/%2e/summary.json",
@@ -902,6 +1004,56 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             self.assertNotIn(overlong, stderr)
 
+    def test_archive_string_helpers_reject_unicode_format_controls_without_echo(self):
+        hidden = "\u202eevidence-string-leak"
+        cases = (
+            (
+                "required",
+                lambda: EVIDENCE._required_string(
+                    {"path": "summary" + hidden}, "path", "summary"
+                ),
+            ),
+            (
+                "nullable-rail-message-id",
+                lambda: EVIDENCE._nullable_rail_message_id(
+                    {"rail_message_id": "rail-message" + hidden},
+                    "rail_message_id",
+                    "receipt",
+                ),
+            ),
+            (
+                "list",
+                lambda: EVIDENCE._required_clean_string_list(
+                    {"oids": ["1.2.3" + hidden]}, "oids", "bundle"
+                ),
+            ),
+            (
+                "der-label",
+                lambda: EVIDENCE._required_der_summary_entries(
+                    {
+                        "x509_crls": [
+                            {
+                                "label": "CRL" + hidden,
+                                "sha256": "1" * 64,
+                                "byte_len": 1,
+                            }
+                        ]
+                    },
+                    "x509_crls",
+                    "bundle",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn("control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("evidence-string-leak", message)
+
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (
             "https://pki.local-bank.bank/source:debug",
@@ -926,6 +1078,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             (
                 "https://pki\u0661.local-bank.bank/source",
                 "host must use printable ASCII",
+            ),
+            (
+                "https://pki.local-bank.bank/source\u202edebug",
+                "must not contain control characters",
             ),
             ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
             (
@@ -1125,12 +1281,32 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertNotIn("unexpected", message)
 
         with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._check_no_secret_material(
+                {"unexpected\u202eevidence_key": "redacted"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("forbidden control-bearing field", message)
+        self.assertNotIn("\u202e", message)
+        self.assertNotIn("evidence_key", message)
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
             EVIDENCE._check_no_secret_material({"metadata": "warning \x1b[31mred"})
 
         message = str(caught.exception)
         self.assertIn("unsafe control characters", message)
         self.assertNotIn("\x1b", message)
         self.assertNotIn("[31mred", message)
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._check_no_secret_material(
+                {"metadata": "warning \u202eevidence-bidi-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("unsafe control characters", message)
+        self.assertNotIn("\u202e", message)
+        self.assertNotIn("evidence-bidi-leak", message)
 
         with self.assertRaises(EVIDENCE.EvidenceError) as caught:
             EVIDENCE._check_no_secret_material(
@@ -1142,6 +1318,39 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertNotIn("%70assword%253Devidence-field-leak", message)
         self.assertNotIn("password=evidence-field-leak", message)
         self.assertNotIn("evidence-field-leak", message)
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._check_no_secret_material(
+                {"metadata": "private%E2%80%8Dkey=evidence-field-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("secret-looking material", message)
+        self.assertNotIn("private%E2%80%8Dkey=evidence-field-leak", message)
+        self.assertNotIn("private\u200dkey=evidence-field-leak", message)
+        self.assertNotIn("evidence-field-leak", message)
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._check_no_secret_material(
+                {"metadata": "private%CC%81key=evidence-mark-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("secret-looking material", message)
+        self.assertNotIn("private%CC%81key=evidence-mark-leak", message)
+        self.assertNotIn("private\u0301key=evidence-mark-leak", message)
+        self.assertNotIn("evidence-mark-leak", message)
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._check_no_secret_material(
+                {"metadata": "ｐｒｉｖａｔｅｋｅｙ=evidence-compat-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("secret-looking material", message)
+        self.assertNotIn("ｐｒｉｖａｔｅｋｅｙ=evidence-compat-leak", message)
+        self.assertNotIn("privatekey=evidence-compat-leak", message)
+        self.assertNotIn("evidence-compat-leak", message)
 
     def test_context_cli_flags_reject_missing_empty_or_flag_like_values(self):
         cases = (
@@ -1562,6 +1771,55 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             self.assertEqual(json.loads(partial_summary_out.read_text(encoding="utf-8")), summary)
 
+    def test_partial_canary_policy_does_not_hide_missing_direct_archive_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            full_canary_path = write_json(
+                root / "full-canary.summary.json",
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(
+                        notary_receipts,
+                        rail_receipts,
+                    )
+                ),
+            )
+            partial_body = plan_only_canary_summary()
+            partial_body["planned_stages"] = [
+                partial_body["planned_stages"][0],
+                partial_body["planned_stages"][2],
+            ]
+            del partial_body["planned_stages"][1]["command"][4:6]
+            partial_body.pop("summary_sha256")
+            partial_canary_path = write_json(
+                root / "partial-canary.summary.json",
+                digest_summary(partial_body),
+            )
+            trust_path = write_trust_summary(root / "trust")
+            summary_out = root / "partial-missing-direct-receipts.evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(full_canary_path),
+                    "--canary-summary",
+                    str(partial_canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-plan-only",
+                    "--allow-partial-canary",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("direct receipt archive verification does not include", stderr)
+            self.assertFalse(summary_out.exists())
+
     def test_unused_receipt_and_trust_overrides_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1715,10 +1973,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertIn(
-                "receipt_summary contains receipt kinds for stages not executed: "
-                "iso-rail-gateway",
+                "receipt_summary contains receipt kinds for stages not executed",
                 stderr,
             )
+            self.assertNotIn("iso-rail-gateway", stderr)
             self.assertFalse(summary_out.exists())
 
     def test_dry_run_producer_stage_accepts_executed_stage_receipts_only(self):
@@ -2597,6 +2855,20 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_timestamp_helper_rejects_unicode_format_controls_without_echo(self):
+        hidden = "\u202eevidence-timestamp-leak"
+
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._parse_timestamp(
+                "2026-06-04T00:00:00+00:00" + hidden,
+                "trust.source.retrieved_at",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("evidence-timestamp-leak", message)
 
     def test_duplicate_canary_and_trust_inputs_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3606,6 +3878,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             root = Path(raw_root)
             notary_receipts, rail_receipts = write_https_receipt_dirs(root)
             canary_path = write_canary(root)
+            canary = json.loads(canary_path.read_text(encoding="utf-8"))
+            missing_digest = json.loads(canary["stages"][2]["stdout_preview"])[
+                "receipts"
+            ][0]["receipt_sha256"]
             trust_path = write_trust_summary(root / "trust")
 
             rc, _stdout, stderr = run_evidence(
@@ -3623,6 +3899,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("direct receipt archive verification does not include", stderr)
+            self.assertNotIn(missing_digest, stderr)
 
     def test_canary_receipt_source_path_rejects_checked_in_iso_fixtures(self):
         checked_in_fixture = REPO_ROOT / "fixtures" / "iso20022" / "pacs008_fixture.xml"
@@ -3816,6 +4093,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             self.assertNotIn("receipt_kind 'iso-rail-gateway'", stderr)
             self.assertNotIn("receipt_kind 'iso-audit-notary'", stderr)
+            self.assertNotIn(entries[0]["receipt_sha256"], stderr)
 
     def test_direct_receipt_archive_must_bind_canary_receipt_filenames(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3849,6 +4127,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 stderr,
             )
             self.assertNotIn("relabelled-notary.receipt.json", stderr)
+            self.assertNotIn(entries[0]["receipt_sha256"], stderr)
 
     def test_direct_receipt_archive_must_bind_canary_receipt_metadata(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3887,6 +4166,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("direct receipt archive verification binds", stderr)
             self.assertIn("metadata that does not match canary receipt metadata", stderr)
             self.assertNotIn("sepa-sct-inst", stderr)
+            self.assertNotIn(entries[0]["receipt_sha256"], stderr)
 
     def test_direct_receipt_archive_must_bind_canary_endpoint_policy_evidence(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3931,6 +4211,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("direct receipt archive verification binds", stderr)
             self.assertIn("metadata that does not match canary receipt metadata", stderr)
             self.assertNotIn("endpoint_requires_insecure_http", stderr)
+            self.assertNotIn(entries[0]["receipt_sha256"], stderr)
 
     def test_notary_receipt_record_count_must_be_positive_for_production_evidence(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3964,7 +4245,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             original_receipt = next(Path(notary_receipts).glob("*.receipt.json"))
             extra_receipt = Path(notary_receipts) / "extra-unreferenced.receipt.json"
             extra_receipt.write_bytes(original_receipt.read_bytes())
-            receipt_test.rewrite_receipt(
+            extra_body = receipt_test.rewrite_receipt(
                 extra_receipt,
                 lambda body: body.update(
                     {
@@ -3994,6 +4275,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("includes unreferenced receipt_verification.receipts", stderr)
+            self.assertNotIn(extra_body["receipt_sha256"], stderr)
 
     def test_canary_receipts_cannot_be_reused_across_summaries(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4574,7 +4856,13 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             body = valid_canary_summary()
+            expected_digest = body[EVIDENCE.SUMMARY_DIGEST_FIELD]
             body["provider"] = "changed-after-digest"
+            actual_body = dict(body)
+            actual_body.pop(EVIDENCE.SUMMARY_DIGEST_FIELD)
+            actual_digest = EVIDENCE.sha256_hex(
+                EVIDENCE._canonical_json_bytes(actual_body)
+            )
             canary_path = write_canary(root, body)
             trust_path = write_trust_summary(root)
 
@@ -4584,6 +4872,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("summary_sha256 mismatch", stderr)
+            self.assertNotIn(expected_digest, stderr)
+            self.assertNotIn(actual_digest, stderr)
 
     def test_input_summary_digest_rejects_all_zero_placeholder(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5087,15 +5377,36 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             rail_extra = valid_canary_summary()
             rail_extra["stages"][0]["command"].extend(["--summary-out", "/tmp/rail.json"])
             rail_extra.pop("summary_sha256")
-            cases.append((digest_summary(rail_extra), [], "unsupported flag '--summary-out'"))
+            cases.append(
+                (
+                    digest_summary(rail_extra),
+                    [],
+                    "uses unsupported flag",
+                    "--summary-out",
+                )
+            )
             notary_extra = valid_canary_summary()
             notary_extra["stages"][1]["command"].append("--profile=swift-cbpr-plus")
             notary_extra.pop("summary_sha256")
-            cases.append((digest_summary(notary_extra), [], "unsupported flag '--profile'"))
+            cases.append(
+                (
+                    digest_summary(notary_extra),
+                    [],
+                    "uses unsupported flag",
+                    "--profile",
+                )
+            )
             verify_extra = valid_canary_summary()
             verify_extra["stages"][2]["command"].append("--summary-out=/tmp/verify.json")
             verify_extra.pop("summary_sha256")
-            cases.append((digest_summary(verify_extra), [], "unsupported flag '--summary-out'"))
+            cases.append(
+                (
+                    digest_summary(verify_extra),
+                    [],
+                    "uses unsupported flag",
+                    "--summary-out",
+                )
+            )
             planned_extra = plan_only_canary_summary()
             planned_extra["planned_stages"][0]["command"].append("--summary-out=/tmp/plan.json")
             planned_extra.pop("summary_sha256")
@@ -5103,10 +5414,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 (
                     digest_summary(planned_extra),
                     ["--allow-plan-only"],
-                    "unsupported flag '--summary-out'",
+                    "uses unsupported flag",
+                    "--summary-out",
                 )
             )
-            for body, extra_args, message in cases:
+            for body, extra_args, message, hidden in cases:
                 with self.subTest(message=message, extra_args=extra_args):
                     canary_path = write_canary(root, body)
 
@@ -5117,6 +5429,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_secret_or_non_ascii_unsupported_child_command_flags_do_not_echo(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5748,10 +6061,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 2)
-                    self.assertIn(
-                        "local diagnostic flag '--allow-missing-record-sources'",
-                        stderr,
-                    )
+                    self.assertIn("local diagnostic flag", stderr)
+                    self.assertNotIn("--allow-missing-record-sources", stderr)
 
     def test_canary_child_commands_reject_control_characters(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6515,8 +6826,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "rail-stage-extra-notary-receipt",
                     (0, 2),
                     "both",
-                    "receipt_summary contains receipt kinds for stages not executed: "
-                    "iso-audit-notary",
+                    "receipt_summary contains receipt kinds for stages not executed",
                 ),
             )
             for name, stage_indexes, receipt_scope, message in cases:
@@ -6556,6 +6866,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if name == "rail-stage-extra-notary-receipt":
+                        self.assertNotIn("iso-audit-notary", stderr)
 
             dry_run_root = root / "dry-run-rail-with-receipts"
             dry_run_root.mkdir()
@@ -6583,10 +6895,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn(
-                "receipt_summary contains receipt kinds for stages not executed: "
-                "iso-rail-gateway",
+                "receipt_summary contains receipt kinds for stages not executed",
                 stderr,
             )
+            self.assertNotIn("iso-rail-gateway", stderr)
 
     def test_canary_stage_sequence_must_match_runner_order(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -7348,6 +7660,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         values = (
             ("secret", "token-evidence-stage-secret", "secret-looking material"),
             ("non-ascii", "ra\u0430l", "must use printable ASCII"),
+            ("unsupported", "diagnostic-stage", "unsupported canary stage"),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -7635,6 +7948,14 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "source.authority must not contain placeholder production metadata",
                 ),
                 (
+                    "split-sample-authority",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "authority",
+                        "Sam ple Swift operator PKI",
+                    ),
+                    "source.authority must not contain placeholder production metadata",
+                ),
+                (
                     "version",
                     lambda summary: summary["bundles"][0]["source"].__setitem__(
                         "version",
@@ -7643,10 +7964,34 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "source.version must not contain placeholder production metadata",
                 ),
                 (
+                    "spaced-version",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "version",
+                        "replace before production",
+                    ),
+                    "source.version must not contain placeholder production metadata",
+                ),
+                (
+                    "underscore-version",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "version",
+                        "replace_before_production",
+                    ),
+                    "source.version must not contain placeholder production metadata",
+                ),
+                (
                     "template-version",
                     lambda summary: summary["bundles"][0]["source"].__setitem__(
                         "version",
                         "template-v1",
+                    ),
+                    "source.version must not contain placeholder production metadata",
+                ),
+                (
+                    "split-template-version",
+                    lambda summary: summary["bundles"][0]["source"].__setitem__(
+                        "version",
+                        "tem plate-v1",
                     ),
                     "source.version must not contain placeholder production metadata",
                 ),
@@ -8263,6 +8608,25 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "receipt_summary is missing receipt kinds for executed stages",
                 )
             )
+            hidden_kind = "diagnostic-receipt-kind"
+            unsupported_kind = valid_canary_summary()
+            unsupported_kind_summary = json.loads(receipt_stdout())
+            unsupported_kind_summary["receipt_kind"].append(hidden_kind)
+            unsupported_kind["stages"][2]["stdout_preview"] = (
+                json.dumps(
+                    digest_receipt_summary(unsupported_kind_summary),
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            unsupported_kind.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(unsupported_kind),
+                    "contains unsupported receipt kinds",
+                    hidden_kind,
+                )
+            )
             allow_failed = valid_canary_summary()
             allow_failed["stages"][2]["stdout_preview"] = receipt_stdout(allow_failed=True)
             allow_failed.pop("summary_sha256")
@@ -8273,7 +8637,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             allow_legacy.pop("summary_sha256")
             cases.append((digest_summary(allow_legacy), "allowed legacy colr.007 receipts"))
-            for body, message in cases:
+            for body, message, *hidden_values in cases:
                 with self.subTest(message=message):
                     canary_path = write_canary(root, body)
 
@@ -8283,6 +8647,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    for hidden_value in hidden_values:
+                        self.assertNotIn(hidden_value, stderr)
 
     def test_receipt_verifier_stdout_duplicate_receipts_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8568,13 +8934,68 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_receipt_verifier_stdout_rejects_digest_role_reuse(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = (
+                (
+                    "notary-response-anchor",
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "response_body_sha256",
+                        receipt["anchor_sha256"],
+                    ),
+                    ("anchor_sha256", "response_body_sha256"),
+                ),
+                (
+                    "rail-response-payload",
+                    1,
+                    lambda receipt: receipt.__setitem__(
+                        "response_body_sha256",
+                        receipt["payload_sha256"],
+                    ),
+                    ("payload_sha256", "response_body_sha256"),
+                ),
+            )
+            for name, receipt_index, mutate, fields in cases:
+                with self.subTest(name=name):
+                    receipt_summary = json.loads(receipt_stdout())
+                    mutate(receipt_summary["receipts"][receipt_index])
+                    body = valid_canary_summary()
+                    body["stages"][2]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("must not reuse", stderr)
+                    for field in fields:
+                        self.assertIn(field, stderr)
+
     def test_receipt_verifier_stdout_requires_kind_specific_metadata(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             trust_path = write_trust_summary(root)
             hidden = "\u0660"
+            hidden_kind = "diagnostic-receipt-kind"
             unicode_digit_message_type = f"pacs.{hidden}{hidden}2"
             cases = (
+                (
+                    "unsupported-entry-kind",
+                    0,
+                    lambda receipt: receipt.__setitem__("receipt_kind", hidden_kind),
+                    "stdout_preview.receipts[0].receipt_kind is unsupported",
+                ),
                 (
                     "notary-missing-anchor",
                     0,
@@ -8687,6 +9108,9 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertNotIn(hidden, stderr)
                     self.assertNotIn(unicode_digit_message_type, stderr)
                     self.assertNotIn("token.001", stderr)
+                    self.assertNotIn(hidden_kind, stderr)
+                    self.assertNotIn("zzzz.999", stderr)
+                    self.assertNotIn("colr.007", stderr)
 
     def test_receipt_verifier_stdout_policy_flags_are_required(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9146,6 +9570,40 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if message == "--allow-record-only":
+                        self.assertNotIn("embedded_signature_policy is 'record-only'", stderr)
+
+    def test_forged_nonproduction_trust_policy_diagnostic_hides_policy_value(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_path = write_trust_summary(root / "forged-policy")
+            hidden = "record-only"
+            rewrite_trust_summary(
+                trust_path,
+                lambda summary: (
+                    summary["bundles"][0].__setitem__(
+                        "embedded_signature_policy",
+                        hidden,
+                    ),
+                    summary["bundles"][0]["profile_overrides"].__setitem__(
+                        "embedded_signature_policy",
+                        hidden,
+                    ),
+                ),
+            )
+
+            rc, stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "embedded_signature_policy does not require verified signatures",
+                stderr,
+            )
+            self.assertNotIn(hidden, stderr)
 
     def test_forged_trust_summary_material_requires_matching_policy_flag(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9418,6 +9876,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     if hidden is not None:
                         self.assertNotIn(hidden, stderr)
                         self.assertNotIn("embedded_signature_policy is unsupported", stderr)
+                    else:
+                        self.assertNotIn(policy, stderr)
 
     def test_trust_summary_must_emit_profile_json_by_default(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9665,6 +10125,16 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_placeholder_source_predicate_normalizes_compatibility_forms(self):
+        cases = (
+            "Ｓａｍｐｌｅ Swift operator PKI",
+            "ｔｅｍｐｌａｔｅ-v1",
+            "ｒｅｐｌａｃｅ-before-production",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(EVIDENCE._trust_source_text_is_placeholder(value))
+
     def test_trust_summary_profile_emittable_must_match_source_policy(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -9820,6 +10290,27 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     if duplicate_digest is not None:
                         self.assertNotIn(duplicate_digest, stderr)
+
+    def test_trust_bundle_digest_cannot_reuse_der_material_roles(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_path = write_trust_summary(root / "trust")
+            rewrite_trust_summary(
+                trust_path,
+                lambda trust: trust["bundles"][0].__setitem__(
+                    "bundle_sha256",
+                    trust["bundles"][0]["x509_ocsp_responses"][0]["sha256"],
+                ),
+            )
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("bundle_sha256 must not reuse", stderr)
+            self.assertIn("x509_ocsp_response_der", stderr)
 
     def test_trust_profile_overrides_must_match_material_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -10060,11 +10551,43 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     ),
                     "trusted/revoked certificate pins",
                 ),
+                (
+                    "public-certificate-overlap",
+                    lambda summary: (
+                        summary["bundles"][0]["profile_overrides"].__setitem__(
+                            "signature_public_key_sha256_pins",
+                            [
+                                summary["bundles"][0]["profile_overrides"][
+                                    "x509_trust_anchor_sha256_pins"
+                                ][0]
+                            ],
+                        ),
+                        summary["bundles"][0]["material"].__setitem__(
+                            "signature_public_key_pin_count",
+                            1,
+                        ),
+                    ),
+                    "public-key/certificate SHA-256 pins",
+                ),
+                (
+                    "trust-pin-revocation-der-overlap",
+                    lambda summary: (
+                        summary["bundles"][0]["profile_overrides"].__setitem__(
+                            "trusted_public_key_sha256",
+                            [summary["bundles"][0]["x509_crls"][0]["sha256"]],
+                        ),
+                        summary["bundles"][0]["material"].__setitem__(
+                            "signature_public_key_pin_count",
+                            1,
+                        ),
+                    ),
+                    "trust pin/revocation DER SHA-256 roles",
+                ),
             )
             for name, mutate, message in cases:
                 with self.subTest(name=name):
                     trust_path = write_trust_summary(root / f"trust-{name}")
-                    rewrite_trust_summary(trust_path, mutate)
+                    mutated_summary = rewrite_trust_summary(trust_path, mutate)
 
                     rc, _stdout, stderr = run_evidence(
                         ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
@@ -10072,6 +10595,45 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    hidden_digests = []
+                    if name == "crl-der-digest-drift":
+                        hidden_digests = [
+                            EVIDENCE.sha256_hex(
+                                base64.b64decode(ALT_CRL_B64, validate=True)
+                            )
+                        ]
+                    elif name == "ocsp-der-digest-drift":
+                        hidden_digests = [
+                            EVIDENCE.sha256_hex(
+                                base64.b64decode(ALT_OCSP_B64, validate=True)
+                            )
+                        ]
+                    elif name == "crl-summary-digest-drift":
+                        hidden_digests = [
+                            "3" * 64,
+                            EVIDENCE.sha256_hex(
+                                base64.b64decode(
+                                    mutated_summary["bundles"][0]["profile_overrides"][
+                                        "x509_crl_der_base64"
+                                    ][0],
+                                    validate=True,
+                                )
+                            ),
+                        ]
+                    elif name == "ocsp-summary-byte-len-drift":
+                        hidden_digests = [
+                            mutated_summary["bundles"][0]["x509_ocsp_responses"][0][
+                                "sha256"
+                            ]
+                        ]
+                    for digest in hidden_digests:
+                        self.assertNotIn(digest, stderr)
+                    if name == "trust-pin-revocation-der-overlap":
+                        trust = json.loads(trust_path.read_text(encoding="utf-8"))
+                        self.assertNotIn(
+                            trust["bundles"][0]["x509_crls"][0]["sha256"],
+                            stderr,
+                        )
 
     def test_trust_profile_revocation_flags_are_required(self):
         with tempfile.TemporaryDirectory() as raw_root:

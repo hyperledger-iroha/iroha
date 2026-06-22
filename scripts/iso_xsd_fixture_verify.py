@@ -35,6 +35,7 @@ import stat
 import subprocess
 import sys
 import threading
+import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -63,6 +64,7 @@ SOURCE_REPOSITORY_RE = re.compile(
 SOURCE_REPOSITORY_OWNER_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$"
 )
+SOURCE_REPOSITORY_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$")
 PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS = {
     "dummy",
     "example",
@@ -145,10 +147,10 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(
-        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
         re.IGNORECASE,
     ),
-    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
 ]
 
 
@@ -169,8 +171,59 @@ def _secret_scan_values(raw: str) -> tuple[str, ...]:
 def _contains_secret_material(value: str) -> bool:
     return any(
         pattern.search(candidate)
-        for candidate in _secret_scan_values(value)
+        for raw_candidate in _secret_scan_values(value)
+        for candidate in _secret_value_forms(raw_candidate)
         for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _secret_value_forms(value: str) -> tuple[str, ...]:
+    return _secret_base_forms(value)
+
+
+def _secret_base_forms(value: str) -> tuple[str, ...]:
+    folded = value.casefold()
+    forms: list[str] = []
+    for candidate in (
+        folded,
+        unicodedata.normalize("NFKC", folded).casefold(),
+        unicodedata.normalize("NFKD", folded).casefold(),
+    ):
+        without_obfuscation = "".join(
+            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
+        )
+        obfuscation_spaced = "".join(
+            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
+        )
+        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
+    return tuple(dict.fromkeys(forms))
+
+
+def _is_secret_obfuscation_char(ch: str) -> bool:
+    category = unicodedata.category(ch)
+    return category == "Cf" or category.startswith("M")
+
+
+def _secret_identifier_forms(value: str) -> tuple[str, ...]:
+    forms: list[str] = []
+    for candidate in _secret_base_forms(value):
+        forms.extend(
+            (
+                candidate,
+                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
+                re.sub(r"[\s_./\\-]+", "", candidate),
+            )
+        )
+    return tuple(dict.fromkeys(forms))
+
+
+def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
+    candidate_forms = _secret_identifier_forms(value)
+    return any(
+        marker_form in candidate_form
+        for marker in markers
+        for marker_form in _secret_identifier_forms(marker)
+        for candidate_form in candidate_forms
     )
 
 
@@ -178,25 +231,49 @@ def _contains_secret_identifier_material(value: str) -> bool:
     strong_markers = (
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     paired_markers = ("authorization", "bearer", "token", "cookie")
     return any(
-        any(marker in lowered for marker in strong_markers)
-        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
-        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+        _contains_secret_marker(candidate, strong_markers)
+        or (
+            _contains_secret_marker(candidate, ("secret",))
+            and _contains_secret_marker(candidate, paired_markers)
+        )
+        for candidate in _secret_scan_values(value)
     )
 
 TOP_LEVEL_KEYS = {"version", "schemas", "fixtures", "blocked_schema_sources"}
@@ -327,7 +404,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise FixtureManifestError(
             f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
         )
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise FixtureManifestError(f"{label} must not have surrounding whitespace")
@@ -358,7 +435,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise FixtureManifestError(
             f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
         )
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise FixtureManifestError(f"{label} must not have surrounding whitespace")
@@ -433,7 +510,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        if _contains_control_character(arg):
             raise FixtureManifestError("CLI argument must not contain control characters")
         if any(ord(ch) > 0x7E for ch in arg):
             raise FixtureManifestError("CLI argument must use printable ASCII")
@@ -494,7 +571,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
 
 
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
-    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if raw != raw.strip() or _contains_control_character(raw):
         raise FixtureManifestError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise FixtureManifestError(f"{flag} must use printable ASCII")
@@ -955,8 +1032,20 @@ def _reject_restricted_schema_terms(raw: bytes, path: Path) -> None:
     except UnicodeDecodeError as error:
         raise FixtureManifestError(f"{path} is not valid UTF-8") from error
     lowered = text.casefold()
+    format_removed = "".join(
+        ch for ch in lowered if unicodedata.category(ch) != "Cf"
+    )
+    format_spaced = "".join(
+        " " if unicodedata.category(ch) == "Cf" else ch for ch in lowered
+    )
+    normalized_forms = (
+        lowered,
+        " ".join(lowered.split()),
+        " ".join(format_removed.split()),
+        " ".join(format_spaced.split()),
+    )
     for marker in RESTRICTED_SCHEMA_TEXT_MARKERS:
-        if marker in lowered:
+        if any(marker in normalized for normalized in normalized_forms):
             raise FixtureManifestError(
                 f"{path} contains restricted redistribution terms; "
                 "do not check in licensed Standards Editor packages without redistribution rights"
@@ -986,17 +1075,8 @@ def _require_array(value: Any, label: str) -> list[Any]:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise FixtureManifestError(f"{label} contains unknown keys")
-        raise FixtureManifestError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise FixtureManifestError(f"{label} contains unknown keys")
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -1007,35 +1087,64 @@ def _is_secret_looking_key(value: Any) -> bool:
         "secret",
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "cookie",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     return any(
-        marker in candidate.lower()
+        _contains_secret_marker(candidate, markers)
         for candidate in _secret_scan_values(str(value))
-        for marker in markers
     )
 
 
 def _is_control_bearing_key(value: Any) -> bool:
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+    return _contains_control_character(str(value))
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) == "Cf"
+        for ch in value
+    )
 
 
 def _contains_unsafe_json_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 
@@ -1122,7 +1231,7 @@ def _required_string(
         raise FixtureManifestError(f"{label}.{key} must be a non-empty string")
     if max_chars is not None and len(raw) > max_chars:
         raise FixtureManifestError(f"{label}.{key} must be no longer than {max_chars} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise FixtureManifestError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
         raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
@@ -1181,7 +1290,7 @@ def _optional_string(
         raise FixtureManifestError(f"{label}.{key} must be a non-empty string when set")
     if max_chars is not None and len(raw) > max_chars:
         raise FixtureManifestError(f"{label}.{key} must be no longer than {max_chars} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise FixtureManifestError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
         raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
@@ -1228,7 +1337,7 @@ def _optional_string_list(
             )
         if item != item.strip():
             raise FixtureManifestError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
+        if _contains_control_character(item):
             raise FixtureManifestError(f"{label}.{key}[{offset}] must not contain control characters")
         _reject_non_ascii_identifier(item, f"{label}.{key}[{offset}]")
         if item in seen:
@@ -1349,7 +1458,14 @@ def _require_der_sequence(value: bytes, label: str) -> None:
 def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> None:
     overlap = sorted(set(first) & set(second))
     if overlap:
-        raise FixtureManifestError(f"{label} contains overlapping SHA-256 pin {overlap[0]}")
+        raise FixtureManifestError(f"{label} contains overlapping SHA-256 pins")
+
+
+def _base64_der_sha256_values(values: list[str]) -> list[str]:
+    return [
+        sha256_hex(base64.b64decode(item, validate=True))
+        for item in values
+    ]
 
 
 def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str) -> None:
@@ -1388,6 +1504,11 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
         revoked_pins,
         f"{label}.trusted/revoked certificate pins",
     )
+    _reject_sha256_overlap(
+        public_pins + legacy_public_pins,
+        anchor_pins + legacy_anchor_pins + revoked_pins,
+        f"{label}.public-key/certificate SHA-256 pins",
+    )
     _optional_oid_list(profile, "x509_required_certificate_policy_oids", label)
     crl_required = _optional_bool(profile, "x509_require_crl_revocation_check", label)
     ocsp_required = _optional_bool(profile, "x509_require_ocsp_revocation_check", label)
@@ -1396,6 +1517,15 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
         profile,
         "x509_ocsp_response_der_base64",
         label,
+    )
+    _reject_sha256_overlap(
+        public_pins
+        + legacy_public_pins
+        + anchor_pins
+        + legacy_anchor_pins
+        + revoked_pins,
+        _base64_der_sha256_values(crls + ocsp_responses),
+        f"{label}.trust pin/revocation DER SHA-256 roles",
     )
     if crl_required and not crls:
         raise FixtureManifestError(
@@ -1510,7 +1640,7 @@ def _validate_source_path(raw: str, label: str) -> str:
         )
     if "\\" in raw:
         raise FixtureManifestError(f"{label} must use forward slashes")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     _reject_non_ascii_identifier(raw, label)
     if any(ch.isspace() for ch in raw):
@@ -1535,17 +1665,32 @@ def _validate_source_path(raw: str, label: str) -> str:
     return raw
 
 
-def _source_repository_component_is_placeholder(component: str) -> bool:
+def _source_repository_placeholder_forms(component: str) -> tuple[str, tuple[str, ...], set[str]]:
     lowered = component.casefold()
+    tokens = tuple(token for token in re.split(r"[-_.]+", lowered) if token)
+    joined_windows = {
+        "".join(tokens[start:end])
+        for start in range(len(tokens))
+        for end in range(start + 1, len(tokens) + 1)
+    }
+    return lowered, tokens, joined_windows
+
+
+def _source_repository_component_is_placeholder(component: str) -> bool:
+    lowered, tokens, joined_windows = _source_repository_placeholder_forms(component)
     if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
         return True
     if lowered.endswith(".example"):
         return True
-    return any(
-        token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS
-        for token in re.split(r"[-_.]+", lowered)
-        if token
-    )
+    if any(token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS for token in tokens):
+        return True
+    for marker in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        _marker_lowered, marker_tokens, _marker_windows = (
+            _source_repository_placeholder_forms(marker)
+        )
+        if marker_tokens and "".join(marker_tokens) in joined_windows:
+            return True
+    return False
 
 
 def _validate_source_repository(raw: str, label: str) -> str:
@@ -1567,7 +1712,7 @@ def _validate_source_repository(raw: str, label: str) -> str:
         raise FixtureManifestError(
             f"{label} must be a canonical https://github.com/<org>/<repo> URL"
         )
-    if not any(ch in "0123456789abcdefghijklmnopqrstuvwxyz" for ch in repository_parts[1]):
+    if SOURCE_REPOSITORY_NAME_RE.fullmatch(repository_parts[1]) is None:
         raise FixtureManifestError(
             f"{label} must be a canonical https://github.com/<org>/<repo> URL"
         )
@@ -1910,7 +2055,7 @@ def _validate_relative_path(
         )
     if "\\" in raw:
         raise FixtureManifestError(f"{label} must use forward slashes")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     _reject_non_ascii_identifier(raw, label)
     if any(ch.isspace() for ch in raw):
@@ -2131,7 +2276,9 @@ def _xmllint_output_detail(output: str) -> str:
 
 def _contains_unsafe_diagnostic_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 
@@ -2479,6 +2626,11 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
         raise FixtureManifestError(
             f"{path}.blocked_schema_sources contains duplicate candidate SHA-256 values"
         )
+    if set(blocked_source_digests) & set(schema_digests):
+        raise FixtureManifestError(
+            f"{path}.blocked_schema_sources contains candidate SHA-256 values "
+            "that already identify checked-in schemas"
+        )
     blocked_message_ids = {
         blocked["message_def_id"] for blocked in blocked_schema_sources
     }
@@ -2504,6 +2656,11 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     fixture_digests = [fixture["sha256"] for fixture in fixtures]
     if len(fixture_digests) != len(set(fixture_digests)):
         raise FixtureManifestError(f"{path}.fixtures contains duplicate fixture SHA-256 values")
+    if set(blocked_source_digests) & set(fixture_digests):
+        raise FixtureManifestError(
+            f"{path}.blocked_schema_sources contains candidate SHA-256 values "
+            "that already identify checked-in fixtures"
+        )
     backed_schema_paths = {fixture["schema"] for fixture in fixtures if fixture["schema"]}
     schema_only = [
         schema
@@ -2521,12 +2678,12 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     if args.require_schema_backed_fixtures and missing_schema_fixtures:
         first = missing_schema_fixtures[0]
         raise FixtureManifestError(
-            f"{first['path']} is not schema-backed: {first['missing_schema_reason']}"
+            f"{first['path']} is not schema-backed; reviewed missing-schema reason is recorded"
         )
     if args.require_fixture_for_schema and schema_only:
         first = schema_only[0]
         raise FixtureManifestError(
-            f"{first['path']} has no standalone fixture: {first['schema_only_reason']}"
+            f"{first['path']} has no standalone fixture; reviewed schema-only reason is recorded"
         )
     schema_backed_message_ids = {
         fixture["message_def_id"] for fixture in fixtures if fixture["schema_backed"]

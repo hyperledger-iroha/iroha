@@ -28,6 +28,7 @@ import os
 import re
 import stat
 import sys
+import unicodedata
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -95,20 +96,39 @@ SECRET_RESPONSE_PREVIEW_MARKERS = (
     "bearer ",
     "private_key",
     "private-key",
+    "private key",
+    "private.key",
+    "privatekey",
     "password",
     "passphrase",
     "api_key",
     "api-key",
+    "api key",
+    "api.key",
+    "apikey",
     "access_key",
     "access-key",
+    "access key",
+    "access.key",
+    "accesskey",
     "session_key",
     "session-key",
+    "session key",
+    "session.key",
+    "sessionkey",
     "client_secret",
     "client-secret",
+    "client secret",
+    "client.secret",
+    "clientsecret",
     "cookie",
     "secret",
     "token",
+    "x-iroha-signature",
     "x_iroha_signature",
+    "x iroha signature",
+    "x.iroha.signature",
+    "xirohasignature",
 )
 REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
 SECRET_VALUE_SCAN_EXEMPT_FIELDS = {"response_body_preview", "error"}
@@ -116,10 +136,10 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(
-        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
         re.IGNORECASE,
     ),
-    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
 ]
 
 
@@ -140,8 +160,59 @@ def _secret_scan_values(raw: str) -> tuple[str, ...]:
 def _contains_secret_material(value: str) -> bool:
     return any(
         pattern.search(candidate)
-        for candidate in _secret_scan_values(value)
+        for raw_candidate in _secret_scan_values(value)
+        for candidate in _secret_value_forms(raw_candidate)
         for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _secret_value_forms(value: str) -> tuple[str, ...]:
+    return _secret_base_forms(value)
+
+
+def _secret_base_forms(value: str) -> tuple[str, ...]:
+    folded = value.casefold()
+    forms: list[str] = []
+    for candidate in (
+        folded,
+        unicodedata.normalize("NFKC", folded).casefold(),
+        unicodedata.normalize("NFKD", folded).casefold(),
+    ):
+        without_obfuscation = "".join(
+            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
+        )
+        obfuscation_spaced = "".join(
+            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
+        )
+        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
+    return tuple(dict.fromkeys(forms))
+
+
+def _is_secret_obfuscation_char(ch: str) -> bool:
+    category = unicodedata.category(ch)
+    return category == "Cf" or category.startswith("M")
+
+
+def _secret_identifier_forms(value: str) -> tuple[str, ...]:
+    forms: list[str] = []
+    for candidate in _secret_base_forms(value):
+        forms.extend(
+            (
+                candidate,
+                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
+                re.sub(r"[\s_./\\-]+", "", candidate),
+            )
+        )
+    return tuple(dict.fromkeys(forms))
+
+
+def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
+    candidate_forms = _secret_identifier_forms(value)
+    return any(
+        marker_form in candidate_form
+        for marker in markers
+        for marker_form in _secret_identifier_forms(marker)
+        for candidate_form in candidate_forms
     )
 
 
@@ -149,31 +220,57 @@ def _contains_secret_identifier_material(value: str) -> bool:
     strong_markers = (
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     paired_markers = ("authorization", "bearer", "token", "cookie")
     return any(
-        any(marker in lowered for marker in strong_markers)
-        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
-        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+        _contains_secret_marker(candidate, strong_markers)
+        or (
+            _contains_secret_marker(candidate, ("secret",))
+            and _contains_secret_marker(candidate, paired_markers)
+        )
+        for candidate in _secret_scan_values(value)
     )
 
 
 def _contains_unsafe_preview_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 RAIL_SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
@@ -397,7 +494,7 @@ def _reject_raw_cli_path_smuggling(raw: str, label: str) -> None:
         raise ReceiptError(f"{label} must be a non-empty path")
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise ReceiptError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise ReceiptError(f"{label} must not have surrounding whitespace")
@@ -437,7 +534,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        if _contains_control_character(arg):
             raise ReceiptError("CLI argument must not contain control characters")
         if any(ord(ch) > 0x7E for ch in arg):
             raise ReceiptError("CLI argument must use printable ASCII")
@@ -564,17 +661,8 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise ReceiptError(f"{label} contains unknown keys")
-        raise ReceiptError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise ReceiptError(f"{label} contains unknown keys")
 
 
 def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -> None:
@@ -592,35 +680,64 @@ def _is_secret_looking_key(value: Any) -> bool:
         "secret",
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "cookie",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     return any(
-        marker in candidate.lower()
+        _contains_secret_marker(candidate, markers)
         for candidate in _secret_scan_values(str(value))
-        for marker in markers
     )
 
 
 def _is_control_bearing_key(value: Any) -> bool:
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+    return _contains_control_character(str(value))
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) == "Cf"
+        for ch in value
+    )
 
 
 def _contains_unsafe_json_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 
@@ -682,7 +799,7 @@ def require_digest_matches(obj: dict[str, Any], digest_field: str, label: str) -
     _reject_all_zero_sha256(expected, f"{label}.{digest_field}")
     actual = digest_without_field(obj, digest_field)
     if actual != expected:
-        raise ReceiptError(f"{label} {digest_field} mismatch: expected {expected}, got {actual}")
+        raise ReceiptError(f"{label} {digest_field} mismatch")
     return expected
 
 
@@ -705,7 +822,7 @@ def _check_no_secret_material(value: Any, path: Path, *, field_name: str | None 
 
 
 def _reject_url_control_chars(url: str, label: str) -> None:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+    if _contains_control_character(url):
         raise ReceiptError(f"{label} must not contain control characters")
 
 
@@ -928,7 +1045,7 @@ def _require_clean_string(value: Any, label: str) -> str:
         raise ReceiptError(f"{label} must be a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+    if _contains_control_character(value):
         raise ReceiptError(f"{label} must not contain control characters")
     if value != value.strip():
         raise ReceiptError(f"{label} must not have surrounding whitespace")
@@ -1362,10 +1479,9 @@ def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
-    return any(
-        marker in candidate.lower()
+    return _contains_secret_material(preview) or any(
+        _contains_secret_marker(candidate, SECRET_RESPONSE_PREVIEW_MARKERS)
         for candidate in _secret_scan_values(preview)
-        for marker in SECRET_RESPONSE_PREVIEW_MARKERS
     )
 
 
@@ -1685,7 +1801,7 @@ def _normalize_optional_string(
         raise ReceiptError(f"{label} must be null or a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+    if _contains_control_character(value):
         raise ReceiptError(f"{label} must not contain control characters")
     if value != value.strip():
         raise ReceiptError(f"{label} must not have surrounding whitespace")
@@ -1737,7 +1853,7 @@ def _normalize_sidecar_optional_string(
         raise ReceiptError(f"{label} must be a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+    if _contains_control_character(value):
         raise ReceiptError(f"{label} must not contain control characters")
     if value != value.strip():
         raise ReceiptError(f"{label} must not have surrounding whitespace")
@@ -1833,10 +1949,10 @@ def _verify_rail_source(
     if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
         raise ReceiptError(f"{path} message_type must be lowercase ISO family id")
     if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
-        raise ReceiptError(f"{path} has unsupported rail message_type {message_type!r}")
+        raise ReceiptError(f"{path} has unsupported rail message_type")
     if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
         raise ReceiptError(
-            f"{path} uses legacy rail message_type {message_type!r}; "
+            f"{path} uses legacy rail message_type; "
             "production evidence must use colr.012"
         )
     if "profile" not in receipt:
@@ -1921,7 +2037,7 @@ def verify_receipt_file(
         _reject_non_ascii_identifier(kind, f"{path} receipt_kind")
         _reject_secret_looking_identifier(kind, f"{path} receipt_kind")
     if kind not in SUPPORTED_KINDS:
-        raise ReceiptError(f"{path} has unsupported receipt_kind {kind!r}")
+        raise ReceiptError(f"{path} has unsupported receipt_kind")
     _reject_unknown_keys(receipt, RECEIPT_KEYS_BY_KIND[kind], str(path))
     require_digest_matches(receipt, RECEIPT_DIGEST_FIELD, str(path))
     _check_status(receipt, path, allow_failed=allow_failed)
@@ -1955,7 +2071,7 @@ def verify_receipt_file(
             allow_default_profile=allow_default_profile,
         )
     else:  # pragma: no cover - guarded above, kept explicit for future kinds.
-        raise ReceiptError(f"{path} has unsupported receipt_kind {kind!r}")
+        raise ReceiptError(f"{path} has unsupported receipt_kind")
 
     return receipt
 
@@ -2027,7 +2143,9 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
 def _receipt_endpoint_url(receipt: dict[str, Any]) -> str:
     if receipt["receipt_kind"] == "iso-audit-notary":
         return receipt["endpoint"]
-    return receipt["endpoint_url"]
+    if receipt["receipt_kind"] == "iso-rail-gateway":
+        return receipt["endpoint_url"]
+    raise ReceiptError("unsupported receipt_kind")
 
 
 def _reject_unused_local_overrides(args: argparse.Namespace, receipts: list[dict[str, Any]]) -> None:

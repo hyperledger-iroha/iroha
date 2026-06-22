@@ -32437,10 +32437,10 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_legacy_route_sensitive_block_reconstructs_canonical_state() {
+    fn replay_legacy_route_sensitive_blocks_reconstruct_canonical_state_despite_checkpoint_drift() {
         use std::borrow::Cow;
 
-        use iroha_crypto::Algorithm;
+        use iroha_crypto::{Algorithm, Hash};
         use iroha_primitives::{json::Json, numeric::Numeric};
 
         let chain_id = ChainId::from("iroha:test:legacy-route-replay");
@@ -32556,6 +32556,65 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(legacy_block.clone()))
             .expect("store legacy block");
 
+        let audit_alias = AccountAlias::new(
+            "auditor".parse::<Name>().expect("audit alias"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace_id,
+        );
+        let block3_instructions = vec![
+            InstructionBox::from(Mint::asset_numeric(Numeric::from(5_u32), asset_id.clone())),
+            InstructionBox::from(SetAccountAliasBinding::bind(
+                user_id.clone(),
+                audit_alias,
+                Some(10_002),
+            )),
+            InstructionBox::from(SetKeyValue::account(
+                user_id.clone(),
+                "status".parse::<Name>().expect("account metadata key"),
+                Json::new("settled"),
+            )),
+            InstructionBox::from(SetKeyValue::domain(
+                domain_id.clone(),
+                "window".parse::<Name>().expect("domain metadata key"),
+                Json::new(2_u32),
+            )),
+        ];
+        let block3_tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions::<InstructionBox>(block3_instructions)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let block3_accepted =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
+        let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
+            .chain(0, Some(&legacy_block))
+            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
+                &legacy_block,
+                topology.as_ref(),
+            )))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut legacy_block3: SignedBlock = block3.into();
+        strip_execution_context_and_resign_for_test(&mut legacy_block3, leader.private_key(), 0);
+        assert!(
+            legacy_block3.execution_context().is_none(),
+            "fixture must exercise multi-block legacy missing-context replay"
+        );
+        let legacy_block3 = commit_replay_validated_block(
+            &original_state,
+            &topology,
+            legacy_block3,
+            &chain_id,
+            &genesis_id,
+        );
+        assert!(legacy_block3.has_results());
+        kura.store_block(Arc::new(legacy_block3.clone()))
+            .expect("store second legacy block");
+        kura.store_wsv_checkpoint(
+            3,
+            legacy_block3.hash(),
+            Hash::new(b"adversarial route-sensitive replay checkpoint"),
+        )
+        .expect("overwrite final WSV checkpoint with adversarial hash");
+
         let mut replay_state =
             replay_fixture_state(Arc::clone(&kura), chain_id, lane_id, dataspace_id);
         {
@@ -32568,14 +32627,14 @@ mod replay_validation_tests {
             &kura,
             &mut replay_state,
             &topology,
-            2,
+            3,
             ConsensusMode::Permissioned,
         )
         .expect("replay should reconstruct canonical state");
-        assert_eq!(replay_state.view().height(), 2);
+        assert_eq!(replay_state.view().height(), 3);
         assert_eq!(
             replay_state.view().latest_block_hash(),
-            Some(legacy_block.hash())
+            Some(legacy_block3.hash())
         );
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),

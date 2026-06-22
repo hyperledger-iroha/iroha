@@ -852,11 +852,9 @@ public final class TronSccpProverTests {
           new TronSccpProver.SubmissionInput(
               tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})));
     } catch (final IllegalArgumentException ex) {
-      threw =
-          ex.getMessage().contains("requestHash")
-              || ex.getMessage().contains("sourceProofBytes");
+      threw = ex.getMessage().contains("sourceProofBytes");
     }
-    assert threw : "submission must reject stale wrapped proof-result request context";
+    assert threw : "submission must reject extraneous wrapped proof-result source proof bytes";
 
     final ArrayList<String> mismatchedSignals = new ArrayList<>(proofResult.publicSignalWords());
     mismatchedSignals.set(0, "0x" + repeat("99", 32));

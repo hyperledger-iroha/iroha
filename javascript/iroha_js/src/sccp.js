@@ -9630,10 +9630,7 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(
-    JSON.parse(json),
-    options,
-  );
+  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(

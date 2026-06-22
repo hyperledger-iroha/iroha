@@ -1025,6 +1025,145 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
 }
 
 #[test]
+fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
+    let context = stringify!(multisig_materialized_signatory_can_propose_and_approve);
+    let builder = NetworkBuilder::new().with_min_peers(4);
+    let Some((network, _rt)) = start_network(builder, context) else {
+        return Ok(());
+    };
+    let test_client = network.client();
+    if !multisig_supported(&test_client) {
+        eprintln!("skipping {context}: executor does not support multisig register");
+        return Ok(());
+    }
+
+    let domain: DomainId = DomainId::try_new("multisig-materialized-author", "universal").unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
+
+    let existing_signer = gen_account_in(&domain);
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
+        .submit_blocking(Register::account(Account::new(existing_signer.0.clone())))?;
+
+    let missing_signer = gen_account_in(&domain);
+    assert!(
+        find_account(&test_client, &missing_signer.0)?.is_none(),
+        "precondition: missing signatory must not exist before multisig registration"
+    );
+    let spec = MultisigSpec::new(
+        BTreeMap::from([
+            (existing_signer.0.clone(), 1),
+            (missing_signer.0.clone(), 1),
+        ]),
+        NonZeroU16::new(2).unwrap(),
+        NonZeroU64::MAX,
+    );
+    let seed_account = AccountId::new(KeyPair::random().public_key().clone());
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
+        .submit_blocking::<InstructionBox>(
+            MultisigRegister::with_account(seed_account, domain.clone(), spec.clone()).into(),
+        )
+        .wrap_err("register multisig account with one missing signatory")?;
+
+    let created_via_key: Name = "iroha:created_via".parse().unwrap();
+    let materialized = wait_for_account_visibility(
+        &test_client,
+        &missing_signer.0,
+        "materialized signatory authoring",
+    )?;
+    assert_eq!(
+        materialized.metadata().get(&created_via_key),
+        Some(&Json::new("multisig")),
+        "materialized signatory should be marked as multisig-created"
+    );
+    assert!(
+        materialized.controller().single_signatory().is_some(),
+        "materialized signatory must remain a single-key authority"
+    );
+
+    let multisig_account_id = canonical_multisig_account_id(&spec);
+    let marker: Name = "materialized_author_marker".parse().unwrap();
+    let marker_value = Json::new("materialized-approved");
+    let instructions = vec![
+        SetKeyValue::account(
+            multisig_account_id.clone(),
+            marker.clone(),
+            marker_value.clone(),
+        )
+        .into(),
+    ];
+    let instructions_hash = HashOf::new(&instructions);
+
+    let proposer_client = alt_client(missing_signer.clone(), &test_client);
+    let propose = MultisigPropose::new(multisig_account_id.clone(), instructions.clone(), None);
+    let proposal_tx = proposer_client.build_transaction_from_items(
+        core::iter::once::<InstructionBox>(propose.into()),
+        Metadata::default(),
+    );
+    assert_eq!(
+        proposal_tx.authority().subject_id(),
+        missing_signer.0.subject_id(),
+        "proposal transaction authority subject must match materialized proposer"
+    );
+    assert!(
+        proposal_tx
+            .authority()
+            .controller()
+            .single_signatory()
+            .is_some(),
+        "proposal transaction authority must stay single-key: {}",
+        proposal_tx.authority()
+    );
+    proposer_client
+        .submit_transaction_blocking(&proposal_tx)
+        .wrap_err("materialized signatory should submit multisig proposal")?;
+
+    assert!(
+        find_account(&test_client, &multisig_account_id)?
+            .and_then(|account| account.metadata().get(&marker).cloned())
+            .is_none(),
+        "proposal alone must not execute before quorum approval"
+    );
+
+    let approver_client = alt_client(existing_signer.clone(), &test_client);
+    let approve: InstructionBox =
+        MultisigApprove::new(multisig_account_id.clone(), instructions_hash).into();
+    let approve_tx = approver_client.build_transaction_from_items(
+        core::iter::once::<InstructionBox>(approve),
+        Metadata::default(),
+    );
+    assert_eq!(
+        approve_tx.authority().subject_id(),
+        existing_signer.0.subject_id(),
+        "approval transaction authority subject must match existing approver"
+    );
+    assert!(
+        approve_tx
+            .authority()
+            .controller()
+            .single_signatory()
+            .is_some(),
+        "approval transaction authority must stay single-key: {}",
+        approve_tx.authority()
+    );
+    approver_client
+        .submit_transaction_blocking(&approve_tx)
+        .wrap_err("existing signatory should approve materialized proposal")?;
+
+    let executed = wait_for_account_metadata_value(
+        &test_client,
+        &multisig_account_id,
+        &marker,
+        "materialized signatory multisig execution",
+    )?;
+    assert_eq!(
+        executed, marker_value,
+        "multisig quorum should execute the proposed metadata write"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -> Result<()> {
     let context =
         stringify!(multisig_register_by_non_signatory_materializes_missing_signatory_account);

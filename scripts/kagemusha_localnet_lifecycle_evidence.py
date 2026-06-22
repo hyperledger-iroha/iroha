@@ -27,6 +27,9 @@ LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME = (
 DEFAULT_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_PATH = (
     f"artifacts/kagemusha/{LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}"
 )
+MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES = (
+    readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES
+)
 
 
 def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
@@ -68,18 +71,41 @@ def _same_resolved_parent(child: Path, parent: Path) -> tuple[bool | None, list[
     return child_parent == parent_resolved, []
 
 
+def validate_acceptance_report_path_shape(acceptance_report: Path) -> list[str]:
+    """Reject unsafe acceptance-report path strings before filesystem metadata."""
+
+    path_text = str(acceptance_report)
+    report_secret_error = lineage_helper._secret_path_error(
+        path_text,
+        "--acceptance-report",
+    )
+    if report_secret_error is not None:
+        return [report_secret_error]
+    if device_lab._contains_control_character(path_text):
+        return ["--acceptance-report must not contain control characters"]
+    if "\\" in path_text:
+        return ["--acceptance-report must not contain backslashes"]
+    if ".." in acceptance_report.parts:
+        return ["--acceptance-report must be canonical"]
+    return []
+
+
 def validate_localnet_input_paths(
     artifact_dir: Path,
     acceptance_report: Path,
 ) -> list[str]:
     """Reject detached or aliased localnet lifecycle acceptance inputs."""
 
-    report_secret_error = lineage_helper._secret_path_error(
-        str(acceptance_report),
-        "--acceptance-report",
-    )
-    if report_secret_error is not None:
-        return [report_secret_error]
+    report_shape_errors = validate_acceptance_report_path_shape(acceptance_report)
+    if report_shape_errors:
+        return report_shape_errors
+    if acceptance_report.name == readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME:
+        return ["--acceptance-report must not use the release evidence filename"]
+    if acceptance_report.name != LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME:
+        return [
+            "--acceptance-report must be named "
+            f"{LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}"
+        ]
     errors = lineage_helper.validate_artifact_dir_path(artifact_dir)
     if errors:
         return errors
@@ -94,8 +120,6 @@ def validate_localnet_input_paths(
         return corridor_errors
     if not same_parent:
         return ["--acceptance-report must be written directly under --artifact-dir"]
-    if acceptance_report.name == readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME:
-        return ["--acceptance-report must not use the release evidence filename"]
     return []
 
 
@@ -108,7 +132,7 @@ def _load_acceptance_report(path: Path) -> tuple[dict[str, Any] | None, list[str
         shape_code="localnet_lifecycle_acceptance_file_shape",
         not_object_code="localnet_lifecycle_acceptance_not_object",
         label="Kagemusha localnet lifecycle acceptance report",
-        max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,
+        max_bytes=MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES,
     )
     if blockers:
         return None, _blocker_messages(blockers)
@@ -140,10 +164,7 @@ def build_evidence(
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build a localnet lifecycle evidence document from an acceptance report."""
 
-    errors = validate_localnet_input_paths(artifact_dir, acceptance_report)
-    if errors:
-        return None, errors
-
+    errors: list[str] = []
     errors.extend(_validate_generated_at_utc(generated_at_utc))
     generated_at, timestamp_error = readiness.parse_utc_timestamp(
         generated_at_utc,
@@ -157,6 +178,10 @@ def build_evidence(
             max_generated_at_future_skew_seconds,
         )
     )
+    if errors:
+        return None, errors
+
+    errors.extend(validate_localnet_input_paths(artifact_dir, acceptance_report))
     if errors:
         return None, errors
 
@@ -210,6 +235,12 @@ def _cleanup_validation_temp_output(
             return []
         except OSError:
             return ["localnet lifecycle evidence validation file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [
+                "localnet lifecycle evidence validation file cleanup could not be synced"
+            ]
     finally:
         os.close(parent_fd)
     return []
@@ -247,6 +278,14 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
         ) + "\n"
     except ValueError:
         return ["localnet lifecycle evidence validation file is not strict JSON"]
+    if (
+        len(evidence_text.encode("utf-8"))
+        > readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES
+    ):
+        return [
+            "localnet lifecycle evidence validation file must be no more than "
+            f"{readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES} bytes"
+        ]
     try:
         artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
@@ -355,13 +394,44 @@ def main(argv: list[str] | None = None) -> int:
         else artifact_dir / LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
     )
     out_path = Path(args.out)
-    path_errors.extend(validate_localnet_input_paths(artifact_dir, acceptance_report))
-    path_errors.extend(lineage_helper.validate_output_corridor(out_path, artifact_dir))
+
     if out_path.name != readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME:
         path_errors.append(
             f"--out must be named {readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
         )
-    path_errors.extend(lineage_helper.preflight_output_path(out_path, "--out"))
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    scalar_errors: list[str] = []
+    scalar_errors.extend(_validate_generated_at_utc(args.generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        args.generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        scalar_errors.append(timestamp_error["message"])
+    scalar_errors.extend(
+        _validate_generated_at_future_skew(
+            generated_at,
+            args.max_generated_at_future_skew_seconds,
+        )
+    )
+    if scalar_errors:
+        for error in scalar_errors:
+            print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    path_errors.extend(lineage_helper.validate_output_corridor(out_path, artifact_dir))
+    early_output_errors = lineage_helper.preflight_output_path(out_path, "--out")
+    path_errors.extend(early_output_errors)
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    path_errors.extend(validate_localnet_input_paths(artifact_dir, acceptance_report))
     if path_errors:
         for error in path_errors:
             print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)
@@ -385,7 +455,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)
         return 1
 
-    write_errors = lineage_helper.write_evidence(out_path, evidence)
+    write_errors = lineage_helper.write_evidence(
+        out_path,
+        evidence,
+        max_bytes=readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES,
+    )
     if write_errors:
         for error in write_errors:
             print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)

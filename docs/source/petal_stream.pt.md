@@ -2,11 +2,11 @@
 lang: pt
 direction: ltr
 source: docs/source/petal_stream.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 54c0628a5f216809f7f7adee19c7c1a3087255c020cc96a4052b75e0bbc212cc
-source_last_modified: "2026-01-24T11:26:02.149501+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: b94d279fdfb00a62f9b3bc46bc22f7ae4338e83f3e3ca5f69cb627605342b816
+source_last_modified: "2026-06-22T10:41:05.354119+00:00"
+translation_last_reviewed: null
 title: Petal Stream Transport
 ---
 

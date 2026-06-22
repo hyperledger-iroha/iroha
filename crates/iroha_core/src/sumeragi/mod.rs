@@ -3687,7 +3687,6 @@ mod tests {
             }),
             BlockMessage::Proposal(proposal),
             BlockMessage::QcVote(vote),
-            BlockMessage::Qc(qc),
             BlockMessage::RbcInitRequest(crate::sumeragi::consensus::RbcInitRequest {
                 block_hash,
                 height,
@@ -3752,6 +3751,19 @@ mod tests {
         for message in messages {
             assert!(!handle.incoming_block_message(message));
         }
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
+
+        assert!(handle.incoming_block_message(BlockMessage::Qc(qc)));
+        let received = block_payload_rx
+            .try_recv()
+            .expect("committed-height QC should still reach validation");
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::Qc(_),
+                ..
+            }
+        ));
         assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
     }
 
@@ -12648,6 +12660,9 @@ impl SumeragiHandle {
     }
 
     fn drop_if_committed_or_older(&self, msg: &BlockMessage) -> bool {
+        if matches!(msg, BlockMessage::Qc(_)) {
+            return false;
+        }
         let Some((kind, height, view)) = Self::committed_height_fields(msg) else {
             return false;
         };

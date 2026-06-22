@@ -286,6 +286,21 @@ def add_archive_receipt_verification(path, receipt_kind=None, *, verified_receip
 
 
 class IsoProductionReadinessTest(unittest.TestCase):
+    def test_receipt_metadata_helper_rejects_unsupported_kind_without_echo(self):
+        secret_kind = "token=readiness-receipt-kind-secret"
+        receipt = {
+            "receipt_kind": secret_kind,
+            "ok": True,
+            "status_code": 202,
+            "response_body_sha256": "1" * 64,
+            "endpoint_requires_insecure_http": False,
+        }
+
+        with self.assertRaisesRegex(READINESS.ReadinessError, "unsupported receipt_kind") as ctx:
+            READINESS._receipt_entry_content_metadata(receipt)
+
+        self.assertNotIn(secret_kind, str(ctx.exception))
+
     def test_replay_placeholder_predicates_match_direct_verifiers(self):
         endpoint_modules = (
             evidence_test.rail_test.ADAPTER,
@@ -358,6 +373,21 @@ class IsoProductionReadinessTest(unittest.TestCase):
             READINESS.PLACEHOLDER_TRUST_SOURCE_HOSTS,
             evidence_test.trust_test.VERIFIER.PLACEHOLDER_TRUST_SOURCE_HOSTS,
         )
+        for value in (
+            "Ｓａｍｐｌｅ Swift operator PKI",
+            "ｔｅｍｐｌａｔｅ-v1",
+            "ｒｅｐｌａｃｅ-before-production",
+        ):
+            with self.subTest(trust_source=value):
+                self.assertTrue(READINESS._trust_source_text_is_placeholder(value))
+                self.assertTrue(
+                    evidence_test.EVIDENCE._trust_source_text_is_placeholder(value)
+                )
+                self.assertTrue(
+                    evidence_test.trust_test.VERIFIER._trust_source_text_is_placeholder(
+                        value
+                    )
+                )
 
         valid_repository = "https://github.com/moov-io/fedwire20022"
         self.assertFalse(READINESS._xsd_source_repository_is_invalid(valid_repository))
@@ -382,6 +412,18 @@ class IsoProductionReadinessTest(unittest.TestCase):
                             repository,
                             "source.repository",
                         )
+
+        for repository in (
+            "https://github.com/moov-io/iso20022-replace_before_production-fixtures",
+            "https://github.com/moov-io/operatorcanarybank",
+        ):
+            with self.subTest(repository=repository):
+                self.assertTrue(READINESS._xsd_source_repository_is_invalid(repository))
+                with self.assertRaises(xsd_test.VERIFIER.FixtureManifestError):
+                    xsd_test.VERIFIER._validate_source_repository(
+                        repository,
+                        "source.repository",
+                    )
 
         retrieved_at = READINESS.dt.datetime.now(READINESS.dt.UTC).isoformat()
 
@@ -643,8 +685,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("password_readiness_unknown_secret", "readiness_unknown_secret"),
             ("%70assword_readiness_unknown_leak", "readiness_unknown_leak"),
             ("private-key_readiness_unknown_leak", "readiness_unknown_leak"),
+            ("private--key_readiness_unknown_leak", "readiness_unknown_leak"),
+            ("private%09key_readiness_unknown_leak", "readiness_unknown_leak"),
+            ("x--iroha--signature_readiness_unknown_leak", "readiness_unknown_leak"),
             ("unexpected\x1breadiness_key", "\x1b"),
             ("unexpected_readiness_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -666,6 +712,62 @@ class IsoProductionReadinessTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey readiness identifier",
+            "private--key readiness identifier",
+            "private/key readiness identifier",
+            "private\\key readiness identifier",
+            "private%2fkey readiness identifier",
+            "private\u200dkey readiness identifier",
+            "private\u0301key readiness identifier",
+            "ｐｒｉｖａｔｅｋｅｙ readiness identifier",
+            "x--iroha--signature readiness identifier",
+            "x/iroha/signature readiness identifier",
+            "x%2firoha%2fsignature readiness identifier",
+            "x\u200diroha\u200dsignature readiness identifier",
+            "x\u0301iroha\u0301signature readiness identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ readiness identifier",
+            "token%09secret readiness identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(READINESS._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(READINESS._is_secret_looking_key(key))
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=readiness-value-secret",
+            "api/key:readiness-value-secret",
+            "client/secret=readiness-value-secret",
+            "set/cookie:readiness-value-secret",
+            "x/iroha/signature: readiness-value-secret",
+            "private%2fkey=readiness-value-secret",
+            "private\u200dkey=readiness-value-secret",
+            "private\u0301key=readiness-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=readiness-compat-secret",
+            "ａｐｉ／ｋｅｙ:readiness-compat-secret",
+            "x\u200diroha\u200dsignature: readiness-value-secret",
+            "x\u0301iroha\u0301signature: readiness-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: readiness-compat-secret",
+            "private%E2%80%8Dkey=readiness-value-secret",
+            "private%CC%81key=readiness-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(READINESS._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=readiness-terminator-secret"
@@ -729,15 +831,20 @@ class IsoProductionReadinessTest(unittest.TestCase):
         self.assertIn("--summary-ou", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-readiness\x1bflag"
-        with self.assertRaises(READINESS.ReadinessError) as caught:
-            READINESS._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+        cases = (
+            ("--unknown-readiness\x1bflag", "\x1b"),
+            ("--unknown-readiness\u202eflag", "\u202e"),
+        )
+        for hidden, marker in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._preflight_raw_cli_secrets([hidden], {"--summary-out"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-readiness", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(marker, message)
+                self.assertNotIn("unknown-readiness", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dsummary-out"
@@ -769,6 +876,22 @@ class IsoProductionReadinessTest(unittest.TestCase):
         cases = (
             ("token=readiness-path-leak.summary.json", "token=readiness-path-leak"),
             ("token%3Dreadiness-path-leak.summary.json", "token=readiness-path-leak"),
+            (
+                "private%20key%3Dreadiness-path-leak.summary.json",
+                "private key=readiness-path-leak",
+            ),
+            (
+                "private%20key-readiness-path-secret.summary.json",
+                "private key-readiness-path-secret",
+            ),
+            (
+                "private/key-readiness-path-secret.summary.json",
+                "private/key-readiness-path-secret",
+            ),
+            (
+                "x%2firoha%2fsignature-readiness-path-secret.summary.json",
+                "x/iroha/signature-readiness-path-secret",
+            ),
             (
                 "%70assword%253Dreadiness-path-leak.summary.json",
                 "password=readiness-path-leak",
@@ -848,6 +971,39 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 lambda raw: READINESS._reject_output_path_smuggling(Path(raw), "output path"),
                 overlong_path,
                 f"no longer than {READINESS.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "raw format-control",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/summary\u202e.json",
+                "control characters",
+            ),
+            (
+                "output format-control",
+                lambda raw: READINESS._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/summary\u202e.json",
+                "control characters",
+            ),
+            (
+                "input format-control",
+                lambda raw: READINESS._reject_path_smuggling(raw, "config_path"),
+                "/ops/iso/readiness\u202e.json",
+                "control characters",
+            ),
+            (
+                "xsd source format-control",
+                lambda raw: READINESS._validate_schema_source_path(raw, "source.path"),
+                "schemas/camt\u202e.052.xsd",
+                "control characters",
+            ),
+            (
+                "xsd relative format-control",
+                lambda raw: READINESS._validate_fixture_summary_path(
+                    raw,
+                    "fixtures[0].path",
+                ),
+                "fixtures/pacs\u202e.xml",
+                "control characters",
             ),
             (
                 "raw encoded dot",
@@ -954,6 +1110,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             (
                 "https://pki\u0661.local-bank.bank/source",
                 "host must use printable ASCII",
+            ),
+            (
+                "https://pki.local-bank.bank/source\u202edebug",
+                "must not contain control characters",
             ),
             ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
             (
@@ -1149,12 +1309,32 @@ class IsoProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("unexpected", message)
 
         with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material(
+                {"unexpected\u202ereadiness_key": "redacted"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("forbidden control-bearing field", message)
+        self.assertNotIn("\u202e", message)
+        self.assertNotIn("readiness_key", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
             READINESS._check_no_secret_material({"metadata": "warning \x1b[31mred"})
 
         message = str(caught.exception)
         self.assertIn("unsafe control characters", message)
         self.assertNotIn("\x1b", message)
         self.assertNotIn("[31mred", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material(
+                {"metadata": "warning \u202ereadiness-bidi-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("unsafe control characters", message)
+        self.assertNotIn("\u202e", message)
+        self.assertNotIn("readiness-bidi-leak", message)
 
         with self.assertRaises(READINESS.ReadinessError) as caught:
             READINESS._check_no_secret_material(
@@ -1166,6 +1346,39 @@ class IsoProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("%70assword%253Dreadiness-field-leak", message)
         self.assertNotIn("password=readiness-field-leak", message)
         self.assertNotIn("readiness-field-leak", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material(
+                {"metadata": "private%E2%80%8Dkey=readiness-field-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("secret-looking material", message)
+        self.assertNotIn("private%E2%80%8Dkey=readiness-field-leak", message)
+        self.assertNotIn("private\u200dkey=readiness-field-leak", message)
+        self.assertNotIn("readiness-field-leak", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material(
+                {"metadata": "private%CC%81key=readiness-mark-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("secret-looking material", message)
+        self.assertNotIn("private%CC%81key=readiness-mark-leak", message)
+        self.assertNotIn("private\u0301key=readiness-mark-leak", message)
+        self.assertNotIn("readiness-mark-leak", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material(
+                {"metadata": "ｐｒｉｖａｔｅｋｅｙ=readiness-compat-leak"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("secret-looking material", message)
+        self.assertNotIn("ｐｒｉｖａｔｅｋｅｙ=readiness-compat-leak", message)
+        self.assertNotIn("privatekey=readiness-compat-leak", message)
+        self.assertNotIn("readiness-compat-leak", message)
 
     def test_context_cli_flags_reject_missing_empty_or_flag_like_values(self):
         cases = (
@@ -2675,6 +2888,75 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 },
             )
 
+    def test_xsd_gap_diagnostics_do_not_echo_reviewed_reason_text(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            schema_reason = "Reviewed schema-only gap: internal-ticket-readiness-427."
+            missing_reason = "Reviewed missing schema package: internal-ticket-readiness-839."
+            manifest = xsd_test.minimal_manifest()
+            manifest["schemas"][0]["schema_only_reason"] = schema_reason
+            manifest["fixtures"][0].pop("schema")
+            manifest["fixtures"][0]["missing_schema_reason"] = missing_reason
+            manifest_path = xsd_test.write_minimal_tree(root / "xsd", manifest)
+            xsd_summary = root / "xsd" / "reviewed-gap.summary.json"
+            rc, _stdout, stderr = xsd_test.run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(xsd_summary),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            for extra_args, collection, expected_rc in (
+                ([], "blockers", 1),
+                (["--allow-reviewed-xsd-gaps"], "warnings", 0),
+            ):
+                with self.subTest(collection=collection):
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                            *extra_args,
+                        ]
+                    )
+
+                    self.assertEqual(rc, expected_rc, stderr)
+                    self.assertNotIn(schema_reason, stdout)
+                    self.assertNotIn(missing_reason, stdout)
+                    self.assertNotIn("internal-ticket-readiness-427", stdout)
+                    self.assertNotIn("internal-ticket-readiness-839", stdout)
+                    self.assertNotIn(schema_reason, stderr)
+                    self.assertNotIn(missing_reason, stderr)
+                    result = json.loads(stdout)
+                    gap_entries = [
+                        entry
+                        for item in result[collection]
+                        if item["code"]
+                        in {"xsd.missing_schema_fixtures", "xsd.schema_only_entries"}
+                        for entry in item["entries"]
+                    ]
+                    self.assertEqual(
+                        gap_entries,
+                        [
+                            {
+                                "path": "../foo_fixture.xml",
+                                "message_def_id": "fooo.001.001.01",
+                            },
+                            {
+                                "path": "iso/fooo.001.001.01.xsd",
+                                "message_def_id": "fooo.001.001.01",
+                            },
+                        ],
+                    )
+                    self.assertTrue(all("reason" not in entry for entry in gap_entries))
+
     def test_allow_reviewed_xsd_gaps_keeps_unreviewed_profile_versions_blocking(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3042,6 +3324,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
             duplicate_fixture["verified_fixtures"] += 1
             duplicate_fixture["schema_backed_fixtures"] += 1
             cases.append((duplicate_fixture, "xsd.fixture_digest_duplicate"))
+
+            fixture_digest_reuses_schema = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            fixture_digest_reuses_schema["fixtures"][0]["sha256"] = (
+                fixture_digest_reuses_schema["schemas"][0]["sha256"]
+            )
+            cases.append((fixture_digest_reuses_schema, "xsd.fixture_digest_matches_schema"))
 
             fixture_count = json.loads(xsd_summary.read_text(encoding="utf-8"))
             fixture_count["verified_fixtures"] += 1
@@ -4020,6 +4308,32 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 (punctuation_only_name_repository, "xsd.schema_source_repository_invalid")
             )
 
+            leading_punctuation_name_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            leading_punctuation_name_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov-io/-fedwire20022"
+            blocker_cases.append(
+                (
+                    leading_punctuation_name_repository,
+                    "xsd.schema_source_repository_invalid",
+                )
+            )
+
+            trailing_punctuation_name_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            trailing_punctuation_name_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov-io/fedwire20022."
+            blocker_cases.append(
+                (
+                    trailing_punctuation_name_repository,
+                    "xsd.schema_source_repository_invalid",
+                )
+            )
+
             placeholder_repository_owner = json.loads(xsd_summary.read_text(encoding="utf-8"))
             placeholder_repository_owner["schemas"][0]["source"]["repository"] = (
                 "https://github.com/example/iso20022-fixtures"
@@ -4038,6 +4352,32 @@ class IsoProductionReadinessTest(unittest.TestCase):
             blocker_cases.append(
                 (
                     placeholder_repository_name,
+                    "xsd.schema_source_repository_invalid",
+                )
+            )
+
+            placeholder_repository_name_separated = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            placeholder_repository_name_separated["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov-io/iso20022-replace_before_production-fixtures"
+            blocker_cases.append(
+                (
+                    placeholder_repository_name_separated,
+                    "xsd.schema_source_repository_invalid",
+                )
+            )
+
+            placeholder_repository_name_collapsed = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            placeholder_repository_name_collapsed["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov-io/operatorcanarybank"
+            blocker_cases.append(
+                (
+                    placeholder_repository_name_collapsed,
                     "xsd.schema_source_repository_invalid",
                 )
             )
@@ -4360,6 +4700,40 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 )
             )
 
+            leading_punctuation_name_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                leading_punctuation_name_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            leading_punctuation_name_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/-iso20022-messages-for-go"
+            blocker_cases.append(
+                (
+                    leading_punctuation_name_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            trailing_punctuation_name_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                trailing_punctuation_name_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            trailing_punctuation_name_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/iso20022-messages-for-go_"
+            blocker_cases.append(
+                (
+                    trailing_punctuation_name_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
             placeholder_repository_owner = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_blocked_sources(
                 placeholder_repository_owner,
@@ -4386,6 +4760,40 @@ class IsoProductionReadinessTest(unittest.TestCase):
             blocker_cases.append(
                 (
                     placeholder_repository_name,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            placeholder_repository_name_separated = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                placeholder_repository_name_separated,
+                [xsd_test.blocked_schema_source()],
+            )
+            placeholder_repository_name_separated["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/iso20022-replace_before_production-blocked"
+            blocker_cases.append(
+                (
+                    placeholder_repository_name_separated,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            placeholder_repository_name_collapsed = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                placeholder_repository_name_collapsed,
+                [xsd_test.blocked_schema_source()],
+            )
+            placeholder_repository_name_collapsed["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/operatorcanarybank"
+            blocker_cases.append(
+                (
+                    placeholder_repository_name_collapsed,
                     "xsd.blocked_source_repository_invalid",
                 )
             )
@@ -4431,6 +4839,36 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             blocker_cases.append(
                 (duplicate_digest, "xsd.blocked_source_digest_duplicate")
+            )
+
+            digest_reuses_checked_schema = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                digest_reuses_checked_schema,
+                [xsd_test.blocked_schema_source()],
+            )
+            digest_reuses_checked_schema["blocked_schema_sources"][0]["source"][
+                "sha256"
+            ] = digest_reuses_checked_schema["schemas"][0]["sha256"]
+            blocker_cases.append(
+                (
+                    digest_reuses_checked_schema,
+                    "xsd.blocked_source_digest_matches_checked_schema",
+                )
+            )
+
+            digest_reuses_checked_fixture = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                digest_reuses_checked_fixture,
+                [xsd_test.blocked_schema_source()],
+            )
+            digest_reuses_checked_fixture["blocked_schema_sources"][0]["source"][
+                "sha256"
+            ] = digest_reuses_checked_fixture["fixtures"][0]["sha256"]
+            blocker_cases.append(
+                (
+                    digest_reuses_checked_fixture,
+                    "xsd.blocked_source_digest_matches_fixture",
+                )
             )
 
             for offset, (body, code) in enumerate(blocker_cases):
@@ -4722,6 +5160,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             cases = []
 
+            def attach_blocked_source(body):
+                body["blocked_schema_sources"] = [xsd_test.blocked_schema_source()]
+                body["blocked_schema_source_count"] = 1
+                return body["blocked_schema_sources"][0]["source"]["sha256"]
+
             version_count = json.loads(xsd_summary.read_text(encoding="utf-8"))
             version_count["profile_checked_versions"] += 1
             cases.append((version_count, "xsd.profile_version_count_mismatch"))
@@ -4779,6 +5222,97 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 (
                     profile_catalog_backed_count,
                     "xsd.profile_catalog_schema_backed_count_mismatch",
+                )
+            )
+
+            catalog_source_reuses_schema = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_source_reuses_schema["profile_catalog"]["sha256"] = (
+                catalog_source_reuses_schema["schemas"][0]["sha256"]
+            )
+            cases.append(
+                (
+                    catalog_source_reuses_schema,
+                    "xsd.profile_catalog_digest_matches_schema",
+                )
+            )
+
+            catalog_source_reuses_fixture = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_source_reuses_fixture["profile_catalog"]["sha256"] = (
+                catalog_source_reuses_fixture["fixtures"][0]["sha256"]
+            )
+            cases.append(
+                (
+                    catalog_source_reuses_fixture,
+                    "xsd.profile_catalog_digest_matches_fixture",
+                )
+            )
+
+            catalog_source_reuses_blocked = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_source_reuses_blocked["profile_catalog"]["sha256"] = (
+                attach_blocked_source(catalog_source_reuses_blocked)
+            )
+            cases.append(
+                (
+                    catalog_source_reuses_blocked,
+                    "xsd.profile_catalog_digest_matches_blocked_source",
+                )
+            )
+
+            catalog_source_reuses_json = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_source_reuses_json["profile_catalog"]["catalog_json_sha256"] = (
+                catalog_source_reuses_json["profile_catalog"]["sha256"]
+            )
+            cases.append(
+                (
+                    catalog_source_reuses_json,
+                    "xsd.profile_catalog_digest_matches_catalog_json",
+                )
+            )
+
+            catalog_json_reuses_schema = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_json_reuses_schema["profile_catalog"]["catalog_json_sha256"] = (
+                catalog_json_reuses_schema["schemas"][0]["sha256"]
+            )
+            cases.append(
+                (
+                    catalog_json_reuses_schema,
+                    "xsd.profile_catalog_json_digest_matches_schema",
+                )
+            )
+
+            catalog_json_reuses_fixture = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_json_reuses_fixture["profile_catalog"]["catalog_json_sha256"] = (
+                catalog_json_reuses_fixture["fixtures"][0]["sha256"]
+            )
+            cases.append(
+                (
+                    catalog_json_reuses_fixture,
+                    "xsd.profile_catalog_json_digest_matches_fixture",
+                )
+            )
+
+            catalog_json_reuses_blocked = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            catalog_json_reuses_blocked["profile_catalog"]["catalog_json_sha256"] = (
+                attach_blocked_source(catalog_json_reuses_blocked)
+            )
+            cases.append(
+                (
+                    catalog_json_reuses_blocked,
+                    "xsd.profile_catalog_json_digest_matches_blocked_source",
                 )
             )
 
@@ -5275,7 +5809,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 write_evidence_summary(root / "evidence")
             )
             tampered_xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            expected_xsd_digest = tampered_xsd[READINESS.SUMMARY_DIGEST_FIELD]
             tampered_xsd["verified_schemas"] = 99
+            actual_xsd_body = dict(tampered_xsd)
+            actual_xsd_body.pop(READINESS.SUMMARY_DIGEST_FIELD)
+            actual_xsd_digest = READINESS.sha256_hex(
+                READINESS._canonical_json_bytes(actual_xsd_body)
+            )
             tampered_xsd_path = write_json(root / "tampered-xsd.summary.json", tampered_xsd)
 
             rc, _stdout, stderr = run_readiness(
@@ -5283,15 +5823,25 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(rc, 2)
             self.assertIn("summary_sha256 mismatch", stderr)
+            self.assertNotIn(expected_xsd_digest, stderr)
+            self.assertNotIn(actual_xsd_digest, stderr)
 
             tampered_evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            expected_evidence_digest = tampered_evidence[READINESS.SUMMARY_DIGEST_FIELD]
             tampered_evidence["ok"] = False
+            actual_evidence_body = dict(tampered_evidence)
+            actual_evidence_body.pop(READINESS.SUMMARY_DIGEST_FIELD)
+            actual_evidence_digest = READINESS.sha256_hex(
+                READINESS._canonical_json_bytes(actual_evidence_body)
+            )
             tampered_evidence_path = write_json(root / "tampered-evidence.summary.json", tampered_evidence)
             rc, _stdout, stderr = run_readiness(
                 ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(tampered_evidence_path)]
             )
             self.assertEqual(rc, 2)
             self.assertIn("summary_sha256 mismatch", stderr)
+            self.assertNotIn(expected_evidence_digest, stderr)
+            self.assertNotIn(actual_evidence_digest, stderr)
 
     def test_input_summary_digest_rejects_all_zero_placeholder(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6502,6 +7052,48 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertNotIn(overlong, stderr)
                     self.assertNotIn("unsupported", stderr)
 
+    def test_compact_string_helpers_reject_unicode_format_controls_without_echo(self):
+        hidden = "\u202ereadiness-string-leak"
+        cases = (
+            (
+                "required",
+                lambda: READINESS._require_string(
+                    {"provider": "local" + hidden}, "provider", "summary"
+                ),
+            ),
+            (
+                "cli",
+                lambda: READINESS._require_cli_string(
+                    "local" + hidden,
+                    "--provider",
+                ),
+            ),
+            (
+                "nullable-rail-message-id",
+                lambda: READINESS._require_nullable_rail_message_id(
+                    {"rail_message_id": "rail-message" + hidden},
+                    "rail_message_id",
+                    "receipt",
+                ),
+            ),
+            (
+                "reviewed-gap-reason",
+                lambda: READINESS._validate_reviewed_gap_reason(
+                    "Reviewed" + hidden,
+                    "schema_only_reason",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn("control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("readiness-string-leak", message)
+
     def test_secret_or_non_ascii_compact_stage_names_are_rejected_without_echo(self):
         def set_nested(evidence, parts, value):
             target = evidence
@@ -7072,6 +7664,21 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_timestamp_helper_rejects_unicode_format_controls_without_echo(self):
+        hidden = "\u202ereadiness-timestamp-leak"
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._require_timestamp(
+                {"verified_at": "2026-06-04T00:00:00+00:00" + hidden},
+                "verified_at",
+                "summary",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("readiness-timestamp-leak", message)
+
     def test_overlong_compact_timestamps_are_rejected_without_echo(self):
         def set_nested(value, parts):
             target = value
@@ -7354,6 +7961,14 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ),
             ),
             (
+                "split-sample-authority",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "authority",
+                    "Sam ple Swift operator PKI",
+                ),
+            ),
+            (
                 "version",
                 lambda evidence: set_source_field(
                     evidence,
@@ -7362,11 +7977,35 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ),
             ),
             (
+                "spaced-version",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "version",
+                    "replace before production",
+                ),
+            ),
+            (
+                "underscore-version",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "version",
+                    "replace_before_production",
+                ),
+            ),
+            (
                 "template-version",
                 lambda evidence: set_source_field(
                     evidence,
                     "version",
                     "template-v1",
+                ),
+            ),
+            (
+                "split-template-version",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "version",
+                    "tem plate-v1",
                 ),
             ),
             (
@@ -7645,15 +8284,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             canary = duplicate["canary_summaries"][0]
             canary["stage_names"] = ["rail", "rail", "notary", "verify"]
             canary["stage_windows"].insert(1, dict(canary["stage_windows"][0]))
-            cases.append((duplicate, "stage_names must not contain duplicates"))
+            cases.append((duplicate, "stage_names must not contain duplicates", None))
             unsupported = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = unsupported["canary_summaries"][0]
-            canary["stage_names"].append("diagnostic")
+            hidden_stage = "diagnostic"
+            canary["stage_names"].append(hidden_stage)
             extra_window = dict(canary["stage_windows"][0])
-            extra_window["name"] = "diagnostic"
+            extra_window["name"] = hidden_stage
             canary["stage_windows"].append(extra_window)
-            cases.append((unsupported, "stage_names contains unsupported stages"))
-            for offset, (body, message) in enumerate(cases):
+            cases.append((unsupported, "stage_names contains unsupported stages", hidden_stage))
+            for offset, (body, message, hidden) in enumerate(cases):
                 with self.subTest(message=message):
                     refresh_digest(body)
                     mutated_path = write_json(root / f"stage-names-{offset}.summary.json", body)
@@ -7664,6 +8304,8 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if hidden is not None:
+                        self.assertNotIn(hidden, stderr)
 
     def test_compact_stage_names_must_follow_canary_order(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8047,9 +8689,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 1, stderr)
-            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
             self.assertIn("trust.policy_not_require_verified", codes)
             self.assertIn("trust.no_signature_or_x509_pins", codes)
+            blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+            self.assertNotIn("record-only", blocker_text)
 
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             evidence["trust_summaries"][0]["profiles"][0][
@@ -8063,9 +8708,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 1, stderr)
-            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
             self.assertIn("trust.policy_unsupported", codes)
             self.assertNotIn("trust.policy_not_require_verified", codes)
+            blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+            self.assertNotIn("diagnostic-only", blocker_text)
 
     def test_non_ascii_compact_trust_policy_is_rejected_without_echo(self):
         hidden = "require-verif\u0456ed"
@@ -8379,6 +9027,66 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 1, stderr)
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("trust.bundle_digest_duplicate", codes)
+
+    def test_trust_profile_json_and_bundle_digests_cannot_reuse_trust_material_roles(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            def profile_json_reuses_bundle(trust):
+                trust["profile_json_sha256"] = trust["profiles"][0]["bundle_sha256"]
+
+            def profile_json_reuses_der(trust):
+                trust["profile_json_sha256"] = trust["profiles"][0]["x509_crl_der"][0][
+                    "sha256"
+                ]
+
+            def bundle_reuses_der(trust):
+                profile = trust["profiles"][0]
+                profile["bundle_sha256"] = profile["x509_ocsp_response_der"][0][
+                    "sha256"
+                ]
+
+            cases = (
+                (
+                    "profile-json-bundle",
+                    profile_json_reuses_bundle,
+                    "trust.profile_json_digest_matches_bundle",
+                ),
+                (
+                    "profile-json-der",
+                    profile_json_reuses_der,
+                    "trust.profile_json_digest_matches_der_proof",
+                ),
+                (
+                    "bundle-der",
+                    bundle_reuses_der,
+                    "trust.bundle_digest_matches_der_proof",
+                ),
+            )
+
+            for name, mutate, code in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate(evidence["trust_summaries"][0])
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"{name}.summary.json", evidence)
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(code, codes)
 
     def test_trust_profiles_cannot_be_reused_across_compact_summaries(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9027,6 +9735,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 write_evidence_summary(root / "evidence")
             )
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            missing_digest = evidence["canary_summaries"][0]["receipt_summary"][
+                "receipts"
+            ][0]["receipt_sha256"]
             evidence["receipt_verification"]["receipts"][0]["receipt_sha256"] = "f" * 64
             refresh_digest(evidence["receipt_verification"])
             refresh_digest(evidence)
@@ -9037,8 +9748,104 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 1, stderr)
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
+            self.assertIn("evidence.archive_receipt_missing_canary_digest", codes)
+            blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+            self.assertNotIn(missing_digest, blocker_text)
+
+    def test_local_canary_policies_do_not_hide_archive_digest_gaps(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            receipt_root = root / "receipts"
+            receipt_root.mkdir()
+            notary_receipts, rail_receipts = evidence_test.write_https_receipt_dirs(
+                receipt_root
+            )
+            full_canary_path = write_json(
+                root / "full-canary.summary.json",
+                evidence_test.valid_canary_summary(
+                    receipt_entries=evidence_test.receipt_entries_from_dirs(
+                        notary_receipts,
+                        rail_receipts,
+                    )
+                ),
+            )
+            partial_body = evidence_test.plan_only_canary_summary()
+            partial_body["planned_stages"] = [
+                partial_body["planned_stages"][0],
+                partial_body["planned_stages"][2],
+            ]
+            del partial_body["planned_stages"][1]["command"][4:6]
+            partial_body.pop("summary_sha256")
+            partial_canary_path = write_json(
+                root / "partial-canary.summary.json",
+                evidence_test.digest_summary(partial_body),
+            )
+            dry_run_body = evidence_test.plan_only_canary_summary()
+            dry_run_body["planned_stages"][0]["dry_run"] = True
+            dry_run_body["planned_stages"][0]["command"].append("--dry-run")
+            dry_run_body.pop("summary_sha256")
+            dry_run_canary_path = write_json(
+                root / "dry-run-canary.summary.json",
+                evidence_test.digest_summary(dry_run_body),
+            )
+            trust_path = evidence_test.write_trust_summary(root / "trust")
+            evidence_path = root / "local-policy.evidence.summary.json"
+            rc, _stdout, stderr = evidence_test.run_evidence(
+                [
+                    "--canary-summary",
+                    str(full_canary_path),
+                    "--canary-summary",
+                    str(partial_canary_path),
+                    "--canary-summary",
+                    str(dry_run_canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--provider",
+                    "local-bank",
+                    "--environment",
+                    "preprod",
+                    "--allow-plan-only",
+                    "--allow-partial-canary",
+                    "--allow-dry-run",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(evidence_path),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            notary_archive_receipt = next(
+                receipt
+                for receipt in evidence["receipt_verification"]["receipts"]
+                if receipt["receipt_kind"] == "iso-audit-notary"
+            )
+            evidence["receipt_verification"] = receipt_verification_summary(
+                ["iso-audit-notary"],
+                receipts=[dict(notary_archive_receipt)],
+            )
+            refresh_digest(evidence)
+            forged_path = write_json(
+                root / "local-policy-missing-rail-archive.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(forged_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.archive_receipt_missing_canary_digest", codes)
+            self.assertIn("evidence.archive_receipt_kinds_missing", codes)
+            self.assertIn("evidence.policy.allow_partial_canary", codes)
+            self.assertIn("evidence.policy.allow_dry_run", codes)
 
     def test_compact_receipt_source_path_blocks_checked_in_iso_fixtures(self):
         checked_in_fixture = REPO_ROOT / "fixtures" / "iso20022" / "pacs008_fixture.xml"
@@ -9102,8 +9909,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 1, stderr)
-            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
             self.assertIn("evidence.archive_receipt_unreferenced_digest", codes)
+            blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+            self.assertNotIn(extra["receipt_sha256"], blocker_text)
 
     def test_archive_receipts_must_bind_canary_receipt_kinds(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9137,6 +9947,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertNotIn("receipt_kind 'iso-rail-gateway'", blocker_text)
             self.assertNotIn("receipt_kind 'iso-audit-notary'", blocker_text)
+            self.assertNotIn(receipts[0]["receipt_sha256"], blocker_text)
 
     def test_archive_receipts_must_bind_canary_receipt_filenames(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9169,6 +9980,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertNotIn("relabelled-notary.receipt.json", blocker_text)
             self.assertNotIn("relabelled-notary.receipt.json", stderr)
+            self.assertNotIn(canary_receipts[0]["receipt_sha256"], blocker_text)
 
     def test_archive_receipts_must_bind_canary_receipt_metadata(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9290,6 +10102,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     receipt_summary = evidence
                     for key in summary_path:
                         receipt_summary = receipt_summary[key]
+                    receipt_digest = receipt_summary["receipts"][receipt_index][
+                        "receipt_sha256"
+                    ]
                     mutate(receipt_summary["receipts"][receipt_index])
                     refresh_digest(receipt_summary)
                     refresh_digest(evidence)
@@ -9300,8 +10115,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 1, stderr)
-                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
                     self.assertIn("evidence.archive_receipt_canary_metadata_mismatch", codes)
+                    blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+                    self.assertNotIn(receipt_digest, blocker_text)
 
     def test_canary_receipts_cannot_be_reused_across_compact_summaries(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9425,9 +10243,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             for name, path_parts, code in cases:
                 with self.subTest(name=name):
+                    hidden_kind = "diagnostic-receipt"
                     evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
                     receipt_summary = nested(evidence, path_parts)
-                    receipt_summary["receipts"][0]["receipt_kind"] = "diagnostic-receipt"
+                    receipt_summary["receipts"][0]["receipt_kind"] = hidden_kind
                     refresh_digest(receipt_summary)
                     refresh_digest(evidence)
                     mutated_path = write_json(
@@ -9440,8 +10259,90 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 1, stderr)
-                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
                     self.assertIn(code, codes)
+                    blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+                    self.assertNotIn(hidden_kind, blocker_text)
+
+    def test_receipt_kind_summary_lists_must_not_include_unsupported_values(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            def nested(value, parts):
+                for part in parts:
+                    value = value[part]
+                return value
+
+            cases = (
+                (
+                    "canary",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    "evidence.receipt_kind_entry_mismatch",
+                ),
+                (
+                    "archive",
+                    ("receipt_verification",),
+                    "evidence.archive_receipt_kind_entry_mismatch",
+                ),
+            )
+            for name, path_parts, code in cases:
+                with self.subTest(name=name):
+                    hidden_kind = "diagnostic-receipt-list"
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = nested(evidence, path_parts)
+                    receipt_summary["receipt_kind"].append(hidden_kind)
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"unsupported-{name}-receipt-kind-list.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
+                    self.assertIn(code, codes)
+                    blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+                    self.assertNotIn(hidden_kind, blocker_text)
+
+    def test_archive_receipt_metadata_binding_rejects_unsupported_internal_kind(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            receipt_summary = evidence["canary_summaries"][0]["receipt_summary"]
+            archive_summary = evidence["receipt_verification"]
+            receipt_summary["receipts"][0]["receipt_kind"] = "diagnostic-receipt"
+            archive_summary["receipts"][0]["receipt_kind"] = "diagnostic-receipt"
+            refresh_digest(receipt_summary)
+            refresh_digest(archive_summary)
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "unsupported-metadata-kind-binding.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.receipt_kind_entry_mismatch", codes)
+            self.assertIn("evidence.archive_receipt_kind_entry_mismatch", codes)
+            self.assertIn("evidence.archive_receipt_canary_metadata_mismatch", codes)
 
     def test_weak_archive_receipt_policy_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9676,6 +10577,36 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 1, stderr)
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
+
+    def test_receipt_entry_digests_cannot_reuse_response_or_source_roles(self):
+        def mutate_receipts(receipt_summary):
+            for receipt in receipt_summary["receipts"]:
+                if receipt["receipt_kind"] == "iso-audit-notary":
+                    receipt["response_body_sha256"] = receipt["anchor_sha256"]
+                else:
+                    receipt["receipt_sha256"] = receipt["payload_sha256"]
+            refresh_digest(receipt_summary)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            mutate_receipts(evidence["canary_summaries"][0]["receipt_summary"])
+            mutate_receipts(evidence["receipt_verification"])
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "receipt-digest-role-reuse.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.receipt_digest_role_reuse", codes)
+            self.assertIn("evidence.archive_receipt_digest_role_reuse", codes)
 
     def test_receipt_entries_must_be_successful(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -10128,6 +11059,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertNotIn(unicode_digit_message_type, stderr)
                     self.assertNotIn("token.001", blocker_text)
                     self.assertNotIn("token.001", stderr)
+                    self.assertNotIn("zzzz.999", blocker_text)
+                    self.assertNotIn("zzzz.999", stderr)
+                    self.assertNotIn("colr.007", blocker_text)
+                    self.assertNotIn("colr.007", stderr)
 
     def test_canary_receipt_entries_must_be_unique(self):
         with tempfile.TemporaryDirectory() as raw_root:

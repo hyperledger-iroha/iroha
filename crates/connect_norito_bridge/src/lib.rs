@@ -25576,11 +25576,16 @@ fn telemetry_from_json(value: &JsonValue) -> Result<TelemetryEntryInput, c_int> 
         .and_then(JsonValue::as_str)
         .map(str::to_owned)
         .ok_or(ERR_FETCH_OPTIONS_JSON)?;
-    let reputation_score_bps = obj
-        .get("reputation_score_bps")
-        .and_then(JsonValue::as_u64)
-        .map(|value| u16::try_from(value).map_err(|_| ERR_FETCH_OPTIONS_JSON))
-        .transpose()?;
+    let reputation_score_bps = match obj.get("reputation_score_bps") {
+        Some(value) => {
+            let score = value.as_u64().ok_or(ERR_FETCH_OPTIONS_JSON)?;
+            if score > 10_000 {
+                return Err(ERR_FETCH_OPTIONS_JSON);
+            }
+            Some(u16::try_from(score).map_err(|_| ERR_FETCH_OPTIONS_JSON)?)
+        }
+        None => None,
+    };
     Ok(TelemetryEntryInput {
         provider_id,
         qos_score: obj.get("qos_score").and_then(JsonValue::as_f64),

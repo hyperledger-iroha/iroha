@@ -509,6 +509,10 @@ ADVERSARIAL_COVERAGE = {
         "lineage Pallas opening public-input schema metadata substitution",
         'field: "lineage_witness.pallas_open_envelopes_archive.vk_commitment"',
         'field: "lineage_witness.pallas_open_envelopes_archive.public_inputs_schema_hash"',
+        "let step_count = record_bundle.bundle.steps.len();",
+        "if envelopes.len() != step_count",
+        "helper-level missing lineage Pallas envelope must reject before zip",
+        "helper-level extra lineage Pallas envelope must reject before zip",
         'field: "lineage_witness.record_bundle.verifier_records.key_commitment"',
         'field: "lineage_witness.record_bundle.bundle.steps.attachment.proof.circuit_id"',
         "forged-hop-proof-vk-hash",
@@ -542,6 +546,11 @@ ADVERSARIAL_COVERAGE = {
         "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
         "multi-hop proving requires the append verifier batch to be composed into the compact proof",
         "fn kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable",
+        "fn kagemusha_recursive_compact_record_preflight_rejects_pallas_count_mismatch_before_zip",
+        "missing helper-level Pallas envelope must reject before zip preflight",
+        "extra helper-level Pallas envelope must reject before zip preflight",
+        "helper-level Pallas count mismatch should reject before hop proof decode or verification",
+        "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch",
         "fn kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable",
         "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1",
         "Norito-valid data-model proof envelope must not decode as Pallas openings",
@@ -608,6 +617,19 @@ ADVERSARIAL_COVERAGE = {
         "output commitment overlaps an input nullifier",
         "input nullifier overlaps an output commitment",
         "record-backed cross-hop overlap error should come before proof decoding",
+        "fn kagemusha_verified_folded_public_inputs_rejects_public_input_bindings_before_proof_verify",
+        "wrong chain id",
+        "Kagemusha fold confidential-v2 chain tag mismatch",
+        "wrong asset definition",
+        "Kagemusha fold confidential-v2 asset tag mismatch",
+        "metadata root_before splice",
+        "Kagemusha fold confidential-v2 root mismatch",
+        "metadata nullifier splice",
+        "Kagemusha fold confidential-v2 nullifier mismatch",
+        "metadata output commitment splice",
+        "Kagemusha fold confidential-v2 output commitment mismatch",
+        "direct public-input binding mismatch must reject before proof verification",
+        "record-backed public-input binding error should come before proof verification",
         "fn kagemusha_recursive_spend_lineage_witness_preflights_fold_metadata_before_archive_decode",
         "validate_kagemusha_fold_metadata(&fold_steps)",
         "lineage witness root-continuity error should come before Pallas archive decoding",
@@ -2340,6 +2362,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-overlap-predecode",
     ),
     (
+        "core checked-fold public-input binding negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-public-input-binding",
+    ),
+    (
         "core checked-fold public-input preverification negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-public-input-preverify-order",
     ),
@@ -3849,6 +3875,24 @@ def check_recursive_compact_record_envelope_preflight_order():
     ):
         if needle not in decode_body:
             fail(f"recursive compact Pallas decoder lost shape preflight: {needle}")
+
+    helper_body = extract_rust_function_body(
+        core,
+        "fn validate_kagemusha_recursive_compact_record_envelope_preflight(",
+        "recursive compact record-backed Pallas preflight helper",
+    )
+    require_ordered_needles(
+        helper_body,
+        "recursive compact record-backed Pallas preflight helper",
+        (
+            "validate_kagemusha_fold_metadata(&steps)?;",
+            "let step_count = steps.len();",
+            "if envelopes.len() != step_count",
+            "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch",
+            "validate_kagemusha_hop_verifier_record_set(&steps, &records)?;",
+            "for (hop_index, (step, envelope)) in steps.iter().zip(envelopes.iter()).enumerate()",
+        ),
+    )
 
     prover_body = extract_rust_function_body(
         core,
@@ -6463,6 +6507,25 @@ if mode == "--negative-control-core-fold-overlap-predecode":
         raise SystemExit(0)
     raise SystemExit("negative control failed: checked-fold overlap predecode drift was not detected")
 
+if mode == "--negative-control-core-fold-public-input-binding":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "direct public-input binding mismatch must reject before proof verification",
+        "direct public-input binding may verify proof first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate checked-fold public-input binding coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected checked-fold public-input binding drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: checked-fold public-input binding drift was not detected")
+
 if mode == "--negative-control-core-fold-public-input-preverify-order":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
@@ -6575,23 +6638,53 @@ if mode == "--negative-control-core-lineage-witness-count-mismatch-predecode":
     raise SystemExit("negative control failed: lineage witness count mismatch predecode drift was not detected")
 
 if mode == "--negative-control-core-lineage-witness-envelope-count":
-    target = "crates/iroha_core/src/zk.rs"
-    source = read(target)
-    mutated = source.replace(
-        "lineage envelope count mismatch: expected 2, found 0",
-        "lineage envelope count mismatch: expected 2, found 1",
-        1,
+    cases = (
+        (
+            "crates/iroha_core/src/zk.rs",
+            "lineage envelope count mismatch: expected 2, found 0",
+            "lineage envelope count mismatch: expected 2, found 1",
+            "lineage envelope count mismatch: expected 2, found 0",
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "if envelopes.len() != step_count",
+            "if false && envelopes.len() != step_count",
+            "if envelopes.len() != step_count",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate lineage witness envelope-count coverage")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        print("negative control rejected lineage witness envelope-count drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: lineage witness envelope-count drift was not detected")
+    first_message = None
+    for target, before, after, label in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate lineage witness envelope-count coverage: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: lineage witness envelope-count drift was not detected for "
+                    + label
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: lineage witness envelope-count drift was not detected for "
+            + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: lineage witness envelope-count drift was not detected")
+    print("negative control rejected lineage witness envelope-count drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-core-lineage-witness-malformed-envelope-archive":
     target = "crates/iroha_core/src/zk.rs"
@@ -6768,6 +6861,11 @@ if mode == "--negative-control-core-recursive-compact-pallas-count":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     cases = (
+        (
+            "if envelopes.len() != step_count",
+            "if false && envelopes.len() != step_count",
+            "if envelopes.len() != step_count",
+        ),
         (
             '.expect_err("detached compact Pallas archive must reject before proving");',
             '.expect_err("detached compact Pallas archive may return unavailable");',

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Iterable
+import unicodedata
 
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
@@ -84,6 +85,14 @@ SIGNED_AT_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SECRET_RE = re.compile(
     r"(authorization:|bearer\s+|private[_-]?key|token=|x-iroha-signature)",
     re.IGNORECASE,
+)
+PRIVATE_KEY_PEM_MARKERS = (
+    b"-----BEGIN PRIVATE KEY-----",
+    b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    b"-----BEGIN RSA PRIVATE KEY-----",
+    b"-----BEGIN EC PRIVATE KEY-----",
+    b"-----BEGIN DSA PRIVATE KEY-----",
+    b"-----BEGIN OPENSSH PRIVATE KEY-----",
 )
 KAGEMUSHA_STANDARD_DEVICE_FAMILIES: tuple[str, ...] = (
     "Google Pixel 6 / 6a",
@@ -757,13 +766,15 @@ def _normalise_safe_relative_path(
     if _contains_control_character(path_text):
         errors.append(f"{label}: unsafe path contains control characters")
         return None
-    if path_text != path_text.strip():
+    candidate = PurePosixPath(path_text)
+    if path_text != path_text.strip() or any(
+        part != part.strip() for part in candidate.parts
+    ):
         errors.append(f"{label}: unsafe path contains surrounding whitespace")
         return None
     if SECRET_RE.search(path_text):
         errors.append(f"{label}: unsafe path contains secret-looking material")
         return None
-    candidate = PurePosixPath(path_text)
     if (
         not path_text
         or path_text.startswith("*")
@@ -783,7 +794,8 @@ def _normalise_safe_relative_path(
 
 
 def _safe_relative_path_is_child_of(path_text: str, root: str) -> bool:
-    return path_text.startswith(f"{root}/")
+    prefix = f"{root}/"
+    return path_text.startswith(prefix) and len(path_text) > len(prefix)
 
 
 def _display_path(path_text: str) -> str:
@@ -795,9 +807,14 @@ def _display_path(path_text: str) -> str:
 
 
 def _contains_control_character(value: str) -> bool:
-    """Return whether a filesystem label carries non-printing control bytes."""
+    """Return whether a filesystem label carries non-printing control text."""
 
-    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    return any(
+        ord(character) < 0x20
+        or ord(character) == 0x7F
+        or unicodedata.category(character) == "Cf"
+        for character in value
+    )
 
 
 def _display_slot_name(slot_name: str) -> str:
@@ -990,6 +1007,12 @@ KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("d2d_payment_transcript_path", "d2d_payment_transcript_sha256"),
     ("wallet_integrity_transcript_path", "wallet_integrity_transcript_sha256"),
 )
+KAGEMUSHA_SUMMARY_RELEASE_ARTIFACT_ROOTS: dict[str, str] = {
+    "attestation_certificate_chain_path": "attestation",
+    "offline_wallet_apk_path": "evidence",
+    "d2d_payment_transcript_path": "handoff",
+    "wallet_integrity_transcript_path": "wallet",
+}
 KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS: tuple[str, ...] = (
     "signed_evidence_artifact_sha256",
     "signed_evidence_signer_public_key_sha256",
@@ -999,6 +1022,21 @@ KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS: tuple[str, ...] = (
         digest_field
         for _, digest_field in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS
     ),
+)
+KAGEMUSHA_SUMMARY_RELEASE_SLOT_FIELDS: frozenset[str] = frozenset(
+    (
+        "required",
+        "native_bridge_abi_version",
+        "device_family",
+        "device_model",
+        "device_codename",
+        "signed_at_utc",
+        "d2d_payment_transport",
+        "d2d_payment_transports",
+        D2D_PAYMENT_TRANSCRIPTS_FIELD,
+        *KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS,
+        *(path_field for path_field, _ in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS),
+    )
 )
 KAGEMUSHA_SUMMARY_RELEASE_REDACTED_SLOT_IDS: frozenset[str] = frozenset(
     {
@@ -1037,6 +1075,14 @@ def _summary_release_d2d_transcript_path(value: Any) -> bool:
         _summary_release_artifact_path(value)
         and isinstance(value, str)
         and _safe_relative_path_is_child_of(value, "handoff")
+    )
+
+
+def _summary_release_artifact_path_under(value: Any, root: str) -> bool:
+    return (
+        _summary_release_artifact_path(value)
+        and isinstance(value, str)
+        and _safe_relative_path_is_child_of(value, root)
     )
 
 
@@ -1112,12 +1158,8 @@ def _summary_release_kagemusha(
     ):
         return None
     for path_field, _ in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS:
-        path_is_valid = (
-            _summary_release_d2d_transcript_path(kagemusha.get(path_field))
-            if path_field == "d2d_payment_transcript_path"
-            else _summary_release_artifact_path(kagemusha.get(path_field))
-        )
-        if not path_is_valid:
+        root = KAGEMUSHA_SUMMARY_RELEASE_ARTIFACT_ROOTS[path_field]
+        if not _summary_release_artifact_path_under(kagemusha.get(path_field), root):
             return None
     return kagemusha
 
@@ -1240,6 +1282,32 @@ def _summary_release_d2d_payment_transports(
     return []
 
 
+def _summary_reports_for_release_output(
+    reports: list[dict],
+    *,
+    require_complete_signed_evidence: bool,
+    trusted_signer_public_key_sha256: frozenset[str] | None,
+) -> list[dict]:
+    """Return scanner summary rows with incomplete release Kagemusha claims pruned."""
+
+    if not require_complete_signed_evidence:
+        return reports
+    pruned_reports: list[dict] = []
+    for report in reports:
+        summary = dict(report)
+        if _summary_release_kagemusha(report, trusted_signer_public_key_sha256) is None:
+            kagemusha = summary.get("kagemusha")
+            if isinstance(kagemusha, dict):
+                pruned = dict(kagemusha)
+                for field in KAGEMUSHA_SUMMARY_RELEASE_SLOT_FIELDS:
+                    pruned.pop(field, None)
+                summary["kagemusha"] = pruned
+            else:
+                summary["kagemusha"] = {}
+        pruned_reports.append(summary)
+    return pruned_reports
+
+
 def infer_kagemusha_device_family(
     model: str | None,
     codename: str | None,
@@ -1344,6 +1412,12 @@ def validate_device_lab_root_path(root: Path) -> list[str]:
     return errors
 
 
+def _path_has_surrounding_whitespace_component(path: Path) -> bool:
+    """Return true when any path component has ambiguous surrounding whitespace."""
+
+    return any(part != part.strip() for part in path.parts if part)
+
+
 def classify_device_lab_root_path(root: Path) -> tuple[bool, list[str]]:
     """Classify whether the device-lab root exists and is safe for discovery."""
 
@@ -1352,6 +1426,8 @@ def classify_device_lab_root_path(root: Path) -> tuple[bool, list[str]]:
         return False, ["device-lab root path must not contain secret-looking material"]
     if _contains_control_character(root_text):
         return False, ["device-lab root path must not contain control characters"]
+    if root_text != root_text.strip() or _path_has_surrounding_whitespace_component(root):
+        return False, ["device-lab root path must not contain surrounding whitespace"]
     if "\\" in root_text:
         return False, ["device-lab root path must not contain backslashes"]
     if ".." in root.parts:
@@ -1393,10 +1469,27 @@ def _slot_path_boundary_errors(slot_path: Path) -> list[str]:
         return ["slot path must not contain secret-looking material"]
     if _contains_control_character(path_text):
         return ["slot path must not contain control characters"]
+    if path_text != path_text.strip() or _path_has_surrounding_whitespace_component(
+        slot_path
+    ):
+        return ["slot path must not contain surrounding whitespace"]
     if "\\" in path_text:
         return ["slot path must not contain backslashes"]
     if ".." in slot_path.parts:
         return ["slot path must be canonical"]
+    return []
+
+
+def _cli_path_alias_errors(path: str, label: str) -> list[str]:
+    """Reject CLI path aliases before scanner metadata reads."""
+
+    candidate = Path(path)
+    if path != path.strip() or _path_has_surrounding_whitespace_component(candidate):
+        return [f"{label} must not contain surrounding whitespace"]
+    if "\\" in path:
+        return [f"{label} must not contain backslashes"]
+    if ".." in candidate.parts:
+        return [f"{label} must be a canonical path"]
     return []
 
 
@@ -2139,6 +2232,11 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         return None
     if _contains_control_character(path_text):
         errors.append(f"{label} path must not contain control characters")
+        return None
+    if path_text != path_text.strip() or _path_has_surrounding_whitespace_component(
+        path
+    ):
+        errors.append(f"{label} path must not contain surrounding whitespace")
         return None
     if "\\" in path_text:
         errors.append(f"{label} path must not contain backslashes")
@@ -3468,6 +3566,14 @@ def _openssl_public_key_der(
 ) -> bytes | None:
     if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
         return None
+    try:
+        public_key_bytes = public_key_path.read_bytes()
+    except OSError:
+        errors.append(f"{label} file could not be read")
+        return None
+    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):
+        errors.append(f"{label} must contain public key material, not a private key")
+        return None
     openssl = _require_openssl(errors)
     if openssl is None:
         return None
@@ -3504,13 +3610,19 @@ def _validate_public_key_path_shape(
 ) -> bool:
     """Reject public key paths that could alias external key material."""
 
-    if SECRET_RE.search(str(public_key_path)):
+    path_text = str(public_key_path)
+    if SECRET_RE.search(path_text):
         errors.append(f"{label} path must not contain secret-looking material")
         return False
-    if _contains_control_character(str(public_key_path)):
+    if _contains_control_character(path_text):
         errors.append(f"{label} path must not contain control characters")
         return False
-    if "\\" in str(public_key_path):
+    if path_text != path_text.strip() or _path_has_surrounding_whitespace_component(
+        public_key_path
+    ):
+        errors.append(f"{label} path must not contain surrounding whitespace")
+        return False
+    if "\\" in path_text:
         errors.append(f"{label} path must not contain backslashes")
         return False
     if ".." in public_key_path.parts:
@@ -3550,15 +3662,34 @@ def _validate_public_key_path_shape(
     return True
 
 
+def _trusted_signer_public_key_path_inputs(
+    public_key_paths: Iterable[str | os.PathLike[str]] | str | os.PathLike[str] | None,
+) -> tuple[tuple[Any, ...], list[str]]:
+    """Normalize direct trusted-signer path inputs without iterating path strings."""
+
+    if public_key_paths is None:
+        return (), []
+    if isinstance(public_key_paths, (str, bytes, bytearray, os.PathLike)):
+        return (public_key_paths,), []
+    try:
+        return tuple(public_key_paths), []
+    except TypeError:
+        return (), ["trusted signer public key paths must be an iterable of paths"]
+
+
 def load_trusted_signer_public_keys(
-    public_key_paths: Iterable[str | Path] | None,
+    public_key_paths: Iterable[str | os.PathLike[str]] | str | os.PathLike[str] | None,
 ) -> tuple[dict[str, Path], list[str]]:
     """Load trusted lab signer public keys and return them keyed by DER SHA-256."""
 
-    errors: list[str] = []
+    raw_paths, errors = _trusted_signer_public_key_path_inputs(public_key_paths)
     trusted: dict[str, Path] = {}
-    for raw_path in public_key_paths or []:
-        path = Path(raw_path)
+    for raw_path in raw_paths:
+        try:
+            path = Path(raw_path)
+        except TypeError:
+            errors.append("trusted signer public key path must be a string or pathlib Path")
+            continue
         der = _openssl_public_key_der(
             path,
             errors=errors,
@@ -3605,7 +3736,7 @@ def _trusted_signer_digest_sort_key(item: tuple[Any, Any]) -> tuple[int, str, st
 def validate_trusted_signer_public_key_map(
     trusted_signer_public_keys: Mapping[Any, Any] | None,
 ) -> list[str]:
-    """Reject direct trusted-signer maps with unsafe public-key path strings."""
+    """Reject direct trusted-signer maps with unsafe or misbound public keys."""
 
     errors: list[str] = []
     if trusted_signer_public_keys is None:
@@ -3629,12 +3760,29 @@ def validate_trusted_signer_public_key_map(
         if _contains_control_character(path_text):
             errors.append("trusted signer public key path must not contain control characters")
             continue
+        if path_text != path_text.strip() or _path_has_surrounding_whitespace_component(
+            public_key_path
+        ):
+            errors.append("trusted signer public key path must not contain surrounding whitespace")
+            continue
         if "\\" in path_text:
             errors.append("trusted signer public key path must not contain backslashes")
             continue
         if ".." in public_key_path.parts:
             errors.append("trusted signer public key path must be canonical")
             continue
+        der = _openssl_public_key_der(
+            public_key_path,
+            errors=errors,
+            label="trusted signer public key",
+        )
+        if der is None:
+            continue
+        actual_digest = hashlib.sha256(der).hexdigest()
+        if actual_digest != digest:
+            errors.append(
+                "trusted signer public key digest must match public key DER sha256"
+            )
     return errors
 
 
@@ -3791,6 +3939,16 @@ def _validate_signed_at_utc(value: str | None, errors: list[str]) -> None:
         )
 
 
+def _is_required_signed_evidence_digest_path(relative: str) -> bool:
+    for root in (*EXPECTED_DIRS, "handoff", "wallet"):
+        if _safe_relative_path_is_child_of(relative, root):
+            return True
+    return (
+        _safe_relative_path_is_child_of(relative, "evidence")
+        and relative != KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH
+    )
+
+
 def _required_signed_evidence_digest_paths(
     slot_path: Path,
     errors: list[str] | None = None,
@@ -3799,11 +3957,7 @@ def _required_signed_evidence_digest_paths(
     paths = {
         relative
         for relative in _slot_files(slot_path, errors)
-        if relative.split("/", 1)[0] in set(EXPECTED_DIRS) | {"handoff", "wallet"}
-        or (
-            relative.split("/", 1)[0] == "evidence"
-            and relative != KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH
-        )
+        if _is_required_signed_evidence_digest_path(relative)
     } | set(REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS)
     if metadata is not None:
         path_errors = errors if errors is not None else []
@@ -4476,23 +4630,26 @@ def validate_kagemusha_production_metadata(
             "slot.json offline_wallet_apk_path",
         )
     if apk_relative is not None:
-        _, actual_apk_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
-            slot_path,
-            apk_relative,
-            "slot.json offline_wallet_apk_path",
-            "slot.json offline_wallet_apk_path must point to an existing file",
-            _slot_artifact_max_bytes(apk_relative),
-        )
-        if digest_errors:
-            errors.extend(digest_errors)
-        elif apk_digest is not None and actual_apk_digest is not None:
-            if actual_apk_digest != apk_digest:
-                errors.append(
-                    "slot.json offline_wallet_apk_sha256 does not match offline_wallet_apk_path"
-                )
-            else:
-                details["offline_wallet_apk_path"] = apk_relative
-                details["offline_wallet_apk_sha256"] = apk_digest
+        if not _safe_relative_path_is_child_of(apk_relative, "evidence"):
+            errors.append("slot.json offline_wallet_apk_path must stay under evidence/")
+        else:
+            _, actual_apk_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+                slot_path,
+                apk_relative,
+                "slot.json offline_wallet_apk_path",
+                "slot.json offline_wallet_apk_path must point to an existing file",
+                _slot_artifact_max_bytes(apk_relative),
+            )
+            if digest_errors:
+                errors.extend(digest_errors)
+            elif apk_digest is not None and actual_apk_digest is not None:
+                if actual_apk_digest != apk_digest:
+                    errors.append(
+                        "slot.json offline_wallet_apk_sha256 does not match offline_wallet_apk_path"
+                    )
+                else:
+                    details["offline_wallet_apk_path"] = apk_relative
+                    details["offline_wallet_apk_sha256"] = apk_digest
 
     d2d_relative, d2d_digest, d2d_transport = validate_d2d_payment_transcript_binding(
         slot_path,
@@ -4612,13 +4769,22 @@ def validate_kagemusha_production_metadata(
         metadata, "signed_evidence_artifact_path", errors
     )
     if artifact_relative is not None:
-        artifact_relative = _normalise_safe_relative_path(
-            artifact_relative,
-            errors,
-            "slot.json signed_evidence_artifact_path",
-        )
+        if _path_has_surrounding_whitespace_component(Path(artifact_relative)):
+            errors.append(
+                "slot.json signed_evidence_artifact_path must not contain surrounding whitespace"
+            )
+            artifact_relative = None
+        else:
+            artifact_relative = _normalise_safe_relative_path(
+                artifact_relative,
+                errors,
+                "slot.json signed_evidence_artifact_path",
+            )
     artifact_root_ok = True
-    if artifact_relative is not None and artifact_relative.split("/", 1)[0] != "evidence":
+    if artifact_relative is not None and not _safe_relative_path_is_child_of(
+        artifact_relative,
+        "evidence",
+    ):
         errors.append("slot.json signed_evidence_artifact_path must stay under evidence/")
         artifact_root_ok = False
     elif (
@@ -4977,13 +5143,18 @@ def build_summary(
     trusted_signer_public_key_sha256 = _trusted_signer_public_key_sha256_set(
         trusted_signer_public_keys
     )
+    output_reports = _summary_reports_for_release_output(
+        summary_reports,
+        require_complete_signed_evidence=require_complete_kagemusha,
+        trusted_signer_public_key_sha256=trusted_signer_public_key_sha256,
+    )
     summary = {
         "schema_version": 1,
         "generated_at": now.isoformat().replace("+00:00", "Z"),
         "root": DEVICE_LAB_ROOT_SUMMARY_LABEL,
-        "slots": summary_reports,
-        "ok": sum(1 for r in summary_reports if r["status"] == "ok"),
-        "failed": sum(1 for r in summary_reports if r["status"] != "ok"),
+        "slots": output_reports,
+        "ok": sum(1 for r in output_reports if r["status"] == "ok"),
+        "failed": sum(1 for r in output_reports if r["status"] != "ok"),
     }
     if require_kagemusha_production_evidence or require_kagemusha_standard_matrix:
         covered = sorted(
@@ -5102,6 +5273,10 @@ def validate_summary_output_path(path: Path, label: str) -> list[str]:
         return [f"{label} must not contain secret-looking material"]
     if _contains_control_character(path_text):
         return [f"{label} must not contain control characters"]
+    if path_text != path_text.strip() or _path_has_surrounding_whitespace_component(
+        path
+    ):
+        return [f"{label} must not contain surrounding whitespace"]
     if "\\" in path_text:
         return [f"{label} must not contain backslashes"]
     if ".." in path.parts:
@@ -5454,6 +5629,10 @@ def _unlink_summary_output_if_identity_at(
         return []
     except OSError:
         return ["--json-out could not be removed after parent sync failure"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return ["--json-out cleanup could not be synced after parent sync failure"]
     return []
 
 
@@ -5489,6 +5668,10 @@ def _cleanup_summary_output(
             return []
         except OSError:
             return ["--json-out temporary file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["--json-out temporary file cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -5552,16 +5735,20 @@ def main(argv: list[str] | None = None) -> int:
         path_arg_errors.append("--root must not contain secret-looking material")
     if _contains_control_character(args.root):
         path_arg_errors.append("--root must not contain control characters")
+    path_arg_errors.extend(_cli_path_alias_errors(args.root, "--root"))
     if args.json_out is not None and SECRET_RE.search(args.json_out):
         path_arg_errors.append("--json-out must not contain secret-looking material")
     if args.json_out is not None and _contains_control_character(args.json_out):
         path_arg_errors.append("--json-out must not contain control characters")
+    if args.json_out is not None:
+        path_arg_errors.extend(_cli_path_alias_errors(args.json_out, "--json-out"))
     for index, key_path in enumerate(args.trusted_signer_public_keys or []):
         label = f"--trusted-signer-public-key[{index}]"
         if SECRET_RE.search(key_path):
             path_arg_errors.append(f"{label} must not contain secret-looking material")
         if _contains_control_character(key_path):
             path_arg_errors.append(f"{label} must not contain control characters")
+        path_arg_errors.extend(_cli_path_alias_errors(key_path, label))
     if path_arg_errors:
         for error in path_arg_errors:
             print(f"[device-lab] {error}", file=sys.stderr)

@@ -4,11 +4,11 @@
 lang: ba
 direction: ltr
 source: docs/formal/sumeragi/README.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: e89f83a4ce35b7cab8d3bfcee27eafb761f6a281c445a7cae13ae9d228760fe7
-source_last_modified: "2026-04-30T20:10:10.884040+00:00"
-translation_last_reviewed: 2026-05-01
+source_hash: 11eb72b5851bd4763895248c9253df49c337fb2b0921b008672e86ae77caf21a
+source_last_modified: "2026-06-21T13:31:16.238431+00:00"
+translation_last_reviewed: null
 translator: machine-google-reviewed
 ---
 

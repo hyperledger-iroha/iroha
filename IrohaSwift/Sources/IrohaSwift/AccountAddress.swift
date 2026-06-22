@@ -1465,14 +1465,16 @@ extension AccountAddress {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeUInt8(version))
         writer.writeField(OfflineCompactNorito.encodeUInt16(threshold))
-        let membersPayload = try OfflineCompactNorito.encodeVec(members) { member in
+        var membersPayload = OfflineCompactNoritoWriter()
+        membersPayload.writeUInt64LE(UInt64(members.count))
+        for member in members {
             var memberWriter = OfflineCompactNoritoWriter()
             let keyPayload = try compactNoritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
             memberWriter.writeField(keyPayload)
             memberWriter.writeField(OfflineCompactNorito.encodeUInt16(member.weight))
-            return memberWriter.data
+            membersPayload.writeField(memberWriter.data)
         }
-        writer.writeField(membersPayload)
+        writer.writeField(membersPayload.data)
         return writer.data
     }
 

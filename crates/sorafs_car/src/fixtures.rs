@@ -164,6 +164,7 @@ fn build_telemetry(providers: &[ProviderMetadata]) -> TelemetrySnapshot {
             telemetry.failure_rate_ewma = Some(0.02 * (idx as f64));
             telemetry.token_health = Some(0.9);
             telemetry.staking_weight = Some(1.0);
+            telemetry.reputation_score_bps = Some(10_000);
             telemetry.last_updated_unix = Some(FIXTURE_NOW_UNIX_SECS - 120);
             telemetry
         })

@@ -79311,6 +79311,221 @@ mod subscription_api_tests {
         assert!(grants_subscriber_nft_mutation);
     }
 
+    #[tokio::test]
+    async fn handle_post_v1_account_alias_auto_renew_disable_mutates_onboarding_subscription_nft() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let alias_literal = "member@universal";
+        let subscription_domain: DomainId =
+            DomainId::try_new("subscriptions", "universal").unwrap();
+        let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("default nexus fee asset definition id");
+        let billing_trigger_id = {
+            let subscription_id = account_alias_auto_renew_subscription_id(
+                &subscription_domain,
+                &subscriber,
+                alias_literal,
+            )
+            .expect("subscription id");
+            derive_trigger_id("sub_bill_", &subscription_id).expect("billing trigger id")
+        };
+        let now_ms = network_time_ms().expect("network time");
+        let registered_at_ms = now_ms.saturating_sub(1_000);
+        let expires_at_ms = now_ms.saturating_add(60_000);
+        let grace_expires_at_ms = expires_at_ms.saturating_add(60_000);
+        let redemption_expires_at_ms = grace_expires_at_ms.saturating_add(60_000);
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let alias = account::rekey::AccountAlias::from_literal(alias_literal, &dataspace_catalog)
+            .expect("valid account alias");
+        let selector = iroha_core::sns::selector_for_account_alias(&alias, &dataspace_catalog)
+            .expect("account alias selector");
+        let account_address =
+            iroha_data_model::account::AccountAddress::from_account_id(&subscriber)
+                .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            subscriber.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            1,
+            registered_at_ms,
+            expires_at_ms,
+            grace_expires_at_ms,
+            Metadata::default(),
+        );
+        let fee_asset_definition =
+            AssetDefinition::new(fee_asset_definition_id.clone(), NumericSpec::integer())
+                .build(&provider);
+        let domains = vec![
+            Domain::new(DomainId::try_new("universal", "universal").unwrap()).build(&provider),
+            Domain::new(subscription_domain.clone()).build(&provider),
+        ];
+        let accounts = vec![
+            Account::new(provider.account().clone()).build(&provider),
+            Account::new(subscriber.account().clone()).build(&subscriber),
+        ];
+        let mut world = World::with_assets(domains, accounts, [fee_asset_definition], [], []);
+        iroha_core::sns::seed_default_namespace_policies(&mut world);
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
+        {
+            let app_state = Arc::get_mut(&mut app).expect("unique app state");
+            app_state.uaid_onboarding = Some(crate::AccountOnboardingSigner {
+                authority: provider.clone(),
+                private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
+                allowed_permissions: std::collections::BTreeSet::new(),
+                fee_sponsor_account: None,
+                alias_lease_term_years: 1,
+                alias_auto_renew_enabled: true,
+                alias_auto_renew_retry_backoff_ms: 500,
+                alias_auto_renew_max_failures: 3,
+                alias_auto_renew_subscription_domain: Some(subscription_domain.clone()),
+            });
+        }
+        bind_account_alias_for_test(&app.state, &subscriber, alias_literal);
+
+        let lease_quote = LeaseQuote {
+            selector,
+            pricing_class: 0,
+            payment_asset_id: AssetId::of(fee_asset_definition_id.clone(), provider.clone())
+                .to_string(),
+            payment_asset_definition_id: fee_asset_definition_id,
+            collector_account: provider.clone(),
+            charge_amount: 200,
+            expires_at_ms,
+            grace_expires_at_ms,
+            redemption_expires_at_ms,
+        };
+        let (onboarding_instructions, subscription_id) =
+            build_onboarding_alias_auto_renew_instructions(
+                &provider,
+                &subscriber,
+                &subscription_domain,
+                alias_literal,
+                &lease_quote,
+                1,
+                500,
+                3,
+                200,
+            )
+            .expect("onboarding auto-renew instructions");
+        let onboarding_tx = sign_app_api_transaction(
+            TransactionBuilder::new((*app.chain_id).clone(), provider.clone())
+                .with_instructions(onboarding_instructions),
+            ALICE_KEYPAIR.private_key(),
+            ENDPOINT_ACCOUNTS_ONBOARD,
+        )
+        .expect("sign onboarding auto-renew setup transaction");
+        handle_transaction_with_metrics(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            onboarding_tx,
+            MaybeTelemetry::disabled(),
+            ENDPOINT_ACCOUNTS_ONBOARD,
+        )
+        .await
+        .expect("enqueue onboarding auto-renew setup transaction");
+        let setup_height = u64::try_from(app.state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let applied = crate::test_utils::apply_queued_in_one_block(
+            &app.state,
+            &app.queue,
+            &app.chain_id,
+            setup_height,
+        );
+        assert_eq!(applied, 1, "onboarding setup transaction should apply");
+
+        {
+            let view = app.state.view();
+            let nft = view
+                .world()
+                .nft(&subscription_id)
+                .expect("subscription nft should exist after onboarding setup");
+            assert_eq!(nft.owned_by, subscriber);
+            assert!(
+                view.world()
+                    .triggers()
+                    .time_triggers()
+                    .get(&billing_trigger_id)
+                    .is_some(),
+                "onboarding setup should register billing trigger"
+            );
+        }
+
+        let req = AccountAliasAutoRenewRequestDto {
+            authority: subscriber.to_string(),
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            enabled: false,
+            term_years: None,
+            max_charge_amount: None,
+        };
+        let resp = handle_post_v1_account_alias_auto_renew(
+            app.clone(),
+            axum::extract::Path((subscriber.to_string(), alias_literal.to_owned())),
+            NoritoJson(req),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("disable auto-renew ok")
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.queued_len(), 1);
+        let json = response_json(resp).await;
+        assert_eq!(json["auto_renew_enabled"].as_bool(), Some(false));
+        assert_eq!(json["status"].as_str(), Some("QUEUED"));
+        let subscription_id_str = subscription_id.to_string();
+        assert_eq!(
+            json["subscription_id"].as_str(),
+            Some(subscription_id_str.as_str())
+        );
+
+        let disable_height = u64::try_from(app.state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let applied = crate::test_utils::apply_queued_in_one_block(
+            &app.state,
+            &app.queue,
+            &app.chain_id,
+            disable_height,
+        );
+        assert_eq!(applied, 1, "disable auto-renew transaction should apply");
+
+        let view = app.state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should still exist");
+        let updated_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(updated_state.status, SubscriptionStatus::Canceled);
+        assert!(!updated_state.cancel_at_period_end);
+        assert_eq!(updated_state.cancel_at_ms, None);
+        assert_eq!(updated_state.subscriber, subscriber);
+        assert!(
+            account_alias_auto_renew_from_metadata(&nft.content)
+                .unwrap()
+                .is_some(),
+            "disable should preserve account-alias auto-renew settings metadata"
+        );
+        assert!(
+            view.world()
+                .triggers()
+                .time_triggers()
+                .get(&billing_trigger_id)
+                .is_none(),
+            "disable should unregister the billing trigger"
+        );
+    }
+
     #[test]
     fn default_charge_ms_fixed_period_respects_bill_for() {
         let billing = SubscriptionBilling {
