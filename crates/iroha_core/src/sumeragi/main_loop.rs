@@ -35971,6 +35971,12 @@ impl Actor {
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
         let committed_height = self.committed_height_snapshot();
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let local_leader_can_make_frontier_progress = height == committed_height.saturating_add(1)
+            && self.queue.active_len() > 0
+            && self.pending_block_count_for_height(height) == 0
+            && !self.slot_has_round_liveness(height, current_view)
+            && self.local_is_round_leader(height, current_view);
         if !self.missing_qc_height_has_unresolved_dependency_at_height(height) {
             let _ = self.clear_non_actionable_missing_dependencies_for_height(
                 height,
@@ -35978,6 +35984,16 @@ impl Actor {
                 now,
             );
             self.clear_missing_block_recovery_for_height(height, now);
+            return false;
+        }
+        if local_leader_can_make_frontier_progress {
+            self.clear_missing_block_recovery_for_height_preserving_frontier_state(height, now);
+            debug!(
+                height,
+                view = current_view,
+                queue_len = self.queue.active_len(),
+                "allowing local leader proposal despite same-height missing dependency"
+            );
             return false;
         }
         self.missing_block_height_recovery

@@ -18994,6 +18994,7 @@ impl State {
         )
     }
 
+    /// Record commit-roster artifacts for a durably committed block, including sidecar.
     pub(crate) fn record_commit_roster_with_sidecar(
         &self,
         commit_qc: &Qc,
@@ -48378,6 +48379,115 @@ mod tests {
             Some(&commit_cert),
             "commit certificate should be recorded in world storage"
         );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_with_sidecar_keeps_hot_path_journal_in_memory() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let peer = PeerId::new(kp.public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
+                .expect("test block signing should succeed"),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+        let block_hash = canonical_block.hash();
+        kura.store_block(Arc::clone(&canonical_block))
+            .expect("store canonical block");
+        let roster = vec![peer];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAA; 96];
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        assert!(
+            state.record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None),
+            "committed sidecar path should accept canonical roster metadata"
+        );
+        assert!(
+            kura.read_roster_metadata(commit_cert.height).is_some(),
+            "committed sidecar path should still write retained sidecar metadata"
+        );
+
+        let journal_path = CommitRosterJournal::journal_path(&kura.store_root());
+        let reloaded = CommitRosterJournal::load(journal_path, kura.block_sync_roster_retention())
+            .expect("reload commit roster journal");
+        assert!(
+            reloaded
+                .get(commit_cert.height, commit_cert.subject_block_hash)
+                .is_none(),
+            "committed sidecar path must not rewrite the full journal on the hot commit path"
+        );
+        let snapshot = state
+            .commit_roster_journal
+            .read()
+            .get(commit_cert.height, commit_cert.subject_block_hash)
+            .expect("committed sidecar path should update the in-memory journal entry");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint);
+        assert!(snapshot.stake_snapshot.is_none());
+
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
     }
