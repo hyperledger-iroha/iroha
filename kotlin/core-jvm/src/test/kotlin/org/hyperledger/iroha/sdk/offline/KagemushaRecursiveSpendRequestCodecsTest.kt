@@ -145,6 +145,33 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(abi7.encodedBytes > 0)
         assertEquals(abi7.chainAdmissionReason.isEmpty(), abi7.chainAdmissible)
         assertEquals(!abi7.lineageWitnessRequired, abi7.witnesslessRedeemSupported)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
+                recursiveSpendVerifyResultWithTrailingField(),
+            )
+        }.also { error ->
+            assertTrue(error.message!!.contains("Trailing bytes after verify result"))
+        }
+    }
+
+    @Test
+    fun `lineage witness rejects trailing fields`() {
+        val malformedWitnesses = listOf(
+            recursiveSpendLineageWitnessWithTrailingField() to "Trailing bytes after lineageWitness",
+            recursiveSpendLineageWitnessWithTrailingPreviousProofsField() to
+                "Trailing bytes after lineageWitness.previousRecursiveProofs",
+            recursiveSpendLineageWitnessWithTrailingPreviousProofField() to
+                "Trailing bytes after lineageWitness.previousRecursiveProofs",
+            recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() to
+                "Trailing bytes after verifier key id",
+        )
+        for ((archive, expected) in malformedWitnesses) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(archive)
+            }.also { error ->
+                assertTrue(error.message.orEmpty().contains(expected))
+            }
+        }
     }
 
     @Test
@@ -191,6 +218,33 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertTrue(malformedProofBackend.message.orEmpty().contains("bundle.proof_backend"))
+        val malformedProofBoxBackend = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithProofBoxBackend(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND),
+            )
+        }
+        assertTrue(malformedProofBoxBackend.message.orEmpty().contains("bundle.proof_backend"))
+
+        val trailingRecursiveProofField = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithTrailingRecursiveProofField(),
+            )
+        }
+        assertTrue(trailingRecursiveProofField.message.orEmpty().contains("Trailing bytes after recursive proof"))
+
+        val trailingVerifierKeyIdField = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithTrailingVerifierKeyIdField(),
+            )
+        }
+        assertTrue(trailingVerifierKeyIdField.message.orEmpty().contains("Trailing bytes after verifier key id"))
+
+        val trailingProofBoxField = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithTrailingProofBoxField(),
+            )
+        }
+        assertTrue(trailingProofBoxField.message.orEmpty().contains("Trailing bytes after proof"))
 
         val malformedProofBytes = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -267,6 +321,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 ),
                 "amount",
             ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(
+                    2,
+                    numericPayloadWithTrailingField(),
+                ),
+                "Trailing bytes after field decode",
+            ),
         )
         malformedCurrentNotes.forEach { (archive, expectedField) ->
             val malformedCurrentNote = assertFailsWith<IllegalArgumentException> {
@@ -274,6 +335,18 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             }
             assertTrue(malformedCurrentNote.message.orEmpty().contains(expectedField))
         }
+        val trailingBundleField = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithTrailingBundleField(),
+            )
+        }
+        assertTrue(trailingBundleField.message.orEmpty().contains("Trailing bytes after bundle"))
+        val trailingCurrentNoteField = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithTrailingCurrentNoteField(),
+            )
+        }
+        assertTrue(trailingCurrentNoteField.message.orEmpty().contains("Trailing bytes after field decode"))
 
         val malformedDomain = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -285,6 +358,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         assertTrue(malformedDomain.message.orEmpty().contains("bundle.accumulator.domain"))
         val malformedAccumulatorFields = listOf(
+            Triple(1, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id"),
             Triple(2, fixedArrayPayload(0x01, 15), "asset"),
             Triple(2, fixedArrayPayload(0x01, 17), "asset"),
             Triple(3, fixedArrayPayload(0x02, 31), "initial_root"),
@@ -311,6 +385,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             }
             assertTrue(malformedField.message.orEmpty().contains(expectedField))
         }
+        val trailingAccumulatorField = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithTrailingAccumulatorField(),
+            )
+        }
+        assertTrue(trailingAccumulatorField.message.orEmpty().contains("Trailing bytes after accumulator"))
     }
 
     @Test
@@ -2094,6 +2174,132 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
     }
 
+    private fun recursiveSpendBundleWithTrailingBundleField(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        bundleFields.add(testStringPayload("ignored-extra-bundle-field"))
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendVerifyResultWithTrailingField(): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT,
+            ),
+        ).toMutableList()
+        fields.add(byteArrayOf(0x01))
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendLineageWitnessWithTrailingField(): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        fields.add(testStringPayload("ignored-extra-lineage-witness-field"))
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendLineageWitnessWithTrailingPreviousProofsField(): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        fields[3] = fields[3] + encodeFields(listOf(testStringPayload("ignored-extra-previous-proofs-field")))
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendLineageWitnessWithTrailingPreviousProofField(): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        val previousProofs = sequencePayloads(fields[3]).toMutableList()
+        assertTrue(previousProofs.isNotEmpty())
+        val previousProofFields = fieldPayloads(previousProofs[0]).toMutableList()
+        previousProofFields.add(testStringPayload("ignored-extra-previous-proof-field"))
+        previousProofs[0] = encodeFields(previousProofFields)
+        fields[3] = encodeSequence(previousProofs)
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(): ByteArray {
+        val fields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            ),
+        ).toMutableList()
+        val previousProofs = sequencePayloads(fields[3]).toMutableList()
+        assertTrue(previousProofs.isNotEmpty())
+        val previousProofFields = fieldPayloads(previousProofs[0]).toMutableList()
+        val verifierKeyIdFields = fieldPayloads(previousProofFields[0]).toMutableList()
+        verifierKeyIdFields.add(testStringPayload("ignored-extra-previous-verifier-key-field"))
+        previousProofFields[0] = encodeFields(verifierKeyIdFields)
+        previousProofs[0] = encodeFields(previousProofFields)
+        fields[3] = encodeSequence(previousProofs)
+        return NoritoCodec.encode(
+            encodeFields(fields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithTrailingAccumulatorField(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val accumulatorFields = fieldPayloads(bundleFields[0]).toMutableList()
+        accumulatorFields.add(testStringPayload("ignored-extra-accumulator-field"))
+        bundleFields[0] = encodeFields(accumulatorFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
     private fun recursiveSpendBundleWithCurrentNoteField(
         fieldIndex: Int,
         replacement: ByteArray,
@@ -2107,6 +2313,26 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val accumulatorFields = fieldPayloads(bundleFields[0]).toMutableList()
         val currentNoteFields = fieldPayloads(accumulatorFields[22]).toMutableList()
         currentNoteFields[fieldIndex] = replacement
+        accumulatorFields[22] = encodeFields(currentNoteFields)
+        bundleFields[0] = encodeFields(accumulatorFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithTrailingCurrentNoteField(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val accumulatorFields = fieldPayloads(bundleFields[0]).toMutableList()
+        val currentNoteFields = fieldPayloads(accumulatorFields[22]).toMutableList()
+        currentNoteFields.add(testStringPayload("ignored-extra-current-note-field"))
         accumulatorFields[22] = encodeFields(currentNoteFields)
         bundleFields[0] = encodeFields(accumulatorFields)
         return NoritoCodec.encode(
@@ -2147,6 +2373,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 littleEndianU32(scale.toLong()),
             ),
         )
+
+    private fun numericPayloadWithTrailingField(): ByteArray =
+        numericPayload(byteArrayOf(1)) + encodeFields(listOf(littleEndianU32(0x42)))
 
     private fun littleEndianU32(value: Long): ByteArray =
         byteArrayOf(
@@ -2190,6 +2419,84 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         require(replacements == 2) { "test proof backend fixture replacements must be exhaustive" }
         return NoritoCodec.encode(
             mutatedPayload,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithProofBoxBackend(proofBackend: String): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        val proofBoxFields = fieldPayloads(proofFields[3]).toMutableList()
+        proofBoxFields[0] = testStringPayload(proofBackend)
+        proofFields[3] = encodeFields(proofBoxFields)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithTrailingVerifierKeyIdField(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        val verifierKeyIdFields = fieldPayloads(proofFields[0]).toMutableList()
+        verifierKeyIdFields.add(testStringPayload("ignored-extra-verifier-key-field"))
+        proofFields[0] = encodeFields(verifierKeyIdFields)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithTrailingRecursiveProofField(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        proofFields.add(testStringPayload("ignored-extra-recursive-proof-field"))
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithTrailingProofBoxField(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        val proofBoxFields = fieldPayloads(proofFields[3]).toMutableList()
+        proofBoxFields.add(testStringPayload("ignored-extra-proof-box-field"))
+        proofFields[3] = encodeFields(proofBoxFields)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
             RawPayloadAdapter,
             NoritoHeader.COMPACT_LEN,
@@ -2314,6 +2621,15 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private fun encodeFields(fields: List<ByteArray>): ByteArray =
         testPayload {
+            for (field in fields) {
+                writeLength(field.size.toLong(), true)
+                writeBytes(field)
+            }
+        }
+
+    private fun encodeSequence(fields: List<ByteArray>): ByteArray =
+        testPayload {
+            writeUInt(fields.size.toLong(), 64)
             for (field in fields) {
                 writeLength(field.size.toLong(), true)
                 writeBytes(field)

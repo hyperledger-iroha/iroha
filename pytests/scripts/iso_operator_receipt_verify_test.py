@@ -76,6 +76,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("x--iroha--signature_receipt_unknown_leak", "receipt_unknown_leak"),
             ("unexpected\x1breceipt_key", "\x1b"),
             ("unexpected_receipt_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -1718,7 +1719,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("contains unknown keys: operator_comment", stderr)
+            self.assertIn("contains unknown keys", stderr)
+            self.assertNotIn("operator_comment", stderr)
 
     def test_endpoint_digest_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2018,6 +2020,33 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertIn("message_type must use printable ASCII", stderr)
                     self.assertNotIn(hidden, stderr)
                     self.assertNotIn(unicode_digit_message_type, stderr)
+
+    def test_unsupported_rail_message_type_is_rejected_without_echo(self):
+        hidden = "zzzz.999"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(receipt, lambda body: body.update({"message_type": hidden}))
+
+            rc, _stdout, stderr = run_verify(["--receipt", str(receipt), "--allow-insecure-http"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("unsupported rail message_type", stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_status_timestamp_and_response_metadata_are_consistent(self):
         cases = [
@@ -2519,7 +2548,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 ),
-                "contains unknown keys: operator_note",
+                "contains unknown keys",
             ),
             (
                 "profile_whitespace",
@@ -3677,7 +3706,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             (
                 "unknown_anchor_field",
                 unknown_anchor_field,
-                "contains unknown keys: operator_note",
+                "contains unknown keys",
             ),
             (
                 "boolean_receipt_record_count",
@@ -3697,12 +3726,12 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             (
                 "unknown_exported_index_field",
                 unknown_exported_index_field,
-                "contains unknown keys: operator_note",
+                "contains unknown keys",
             ),
             (
                 "unknown_embedded_record_field",
                 unknown_embedded_record_field,
-                "contains unknown keys: operator_note",
+                "contains unknown keys",
             ),
             (
                 "missing_nullable_embedded_record_field",
@@ -4146,6 +4175,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
             self.assertEqual(rc, 2)
             self.assertIn("legacy rail message_type", stderr)
+            self.assertNotIn("colr.007", stderr)
 
             rc, stdout, stderr = run_verify(
                 [
@@ -4416,6 +4446,35 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertIn("receipt_kind must use printable ASCII", stderr)
             self.assertNotIn(hidden, stderr)
             self.assertNotIn("unsupported receipt_kind", stderr)
+
+    def test_unsupported_receipt_kind_is_rejected_without_echo(self):
+        hidden = "diagnostic-receipt"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            "--receipt-dir",
+                            str(inbox / "receipts"),
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(receipt, lambda body: body.update({"receipt_kind": hidden}))
+
+            rc, _stdout, stderr = run_verify(["--receipt", str(receipt), "--allow-insecure-http"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("unsupported receipt_kind", stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_endpoint_urls_reject_secret_path_without_echo(self):
         cases = (

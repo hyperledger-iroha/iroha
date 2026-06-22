@@ -29,7 +29,16 @@ const DEFAULT_SCORE_STYLES_FPS: u16 = 24;
 const DEFAULT_TARGET_EFFECTIVE_BPS: u64 = 3_000;
 const DEFAULT_ENCODE_DIMENSION: u32 = 1_024;
 const MAX_ENCODE_DIMENSION: u32 = 4_096;
+const MAX_ANIMATION_FRAMES: u16 = 120;
+const DEFAULT_CAPTURE_DOWNSCALE_CELLS: u8 = 1;
+const MAX_CAPTURE_DOWNSCALE_CELLS: u8 = 8;
+const MAX_CAPTURE_BLUR_RADIUS: u8 = 4;
+const MAX_CAPTURE_MOTION_BLUR_CELLS: u8 = 8;
+const MAX_CAPTURE_NOISE_AMPLITUDE: u8 = 64;
+const MIN_CAPTURE_EXPOSURE_OFFSET: i16 = -255;
+const MAX_CAPTURE_EXPOSURE_OFFSET: i16 = 255;
 const DEFAULT_STYLE_NAME: &str = "sora-temple";
+const KATAKANA_STYLE_NAME: &str = "sora-temple-command";
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
@@ -83,13 +92,13 @@ pub(crate) struct EncodeArgs {
     /// Output directory for rendered frames and manifest.
     #[arg(long, value_name = "DIR")]
     output: PathBuf,
-    /// Output format. PNG is implemented for the core deterministic grid.
+    /// Output format. PNG is implemented for all deterministic Petal channels.
     #[arg(long, value_enum, default_value_t = PetalEncodeFormatArg::Png)]
     format: PetalEncodeFormatArg,
-    /// Renderer style. Current PNG output uses the decode-critical grid layer.
+    /// Renderer style. Binary grid uses `sora-temple`; Katakana uses `sora-temple-command`.
     #[arg(long, value_enum, default_value_t = PetalEncodeStyleArg::SoraTemple)]
     style: PetalEncodeStyleArg,
-    /// Visual channel. Current PNG output supports only the binary Petal grid.
+    /// Visual channel.
     #[arg(long, value_enum, default_value_t = PetalEncodeChannelArg::BinaryGrid)]
     channel: PetalEncodeChannelArg,
     /// Square output dimension in pixels.
@@ -98,6 +107,9 @@ pub(crate) struct EncodeArgs {
     /// Frames per second metadata for downstream animation tooling.
     #[arg(long, default_value_t = DEFAULT_SCORE_STYLES_FPS)]
     fps: u16,
+    /// Number of deterministic animation frames to render.
+    #[arg(long = "animation-frames", default_value_t = 1)]
+    animation_frames: u16,
     /// Override the Petal grid size. Zero keeps automatic sizing.
     #[arg(long = "grid-size", default_value_t = 0)]
     grid_size: u16,
@@ -114,7 +126,7 @@ pub(crate) struct EvalCaptureArgs {
     /// Directory containing rendered PNG frames, or an encode output directory with manifest.json.
     #[arg(long = "input-dir", value_name = "DIR")]
     input_dir: PathBuf,
-    /// Visual channel. Current evaluation supports only the binary Petal grid.
+    /// Visual channel used by the rendered input.
     #[arg(long, value_enum, default_value_t = PetalEncodeChannelArg::BinaryGrid)]
     channel: PetalEncodeChannelArg,
     /// Deterministic capture profile label recorded in the report.
@@ -148,7 +160,7 @@ pub(crate) struct SimulateRealtimeArgs {
     /// Directory containing rendered PNG frames, or an encode output directory with manifest.json.
     #[arg(long = "input-dir", value_name = "DIR")]
     input_dir: PathBuf,
-    /// Visual channel. Current realtime simulation supports only the binary Petal grid.
+    /// Visual channel used by the rendered input.
     #[arg(long, value_enum, default_value_t = PetalEncodeChannelArg::BinaryGrid)]
     channel: PetalEncodeChannelArg,
     /// Deterministic capture profile label recorded in the report.
@@ -229,7 +241,7 @@ pub(crate) struct ScoreStylesArgs {
     luminance_jitter: Option<u8>,
 }
 
-#[derive(Args, Debug, Clone, Default)]
+#[derive(Args, Debug, Clone)]
 struct CapturePerturbationArgs {
     /// Apply deterministic profile luminance perturbation before decoding.
     #[arg(long = "perturb-capture", default_value_t = false)]
@@ -249,13 +261,46 @@ struct CapturePerturbationArgs {
     /// Override perturbed deterministic luminance jitter.
     #[arg(long = "capture-luminance-jitter")]
     luminance_jitter: Option<u8>,
+    /// Average capture samples into cell blocks before decoding.
+    #[arg(long = "capture-downscale-cells", default_value_t = DEFAULT_CAPTURE_DOWNSCALE_CELLS)]
+    downscale_cells: u8,
+    /// Apply deterministic box blur over capture samples before decoding.
+    #[arg(long = "capture-blur-radius", default_value_t = 0)]
+    blur_radius: u8,
+    /// Apply deterministic horizontal motion blur over capture samples before decoding.
+    #[arg(long = "capture-motion-blur-cells", default_value_t = 0)]
+    motion_blur_cells: u8,
+    /// Apply deterministic per-cell sensor noise before decoding.
+    #[arg(long = "capture-noise-amplitude", default_value_t = 0)]
+    noise_amplitude: u8,
+    /// Add a deterministic exposure offset to capture samples before decoding.
+    #[arg(long = "capture-exposure-offset", default_value_t = 0)]
+    exposure_offset: i16,
+}
+
+impl Default for CapturePerturbationArgs {
+    fn default() -> Self {
+        Self {
+            perturb_capture: false,
+            seed: 0,
+            attempts: None,
+            dark_luma: None,
+            light_luma: None,
+            luminance_jitter: None,
+            downscale_cells: DEFAULT_CAPTURE_DOWNSCALE_CELLS,
+            blur_radius: 0,
+            motion_blur_cells: 0,
+            noise_amplitude: 0,
+            exposure_offset: 0,
+        }
+    }
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetalEncodeFormatArg {
     /// Single-frame PNG output.
     Png,
-    /// Animated GIF output is reserved for the renderer-backed path.
+    /// Animated GIF output is implemented for the binary grid channel.
     Gif,
 }
 
@@ -269,13 +314,6 @@ impl std::fmt::Display for PetalEncodeFormatArg {
 }
 
 impl PetalEncodeFormatArg {
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Png => "png",
-            Self::Gif => "gif",
-        }
-    }
-
     fn validate_available(self) -> Result<()> {
         match self {
             Self::Png => Ok(()),
@@ -296,11 +334,23 @@ fn validate_gif_available() -> Result<()> {
     ))
 }
 
+#[cfg(feature = "offline-visual-codecs")]
+fn validate_gif_replay_available() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "offline-visual-codecs"))]
+fn validate_gif_replay_available() -> Result<()> {
+    Err(eyre!(
+        "GIF replay requires building iroha_cli with --features offline-visual-codecs"
+    ))
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetalEncodeStyleArg {
     /// Decode-critical SORA temple grid layer.
     SoraTemple,
-    /// Katakana command styling is reserved for the renderer-backed path.
+    /// Katakana command styling for the deterministic Katakana-base94 channel.
     SoraTempleCommand,
 }
 
@@ -308,7 +358,7 @@ impl std::fmt::Display for PetalEncodeStyleArg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SoraTemple => f.write_str("sora-temple"),
-            Self::SoraTempleCommand => f.write_str("sora-temple-command"),
+            Self::SoraTempleCommand => f.write_str(KATAKANA_STYLE_NAME),
         }
     }
 }
@@ -317,7 +367,7 @@ impl std::fmt::Display for PetalEncodeStyleArg {
 pub(crate) enum PetalEncodeChannelArg {
     /// Binary luminance grid suitable for scanner bring-up.
     BinaryGrid,
-    /// Katakana base94 rendering is reserved for the renderer-backed path.
+    /// Deterministic Katakana command-tile rendering with Petal luminance anchors.
     KatakanaBase94,
 }
 
@@ -334,12 +384,15 @@ impl std::fmt::Display for PetalEncodeChannelArg {
 pub(crate) enum PetalStyleSetArg {
     /// Current production Petal style family.
     SoraTempleDefault,
+    /// Production Petal style family plus deterministic hardening variants.
+    SoraTempleExpanded,
 }
 
 impl std::fmt::Display for PetalStyleSetArg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SoraTempleDefault => f.write_str("sora-temple-default"),
+            Self::SoraTempleExpanded => f.write_str("sora-temple-expanded"),
         }
     }
 }
@@ -395,8 +448,17 @@ impl EncodeArgs {
         let format_dir = self.output.join(self.format.to_string());
         fs::create_dir_all(&format_dir)
             .wrap_err_with(|| format!("failed to create {}", format_dir.display()))?;
-        let frame_path = format_dir.join(format!("frame_0000.{}", self.format.extension()));
-        write_grid_image(&frame_path, &grid, self.dimension, self.format, self.fps)?;
+        let frames = write_grid_output(
+            &format_dir,
+            &grid,
+            options,
+            self.dimension,
+            self.format,
+            self.channel,
+            self.fps,
+            self.animation_frames,
+            payload.len() as u64,
+        )?;
 
         let report = EncodeReport {
             schema: ENCODE_SCHEMA.to_string(),
@@ -407,6 +469,7 @@ impl EncodeArgs {
             style: self.style.to_string(),
             channel: self.channel.to_string(),
             fps: self.fps,
+            animation_frames: self.animation_frames,
             dimension: self.dimension,
             grid: GridReport {
                 requested_grid_size: self.grid_size,
@@ -414,11 +477,7 @@ impl EncodeArgs {
                 border: self.border,
                 anchor_size: self.anchor_size,
             },
-            frames: vec![EncodeFrameReport {
-                index: 0,
-                path: frame_path.display().to_string(),
-                payload_bytes: payload.len() as u64,
-            }],
+            frames,
         };
         let manifest_path = self.output.join("manifest.json");
         write_encode_manifest(&manifest_path, &report)?;
@@ -426,19 +485,25 @@ impl EncodeArgs {
     }
 
     fn validate(&self) -> Result<()> {
+        match self.channel {
+            PetalEncodeChannelArg::BinaryGrid => {
+                if self.style != PetalEncodeStyleArg::SoraTemple {
+                    return Err(eyre!(
+                        "--channel binary-grid requires --style {}",
+                        PetalEncodeStyleArg::SoraTemple
+                    ));
+                }
+            }
+            PetalEncodeChannelArg::KatakanaBase94 => {
+                if self.style != PetalEncodeStyleArg::SoraTempleCommand {
+                    return Err(eyre!(
+                        "--channel katakana-base94 requires --style {}",
+                        PetalEncodeStyleArg::SoraTempleCommand
+                    ));
+                }
+            }
+        }
         self.format.validate_available()?;
-        if self.style != PetalEncodeStyleArg::SoraTemple {
-            return Err(eyre!(
-                "--style {} is planned for renderer-backed output; use --style sora-temple",
-                self.style
-            ));
-        }
-        if self.channel != PetalEncodeChannelArg::BinaryGrid {
-            return Err(eyre!(
-                "--channel {} is planned for renderer-backed output; use --channel binary-grid",
-                self.channel
-            ));
-        }
         if self.dimension == 0 {
             return Err(eyre!("--dimension must be greater than 0"));
         }
@@ -450,6 +515,15 @@ impl EncodeArgs {
         }
         if self.fps == 0 {
             return Err(eyre!("--fps must be greater than 0"));
+        }
+        if self.animation_frames == 0 {
+            return Err(eyre!("--animation-frames must be greater than 0"));
+        }
+        if self.animation_frames > MAX_ANIMATION_FRAMES {
+            return Err(eyre!(
+                "--animation-frames must be <= {} for bounded offline rendering",
+                MAX_ANIMATION_FRAMES
+            ));
         }
         Ok(())
     }
@@ -509,11 +583,11 @@ impl EvalCaptureArgs {
         let mut aborted_early = false;
         let mut frames = Vec::with_capacity(planned_attempts as usize);
 
-        for (source_index, path) in input.frames.iter().enumerate() {
+        for (source_index, frame) in input.frames.iter().enumerate() {
             for capture_attempt_index in 0..attempts_per_frame {
                 attempts = attempts.saturating_add(1);
-                let result = evaluate_png_frame(
-                    path,
+                let result = evaluate_source_frame(
+                    frame,
                     options,
                     input.payload_bytes,
                     capture,
@@ -530,7 +604,7 @@ impl EvalCaptureArgs {
                     index: attempts.saturating_sub(1),
                     source_index: u16::try_from(source_index).unwrap_or(u16::MAX),
                     capture_attempt_index,
-                    path: path.display().to_string(),
+                    path: frame.report_path(),
                     success,
                     decoded_payload_bytes,
                     error,
@@ -559,6 +633,11 @@ impl EvalCaptureArgs {
             capture_seed: capture.map(|active| active.seed),
             capture_attempts_per_frame: attempts_per_frame,
             capture_profile: capture.map(|active| CaptureProfileReport::from(active.profile)),
+            capture_downscale_cells: capture.map(|active| active.downscale_cells),
+            capture_blur_radius: capture.map(|active| active.blur_radius),
+            capture_motion_blur_cells: capture.map(|active| active.motion_blur_cells),
+            capture_noise_amplitude: capture.map(|active| active.noise_amplitude),
+            capture_exposure_offset: capture.map(|active| active.exposure_offset),
             min_success_ratio_bps,
             planned_attempts,
             attempts,
@@ -573,12 +652,6 @@ impl EvalCaptureArgs {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.channel != PetalEncodeChannelArg::BinaryGrid {
-            return Err(eyre!(
-                "--channel {} is planned for renderer-backed evaluation; use --channel binary-grid",
-                self.channel
-            ));
-        }
         if self.min_success_ratio.is_some() && self.min_success_ratio_bps.is_some() {
             return Err(eyre!(
                 "pass only one of --min-success-ratio or --min-success-ratio-bps"
@@ -666,11 +739,11 @@ impl SimulateRealtimeArgs {
         let mut frames = Vec::new();
 
         for loop_index in 0..self.realtime_loops {
-            for (source_index, path) in input.frames.iter().enumerate() {
+            for (source_index, frame) in input.frames.iter().enumerate() {
                 for capture_attempt_index in 0..attempts_per_frame {
                     attempts = attempts.saturating_add(1);
-                    let result = decode_png_frame_payload(
-                        path,
+                    let result = decode_source_frame_payload(
+                        frame,
                         options,
                         input.payload_bytes,
                         capture,
@@ -694,7 +767,7 @@ impl SimulateRealtimeArgs {
                         loop_index,
                         source_index: u16::try_from(source_index).unwrap_or(u16::MAX),
                         capture_attempt_index,
-                        path: path.display().to_string(),
+                        path: frame.report_path(),
                         success,
                         decoded_payload_bytes,
                         error,
@@ -723,6 +796,11 @@ impl SimulateRealtimeArgs {
             capture_seed: capture.map(|active| active.seed),
             capture_attempts_per_frame: attempts_per_frame,
             capture_profile: capture.map(|active| CaptureProfileReport::from(active.profile)),
+            capture_downscale_cells: capture.map(|active| active.downscale_cells),
+            capture_blur_radius: capture.map(|active| active.blur_radius),
+            capture_motion_blur_cells: capture.map(|active| active.motion_blur_cells),
+            capture_noise_amplitude: capture.map(|active| active.noise_amplitude),
+            capture_exposure_offset: capture.map(|active| active.exposure_offset),
             simulate_fps: self.simulate_fps,
             realtime_loops: self.realtime_loops,
             planned_attempts,
@@ -739,12 +817,6 @@ impl SimulateRealtimeArgs {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.channel != PetalEncodeChannelArg::BinaryGrid {
-            return Err(eyre!(
-                "--channel {} is planned for renderer-backed realtime simulation; use --channel binary-grid",
-                self.channel
-            ));
-        }
         if self.simulate_fps == 0 {
             return Err(eyre!("--simulate-fps must be greater than 0"));
         }
@@ -809,14 +881,13 @@ impl ScoreStylesArgs {
             effective_payload_bytes_per_second.saturating_mul(8);
         let styles = self
             .style_set
-            .style_names()
+            .style_candidates(base_profile)
             .into_iter()
-            .map(|style| {
+            .map(|candidate| {
                 score_style(
-                    style,
+                    candidate,
                     &payload,
                     options,
-                    base_profile,
                     self.seed,
                     self.min_success_ratio_bps,
                     effective_payload_bytes_per_second,
@@ -882,6 +953,11 @@ impl ScoreStylesArgs {
 struct ActiveCapturePerturbation {
     profile: PetalStreamCaptureProfile,
     seed: u64,
+    downscale_cells: u8,
+    blur_radius: u8,
+    motion_blur_cells: u8,
+    noise_amplitude: u8,
+    exposure_offset: i16,
 }
 
 impl CapturePerturbationArgs {
@@ -892,6 +968,11 @@ impl CapturePerturbationArgs {
                 || self.dark_luma.is_some()
                 || self.light_luma.is_some()
                 || self.luminance_jitter.is_some()
+                || self.downscale_cells != DEFAULT_CAPTURE_DOWNSCALE_CELLS
+                || self.blur_radius != 0
+                || self.motion_blur_cells != 0
+                || self.noise_amplitude != 0
+                || self.exposure_offset != 0
             {
                 return Err(eyre!(
                     "capture perturbation overrides require --perturb-capture"
@@ -900,7 +981,44 @@ impl CapturePerturbationArgs {
             return Ok(());
         }
         let profile = self.profile(profile_arg);
-        validate_capture_profile_for_cli(profile)
+        validate_capture_profile_for_cli(profile)?;
+        if self.downscale_cells == 0 {
+            return Err(eyre!("--capture-downscale-cells must be greater than 0"));
+        }
+        if self.downscale_cells > MAX_CAPTURE_DOWNSCALE_CELLS {
+            return Err(eyre!(
+                "--capture-downscale-cells must be <= {}",
+                MAX_CAPTURE_DOWNSCALE_CELLS
+            ));
+        }
+        if self.blur_radius > MAX_CAPTURE_BLUR_RADIUS {
+            return Err(eyre!(
+                "--capture-blur-radius must be <= {}",
+                MAX_CAPTURE_BLUR_RADIUS
+            ));
+        }
+        if self.motion_blur_cells > MAX_CAPTURE_MOTION_BLUR_CELLS {
+            return Err(eyre!(
+                "--capture-motion-blur-cells must be <= {}",
+                MAX_CAPTURE_MOTION_BLUR_CELLS
+            ));
+        }
+        if self.noise_amplitude > MAX_CAPTURE_NOISE_AMPLITUDE {
+            return Err(eyre!(
+                "--capture-noise-amplitude must be <= {}",
+                MAX_CAPTURE_NOISE_AMPLITUDE
+            ));
+        }
+        if !(MIN_CAPTURE_EXPOSURE_OFFSET..=MAX_CAPTURE_EXPOSURE_OFFSET)
+            .contains(&self.exposure_offset)
+        {
+            return Err(eyre!(
+                "--capture-exposure-offset must be between {} and {}",
+                MIN_CAPTURE_EXPOSURE_OFFSET,
+                MAX_CAPTURE_EXPOSURE_OFFSET
+            ));
+        }
+        Ok(())
     }
 
     fn active(&self, profile_arg: PetalCaptureProfileArg) -> Result<Option<ActiveCapturePerturbation>> {
@@ -908,6 +1026,11 @@ impl CapturePerturbationArgs {
         Ok(self.perturb_capture.then(|| ActiveCapturePerturbation {
             profile: self.profile(profile_arg),
             seed: self.seed,
+            downscale_cells: self.downscale_cells,
+            blur_radius: self.blur_radius,
+            motion_blur_cells: self.motion_blur_cells,
+            noise_amplitude: self.noise_amplitude,
+            exposure_offset: self.exposure_offset,
         }))
     }
 
@@ -942,37 +1065,74 @@ fn validate_capture_profile_for_cli(profile: PetalStreamCaptureProfile) -> Resul
 }
 
 impl PetalStyleSetArg {
-    fn style_names(self) -> Vec<&'static str> {
+    fn style_candidates(self, base_profile: PetalStreamCaptureProfile) -> Vec<PetalStyleCandidate> {
         match self {
-            Self::SoraTempleDefault => vec![DEFAULT_STYLE_NAME],
+            Self::SoraTempleDefault => vec![PetalStyleCandidate {
+                name: DEFAULT_STYLE_NAME,
+                capture_profile: base_profile,
+            }],
+            Self::SoraTempleExpanded => vec![
+                PetalStyleCandidate {
+                    name: DEFAULT_STYLE_NAME,
+                    capture_profile: base_profile,
+                },
+                PetalStyleCandidate {
+                    name: "sora-temple-high-contrast",
+                    capture_profile: high_contrast_capture_profile(base_profile),
+                },
+            ],
         }
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PetalStyleCandidate {
+    name: &'static str,
+    capture_profile: PetalStreamCaptureProfile,
+}
+
+fn high_contrast_capture_profile(
+    mut profile: PetalStreamCaptureProfile,
+) -> PetalStreamCaptureProfile {
+    profile.dark_luma = profile.dark_luma.saturating_sub(64);
+    profile.light_luma = profile.light_luma.saturating_add(64);
+    profile
+}
+
 fn score_style(
-    style: &str,
+    candidate: PetalStyleCandidate,
     payload: &[u8],
     options: PetalStreamOptions,
-    profile: PetalStreamCaptureProfile,
     seed: u64,
     min_success_ratio_bps: u16,
     effective_payload_bytes_per_second: u64,
     effective_payload_bits_per_second: u64,
     target_effective_bps: u64,
 ) -> Result<StyleScoreReport> {
-    let score = score_petal_capture_profile_with_seed(payload, options, profile, seed)
-        .map_err(|err| eyre!("failed to score style '{style}': {err}"))?;
+    let score = score_petal_capture_profile_with_seed(
+        payload,
+        options,
+        candidate.capture_profile,
+        seed,
+    )
+    .map_err(|err| eyre!("failed to score style '{}': {err}", candidate.name))?;
     let capture_success_ratio_bps = score.success_ratio_bps();
     let capture_gate_passed = score
         .meets_min_success_ratio_bps(min_success_ratio_bps)
-        .map_err(|err| eyre!("failed to evaluate capture gate for style '{style}': {err}"))?;
+        .map_err(|err| {
+            eyre!(
+                "failed to evaluate capture gate for style '{}': {err}",
+                candidate.name
+            )
+        })?;
     let throughput_score_bps =
         throughput_score_bps(effective_payload_bits_per_second, target_effective_bps);
     let throughput_gate_passed =
         target_effective_bps == 0 || effective_payload_bits_per_second >= target_effective_bps;
     let overall_score_bps = capture_success_ratio_bps.min(throughput_score_bps);
     Ok(StyleScoreReport {
-        style: style.to_string(),
+        style: candidate.name.to_string(),
+        capture_profile: CaptureProfileReport::from(candidate.capture_profile),
         capture_attempts: score.attempts,
         capture_successes: score.successes,
         capture_success_ratio_bps,
@@ -1024,8 +1184,9 @@ fn ratio_bps(successes: u32, attempts: u32) -> u16 {
 
 fn required_successes(attempts: u32, min_success_ratio_bps: u16) -> Result<u32> {
     validate_success_ratio_bps(min_success_ratio_bps)?;
-    let numerator = attempts * u32::from(min_success_ratio_bps);
-    Ok(numerator.div_ceil(u32::from(PETAL_CAPTURE_RATIO_BPS_SCALE)))
+    let numerator = u64::from(attempts) * u64::from(min_success_ratio_bps);
+    let required = numerator.div_ceil(u64::from(PETAL_CAPTURE_RATIO_BPS_SCALE));
+    u32::try_from(required).map_err(|_| eyre!("required capture successes exceed u32"))
 }
 
 fn validate_success_ratio_bps(value: u16) -> Result<u16> {
@@ -1081,7 +1242,36 @@ struct EvalCaptureInput {
     manifest_path: Option<PathBuf>,
     payload_bytes: Option<u64>,
     grid: GridReport,
-    frames: Vec<PathBuf>,
+    frames: Vec<EvalCaptureSourceFrame>,
+}
+
+#[derive(Clone, Debug)]
+struct EvalCaptureSourceFrame {
+    path: PathBuf,
+    format: PetalEncodeFormatArg,
+    encoded_frame_index: u16,
+}
+
+impl EvalCaptureSourceFrame {
+    fn png(path: PathBuf) -> Self {
+        Self {
+            path,
+            format: PetalEncodeFormatArg::Png,
+            encoded_frame_index: 0,
+        }
+    }
+
+    fn report_path(&self) -> String {
+        if self.format == PetalEncodeFormatArg::Gif {
+            format!(
+                "{}#frame_{}",
+                self.path.display(),
+                self.encoded_frame_index
+            )
+        } else {
+            self.path.display().to_string()
+        }
+    }
 }
 
 fn resolve_eval_capture_input(args: &EvalCaptureArgs) -> Result<EvalCaptureInput> {
@@ -1099,11 +1289,14 @@ fn resolve_eval_capture_input(args: &EvalCaptureArgs) -> Result<EvalCaptureInput
             "manifest.json not found; pass --grid-size for manifest-free PNG directories"
         ));
     }
-    let mut frames = collect_png_frames(&args.input_dir)?;
+    let mut frames = collect_png_frames(&args.input_dir)?
+        .into_iter()
+        .map(EvalCaptureSourceFrame::png)
+        .collect::<Vec<_>>();
     if frames.is_empty() {
         return Err(eyre!("no PNG frames found in {}", args.input_dir.display()));
     }
-    frames.sort();
+    frames.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(EvalCaptureInput {
         manifest_path: None,
         payload_bytes: None,
@@ -1141,9 +1334,9 @@ fn resolve_eval_capture_manifest_input(
             "unsupported Petal manifest schema '{schema}', expected {ENCODE_SCHEMA}"
         ));
     }
-    let format = json_str_field(&value, "format")?;
-    if format != "png" {
-        return Err(eyre!("eval-capture supports PNG manifests, found '{format}'"));
+    let format = parse_manifest_format(json_str_field(&value, "format")?)?;
+    if format == PetalEncodeFormatArg::Gif {
+        validate_gif_replay_available()?;
     }
     let channel = json_str_field(&value, "channel")?;
     if channel != args.channel.to_string() {
@@ -1173,7 +1366,30 @@ fn resolve_eval_capture_manifest_input(
             .get("path")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("manifest frame {idx} missing path"))?;
-        frames.push(resolve_manifest_frame_path(manifest_parent, path));
+        let path = resolve_manifest_frame_path(manifest_parent, path);
+        let encoded_frame_count = optional_json_u16_field(frame, "encoded_frame_count")?.unwrap_or(1);
+        if encoded_frame_count == 0 {
+            return Err(eyre!("manifest frame {idx} encoded_frame_count must be > 0"));
+        }
+        match format {
+            PetalEncodeFormatArg::Png => {
+                if encoded_frame_count != 1 {
+                    return Err(eyre!(
+                        "PNG manifest frame {idx} encoded_frame_count must be 1"
+                    ));
+                }
+                frames.push(EvalCaptureSourceFrame::png(path));
+            }
+            PetalEncodeFormatArg::Gif => {
+                for encoded_frame_index in 0..encoded_frame_count {
+                    frames.push(EvalCaptureSourceFrame {
+                        path: path.clone(),
+                        format,
+                        encoded_frame_index,
+                    });
+                }
+            }
+        }
     }
     if frames.is_empty() {
         return Err(eyre!("manifest contains no frames"));
@@ -1205,22 +1421,22 @@ fn collect_png_frames(input_dir: &Path) -> Result<Vec<PathBuf>> {
 
 fn resolve_manifest_frame_path(manifest_parent: &Path, raw: &str) -> PathBuf {
     let path = PathBuf::from(raw);
-    if path.is_absolute() || path.exists() {
+    if path.is_absolute() {
         path
     } else {
         manifest_parent.join(path)
     }
 }
 
-fn evaluate_png_frame(
-    path: &Path,
+fn evaluate_source_frame(
+    frame: &EvalCaptureSourceFrame,
     options: PetalStreamOptions,
     expected_payload_bytes: Option<u64>,
     capture: Option<ActiveCapturePerturbation>,
     capture_attempt_index: u16,
 ) -> Result<usize> {
-    decode_png_frame_payload(
-        path,
+    decode_source_frame_payload(
+        frame,
         options,
         expected_payload_bytes,
         capture,
@@ -1229,14 +1445,14 @@ fn evaluate_png_frame(
     .map(|payload| payload.len())
 }
 
-fn decode_png_frame_payload(
-    path: &Path,
+fn decode_source_frame_payload(
+    frame: &EvalCaptureSourceFrame,
     options: PetalStreamOptions,
     expected_payload_bytes: Option<u64>,
     capture: Option<ActiveCapturePerturbation>,
     capture_attempt_index: u16,
 ) -> Result<Vec<u8>> {
-    let mut samples = read_petal_png_samples(path, options.grid_size)?;
+    let mut samples = read_petal_frame_samples(frame, options.grid_size)?;
     if let Some(capture) = capture {
         samples = perturb_petal_samples(&samples, capture, capture_attempt_index)?;
     }
@@ -1273,13 +1489,166 @@ fn perturb_petal_samples(
         .collect::<Vec<_>>();
     let grid = PetalStreamGrid::new(samples.grid_size, cells)
         .map_err(|err| eyre!("failed to build Petal perturbation grid: {err}"))?;
-    render_petal_capture_samples_with_seed(
+    let rendered = render_petal_capture_samples_with_seed(
         &grid,
         capture.profile,
         capture_attempt_index,
         capture.seed,
     )
-    .map_err(|err| eyre!("failed to perturb Petal samples: {err}"))
+    .map_err(|err| eyre!("failed to perturb Petal samples: {err}"))?;
+    apply_capture_sample_models(rendered, capture, capture_attempt_index)
+}
+
+fn apply_capture_sample_models(
+    samples: PetalStreamSampleGrid,
+    capture: ActiveCapturePerturbation,
+    capture_attempt_index: u16,
+) -> Result<PetalStreamSampleGrid> {
+    let mut values = samples.samples;
+    if capture.downscale_cells > DEFAULT_CAPTURE_DOWNSCALE_CELLS {
+        values = downscale_sample_cells(&values, samples.grid_size, capture.downscale_cells)?;
+    }
+    if capture.blur_radius > 0 {
+        values = box_blur_sample_cells(&values, samples.grid_size, capture.blur_radius)?;
+    }
+    if capture.motion_blur_cells > 0 {
+        values = motion_blur_sample_cells(&values, samples.grid_size, capture.motion_blur_cells)?;
+    }
+    if capture.noise_amplitude > 0 {
+        apply_sample_noise(
+            &mut values,
+            capture.noise_amplitude,
+            capture.seed,
+            capture_attempt_index,
+        );
+    }
+    if capture.exposure_offset != 0 {
+        apply_sample_exposure_offset(&mut values, capture.exposure_offset);
+    }
+    PetalStreamSampleGrid::new(samples.grid_size, values)
+        .map_err(|err| eyre!("failed to apply Petal capture sample models: {err}"))
+}
+
+fn downscale_sample_cells(samples: &[u8], grid_size: u16, factor: u8) -> Result<Vec<u8>> {
+    if factor == 0 {
+        return Err(eyre!("capture downscale factor must be greater than 0"));
+    }
+    let grid_size = usize::from(grid_size);
+    if samples.len() != grid_size * grid_size {
+        return Err(eyre!("capture downscale sample grid mismatch"));
+    }
+    let factor = usize::from(factor);
+    let mut out = vec![0u8; samples.len()];
+    for y in 0..grid_size {
+        let block_y = (y / factor) * factor;
+        let y_end = (block_y + factor).min(grid_size);
+        for x in 0..grid_size {
+            let block_x = (x / factor) * factor;
+            let x_end = (block_x + factor).min(grid_size);
+            let mut sum = 0u32;
+            let mut count = 0u32;
+            for yy in block_y..y_end {
+                for xx in block_x..x_end {
+                    sum += u32::from(samples[yy * grid_size + xx]);
+                    count += 1;
+                }
+            }
+            out[y * grid_size + x] = u8::try_from(sum / count).unwrap_or(u8::MAX);
+        }
+    }
+    Ok(out)
+}
+
+fn box_blur_sample_cells(samples: &[u8], grid_size: u16, radius: u8) -> Result<Vec<u8>> {
+    let grid_size = usize::from(grid_size);
+    if samples.len() != grid_size * grid_size {
+        return Err(eyre!("capture blur sample grid mismatch"));
+    }
+    if radius == 0 {
+        return Ok(samples.to_vec());
+    }
+    let radius = usize::from(radius);
+    let mut out = vec![0u8; samples.len()];
+    for y in 0..grid_size {
+        let y_start = y.saturating_sub(radius);
+        let y_end = (y + radius + 1).min(grid_size);
+        for x in 0..grid_size {
+            let x_start = x.saturating_sub(radius);
+            let x_end = (x + radius + 1).min(grid_size);
+            let mut sum = 0u32;
+            let mut count = 0u32;
+            for yy in y_start..y_end {
+                for xx in x_start..x_end {
+                    sum += u32::from(samples[yy * grid_size + xx]);
+                    count += 1;
+                }
+            }
+            out[y * grid_size + x] = u8::try_from(sum / count).unwrap_or(u8::MAX);
+        }
+    }
+    Ok(out)
+}
+
+fn motion_blur_sample_cells(samples: &[u8], grid_size: u16, radius: u8) -> Result<Vec<u8>> {
+    let grid_size = usize::from(grid_size);
+    if samples.len() != grid_size * grid_size {
+        return Err(eyre!("capture motion blur sample grid mismatch"));
+    }
+    if radius == 0 {
+        return Ok(samples.to_vec());
+    }
+    let radius = usize::from(radius);
+    let mut out = vec![0u8; samples.len()];
+    for y in 0..grid_size {
+        for x in 0..grid_size {
+            let x_start = x.saturating_sub(radius);
+            let x_end = (x + radius + 1).min(grid_size);
+            let mut sum = 0u32;
+            let mut count = 0u32;
+            for xx in x_start..x_end {
+                sum += u32::from(samples[y * grid_size + xx]);
+                count += 1;
+            }
+            out[y * grid_size + x] = u8::try_from(sum / count).unwrap_or(u8::MAX);
+        }
+    }
+    Ok(out)
+}
+
+fn apply_sample_noise(samples: &mut [u8], amplitude: u8, seed: u64, attempt: u16) {
+    if amplitude == 0 {
+        return;
+    }
+    let span = u32::from(amplitude) * 2 + 1;
+    let seed32 = (seed as u32) ^ ((seed >> 32) as u32);
+    for (index, sample) in samples.iter_mut().enumerate() {
+        let mixed = (index as u32)
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223)
+            .wrapping_add(u32::from(attempt).wrapping_mul(97_531))
+            .wrapping_add(seed32.rotate_left(u32::from(attempt % 31)))
+            .rotate_left((index as u32 + u32::from(attempt)) % 17);
+        let offset = i16::try_from(mixed % span).unwrap_or(i16::MAX) - i16::from(amplitude);
+        *sample = (i16::from(*sample) + offset).clamp(0, 255) as u8;
+    }
+}
+
+fn apply_sample_exposure_offset(samples: &mut [u8], offset: i16) {
+    for sample in samples {
+        *sample = (i16::from(*sample) + offset).clamp(0, 255) as u8;
+    }
+}
+
+fn read_petal_frame_samples(
+    frame: &EvalCaptureSourceFrame,
+    grid_size: u16,
+) -> Result<PetalStreamSampleGrid> {
+    match frame.format {
+        PetalEncodeFormatArg::Png => read_petal_png_samples(&frame.path, grid_size),
+        PetalEncodeFormatArg::Gif => {
+            read_petal_gif_samples(&frame.path, grid_size, frame.encoded_frame_index)
+        }
+    }
 }
 
 fn read_petal_png_samples(path: &Path, grid_size: u16) -> Result<PetalStreamSampleGrid> {
@@ -1318,6 +1687,66 @@ fn read_petal_png_samples(path: &Path, grid_size: u16) -> Result<PetalStreamSamp
         .map_err(|err| eyre!("failed to build Petal sample grid: {err}"))
 }
 
+#[cfg(feature = "offline-visual-codecs")]
+fn read_petal_gif_samples(
+    path: &Path,
+    grid_size: u16,
+    encoded_frame_index: u16,
+) -> Result<PetalStreamSampleGrid> {
+    use image::{AnimationDecoder, codecs::gif::GifDecoder};
+
+    if grid_size == 0 {
+        return Err(eyre!("grid size must be greater than 0"));
+    }
+    let file =
+        fs::File::open(path).wrap_err_with(|| format!("failed to open GIF {}", path.display()))?;
+    let decoder = GifDecoder::new(BufReader::new(file))
+        .wrap_err_with(|| format!("failed to read GIF info {}", path.display()))?;
+    let frame = decoder
+        .into_frames()
+        .nth(usize::from(encoded_frame_index))
+        .ok_or_else(|| {
+            eyre!(
+                "GIF {} missing encoded frame {}",
+                path.display(),
+                encoded_frame_index
+            )
+        })?
+        .wrap_err_with(|| {
+            format!(
+                "failed to decode GIF frame {} from {}",
+                encoded_frame_index,
+                path.display()
+            )
+        })?;
+    let image = frame.into_buffer();
+    let width = image.width();
+    let height = image.height();
+    if width != height {
+        return Err(eyre!("Petal GIF frame must be square"));
+    }
+    if width < u32::from(grid_size) {
+        return Err(eyre!(
+            "GIF dimension {} is smaller than grid size {}",
+            width,
+            grid_size
+        ));
+    }
+    let samples = sample_rgba_luminance_grid(image.as_raw(), width, height, grid_size)?;
+    PetalStreamSampleGrid::new(grid_size, samples)
+        .map_err(|err| eyre!("failed to build Petal sample grid: {err}"))
+}
+
+#[cfg(not(feature = "offline-visual-codecs"))]
+fn read_petal_gif_samples(
+    _path: &Path,
+    _grid_size: u16,
+    _encoded_frame_index: u16,
+) -> Result<PetalStreamSampleGrid> {
+    validate_gif_replay_available()?;
+    unreachable!("validate_gif_replay_available always errors without offline-visual-codecs")
+}
+
 fn sample_png_luminance_grid(
     bytes: &[u8],
     info: &png::OutputInfo,
@@ -1336,6 +1765,38 @@ fn sample_png_luminance_grid(
     let expected = grid_size as usize * grid_size as usize;
     if samples.len() != expected || info.width == 0 {
         return Err(eyre!("PNG sampling produced invalid grid"));
+    }
+    Ok(samples)
+}
+
+#[cfg(feature = "offline-visual-codecs")]
+fn sample_rgba_luminance_grid(
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+    grid_size: u16,
+) -> Result<Vec<u8>> {
+    let line_size = width as usize * 4;
+    if bytes.len() < line_size * height as usize {
+        return Err(eyre!("GIF sampling input is truncated"));
+    }
+    let mut samples = Vec::with_capacity(grid_size as usize * grid_size as usize);
+    for gy in 0..u32::from(grid_size) {
+        let y = cell_center_pixel(gy, height, grid_size);
+        for gx in 0..u32::from(grid_size) {
+            let x = cell_center_pixel(gx, width, grid_size);
+            let idx = y as usize * line_size + x as usize * 4;
+            let rgb = rgb_luminance(&bytes[idx..idx + 3])?;
+            let alpha = bytes
+                .get(idx + 3)
+                .copied()
+                .ok_or_else(|| eyre!("truncated GIF rgba pixel"))?;
+            samples.push(composite_luminance_over_white(rgb, alpha));
+        }
+    }
+    let expected = grid_size as usize * grid_size as usize;
+    if samples.len() != expected || width == 0 {
+        return Err(eyre!("GIF sampling produced invalid grid"));
     }
     Ok(samples)
 }
@@ -1383,6 +1844,16 @@ fn composite_luminance_over_white(luminance: u8, alpha: u8) -> u8 {
     u8::try_from((foreground + background) / u16::from(u8::MAX)).unwrap_or(u8::MAX)
 }
 
+fn parse_manifest_format(raw: &str) -> Result<PetalEncodeFormatArg> {
+    match raw {
+        "png" => Ok(PetalEncodeFormatArg::Png),
+        "gif" => Ok(PetalEncodeFormatArg::Gif),
+        _ => Err(eyre!(
+            "unsupported Petal manifest format '{raw}', expected png or gif"
+        )),
+    }
+}
+
 fn json_str_field<'a>(value: &'a norito::json::Value, field: &str) -> Result<&'a str> {
     value
         .get(field)
@@ -1398,6 +1869,18 @@ fn json_u16_field(value: &norito::json::Value, field: &str) -> Result<u16> {
     u16::try_from(raw).map_err(|_| eyre!("manifest field `{field}` exceeds u16"))
 }
 
+fn optional_json_u16_field(value: &norito::json::Value, field: &str) -> Result<Option<u16>> {
+    let Some(raw) = value.get(field) else {
+        return Ok(None);
+    };
+    let raw = raw
+        .as_u64()
+        .ok_or_else(|| eyre!("manifest field `{field}` must be an integer"))?;
+    u16::try_from(raw)
+        .map(Some)
+        .map_err(|_| eyre!("manifest field `{field}` exceeds u16"))
+}
+
 fn json_u8_field(value: &norito::json::Value, field: &str) -> Result<u8> {
     let raw = value
         .get(field)
@@ -1406,16 +1889,37 @@ fn json_u8_field(value: &norito::json::Value, field: &str) -> Result<u8> {
     u8::try_from(raw).map_err(|_| eyre!("manifest field `{field}` exceeds u8"))
 }
 
-fn write_grid_image(
-    path: &Path,
+fn write_grid_output(
+    format_dir: &Path,
     grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
     dimension: u32,
     format: PetalEncodeFormatArg,
+    channel: PetalEncodeChannelArg,
     fps: u16,
-) -> Result<()> {
+    animation_frames: u16,
+    payload_bytes: u64,
+) -> Result<Vec<EncodeFrameReport>> {
     match format {
-        PetalEncodeFormatArg::Png => write_grid_png(path, grid, dimension),
-        PetalEncodeFormatArg::Gif => write_grid_gif(path, grid, dimension, fps),
+        PetalEncodeFormatArg::Png => write_grid_png_frames(
+            format_dir,
+            grid,
+            options,
+            dimension,
+            channel,
+            animation_frames,
+            payload_bytes,
+        ),
+        PetalEncodeFormatArg::Gif => write_grid_gif_file(
+            format_dir,
+            grid,
+            options,
+            dimension,
+            channel,
+            fps,
+            animation_frames,
+            payload_bytes,
+        ),
     }
 }
 
@@ -1436,60 +1940,303 @@ fn render_grid_luma(grid: &PetalStreamGrid, dimension: u32) -> Result<Vec<u8>> {
     Ok(pixels)
 }
 
-fn write_grid_png(path: &Path, grid: &PetalStreamGrid, dimension: u32) -> Result<()> {
-    let pixels = render_grid_luma(grid, dimension)?;
+fn render_katakana_base94_rgb(
+    grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
+    dimension: u32,
+    frame_index: u16,
+) -> Result<Vec<u8>> {
+    let mut pixels = vec![255u8; dimension as usize * dimension as usize * 3];
+    for cell_y in 0..grid.grid_size {
+        let y0 = u32::from(cell_y).saturating_mul(dimension) / u32::from(grid.grid_size);
+        let y1 = (u32::from(cell_y) + 1).saturating_mul(dimension) / u32::from(grid.grid_size);
+        for cell_x in 0..grid.grid_size {
+            let x0 = u32::from(cell_x).saturating_mul(dimension) / u32::from(grid.grid_size);
+            let x1 =
+                (u32::from(cell_x) + 1).saturating_mul(dimension) / u32::from(grid.grid_size);
+            let cell = grid
+                .get(cell_x, cell_y)
+                .ok_or_else(|| eyre!("failed to sample Petal grid cell"))?;
+            let calibration = is_petal_calibration_cell(cell_x, cell_y, grid.grid_size, options);
+            let symbol = katakana_base94_symbol_index(grid, cell_x, cell_y, frame_index);
+            let center_x = cell_center_pixel(u32::from(cell_x), dimension, grid.grid_size);
+            let center_y = cell_center_pixel(u32::from(cell_y), dimension, grid.grid_size);
+            let width = x1.saturating_sub(x0).max(1);
+            let height = y1.saturating_sub(y0).max(1);
+            for y in y0..y1.max(y0 + 1).min(dimension) {
+                for x in x0..x1.max(x0 + 1).min(dimension) {
+                    let local_x = ((x.saturating_sub(x0) * 8) / width).min(7) as u8;
+                    let local_y = ((y.saturating_sub(y0) * 8) / height).min(7) as u8;
+                    let stroke = !calibration
+                        && !(x == center_x && y == center_y)
+                        && katakana_tile_stroke(symbol, local_x, local_y);
+                    let rgb = if stroke {
+                        katakana_accent_rgb(cell, symbol)
+                    } else {
+                        katakana_base_rgb(cell)
+                    };
+                    let idx = (y as usize * dimension as usize + x as usize) * 3;
+                    pixels[idx..idx + 3].copy_from_slice(&rgb);
+                }
+            }
+        }
+    }
+    Ok(pixels)
+}
+
+fn is_petal_calibration_cell(
+    x: u16,
+    y: u16,
+    grid_size: u16,
+    options: PetalStreamOptions,
+) -> bool {
+    let border = u16::from(options.border);
+    let anchor = u16::from(options.anchor_size);
+    if x < border
+        || y < border
+        || x >= grid_size.saturating_sub(border)
+        || y >= grid_size.saturating_sub(border)
+    {
+        return true;
+    }
+    let near_left = x >= border && x < border.saturating_add(anchor);
+    let near_top = y >= border && y < border.saturating_add(anchor);
+    let far_start = grid_size.saturating_sub(border.saturating_add(anchor));
+    let near_right = x >= far_start && x < far_start.saturating_add(anchor);
+    let near_bottom = y >= far_start && y < far_start.saturating_add(anchor);
+    (near_left || near_right) && (near_top || near_bottom)
+}
+
+fn katakana_base94_symbol_index(
+    grid: &PetalStreamGrid,
+    x: u16,
+    y: u16,
+    frame_index: u16,
+) -> u8 {
+    let mut mixed = u32::from(frame_index)
+        .wrapping_mul(97)
+        .wrapping_add(u32::from(x).wrapping_mul(17))
+        .wrapping_add(u32::from(y).wrapping_mul(31));
+    for dy in -1i16..=1 {
+        for dx in -1i16..=1 {
+            let nx = i32::from(x) + i32::from(dx);
+            let ny = i32::from(y) + i32::from(dy);
+            let bit = if nx >= 0
+                && ny >= 0
+                && nx < i32::from(grid.grid_size)
+                && ny < i32::from(grid.grid_size)
+            {
+                grid.get(nx as u16, ny as u16).unwrap_or(false)
+            } else {
+                false
+            };
+            mixed = mixed
+                .wrapping_mul(33)
+                .wrapping_add(u32::from(bit))
+                .wrapping_add(((dx + 2) as u32) << 3)
+                .wrapping_add((dy + 2) as u32);
+        }
+    }
+    u8::try_from(mixed % 94).unwrap_or(0)
+}
+
+fn katakana_tile_stroke(symbol: u8, local_x: u8, local_y: u8) -> bool {
+    if local_x == 0 || local_y == 0 || local_x == 7 || local_y == 7 {
+        return false;
+    }
+    let bits = (u16::from(symbol) * 0x009d) ^ (u16::from(symbol) << 3) ^ 0x0155;
+    ((bits & 0b0000_0000_01) != 0 && local_y == 1 && (2..=5).contains(&local_x))
+        || ((bits & 0b0000_0000_10) != 0 && local_x == 5 && (1..=5).contains(&local_y))
+        || ((bits & 0b0000_0001_00) != 0 && local_y == 5 && (1..=5).contains(&local_x))
+        || ((bits & 0b0000_0010_00) != 0 && local_x == 2 && (2..=6).contains(&local_y))
+        || ((bits & 0b0000_0100_00) != 0 && local_x.saturating_add(local_y) == 6)
+        || ((bits & 0b0000_1000_00) != 0 && local_x == local_y && (2..=6).contains(&local_y))
+        || ((bits & 0b0001_0000_00) != 0 && local_y == 3 && (2..=6).contains(&local_x))
+        || ((bits & 0b0010_0000_00) != 0 && local_x == 6 && (2..=6).contains(&local_y))
+        || ((bits & 0b0100_0000_00) != 0
+            && (local_x == 4 || local_x == 5)
+            && local_y == 2)
+        || ((bits & 0b1000_0000_00) != 0 && local_y == 6 && (3..=6).contains(&local_x))
+}
+
+fn katakana_base_rgb(cell: bool) -> [u8; 3] {
+    if cell {
+        [24, 26, 32]
+    } else {
+        [238, 236, 224]
+    }
+}
+
+fn katakana_accent_rgb(cell: bool, symbol: u8) -> [u8; 3] {
+    if cell {
+        [
+            54u8.saturating_add(symbol % 24),
+            34u8.saturating_add((symbol / 3) % 20),
+            74u8.saturating_add((symbol / 5) % 24),
+        ]
+    } else {
+        [
+            180u8.saturating_add(symbol % 20),
+            196u8.saturating_add((symbol / 3) % 24),
+            204u8.saturating_add((symbol / 5) % 20),
+        ]
+    }
+}
+
+fn write_grid_png_frames(
+    format_dir: &Path,
+    grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
+    dimension: u32,
+    channel: PetalEncodeChannelArg,
+    animation_frames: u16,
+    payload_bytes: u64,
+) -> Result<Vec<EncodeFrameReport>> {
+    let mut frames = Vec::with_capacity(usize::from(animation_frames));
+    for index in 0..animation_frames {
+        let frame_name = format!("frame_{index:04}.png");
+        let frame_path = format_dir.join(&frame_name);
+        write_grid_png(&frame_path, grid, options, dimension, channel, index)?;
+        frames.push(EncodeFrameReport {
+            index,
+            path: format!("{}/{frame_name}", PetalEncodeFormatArg::Png),
+            payload_bytes,
+            encoded_frame_count: 1,
+        });
+    }
+    Ok(frames)
+}
+
+fn write_grid_png(
+    path: &Path,
+    grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
+    dimension: u32,
+    channel: PetalEncodeChannelArg,
+    frame_index: u16,
+) -> Result<()> {
     let file = fs::File::create(path)
         .wrap_err_with(|| format!("failed to create PNG {}", path.display()))?;
     let writer = BufWriter::new(file);
     let mut encoder = png::Encoder::new(writer, dimension, dimension);
-    encoder.set_color(png::ColorType::Grayscale);
+    encoder.set_color(match channel {
+        PetalEncodeChannelArg::BinaryGrid => png::ColorType::Grayscale,
+        PetalEncodeChannelArg::KatakanaBase94 => png::ColorType::Rgb,
+    });
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
         .wrap_err_with(|| format!("failed to write PNG header {}", path.display()))?;
+    let pixels = match channel {
+        PetalEncodeChannelArg::BinaryGrid => render_grid_luma(grid, dimension)?,
+        PetalEncodeChannelArg::KatakanaBase94 => {
+            render_katakana_base94_rgb(grid, options, dimension, frame_index)?
+        }
+    };
     writer
         .write_image_data(&pixels)
         .wrap_err_with(|| format!("failed to write PNG pixels {}", path.display()))
 }
 
 #[cfg(feature = "offline-visual-codecs")]
-fn write_grid_gif(path: &Path, grid: &PetalStreamGrid, dimension: u32, fps: u16) -> Result<()> {
+fn render_frame_rgba(
+    grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
+    dimension: u32,
+    channel: PetalEncodeChannelArg,
+    frame_index: u16,
+) -> Result<Vec<u8>> {
+    match channel {
+        PetalEncodeChannelArg::BinaryGrid => {
+            let luma = render_grid_luma(grid, dimension)?;
+            let mut rgba = Vec::with_capacity(luma.len() * 4);
+            for value in luma {
+                rgba.extend_from_slice(&[value, value, value, u8::MAX]);
+            }
+            Ok(rgba)
+        }
+        PetalEncodeChannelArg::KatakanaBase94 => {
+            let rgb = render_katakana_base94_rgb(grid, options, dimension, frame_index)?;
+            let mut rgba = Vec::with_capacity((rgb.len() / 3) * 4);
+            for pixel in rgb.chunks_exact(3) {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], u8::MAX]);
+            }
+            Ok(rgba)
+        }
+    }
+}
+
+fn write_grid_gif_file(
+    format_dir: &Path,
+    grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
+    dimension: u32,
+    channel: PetalEncodeChannelArg,
+    fps: u16,
+    animation_frames: u16,
+    payload_bytes: u64,
+) -> Result<Vec<EncodeFrameReport>> {
+    let path = format_dir.join("frame_0000.gif");
+    write_grid_gif(
+        &path,
+        grid,
+        options,
+        dimension,
+        channel,
+        fps,
+        animation_frames,
+    )?;
+    Ok(vec![EncodeFrameReport {
+        index: 0,
+        path: format!("{}/frame_0000.gif", PetalEncodeFormatArg::Gif),
+        payload_bytes,
+        encoded_frame_count: animation_frames,
+    }])
+}
+
+#[cfg(feature = "offline-visual-codecs")]
+fn write_grid_gif(
+    path: &Path,
+    grid: &PetalStreamGrid,
+    options: PetalStreamOptions,
+    dimension: u32,
+    channel: PetalEncodeChannelArg,
+    fps: u16,
+    animation_frames: u16,
+) -> Result<()> {
     use image::{
         Delay, Frame, RgbaImage,
         codecs::gif::{GifEncoder, Repeat},
     };
 
-    let luma = render_grid_luma(grid, dimension)?;
-    let mut rgba = Vec::with_capacity(luma.len() * 4);
-    for value in luma {
-        rgba.extend_from_slice(&[value, value, value, u8::MAX]);
-    }
-    let image = RgbaImage::from_raw(dimension, dimension, rgba)
-        .ok_or_else(|| eyre!("failed to build GIF frame buffer"))?;
     let delay_ms = (1_000u32 / u32::from(fps)).max(1);
-    let frame = Frame::from_parts(
-        image,
-        0,
-        0,
-        Delay::from_numer_denom_ms(delay_ms, 1),
-    );
     let file = fs::File::create(path)
         .wrap_err_with(|| format!("failed to create GIF {}", path.display()))?;
     let mut encoder = GifEncoder::new(BufWriter::new(file));
     encoder
         .set_repeat(Repeat::Infinite)
         .wrap_err_with(|| format!("failed to set GIF repeat {}", path.display()))?;
-    encoder
-        .encode_frame(frame)
-        .wrap_err_with(|| format!("failed to write GIF frame {}", path.display()))
+    for frame_index in 0..animation_frames {
+        let rgba = render_frame_rgba(grid, options, dimension, channel, frame_index)?;
+        let image = RgbaImage::from_raw(dimension, dimension, rgba)
+            .ok_or_else(|| eyre!("failed to build GIF frame buffer"))?;
+        let frame = Frame::from_parts(image, 0, 0, Delay::from_numer_denom_ms(delay_ms, 1));
+        encoder
+            .encode_frame(frame)
+            .wrap_err_with(|| format!("failed to write GIF frame {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(not(feature = "offline-visual-codecs"))]
 fn write_grid_gif(
     _path: &Path,
     _grid: &PetalStreamGrid,
+    _options: PetalStreamOptions,
     _dimension: u32,
+    _channel: PetalEncodeChannelArg,
     _fps: u16,
+    _animation_frames: u16,
 ) -> Result<()> {
     Err(eyre!(
         "--format gif requires building iroha_cli with --features offline-visual-codecs"
@@ -1558,6 +2305,7 @@ struct EncodeReport {
     style: String,
     channel: String,
     fps: u16,
+    animation_frames: u16,
     dimension: u32,
     grid: GridReport,
     frames: Vec<EncodeFrameReport>,
@@ -1568,6 +2316,7 @@ struct EncodeFrameReport {
     index: u16,
     path: String,
     payload_bytes: u64,
+    encoded_frame_count: u16,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -1581,6 +2330,11 @@ struct EvalCaptureReport {
     capture_seed: Option<u64>,
     capture_attempts_per_frame: u16,
     capture_profile: Option<CaptureProfileReport>,
+    capture_downscale_cells: Option<u8>,
+    capture_blur_radius: Option<u8>,
+    capture_motion_blur_cells: Option<u8>,
+    capture_noise_amplitude: Option<u8>,
+    capture_exposure_offset: Option<i16>,
     min_success_ratio_bps: u16,
     planned_attempts: u32,
     attempts: u32,
@@ -1625,6 +2379,11 @@ struct SimulateRealtimeReport {
     capture_seed: Option<u64>,
     capture_attempts_per_frame: u16,
     capture_profile: Option<CaptureProfileReport>,
+    capture_downscale_cells: Option<u8>,
+    capture_blur_radius: Option<u8>,
+    capture_motion_blur_cells: Option<u8>,
+    capture_noise_amplitude: Option<u8>,
+    capture_exposure_offset: Option<i16>,
     simulate_fps: u16,
     realtime_loops: u16,
     planned_attempts: u32,
@@ -1717,6 +2476,7 @@ impl From<PetalStreamCaptureProfile> for CaptureProfileReport {
 #[derive(Clone, Debug, JsonSerialize)]
 struct StyleScoreReport {
     style: String,
+    capture_profile: CaptureProfileReport,
     capture_attempts: u16,
     capture_successes: u16,
     capture_success_ratio_bps: u16,
@@ -1821,6 +2581,14 @@ mod tests {
         }
     }
 
+    fn style_score<'a>(report: &'a ScoreStylesReport, name: &str) -> &'a StyleScoreReport {
+        report
+            .styles
+            .iter()
+            .find(|style| style.style == name)
+            .unwrap_or_else(|| panic!("missing style score for {name}"))
+    }
+
     fn encode_args(input: &Path, output: &Path) -> EncodeArgs {
         EncodeArgs {
             input: input.to_path_buf(),
@@ -1830,10 +2598,40 @@ mod tests {
             channel: PetalEncodeChannelArg::BinaryGrid,
             dimension: DEFAULT_ENCODE_DIMENSION,
             fps: DEFAULT_SCORE_STYLES_FPS,
+            animation_frames: 1,
             grid_size: 0,
             border: iroha::data_model::petal_stream::PETAL_STREAM_DEFAULT_BORDER,
             anchor_size: iroha::data_model::petal_stream::PETAL_STREAM_DEFAULT_ANCHOR,
         }
+    }
+
+    fn katakana_encode_args(input: &Path, output: &Path) -> EncodeArgs {
+        let mut args = encode_args(input, output);
+        args.style = PetalEncodeStyleArg::SoraTempleCommand;
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+        args.dimension = 256;
+        args
+    }
+
+    fn decode_encoded_frame(path: &Path, grid: GridReport) -> Vec<u8> {
+        let options = PetalStreamOptions {
+            grid_size: grid.resolved_grid_size,
+            border: grid.border,
+            anchor_size: grid.anchor_size,
+        };
+        let samples = read_petal_png_samples(path, options.grid_size).expect("read samples");
+        decode_petal_samples_payload(&samples, options).expect("decode samples")
+    }
+
+    fn decoded_png_color_type(path: &Path) -> png::ColorType {
+        let file = fs::File::open(path).expect("open PNG");
+        let decoder = png::Decoder::new(BufReader::new(file));
+        let mut reader = decoder.read_info().expect("read PNG info");
+        let mut buffer = vec![0; reader.output_buffer_size().expect("output buffer")];
+        reader
+            .next_frame(&mut buffer)
+            .expect("decode PNG")
+            .color_type
     }
 
     fn eval_capture_args(input_dir: &Path) -> EvalCaptureArgs {
@@ -1878,7 +2676,12 @@ mod tests {
 
         let output: Value = norito::json::from_str(&ctx.printed[0]).expect("encode JSON");
         assert_eq!(output.get("schema").and_then(Value::as_str), Some(ENCODE_SCHEMA));
+        assert_eq!(
+            output.get("animation_frames").and_then(Value::as_u64),
+            Some(1)
+        );
         assert_eq!(output["grid"]["resolved_grid_size"], Value::from(33u64));
+        assert_eq!(output["frames"][0]["path"], Value::from("png/frame_0000.png"));
         let frame_path = tempdir.path().join("png/frame_0000.png");
         let png = std::fs::read(&frame_path).expect("read PNG");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
@@ -1891,18 +2694,84 @@ mod tests {
             manifest.get("schema").and_then(Value::as_str),
             Some(ENCODE_SCHEMA)
         );
-        assert_eq!(manifest["frames"][0]["path"], Value::from(frame_path.display().to_string()));
+        assert_eq!(manifest["frames"][0]["path"], Value::from("png/frame_0000.png"));
+        assert_eq!(manifest["frames"][0]["encoded_frame_count"], Value::from(1u64));
     }
 
     #[test]
-    fn encode_rejects_renderer_backed_channel_until_wired() {
+    fn encode_png_animation_frames_write_multiple_manifest_entries() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = encode_args(payload.path(), tempdir.path());
+        args.dimension = 128;
+        args.animation_frames = 3;
+
+        let report = args.encode().expect("encode png animation frames");
+
+        assert_eq!(report.animation_frames, 3);
+        assert_eq!(report.frames.len(), 3);
+        for index in 0..3 {
+            let frame_path = tempdir.path().join(format!("png/frame_{index:04}.png"));
+            assert!(frame_path.exists(), "expected {}", frame_path.display());
+            assert_eq!(report.frames[index].index, index as u16);
+            assert_eq!(report.frames[index].path, format!("png/frame_{index:04}.png"));
+            assert_eq!(report.frames[index].encoded_frame_count, 1);
+        }
+        let manifest: Value =
+            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
+                .expect("manifest JSON");
+        assert_eq!(manifest["animation_frames"], Value::from(3u64));
+        assert_eq!(
+            manifest["frames"].as_array().expect("frames array").len(),
+            3
+        );
+        assert_eq!(manifest["frames"][2]["path"], Value::from("png/frame_0002.png"));
+    }
+
+    #[test]
+    fn encode_katakana_base94_png_writes_manifest_and_decodes() {
+        let payload = b"sora-temple-capture-baseline";
+        let payload_file = write_payload(payload);
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let args = katakana_encode_args(payload_file.path(), tempdir.path());
+
+        let report = args.encode().expect("encode katakana png");
+
+        assert_eq!(report.style, KATAKANA_STYLE_NAME);
+        assert_eq!(report.channel, "katakana-base94");
+        assert_eq!(report.format, "png");
+        assert_eq!(report.frames.len(), 1);
+        assert_eq!(report.frames[0].path, "png/frame_0000.png");
+        let frame_path = tempdir.path().join("png/frame_0000.png");
+        assert_eq!(decoded_png_color_type(&frame_path), png::ColorType::Rgb);
+        assert_eq!(decode_encoded_frame(&frame_path, report.grid), payload);
+        let manifest: Value =
+            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
+                .expect("manifest JSON");
+        assert_eq!(
+            manifest.get("channel").and_then(Value::as_str),
+            Some("katakana-base94")
+        );
+        assert_eq!(
+            manifest.get("style").and_then(Value::as_str),
+            Some(KATAKANA_STYLE_NAME)
+        );
+    }
+
+    #[test]
+    fn encode_rejects_mismatched_style_channel() {
         let payload = write_payload(b"sora-temple-capture-baseline");
         let tempdir = tempfile::tempdir().expect("temp dir");
         let mut args = encode_args(payload.path(), tempdir.path());
         args.channel = PetalEncodeChannelArg::KatakanaBase94;
 
-        let err = args.encode().expect_err("katakana channel rejected");
-        assert!(err.to_string().contains("renderer-backed"));
+        let err = args.encode().expect_err("katakana style rejected");
+        assert!(err.to_string().contains("sora-temple-command"));
+
+        let mut args = encode_args(payload.path(), tempdir.path());
+        args.style = PetalEncodeStyleArg::SoraTempleCommand;
+        let err = args.encode().expect_err("binary style rejected");
+        assert!(err.to_string().contains("binary-grid"));
     }
 
     #[cfg(not(feature = "offline-visual-codecs"))]
@@ -1914,6 +2783,18 @@ mod tests {
         args.format = PetalEncodeFormatArg::Gif;
 
         let err = args.encode().expect_err("gif feature rejected");
+        assert!(err.to_string().contains("offline-visual-codecs"));
+    }
+
+    #[cfg(not(feature = "offline-visual-codecs"))]
+    #[test]
+    fn encode_gif_katakana_requires_visual_codecs_feature() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = katakana_encode_args(payload.path(), tempdir.path());
+        args.format = PetalEncodeFormatArg::Gif;
+
+        let err = args.encode().expect_err("katakana gif feature rejected");
         assert!(err.to_string().contains("offline-visual-codecs"));
     }
 
@@ -1932,11 +2813,92 @@ mod tests {
         let gif = std::fs::read(&frame_path).expect("read GIF");
         assert!(gif.starts_with(b"GIF89a") || gif.starts_with(b"GIF87a"));
         assert_eq!(report.format, "gif");
-        assert_eq!(report.frames[0].path, frame_path.display().to_string());
+        assert_eq!(report.animation_frames, 1);
+        assert_eq!(report.frames[0].path, "gif/frame_0000.gif");
+        assert_eq!(report.frames[0].encoded_frame_count, 1);
         let manifest: Value =
             norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
                 .expect("manifest JSON");
         assert_eq!(manifest.get("format").and_then(Value::as_str), Some("gif"));
+        assert_eq!(manifest["frames"][0]["path"], Value::from("gif/frame_0000.gif"));
+    }
+
+    #[cfg(feature = "offline-visual-codecs")]
+    #[test]
+    fn encode_gif_animation_frames_are_encoded_inside_single_file() {
+        use image::{AnimationDecoder, codecs::gif::GifDecoder};
+
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = encode_args(payload.path(), tempdir.path());
+        args.format = PetalEncodeFormatArg::Gif;
+        args.dimension = 128;
+        args.animation_frames = 4;
+
+        let report = args.encode().expect("encode animated gif");
+
+        let frame_path = tempdir.path().join("gif/frame_0000.gif");
+        assert_eq!(report.frames.len(), 1);
+        assert_eq!(report.frames[0].encoded_frame_count, 4);
+        let file = std::fs::File::open(&frame_path).expect("open GIF");
+        let decoder = GifDecoder::new(BufReader::new(file)).expect("decode GIF");
+        let frames = decoder
+            .into_frames()
+            .collect_frames()
+            .expect("collect GIF frames");
+        assert_eq!(frames.len(), 4);
+        let manifest: Value =
+            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
+                .expect("manifest JSON");
+        assert_eq!(manifest["animation_frames"], Value::from(4u64));
+        assert_eq!(manifest["frames"][0]["path"], Value::from("gif/frame_0000.gif"));
+        assert_eq!(manifest["frames"][0]["encoded_frame_count"], Value::from(4u64));
+    }
+
+    #[cfg(feature = "offline-visual-codecs")]
+    #[test]
+    fn encode_gif_katakana_base94_writes_animated_command_tiles_with_visual_codecs_feature() {
+        use image::{AnimationDecoder, codecs::gif::GifDecoder};
+
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = katakana_encode_args(payload.path(), tempdir.path());
+        args.format = PetalEncodeFormatArg::Gif;
+        args.dimension = 128;
+        args.animation_frames = 3;
+
+        let report = args.encode().expect("encode katakana gif");
+
+        assert_eq!(report.format, "gif");
+        assert_eq!(report.channel, "katakana-base94");
+        assert_eq!(report.style, KATAKANA_STYLE_NAME);
+        assert_eq!(report.frames.len(), 1);
+        assert_eq!(report.frames[0].path, "gif/frame_0000.gif");
+        assert_eq!(report.frames[0].encoded_frame_count, 3);
+        let frame_path = tempdir.path().join("gif/frame_0000.gif");
+        let gif = std::fs::read(&frame_path).expect("read GIF");
+        assert!(gif.starts_with(b"GIF89a") || gif.starts_with(b"GIF87a"));
+        let file = std::fs::File::open(&frame_path).expect("open GIF");
+        let decoder = GifDecoder::new(BufReader::new(file)).expect("decode GIF");
+        let frames = decoder
+            .into_frames()
+            .collect_frames()
+            .expect("collect GIF frames");
+        assert_eq!(frames.len(), 3);
+        assert_ne!(frames[0].buffer().as_raw(), frames[1].buffer().as_raw());
+        let manifest: Value =
+            norito::json::from_slice(&std::fs::read(tempdir.path().join("manifest.json")).expect("read manifest"))
+                .expect("manifest JSON");
+        assert_eq!(manifest.get("format").and_then(Value::as_str), Some("gif"));
+        assert_eq!(
+            manifest.get("channel").and_then(Value::as_str),
+            Some("katakana-base94")
+        );
+        assert_eq!(
+            manifest.get("style").and_then(Value::as_str),
+            Some(KATAKANA_STYLE_NAME)
+        );
+        assert_eq!(manifest["frames"][0]["encoded_frame_count"], Value::from(3u64));
     }
 
     #[test]
@@ -1958,6 +2920,24 @@ mod tests {
         args.dimension = MAX_ENCODE_DIMENSION + 1;
 
         let err = args.encode().expect_err("large dimension rejected");
+        assert!(err.to_string().contains("bounded offline rendering"));
+    }
+
+    #[test]
+    fn encode_rejects_invalid_animation_frame_counts() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = encode_args(payload.path(), tempdir.path());
+        args.animation_frames = 0;
+
+        let err = args.encode().expect_err("zero animation frames rejected");
+        assert!(err.to_string().contains("animation-frames"));
+
+        let mut args = encode_args(payload.path(), tempdir.path());
+        args.animation_frames = MAX_ANIMATION_FRAMES + 1;
+        let err = args
+            .encode()
+            .expect_err("too many animation frames rejected");
         assert!(err.to_string().contains("bounded offline rendering"));
     }
 
@@ -1984,6 +2964,109 @@ mod tests {
             Some(u64::from(PETAL_CAPTURE_RATIO_BPS_SCALE))
         );
         assert_eq!(output["frames"][0]["success"], Value::from(true));
+    }
+
+    #[test]
+    fn eval_capture_decodes_katakana_manifest_and_passes_gate() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        katakana_encode_args(payload.path(), tempdir.path())
+            .encode()
+            .expect("encode katakana png");
+        let mut args = eval_capture_args(&tempdir.path().join("png"));
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+
+        let report = args.evaluate().expect("eval katakana capture");
+
+        assert_eq!(report.channel, "katakana-base94");
+        assert_eq!(report.planned_attempts, 1);
+        assert_eq!(report.successes, 1);
+        assert!(report.gate_passed);
+        assert!(report.frames[0].success);
+    }
+
+    #[cfg(not(feature = "offline-visual-codecs"))]
+    #[test]
+    fn eval_capture_rejects_gif_manifest_without_visual_codecs_feature() {
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            tempdir.path().join("manifest.json"),
+            r#"{
+  "schema": "iroha.offline.petal.encode.v1",
+  "payload_bytes": 28,
+  "format": "gif",
+  "style": "sora-temple",
+  "channel": "binary-grid",
+  "grid": {
+    "requested_grid_size": 0,
+    "resolved_grid_size": 33,
+    "border": 1,
+    "anchor_size": 3
+  },
+  "frames": [
+    {
+      "index": 0,
+      "path": "gif/frame_0000.gif",
+      "payload_bytes": 28,
+      "encoded_frame_count": 2
+    }
+  ]
+}"#,
+        )
+        .expect("write manifest");
+
+        let err = eval_capture_args(tempdir.path())
+            .evaluate()
+            .expect_err("gif replay rejected");
+
+        assert!(err.to_string().contains("GIF replay"));
+        assert!(err.to_string().contains("offline-visual-codecs"));
+    }
+
+    #[cfg(feature = "offline-visual-codecs")]
+    #[test]
+    fn eval_capture_decodes_binary_gif_manifest_frames_with_visual_codecs_feature() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut encode = encode_args(payload.path(), tempdir.path());
+        encode.format = PetalEncodeFormatArg::Gif;
+        encode.dimension = 128;
+        encode.animation_frames = 3;
+        encode.encode().expect("encode gif");
+
+        let report = eval_capture_args(tempdir.path())
+            .evaluate()
+            .expect("eval gif capture");
+
+        assert_eq!(report.channel, "binary-grid");
+        assert_eq!(report.planned_attempts, 3);
+        assert_eq!(report.successes, 3);
+        assert!(report.gate_passed);
+        assert_eq!(report.frames[0].source_index, 0);
+        assert_eq!(report.frames[1].source_index, 1);
+        assert!(report.frames[1].path.contains("#frame_1"));
+    }
+
+    #[cfg(feature = "offline-visual-codecs")]
+    #[test]
+    fn eval_capture_decodes_katakana_gif_manifest_frames_with_visual_codecs_feature() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut encode = katakana_encode_args(payload.path(), tempdir.path());
+        encode.format = PetalEncodeFormatArg::Gif;
+        encode.dimension = 128;
+        encode.animation_frames = 3;
+        encode.encode().expect("encode katakana gif");
+        let mut args = eval_capture_args(tempdir.path());
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+
+        let report = args.evaluate().expect("eval katakana gif capture");
+
+        assert_eq!(report.channel, "katakana-base94");
+        assert_eq!(report.planned_attempts, 3);
+        assert_eq!(report.successes, 3);
+        assert!(report.gate_passed);
+        assert!(report.frames[2].path.contains("#frame_2"));
     }
 
     #[test]
@@ -2043,6 +3126,65 @@ mod tests {
         assert!(report.aborted_early);
         assert!(!report.gate_passed);
         assert!(report.frames[0].error.is_some());
+    }
+
+    #[test]
+    fn capture_sample_models_are_exact_and_deterministic() {
+        let samples = vec![0, 64, 128, 255, 32, 96, 160, 224, 16, 80, 144, 208, 48, 112, 176, 240];
+
+        assert_eq!(
+            downscale_sample_cells(&samples, 4, 2).expect("downscale"),
+            vec![
+                48, 48, 191, 191, 48, 48, 191, 191, 64, 64, 192, 192, 64, 64, 192, 192,
+            ]
+        );
+        assert_eq!(
+            box_blur_sample_cells(&samples, 4, 1).expect("blur"),
+            vec![
+                48, 80, 154, 191, 48, 80, 151, 186, 64, 96, 160, 192, 64, 96, 160, 192,
+            ]
+        );
+        assert_eq!(
+            motion_blur_sample_cells(&samples, 4, 1).expect("motion blur"),
+            vec![
+                32, 64, 149, 191, 64, 96, 160, 192, 48, 80, 144, 176, 80, 112, 176, 208,
+            ]
+        );
+        let mut noisy = vec![32, 96, 160, 224];
+        apply_sample_noise(&mut noisy, 5, 7, 2);
+        assert_eq!(noisy, vec![33, 96, 165, 220]);
+        let mut exposed = vec![0, 10, 250, 255];
+        apply_sample_exposure_offset(&mut exposed, -20);
+        assert_eq!(exposed, vec![0, 0, 230, 235]);
+        apply_sample_exposure_offset(&mut exposed, 40);
+        assert_eq!(exposed, vec![40, 40, 255, 255]);
+    }
+
+    #[test]
+    fn eval_capture_reports_bounded_capture_models() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut encode = encode_args(payload.path(), tempdir.path());
+        encode.dimension = 128;
+        encode.encode().expect("encode png");
+        let mut args = eval_capture_args(&tempdir.path().join("png"));
+        args.capture.perturb_capture = true;
+        args.capture.attempts = Some(1);
+        args.capture.luminance_jitter = Some(0);
+        args.capture.downscale_cells = 1;
+        args.capture.blur_radius = 0;
+        args.capture.motion_blur_cells = 0;
+        args.capture.noise_amplitude = 0;
+        args.capture.exposure_offset = 12;
+
+        let report = args.evaluate().expect("eval capture models");
+
+        assert!(report.gate_passed);
+        assert_eq!(report.capture_downscale_cells, Some(1));
+        assert_eq!(report.capture_blur_radius, Some(0));
+        assert_eq!(report.capture_motion_blur_cells, Some(0));
+        assert_eq!(report.capture_noise_amplitude, Some(0));
+        assert_eq!(report.capture_exposure_offset, Some(12));
     }
 
     #[test]
@@ -2121,13 +3263,57 @@ mod tests {
     }
 
     #[test]
-    fn eval_capture_rejects_renderer_backed_channel_until_wired() {
+    fn eval_capture_rejects_malformed_manifest_encoded_frame_counts() {
         let tempdir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(tempdir.path().join("png")).expect("png dir");
+        std::fs::write(tempdir.path().join("png/frame_0000.png"), b"not a png")
+            .expect("write png");
+        std::fs::write(
+            tempdir.path().join("manifest.json"),
+            r#"{
+  "schema": "iroha.offline.petal.encode.v1",
+  "payload_bytes": 28,
+  "format": "png",
+  "style": "sora-temple",
+  "channel": "binary-grid",
+  "grid": {
+    "requested_grid_size": 0,
+    "resolved_grid_size": 33,
+    "border": 1,
+    "anchor_size": 3
+  },
+  "frames": [
+    {
+      "index": 0,
+      "path": "png/frame_0000.png",
+      "payload_bytes": 28,
+      "encoded_frame_count": 2
+    }
+  ]
+}"#,
+        )
+        .expect("write manifest");
+
+        let err = eval_capture_args(tempdir.path())
+            .evaluate()
+            .expect_err("bad png encoded count rejected");
+
+        assert!(err.to_string().contains("encoded_frame_count must be 1"));
+    }
+
+    #[test]
+    fn eval_capture_rejects_manifest_channel_mismatch() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        encode_args(payload.path(), tempdir.path())
+            .encode()
+            .expect("encode png");
         let mut args = eval_capture_args(tempdir.path());
         args.channel = PetalEncodeChannelArg::KatakanaBase94;
 
-        let err = args.evaluate().expect_err("katakana eval rejected");
-        assert!(err.to_string().contains("renderer-backed"));
+        let err = args.evaluate().expect_err("channel mismatch rejected");
+        assert!(err.to_string().contains("manifest channel 'binary-grid'"));
+        assert!(err.to_string().contains("katakana-base94"));
     }
 
     #[test]
@@ -2142,6 +3328,24 @@ mod tests {
     }
 
     #[test]
+    fn required_successes_uses_wide_threshold_math() {
+        assert_eq!(
+            required_successes(u32::MAX, 9_500).expect("required successes"),
+            4_080_218_931
+        );
+    }
+
+    #[test]
+    fn manifest_frame_paths_resolve_relative_to_manifest_parent() {
+        let manifest_parent = Path::new("/tmp/petal_out");
+
+        assert_eq!(
+            resolve_manifest_frame_path(manifest_parent, "png/frame_0000.png"),
+            manifest_parent.join("png/frame_0000.png")
+        );
+    }
+
+    #[test]
     fn eval_capture_rejects_inactive_and_invalid_capture_perturbation_options() {
         let tempdir = tempfile::tempdir().expect("temp dir");
         let mut args = eval_capture_args(tempdir.path());
@@ -2149,6 +3353,20 @@ mod tests {
         let err = args
             .evaluate()
             .expect_err("inactive perturbation override rejected");
+        assert!(err.to_string().contains("perturb-capture"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.downscale_cells = 2;
+        let err = args
+            .evaluate()
+            .expect_err("inactive downscale override rejected");
+        assert!(err.to_string().contains("perturb-capture"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.noise_amplitude = 1;
+        let err = args
+            .evaluate()
+            .expect_err("inactive noise override rejected");
         assert!(err.to_string().contains("perturb-capture"));
 
         let mut args = eval_capture_args(tempdir.path());
@@ -2165,6 +3383,42 @@ mod tests {
             .evaluate()
             .expect_err("inverted capture luminance rejected");
         assert!(err.to_string().contains("dark luminance"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.perturb_capture = true;
+        args.capture.downscale_cells = 0;
+        let err = args.evaluate().expect_err("zero downscale rejected");
+        assert!(err.to_string().contains("capture-downscale-cells"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.perturb_capture = true;
+        args.capture.downscale_cells = MAX_CAPTURE_DOWNSCALE_CELLS + 1;
+        let err = args.evaluate().expect_err("large downscale rejected");
+        assert!(err.to_string().contains("capture-downscale-cells"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.perturb_capture = true;
+        args.capture.blur_radius = MAX_CAPTURE_BLUR_RADIUS + 1;
+        let err = args.evaluate().expect_err("large blur rejected");
+        assert!(err.to_string().contains("capture-blur-radius"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.perturb_capture = true;
+        args.capture.motion_blur_cells = MAX_CAPTURE_MOTION_BLUR_CELLS + 1;
+        let err = args.evaluate().expect_err("large motion blur rejected");
+        assert!(err.to_string().contains("capture-motion-blur-cells"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.perturb_capture = true;
+        args.capture.noise_amplitude = MAX_CAPTURE_NOISE_AMPLITUDE + 1;
+        let err = args.evaluate().expect_err("large noise rejected");
+        assert!(err.to_string().contains("capture-noise-amplitude"));
+
+        let mut args = eval_capture_args(tempdir.path());
+        args.capture.perturb_capture = true;
+        args.capture.exposure_offset = MAX_CAPTURE_EXPOSURE_OFFSET + 1;
+        let err = args.evaluate().expect_err("large exposure rejected");
+        assert!(err.to_string().contains("capture-exposure-offset"));
     }
 
     #[test]
@@ -2199,6 +3453,57 @@ mod tests {
     }
 
     #[test]
+    fn simulate_realtime_decodes_katakana_manifest_and_writes_payload() {
+        let payload = b"sora-temple-capture-baseline";
+        let payload_file = write_payload(payload);
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        katakana_encode_args(payload_file.path(), tempdir.path())
+            .encode()
+            .expect("encode katakana png");
+        let output_payload = tempdir.path().join("decoded/katakana.bin");
+        let mut args = simulate_realtime_args(&tempdir.path().join("png"));
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+        args.output_payload = Some(output_payload.clone());
+
+        let report = args.simulate().expect("simulate katakana realtime");
+
+        assert_eq!(std::fs::read(&output_payload).expect("read payload"), payload);
+        assert_eq!(report.channel, "katakana-base94");
+        assert!(report.decoded);
+        assert_eq!(report.planned_attempts, 1);
+        assert_eq!(report.first_success_source_index, Some(0));
+        assert!(report.frames[0].success);
+    }
+
+    #[cfg(feature = "offline-visual-codecs")]
+    #[test]
+    fn simulate_realtime_decodes_gif_manifest_and_writes_payload_with_visual_codecs_feature() {
+        let payload = b"sora-temple-capture-baseline";
+        let payload_file = write_payload(payload);
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut encode = katakana_encode_args(payload_file.path(), tempdir.path());
+        encode.format = PetalEncodeFormatArg::Gif;
+        encode.dimension = 128;
+        encode.animation_frames = 2;
+        encode.encode().expect("encode katakana gif");
+        let output_payload = tempdir.path().join("decoded/gif.bin");
+        let mut args = simulate_realtime_args(tempdir.path());
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+        args.realtime_loops = 2;
+        args.output_payload = Some(output_payload.clone());
+
+        let report = args.simulate().expect("simulate gif realtime");
+
+        assert_eq!(std::fs::read(&output_payload).expect("read payload"), payload);
+        assert_eq!(report.channel, "katakana-base94");
+        assert!(report.decoded);
+        assert_eq!(report.planned_attempts, 4);
+        assert_eq!(report.attempts, 4);
+        assert_eq!(report.first_success_source_index, Some(0));
+        assert!(report.frames[1].path.contains("#frame_1"));
+    }
+
+    #[test]
     fn simulate_realtime_perturbed_default_profile_reports_capture_attempts() {
         let payload = write_payload(b"sora-temple-capture-baseline");
         let tempdir = tempfile::tempdir().expect("temp dir");
@@ -2210,12 +3515,19 @@ mod tests {
         args.capture.perturb_capture = true;
         args.capture.seed = 7;
         args.capture.attempts = Some(2);
+        args.capture.noise_amplitude = 1;
+        args.capture.exposure_offset = 8;
 
         let report = args.simulate().expect("simulate perturbed realtime");
 
         assert!(report.perturb_capture);
         assert_eq!(report.capture_seed, Some(7));
         assert_eq!(report.capture_attempts_per_frame, 2);
+        assert_eq!(report.capture_downscale_cells, Some(1));
+        assert_eq!(report.capture_blur_radius, Some(0));
+        assert_eq!(report.capture_motion_blur_cells, Some(0));
+        assert_eq!(report.capture_noise_amplitude, Some(1));
+        assert_eq!(report.capture_exposure_offset, Some(8));
         assert_eq!(report.planned_attempts, 4);
         assert_eq!(report.attempts, 4);
         assert!(report.decoded);
@@ -2305,13 +3617,18 @@ mod tests {
     }
 
     #[test]
-    fn simulate_realtime_rejects_renderer_backed_channel_until_wired() {
+    fn simulate_realtime_rejects_manifest_channel_mismatch() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
         let tempdir = tempfile::tempdir().expect("temp dir");
+        encode_args(payload.path(), tempdir.path())
+            .encode()
+            .expect("encode png");
         let mut args = simulate_realtime_args(tempdir.path());
         args.channel = PetalEncodeChannelArg::KatakanaBase94;
 
-        let err = args.simulate().expect_err("katakana realtime rejected");
-        assert!(err.to_string().contains("renderer-backed"));
+        let err = args.simulate().expect_err("channel mismatch rejected");
+        assert!(err.to_string().contains("manifest channel 'binary-grid'"));
+        assert!(err.to_string().contains("katakana-base94"));
     }
 
     #[test]
@@ -2347,6 +3664,66 @@ mod tests {
     }
 
     #[test]
+    fn score_styles_expanded_set_preserves_default_recommendation_for_baseline() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.style_set = PetalStyleSetArg::SoraTempleExpanded;
+
+        let report = args.build_report().expect("score report");
+
+        assert_eq!(report.style_set, "sora-temple-expanded");
+        assert_eq!(report.styles.len(), 2);
+        assert_eq!(report.recommended_style, DEFAULT_STYLE_NAME);
+        assert!(report.gate_passed);
+        let default_style = style_score(&report, DEFAULT_STYLE_NAME);
+        let high_contrast = style_score(&report, "sora-temple-high-contrast");
+        assert_eq!(
+            default_style.capture_success_ratio_bps,
+            PETAL_CAPTURE_RATIO_BPS_SCALE
+        );
+        assert_eq!(
+            high_contrast.capture_success_ratio_bps,
+            PETAL_CAPTURE_RATIO_BPS_SCALE
+        );
+        assert!(default_style.gate_passed);
+        assert!(high_contrast.gate_passed);
+        assert!(high_contrast.capture_profile.dark_luma < default_style.capture_profile.dark_luma);
+        assert!(
+            high_contrast.capture_profile.light_luma > default_style.capture_profile.light_luma
+        );
+    }
+
+    #[test]
+    fn score_styles_expanded_set_recommends_high_contrast_under_low_contrast_profile() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.style_set = PetalStyleSetArg::SoraTempleExpanded;
+        args.dark_luma = Some(128);
+        args.light_luma = Some(129);
+        args.luminance_jitter = Some(0);
+        args.attempts = Some(4);
+
+        let report = args.build_report().expect("score report");
+
+        assert_eq!(report.recommended_style, "sora-temple-high-contrast");
+        assert!(report.gate_passed);
+        let default_style = style_score(&report, DEFAULT_STYLE_NAME);
+        let high_contrast = style_score(&report, "sora-temple-high-contrast");
+        assert_eq!(default_style.capture_successes, 0);
+        assert!(!default_style.capture_gate_passed);
+        assert!(!default_style.gate_passed);
+        assert_eq!(high_contrast.capture_profile.dark_luma, 64);
+        assert_eq!(high_contrast.capture_profile.light_luma, 193);
+        assert_eq!(high_contrast.capture_successes, 4);
+        assert!(high_contrast.capture_gate_passed);
+        assert!(high_contrast.gate_passed);
+        assert_eq!(
+            report.recommended_overall_score_bps,
+            PETAL_CAPTURE_RATIO_BPS_SCALE
+        );
+    }
+
+    #[test]
     fn score_styles_low_contrast_profile_fails_capture_gate() {
         let payload = write_payload(b"sora-temple-capture-baseline");
         let mut args = score_args(payload.path());
@@ -2361,6 +3738,32 @@ mod tests {
         assert_eq!(style.capture_successes, 0);
         assert!(!style.capture_gate_passed);
         assert!(!report.gate_passed);
+    }
+
+    #[test]
+    fn high_contrast_capture_profile_expands_luma_with_saturation() {
+        let profile = PetalStreamCaptureProfile {
+            attempts: 3,
+            dark_luma: 16,
+            light_luma: 250,
+            luminance_jitter: 7,
+        };
+
+        let high_contrast = high_contrast_capture_profile(profile);
+
+        assert_eq!(high_contrast.attempts, profile.attempts);
+        assert_eq!(high_contrast.dark_luma, 0);
+        assert_eq!(high_contrast.light_luma, 255);
+        assert_eq!(high_contrast.luminance_jitter, profile.luminance_jitter);
+
+        let low_contrast = high_contrast_capture_profile(PetalStreamCaptureProfile {
+            attempts: 4,
+            dark_luma: 128,
+            light_luma: 129,
+            luminance_jitter: 0,
+        });
+        assert_eq!(low_contrast.dark_luma, 64);
+        assert_eq!(low_contrast.light_luma, 193);
     }
 
     #[test]

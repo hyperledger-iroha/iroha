@@ -541,6 +541,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             ("x--iroha--signature_evidence_unknown_leak", "evidence_unknown_leak"),
             ("unexpected\x1bevidence_key", "\x1b"),
             ("unexpected_evidence_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -5376,15 +5377,36 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             rail_extra = valid_canary_summary()
             rail_extra["stages"][0]["command"].extend(["--summary-out", "/tmp/rail.json"])
             rail_extra.pop("summary_sha256")
-            cases.append((digest_summary(rail_extra), [], "unsupported flag '--summary-out'"))
+            cases.append(
+                (
+                    digest_summary(rail_extra),
+                    [],
+                    "uses unsupported flag",
+                    "--summary-out",
+                )
+            )
             notary_extra = valid_canary_summary()
             notary_extra["stages"][1]["command"].append("--profile=swift-cbpr-plus")
             notary_extra.pop("summary_sha256")
-            cases.append((digest_summary(notary_extra), [], "unsupported flag '--profile'"))
+            cases.append(
+                (
+                    digest_summary(notary_extra),
+                    [],
+                    "uses unsupported flag",
+                    "--profile",
+                )
+            )
             verify_extra = valid_canary_summary()
             verify_extra["stages"][2]["command"].append("--summary-out=/tmp/verify.json")
             verify_extra.pop("summary_sha256")
-            cases.append((digest_summary(verify_extra), [], "unsupported flag '--summary-out'"))
+            cases.append(
+                (
+                    digest_summary(verify_extra),
+                    [],
+                    "uses unsupported flag",
+                    "--summary-out",
+                )
+            )
             planned_extra = plan_only_canary_summary()
             planned_extra["planned_stages"][0]["command"].append("--summary-out=/tmp/plan.json")
             planned_extra.pop("summary_sha256")
@@ -5392,10 +5414,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 (
                     digest_summary(planned_extra),
                     ["--allow-plan-only"],
-                    "unsupported flag '--summary-out'",
+                    "uses unsupported flag",
+                    "--summary-out",
                 )
             )
-            for body, extra_args, message in cases:
+            for body, extra_args, message, hidden in cases:
                 with self.subTest(message=message, extra_args=extra_args):
                     canary_path = write_canary(root, body)
 
@@ -5406,6 +5429,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_secret_or_non_ascii_unsupported_child_command_flags_do_not_echo(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6037,10 +6061,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 2)
-                    self.assertIn(
-                        "local diagnostic flag '--allow-missing-record-sources'",
-                        stderr,
-                    )
+                    self.assertIn("local diagnostic flag", stderr)
+                    self.assertNotIn("--allow-missing-record-sources", stderr)
 
     def test_canary_child_commands_reject_control_characters(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -7638,6 +7660,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         values = (
             ("secret", "token-evidence-stage-secret", "secret-looking material"),
             ("non-ascii", "ra\u0430l", "must use printable ASCII"),
+            ("unsupported", "diagnostic-stage", "unsupported canary stage"),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -9547,6 +9570,40 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if message == "--allow-record-only":
+                        self.assertNotIn("embedded_signature_policy is 'record-only'", stderr)
+
+    def test_forged_nonproduction_trust_policy_diagnostic_hides_policy_value(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_path = write_trust_summary(root / "forged-policy")
+            hidden = "record-only"
+            rewrite_trust_summary(
+                trust_path,
+                lambda summary: (
+                    summary["bundles"][0].__setitem__(
+                        "embedded_signature_policy",
+                        hidden,
+                    ),
+                    summary["bundles"][0]["profile_overrides"].__setitem__(
+                        "embedded_signature_policy",
+                        hidden,
+                    ),
+                ),
+            )
+
+            rc, stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "embedded_signature_policy does not require verified signatures",
+                stderr,
+            )
+            self.assertNotIn(hidden, stderr)
 
     def test_forged_trust_summary_material_requires_matching_policy_flag(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9819,6 +9876,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     if hidden is not None:
                         self.assertNotIn(hidden, stderr)
                         self.assertNotIn("embedded_signature_policy is unsupported", stderr)
+                    else:
+                        self.assertNotIn(policy, stderr)
 
     def test_trust_summary_must_emit_profile_json_by_default(self):
         with tempfile.TemporaryDirectory() as raw_root:

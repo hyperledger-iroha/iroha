@@ -1384,12 +1384,36 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-chain-id-shape",
     ),
     (
+        "SDK bundle summary trailing-field vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-summary-trailing-field-vectors",
+    ),
+    (
+        "SDK verify-result trailing-field vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors",
+    ),
+    (
+        "SDK lineage-witness trailing-field vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-trailing-field-vectors",
+    ),
+    (
+        "SDK current-note amount trailing-field vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-current-note-amount-trailing-field-vectors",
+    ),
+    (
         "SDK bundle proof-circuit vector negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-circuit-vectors",
     ),
     (
         "SDK bundle proof-backend vector negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-backend-vectors",
+    ),
+    (
+        "SDK bundle proof-box backend vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-box-backend-vectors",
+    ),
+    (
+        "SDK bundle proof trailing-field vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-trailing-field-vectors",
     ),
     (
         "SDK bundle proof-bytes vector negative control",
@@ -9065,6 +9089,51 @@ def check_javascript(texts, errors):
         texts,
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
         (
+            "recursiveSpendBundleWithTrailingBundleField",
+            "recursiveSpendBundleWithTrailingBundleField()),\n    /bundle has trailing bytes/",
+            "recursiveSpendBundleWithTrailingAccumulatorField",
+            "recursiveSpendBundleWithTrailingAccumulatorField()),\n    /accumulator has trailing bytes/",
+            "recursiveSpendBundleWithTrailingCurrentNoteField",
+            "recursiveSpendBundleWithTrailingCurrentNoteField()),\n    /currentNote has trailing bytes/",
+        ),
+        "JavaScript recursive spend bundle summary trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "recursiveSpendVerifyResultWithTrailingField",
+            "decodeKagemushaRecursiveSpendVerifyResult(\n"
+            "        recursiveSpendVerifyResultWithTrailingField(),",
+            "/verifyResult has trailing bytes/u",
+        ),
+        "JavaScript recursive spend verify-result trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "recursiveSpendLineageWitnessWithTrailingField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithTrailingField(),\n      /lineageWitness has trailing bytes/",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+            "/lineageWitness has trailing bytes/",
+            "/lineageWitness\\.previousRecursiveProofs/",
+            "/lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+        ),
+        "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
             "kagemusha-recursive-spend-lineage-badhop-v1",
             "recursiveSpendBundleWithProofCircuitId(",
             "UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID",
@@ -9080,6 +9149,30 @@ def check_javascript(texts, errors):
             'recursiveSpendBundleWithProofBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
         ),
         "JavaScript recursive spend bundle proof-backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "recursiveSpendBundleWithProofBoxBackend",
+            'recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
+        ),
+        "JavaScript recursive spend bundle proof-box backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField(),\n      ),\n    /verifierKeyId has trailing bytes/",
+            "recursiveSpendBundleWithTrailingRecursiveProofField",
+            "recursiveSpendBundleWithTrailingRecursiveProofField(),\n      ),\n    /recursiveProof has trailing bytes/",
+            "recursiveSpendBundleWithTrailingProofBoxField",
+            "recursiveSpendBundleWithTrailingProofBoxField(),\n      ),\n    /proof has trailing bytes/",
+        ),
+        "JavaScript recursive spend bundle proof trailing-field guard tests",
         errors,
     )
     require_contains(
@@ -9120,6 +9213,7 @@ def check_javascript(texts, errors):
             "[1, kagemushaFixedArrayPayload(0x05, 33), /spendNullifier/]",
             "[2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/]",
             "[2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/]",
+            "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
             "/amount/",
         ),
         "JavaScript recursive spend bundle current-note guard tests",
@@ -9131,6 +9225,7 @@ def check_javascript(texts, errors):
         (
             "[2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/]",
             "[2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/]",
+            "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
         ),
         "JavaScript recursive spend bundle current-note amount encoding guard tests",
         errors,
@@ -9721,6 +9816,52 @@ def check_javascript(texts, errors):
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
         (
+            "recursiveSpendBundleWithTrailingBundleField",
+            "recursiveSpendBundleWithTrailingBundleField()),\n    /bundle has trailing bytes/",
+            "recursiveSpendBundleWithTrailingAccumulatorField",
+            "recursiveSpendBundleWithTrailingAccumulatorField()),\n    /accumulator has trailing bytes/",
+            "recursiveSpendBundleWithTrailingCurrentNoteField",
+            "recursiveSpendBundleWithTrailingCurrentNoteField()),\n    /currentNote has trailing bytes/",
+        ),
+        "JavaScript package dist recursive spend bundle summary trailing-field coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend verify result decodes ABI fixtures",
+            "recursiveSpendVerifyResultWithTrailingField",
+            "decodeKagemushaRecursiveSpendVerifyResult(\n"
+            "        recursiveSpendVerifyResultWithTrailingField(),",
+            "/verifyResult has trailing bytes/u",
+        ),
+        "JavaScript package dist recursive spend verify-result trailing-field coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "recursiveSpendLineageWitnessWithTrailingField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithTrailingField(),\n      /lineageWitness has trailing bytes/",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+            "/lineageWitness has trailing bytes/",
+            "/lineageWitness\\.previousRecursiveProofs/",
+            "/lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+        ),
+        "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
             "package dist Kagemusha recursive spend bundle rejects unsupported proof circuit ids before native dispatch",
             "kagemusha-recursive-spend-lineage-badhop-v1",
             "recursiveSpendBundleWithProofCircuitId(",
@@ -9738,6 +9879,30 @@ def check_javascript(texts, errors):
             'recursiveSpendBundleWithProofBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
         ),
         "JavaScript package dist recursive spend bundle proof-backend coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "recursiveSpendBundleWithProofBoxBackend",
+            'recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
+        ),
+        "JavaScript package dist recursive spend bundle proof-box backend coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField(),\n      ),\n    /verifierKeyId has trailing bytes/",
+            "recursiveSpendBundleWithTrailingRecursiveProofField",
+            "recursiveSpendBundleWithTrailingRecursiveProofField(),\n      ),\n    /recursiveProof has trailing bytes/",
+            "recursiveSpendBundleWithTrailingProofBoxField",
+            "recursiveSpendBundleWithTrailingProofBoxField(),\n      ),\n    /proof has trailing bytes/",
+        ),
+        "JavaScript package dist recursive spend bundle proof trailing-field coverage",
         errors,
     )
     require_contains(
@@ -9781,6 +9946,7 @@ def check_javascript(texts, errors):
             "[1, kagemushaFixedArrayPayload(0x05, 33), /spendNullifier/]",
             "[2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/]",
             "[2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/]",
+            "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
             "/amount/",
         ),
         "JavaScript package dist recursive spend bundle current-note coverage",
@@ -9792,6 +9958,7 @@ def check_javascript(texts, errors):
         (
             "[2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/]",
             "[2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/]",
+            "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
         ),
         "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
         errors,
@@ -10978,6 +11145,53 @@ def check_python(texts, errors):
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
         (
+            "def _recursive_spend_bundle_with_trailing_bundle_field(",
+            "_recursive_spend_bundle_with_trailing_bundle_field()\n        )",
+            "def _recursive_spend_bundle_with_trailing_accumulator_field(",
+            "_recursive_spend_bundle_with_trailing_accumulator_field()\n        )",
+            "def _recursive_spend_bundle_with_trailing_current_note_field(",
+            "_recursive_spend_bundle_with_trailing_current_note_field()\n        )",
+            "Trailing bytes after bundle",
+            "Trailing bytes after accumulator",
+            "Trailing bytes after current_note",
+        ),
+        "Python recursive spend bundle summary trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "def _recursive_spend_verify_result_with_trailing_field(",
+            "_recursive_spend_verify_result_with_trailing_field()\n        )",
+            "Trailing bytes after verify_result",
+        ),
+        "Python recursive spend verify-result trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "def _recursive_spend_lineage_witness_with_trailing_field(",
+            "def _recursive_spend_lineage_witness_with_trailing_previous_proofs_field(",
+            "def _recursive_spend_lineage_witness_with_trailing_previous_proof_field(",
+            "def _recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(",
+            "malformed_lineage_witnesses = (",
+            "_recursive_spend_lineage_witness_with_trailing_field(), r\"lineage_witness\"",
+            "_recursive_spend_lineage_witness_with_trailing_previous_proofs_field(),",
+            "_recursive_spend_lineage_witness_with_trailing_previous_proof_field(),",
+            "_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(),",
+            r"lineage_witness\.previous_recursive_proofs",
+            r"lineage_witness\.previous_recursive_proofs\.verifier_key_id",
+        ),
+        "Python recursive spend lineage-witness trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
             "kagemusha-recursive-spend-lineage-badhop-v1",
             "_recursive_spend_bundle_with_proof_circuit_id",
             "UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID",
@@ -10998,6 +11212,39 @@ def check_python(texts, errors):
             "            )",
         ),
         "Python recursive spend bundle proof-backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "def _recursive_spend_bundle_with_proof_box_backend(",
+            "_recursive_spend_bundle_with_proof_box_backend(\n                UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND",
+        ),
+        "Python recursive spend bundle proof-box backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "def _recursive_spend_bundle_with_trailing_verifier_key_id_field(",
+            'with pytest.raises(ValueError, match=r"Trailing bytes after verifier_key_id"):\n'
+            "        kagemusha.decode_kagemusha_recursive_spend_bundle(\n"
+            "            _recursive_spend_bundle_with_trailing_verifier_key_id_field()\n"
+            "        )",
+            "def _recursive_spend_bundle_with_trailing_recursive_proof_field(",
+            'with pytest.raises(ValueError, match=r"Trailing bytes after recursive_proof"):\n'
+            "        kagemusha.decode_kagemusha_recursive_spend_bundle(\n"
+            "            _recursive_spend_bundle_with_trailing_recursive_proof_field()\n"
+            "        )",
+            "def _recursive_spend_bundle_with_trailing_proof_box_field(",
+            'with pytest.raises(ValueError, match=r"Trailing bytes after proof"):\n'
+            "        kagemusha.decode_kagemusha_recursive_spend_bundle(\n"
+            "            _recursive_spend_bundle_with_trailing_proof_box_field()\n"
+            "        )",
+        ),
+        "Python recursive spend bundle proof trailing-field guard tests",
         errors,
     )
     require_contains(
@@ -11079,6 +11326,10 @@ def check_python(texts, errors):
             "_recursive_spend_bundle_with_current_note_field(\n"
             "                2,\n"
             '                _numeric_payload(bytes(16) + b"\\x01"),\n'
+            "            )",
+            "_recursive_spend_bundle_with_current_note_field(\n"
+            "                2,\n"
+            "                _numeric_payload_with_trailing_field(),\n"
             "            )",
             '"numeric scale"',
             '"amount"',
@@ -11844,6 +12095,51 @@ def check_swift(texts, errors):
         texts,
         request_codecs_test,
         (
+            "recursiveSpendBundleWithTrailingBundleField",
+            "Self.recursiveSpendBundleWithTrailingBundleField()",
+            "recursiveSpendBundleWithTrailingAccumulatorField",
+            "Self.recursiveSpendBundleWithTrailingAccumulatorField()",
+            "recursiveSpendBundleWithTrailingCurrentNoteField",
+            "Self.recursiveSpendBundleWithTrailingCurrentNoteField()",
+            '.invalidArchive("bundle")',
+            '.invalidArchive("field")',
+        ),
+        "Swift recursive spend bundle summary trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "recursiveSpendVerifyResultWithTrailingField",
+            "Self.recursiveSpendVerifyResultWithTrailingField()",
+            '.invalidArchive("verifyResult")',
+        ),
+        "Swift recursive spend verify-result trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "testLineageWitnessRejectsTrailingFields",
+            "recursiveSpendLineageWitnessWithTrailingField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "try Self.recursiveSpendLineageWitnessWithTrailingField()",
+            "try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofsField()",
+            "try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofField()",
+            "try Self.recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField()",
+            '.invalidArchive("lineageWitness.previousRecursiveProofs.verifierKeyId")',
+        ),
+        "Swift recursive spend lineage-witness trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
             '"kagemusha-recursive-spend-lineage-badhop-v1"',
             "Self.recursiveSpendBundleWithProofCircuitId(",
             '.invalidArchive("bundle.proof_circuit_id")',
@@ -11861,6 +12157,32 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendProver.recursiveAggregationProofBackend",
         ),
         "Swift recursive spend bundle proof-backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "recursiveSpendBundleWithProofBoxBackend",
+            'Self.recursiveSpendBundleWithProofBoxBackend("halo2/kzg")',
+            '.invalidArchive("bundle.proof_backend")',
+        ),
+        "Swift recursive spend bundle proof-box backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField",
+            "Self.recursiveSpendBundleWithTrailingVerifierKeyIdField()",
+            "recursiveSpendBundleWithTrailingRecursiveProofField",
+            "Self.recursiveSpendBundleWithTrailingRecursiveProofField()",
+            "recursiveSpendBundleWithTrailingProofBoxField",
+            "Self.recursiveSpendBundleWithTrailingProofBoxField()",
+            '.invalidArchive("bundle")',
+        ),
+        "Swift recursive spend bundle proof trailing-field guard tests",
         errors,
     )
     require_contains(
@@ -11903,6 +12225,7 @@ def check_swift(texts, errors):
             "replacement: Self.zeroNumericPayload()",
             "replacement: Self.numericPayload(Data([1]), scale: 1)",
             "replacement: Self.numericPayload(Data(repeating: 0, count: 16) + Data([1]))",
+            "replacement: Self.numericPayloadWithTrailingField()",
             "replacement: Self.fixedArrayPayload(0x04, count: 31)",
             "replacement: Self.fixedArrayPayload(0x04, count: 33)",
             "replacement: Self.fixedArrayPayload(0x05, count: 31)",
@@ -11920,8 +12243,10 @@ def check_swift(texts, errors):
         (
             "replacement: Self.numericPayload(Data([1]), scale: 1)",
             "replacement: Self.numericPayload(Data(repeating: 0, count: 16) + Data([1]))",
+            "replacement: Self.numericPayloadWithTrailingField()",
             '.invalidField("numeric")',
             '.invalidField("amount")',
+            '.invalidArchive("field")',
         ),
         "Swift recursive spend bundle current-note amount encoding guard tests",
         errors,
@@ -13238,6 +13563,8 @@ def check_java_kotlin(texts, errors):
         (
             "domain == KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN",
             "bundle.accumulator.domain",
+            "readAccumulatorChainId",
+            "bundle.accumulator.chain_id",
             "hopCount in 1..KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "bundle.accumulator.hop_count",
             "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)",
@@ -13376,6 +13703,7 @@ def check_java_kotlin(texts, errors):
             "bundle.proof_public_inputs",
             "bundle.proof_public_inputs_hash",
             "bundle.accumulator.domain",
+            'Triple(1, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id")',
             'Triple(6, byteArrayOf(0, 0, 0, 0), "hop_count")',
         ),
         "Kotlin recursive spend bundle accumulator domain guard tests",
@@ -13457,6 +13785,8 @@ def check_java_kotlin(texts, errors):
         (
             "KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN.equals(domain)",
             "bundle.accumulator.domain",
+            "readAccumulatorChainId",
+            "bundle.accumulator.chain_id",
             "bundle.accumulator.hop_count",
             "RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)",
@@ -13595,6 +13925,8 @@ def check_java_kotlin(texts, errors):
             "bundle.proof_public_inputs",
             "bundle.proof_public_inputs_hash",
             "bundle.accumulator.domain",
+            "kagemusha-recursive-spend-abi-chain",
+            "bundle.accumulator.chain_id",
             "new byte[] {0, 0, 0, 0}",
             '"hop_count"',
         ),
@@ -13664,6 +13996,17 @@ def check_java_kotlin(texts, errors):
         "        val malformedAccumulatorFields = listOf(",
         "        malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedField) ->",
         (
+            'Triple(1, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id")',
+        ),
+        "Kotlin recursive spend bundle accumulator chain-id shape guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        kotlin_request_codecs_test,
+        "        val malformedAccumulatorFields = listOf(",
+        "        malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedField) ->",
+        (
             'Triple(2, fixedArrayPayload(0x01, 15), "asset")',
             'Triple(2, fixedArrayPayload(0x01, 17), "asset")',
             'Triple(3, fixedArrayPayload(0x02, 31), "initial_root")',
@@ -13719,6 +14062,38 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         (
+            "recursiveSpendBundleWithProofBoxBackend",
+            "val malformedProofBoxBackend = assertFailsWith<IllegalArgumentException>",
+            "recursiveSpendBundleWithProofBoxBackend(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND)",
+            'assertTrue(malformedProofBoxBackend.message.orEmpty().contains("bundle.proof_backend"))',
+        ),
+        "Kotlin recursive spend bundle proof-box backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField",
+            "val trailingVerifierKeyIdField = assertFailsWith<IllegalArgumentException>",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField(),",
+            'contains("Trailing bytes after verifier key id")',
+            "recursiveSpendBundleWithTrailingRecursiveProofField",
+            "val trailingRecursiveProofField = assertFailsWith<IllegalArgumentException>",
+            "recursiveSpendBundleWithTrailingRecursiveProofField(),",
+            'contains("Trailing bytes after recursive proof")',
+            "recursiveSpendBundleWithTrailingProofBoxField",
+            "val trailingProofBoxField = assertFailsWith<IllegalArgumentException>",
+            "recursiveSpendBundleWithTrailingProofBoxField(),",
+            'contains("Trailing bytes after proof")',
+        ),
+        "Kotlin recursive spend bundle proof trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
             "val malformedProofBytes = assertFailsWith<IllegalArgumentException> {\n"
             "            KagemushaRecursiveSpendRequestCodecs.decodeBundle(\n"
             "                recursiveSpendBundleWithEmptyProofBytes(),\n"
@@ -13745,6 +14120,54 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         (
+            "recursiveSpendBundleWithTrailingBundleField",
+            "recursiveSpendBundleWithTrailingBundleField(),",
+            'contains("Trailing bytes after bundle")',
+            "recursiveSpendBundleWithTrailingAccumulatorField",
+            "recursiveSpendBundleWithTrailingAccumulatorField(),",
+            'contains("Trailing bytes after accumulator")',
+            "recursiveSpendBundleWithTrailingCurrentNoteField",
+            "recursiveSpendBundleWithTrailingCurrentNoteField(),",
+            'contains("Trailing bytes after field decode")',
+        ),
+        "Kotlin recursive spend bundle summary trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "recursiveSpendVerifyResultWithTrailingField",
+            "recursiveSpendVerifyResultWithTrailingField(),",
+            'contains("Trailing bytes after verify result")',
+        ),
+        "Kotlin recursive spend verify-result trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "lineage witness rejects trailing fields",
+            "recursiveSpendLineageWitnessWithTrailingField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "recursiveSpendLineageWitnessWithTrailingField() to",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField() to",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField() to",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() to",
+            '"Trailing bytes after lineageWitness"',
+            '"Trailing bytes after lineageWitness.previousRecursiveProofs"',
+            '"Trailing bytes after verifier key id"',
+        ),
+        "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
             "recursiveSpendBundleWithCurrentNoteField(0, ByteArray(32))",
             '"noteCommitment"',
             "recursiveSpendBundleWithCurrentNoteField(1, ByteArray(32))",
@@ -13753,6 +14176,10 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload())",
             "numericPayload(byteArrayOf(1), scale = 1)",
             "numericPayload(ByteArray(16) + byteArrayOf(1))",
+            "recursiveSpendBundleWithCurrentNoteField(\n"
+            "                    2,\n"
+            "                    numericPayloadWithTrailingField(),\n"
+            "                )",
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 31))",
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 33))",
             "recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 31))",
@@ -13769,10 +14196,28 @@ def check_java_kotlin(texts, errors):
         (
             "numericPayload(byteArrayOf(1), scale = 1)",
             "numericPayload(ByteArray(16) + byteArrayOf(1))",
+            "recursiveSpendBundleWithCurrentNoteField(\n"
+            "                    2,\n"
+            "                    numericPayloadWithTrailingField(),\n"
+            "                )",
             '"numeric scale"',
             '"amount"',
+            '"Trailing bytes after field decode"',
         ),
         "Kotlin recursive spend bundle current-note amount encoding guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_test,
+        "    final Object[][] malformedAccumulatorFields = {",
+        "    for (final Object[] malformedAccumulatorField : malformedAccumulatorFields) {",
+        (
+            "        1,\n        kagemushaNoritoString(",
+            'kagemushaNoritoString(\n            "kagemusha-recursive-spend-abi-chain", TEST_NORITO_COMPACT_LEN_FLAG)',
+            '"bundle.accumulator.chain_id"',
+        ),
+        "Android Java recursive spend bundle accumulator chain-id shape guard tests",
         errors,
     )
     require_block_contains(
@@ -13837,6 +14282,38 @@ def check_java_kotlin(texts, errors):
         texts,
         java_test,
         (
+            "recursiveSpendBundleWithProofBoxBackend",
+            "final IllegalArgumentException malformedProofBoxBackend =",
+            "recursiveSpendBundleWithProofBoxBackend(\n                        UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND)",
+            'assert malformedProofBoxBackend.getMessage().contains("bundle.proof_backend");',
+        ),
+        "Android Java recursive spend bundle proof-box backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField",
+            "final IllegalArgumentException trailingVerifierKeyIdField =",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField()));",
+            'contains("Trailing bytes after verifier key id");',
+            "recursiveSpendBundleWithTrailingRecursiveProofField",
+            "final IllegalArgumentException trailingRecursiveProofField =",
+            "recursiveSpendBundleWithTrailingRecursiveProofField()));",
+            'contains("Trailing bytes after recursive proof");',
+            "recursiveSpendBundleWithTrailingProofBoxField",
+            "final IllegalArgumentException trailingProofBoxField =",
+            "recursiveSpendBundleWithTrailingProofBoxField()));",
+            'contains("Trailing bytes after proof");',
+        ),
+        "Android Java recursive spend bundle proof trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
             "final IllegalArgumentException malformedProofBytes =\n"
             "        captureIllegalArgument(\n"
             "            () ->\n"
@@ -13863,6 +14340,55 @@ def check_java_kotlin(texts, errors):
         texts,
         java_test,
         (
+            "recursiveSpendBundleWithTrailingBundleField",
+            "recursiveSpendBundleWithTrailingBundleField()));",
+            'contains("Trailing bytes after bundle");',
+            "recursiveSpendBundleWithTrailingAccumulatorField",
+            "recursiveSpendBundleWithTrailingAccumulatorField()));",
+            'contains("Trailing bytes after accumulator");',
+            "recursiveSpendBundleWithTrailingCurrentNoteField",
+            "recursiveSpendBundleWithTrailingCurrentNoteField()));",
+            'contains("Trailing bytes after field decode");',
+        ),
+        "Android Java recursive spend bundle summary trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "recursiveSpendVerifyResultWithTrailingField",
+            "recursiveSpendVerifyResultWithTrailingField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result")',
+            'contains("Trailing bytes after verify result");',
+        ),
+        "Android Java recursive spend verify-result ABI-7/trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "assertLineageWitnessTrailingFieldRejected",
+            "recursiveSpendLineageWitnessWithTrailingField()",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField()",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField()",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField()",
+            'recursiveSpendLineageWitnessWithTrailingField(), "Trailing bytes after lineageWitness"',
+            'recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs"',
+            'recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs"',
+            'recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n        "Trailing bytes after verifier key id"',
+            '"Trailing bytes after lineageWitness"',
+            '"Trailing bytes after lineageWitness.previousRecursiveProofs"',
+            '"Trailing bytes after verifier key id"',
+        ),
+        "Android Java recursive spend lineage-witness trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
             "recursiveSpendBundleWithCurrentNoteField(0, new byte[32])",
             '"noteCommitment"',
             "recursiveSpendBundleWithCurrentNoteField(1, new byte[32])",
@@ -13871,6 +14397,7 @@ def check_java_kotlin(texts, errors):
             "recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload())",
             "recursiveSpendBundleWithCurrentNoteField(2, numericPayload(new byte[] {1}, 1))",
             "numericPayload(concat(new byte[16], new byte[] {1}))",
+            "recursiveSpendBundleWithCurrentNoteField(2, numericPayloadWithTrailingField())",
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload((byte) 0x04, 31))",
             "recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload((byte) 0x04, 33))",
             "recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload((byte) 0x05, 31))",
@@ -13887,8 +14414,10 @@ def check_java_kotlin(texts, errors):
         (
             "recursiveSpendBundleWithCurrentNoteField(2, numericPayload(new byte[] {1}, 1))",
             "numericPayload(concat(new byte[16], new byte[] {1}))",
+            "recursiveSpendBundleWithCurrentNoteField(2, numericPayloadWithTrailingField())",
             '"numeric scale"',
             '"amount"',
+            '"Trailing bytes after field decode"',
         ),
         "Android Java recursive spend bundle current-note amount encoding guard tests",
         errors,
@@ -25251,6 +25780,16 @@ if mode == "--negative-control-sdk-accumulator-chain-id-shape":
             '(2, Self.noritoString("kagemusha-recursive-spend-abi-chain", flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.chain_id"))',
             "Swift recursive spend bundle accumulator chain-id shape guard tests",
         ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            'Triple(1, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id")',
+            'Triple(2, testStringPayload("kagemusha-recursive-spend-abi-chain"), "bundle.accumulator.chain_id")',
+            "Kotlin recursive spend bundle accumulator chain-id shape guard tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            '        1,\n        kagemushaNoritoString(\n            "kagemusha-recursive-spend-abi-chain", TEST_NORITO_COMPACT_LEN_FLAG),\n        "bundle.accumulator.chain_id"',
+            '        2,\n        kagemushaNoritoString(\n            "kagemusha-recursive-spend-abi-chain", TEST_NORITO_COMPACT_LEN_FLAG),\n        "bundle.accumulator.chain_id"',
+            "Android Java recursive spend bundle accumulator chain-id shape guard tests",
+        ),
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
             '      1,\n      kagemushaNoritoString("kagemusha-recursive-spend-abi-chain")',
             '      2,\n      kagemushaNoritoString("kagemusha-recursive-spend-abi-chain")',
@@ -25291,6 +25830,459 @@ if mode == "--negative-control-sdk-accumulator-chain-id-shape":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator chain-id shape drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithTrailingBundleField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithTrailingAccumulatorField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithTrailingCurrentNoteField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithTrailingBundleField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithTrailingAccumulatorField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithTrailingCurrentNoteField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithTrailingBundleField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")));',
+            "Android Java recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithTrailingAccumulatorField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")));',
+            "Android Java recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithTrailingCurrentNoteField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")));',
+            "Android Java recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithTrailingBundleField()),\n    /bundle has trailing bytes/",
+            'sharedRecursiveSpendArchive("init_bundle")),\n    /bundle has trailing bytes/',
+            "JavaScript recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithTrailingAccumulatorField()),\n    /accumulator has trailing bytes/",
+            'sharedRecursiveSpendArchive("init_bundle")),\n    /accumulator has trailing bytes/',
+            "JavaScript recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithTrailingCurrentNoteField()),\n    /currentNote has trailing bytes/",
+            'sharedRecursiveSpendArchive("init_bundle")),\n    /currentNote has trailing bytes/',
+            "JavaScript recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_trailing_bundle_field()\n        )",
+            '_shared_recursive_spend_archive("init_bundle")\n        )',
+            "Python recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_trailing_accumulator_field()\n        )",
+            '_shared_recursive_spend_archive("init_bundle")\n        )',
+            "Python recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_trailing_current_note_field()\n        )",
+            '_shared_recursive_spend_archive("init_bundle")\n        )',
+            "Python recursive spend bundle summary trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithTrailingBundleField()),\n    /bundle has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("init_bundle")),\n    /bundle has trailing bytes/',
+            "JavaScript package dist recursive spend bundle summary trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithTrailingAccumulatorField()),\n    /accumulator has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("init_bundle")),\n    /accumulator has trailing bytes/',
+            "JavaScript package dist recursive spend bundle summary trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithTrailingCurrentNoteField()),\n    /currentNote has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("init_bundle")),\n    /currentNote has trailing bytes/',
+            "JavaScript package dist recursive spend bundle summary trailing-field coverage",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate bundle summary trailing-field vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK bundle summary trailing-field vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK bundle summary trailing-field vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK bundle summary trailing-field vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendVerifyResultWithTrailingField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi7, name: "verify_result")',
+            "Swift recursive spend verify-result trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendVerifyResultWithTrailingField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result"),',
+            "Kotlin recursive spend verify-result trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendVerifyResultWithTrailingField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result")));',
+            "Android Java recursive spend verify-result ABI-7/trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendVerifyResultWithTrailingField(),\n      ),\n    /verifyResult has trailing bytes/u",
+            'sharedRecursiveSpendAbi7Archive("verify_result"),\n      ),\n    /verifyResult has trailing bytes/u',
+            "JavaScript recursive spend verify-result trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_verify_result_with_trailing_field()\n        )",
+            '_shared_recursive_spend_abi7_archive("verify_result")\n        )',
+            "Python recursive spend verify-result trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendVerifyResultWithTrailingField(),\n      ),\n    /verifyResult has trailing bytes/u",
+            'sharedRecursiveSpendAbi7Archive("verify_result"),\n      ),\n    /verifyResult has trailing bytes/u',
+            "JavaScript package dist recursive spend verify-result trailing-field coverage",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate verify-result trailing-field vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK verify-result trailing-field vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK verify-result trailing-field vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK verify-result trailing-field vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithTrailingField()",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofsField()",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofField()",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField()",
+            'try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result")',
+            "Swift recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithTrailingField() to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField() to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField() to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() to",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result") to',
+            "Kotlin recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithTrailingField(), \"Trailing bytes after lineageWitness\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"), "Trailing bytes after lineageWitness"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n        \"Trailing bytes after lineageWitness.previousRecursiveProofs\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n        \"Trailing bytes after lineageWitness.previousRecursiveProofs\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "Trailing bytes after lineageWitness.previousRecursiveProofs"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n        \"Trailing bytes after verifier key id\"",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),\n        "Trailing bytes after verifier key id"',
+            "Android Java recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithTrailingField(),\n      /lineageWitness has trailing bytes/",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),\n      /lineageWitness has trailing bytes/',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs/',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs/',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+            'sharedRecursiveSpendArchive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/',
+            "JavaScript recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_trailing_field(), r\"lineage_witness\"",
+            '_shared_recursive_spend_archive("lineage_witness_append_result"), r"lineage_witness"',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_trailing_previous_proofs_field(),",
+            '_shared_recursive_spend_archive("lineage_witness_append_result"),',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_trailing_previous_proof_field(),",
+            '_shared_recursive_spend_archive("lineage_witness_append_result"),',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(),",
+            '_shared_recursive_spend_archive("lineage_witness_append_result"),',
+            "Python recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithTrailingField(),\n      /lineageWitness has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),\n      /lineageWitness has trailing bytes/',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs/',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithTrailingPreviousProofField(),\n      /lineageWitness\\.previousRecursiveProofs/",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs/',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/",
+            'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/',
+            "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate lineage-witness trailing-field vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK lineage-witness trailing-field vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK lineage-witness trailing-field vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK lineage-witness trailing-field vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "try Self.recursiveSpendBundleWithCurrentNoteField(\n"
+            "                    fieldIndex: 2,\n"
+            "                    replacement: Self.numericPayloadWithTrailingField()\n"
+            "                )",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle current-note amount encoding guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithCurrentNoteField(\n"
+            "                    2,\n"
+            "                    numericPayloadWithTrailingField(),\n"
+            "                )",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")',
+            "Kotlin recursive spend bundle current-note amount encoding guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithCurrentNoteField(2, numericPayloadWithTrailingField())",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")',
+            "Android Java recursive spend bundle current-note amount encoding guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
+            "[2, kagemushaZeroNumericPayload(), /amount/]",
+            "JavaScript recursive spend bundle current-note amount encoding guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_current_note_field(\n"
+            "                2,\n"
+            "                _numeric_payload_with_trailing_field(),\n"
+            "            )",
+            '_shared_recursive_spend_archive("init_bundle")',
+            "Python recursive spend bundle current-note amount encoding guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
+            "[2, kagemushaZeroNumericPayload(), /amount/]",
+            "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate current-note amount trailing-field vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK current-note amount trailing-field vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK current-note amount trailing-field vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK current-note amount trailing-field vector drift was not detected"
     )
 
 if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":
@@ -25459,6 +26451,204 @@ if mode == "--negative-control-sdk-bundle-proof-backend-vectors":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof-backend vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            'Self.recursiveSpendBundleWithProofBoxBackend("halo2/kzg")',
+            'Self.recursiveSpendBundleWithProofBoxBackend("halo2/ipa")',
+            "Swift recursive spend bundle proof-box backend guard tests",
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            "recursiveSpendBundleWithProofBoxBackend(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND),",
+            "recursiveSpendBundleWithProofBoxBackend(KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND),",
+            "Kotlin recursive spend bundle proof-box backend guard tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            "recursiveSpendBundleWithProofBoxBackend(\n                        UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND)",
+            "recursiveSpendBundleWithProofBoxBackend(\n                        KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND)",
+            "Android Java recursive spend bundle proof-box backend guard tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            'recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
+            'recursiveSpendBundleWithProofBoxBackend("halo2/ipa"),\n      ),\n    /bundle\\.proof_backend/,',
+            "JavaScript recursive spend bundle proof-box backend guard tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            "_recursive_spend_bundle_with_proof_box_backend(\n                UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND\n            )",
+            "_recursive_spend_bundle_with_proof_box_backend(\n                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND\n            )",
+            "Python recursive spend bundle proof-box backend guard tests",
+        ),
+        "javascript/iroha_js/test/package_dist.test.js": (
+            'recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
+            'recursiveSpendBundleWithProofBoxBackend("halo2/ipa"),\n      ),\n    /bundle\\.proof_backend/,',
+            "JavaScript package dist recursive spend bundle proof-box backend coverage",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate bundle proof-box backend vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK bundle proof-box backend vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK bundle proof-box backend vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK bundle proof-box backend vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithTrailingVerifierKeyIdField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithTrailingRecursiveProofField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "Self.recursiveSpendBundleWithTrailingProofBoxField()",
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+            "Swift recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithTrailingRecursiveProofField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "recursiveSpendBundleWithTrailingProofBoxField(),",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),',
+            "Kotlin recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")));',
+            "Android Java recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithTrailingRecursiveProofField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")));',
+            "Android Java recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "recursiveSpendBundleWithTrailingProofBoxField()));",
+            'sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")));',
+            "Android Java recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField(),\n      ),\n    /verifierKeyId has trailing bytes/",
+            'sharedRecursiveSpendArchive("init_bundle"),\n      ),\n    /verifierKeyId has trailing bytes/',
+            "JavaScript recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithTrailingRecursiveProofField(),\n      ),\n    /recursiveProof has trailing bytes/",
+            'sharedRecursiveSpendArchive("init_bundle"),\n      ),\n    /recursiveProof has trailing bytes/',
+            "JavaScript recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithTrailingProofBoxField(),\n      ),\n    /proof has trailing bytes/",
+            'sharedRecursiveSpendArchive("init_bundle"),\n      ),\n    /proof has trailing bytes/',
+            "JavaScript recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_trailing_verifier_key_id_field()\n        )",
+            '_shared_recursive_spend_archive("init_bundle")\n        )',
+            "Python recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_trailing_recursive_proof_field()\n        )",
+            '_shared_recursive_spend_archive("init_bundle")\n        )',
+            "Python recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_trailing_proof_box_field()\n        )",
+            '_shared_recursive_spend_archive("init_bundle")\n        )',
+            "Python recursive spend bundle proof trailing-field guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithTrailingVerifierKeyIdField(),\n      ),\n    /verifierKeyId has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("init_bundle"),\n      ),\n    /verifierKeyId has trailing bytes/',
+            "JavaScript package dist recursive spend bundle proof trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithTrailingRecursiveProofField(),\n      ),\n    /recursiveProof has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("init_bundle"),\n      ),\n    /recursiveProof has trailing bytes/',
+            "JavaScript package dist recursive spend bundle proof trailing-field coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithTrailingProofBoxField(),\n      ),\n    /proof has trailing bytes/",
+            'sharedRecursiveSpendAbi6Archive("init_bundle"),\n      ),\n    /proof has trailing bytes/',
+            "JavaScript package dist recursive spend bundle proof trailing-field coverage",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate bundle proof trailing-field vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK bundle proof trailing-field vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK bundle proof trailing-field vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK bundle proof trailing-field vector drift was not detected"
     )
 
 if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":

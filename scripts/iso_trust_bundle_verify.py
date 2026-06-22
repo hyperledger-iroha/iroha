@@ -672,17 +672,8 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise TrustBundleError(f"{label} contains unknown keys")
-        raise TrustBundleError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise TrustBundleError(f"{label} contains unknown keys")
 
 
 def _is_secret_looking_key(value: Any) -> bool:

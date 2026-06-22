@@ -1401,6 +1401,32 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !abi6Result.witnesslessRedeemSupported;
     assert abi6Result.lineageWitnessRequired;
 
+    final KagemushaRecursiveSpendRequestCodecs.VerifySpendResult abi7Result =
+        KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
+            sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result"));
+    assert abi7Result.valid;
+    assert abi7Result.hopCount >= 1;
+    assert abi7Result.encodedBytes > 0;
+    assert abi7Result.chainAdmissionReason.isEmpty() == abi7Result.chainAdmissible;
+    assert !abi7Result.lineageWitnessRequired == abi7Result.witnesslessRedeemSupported;
+    final IllegalArgumentException trailingVerifyResultField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
+                    recursiveSpendVerifyResultWithTrailingField()));
+    assert trailingVerifyResultField.getMessage().contains("Trailing bytes after verify result");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithTrailingField(), "Trailing bytes after lineageWitness");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
+        "Trailing bytes after lineageWitness.previousRecursiveProofs");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithTrailingPreviousProofField(),
+        "Trailing bytes after lineageWitness.previousRecursiveProofs");
+    assertLineageWitnessTrailingFieldRejected(
+        recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
+        "Trailing bytes after verifier key id");
+
     final KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary init =
         KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"));
@@ -1437,6 +1463,35 @@ public final class KagemushaRecursiveSpendProverTest {
                     recursiveSpendBundleWithProofBackend(
                         UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND)));
     assert malformedProofBackend.getMessage().contains("bundle.proof_backend");
+    final IllegalArgumentException malformedProofBoxBackend =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithProofBoxBackend(
+                        UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND)));
+    assert malformedProofBoxBackend.getMessage().contains("bundle.proof_backend");
+    final IllegalArgumentException trailingRecursiveProofField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTrailingRecursiveProofField()));
+    assert trailingRecursiveProofField
+        .getMessage()
+        .contains("Trailing bytes after recursive proof");
+    final IllegalArgumentException trailingVerifierKeyIdField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTrailingVerifierKeyIdField()));
+    assert trailingVerifierKeyIdField
+        .getMessage()
+        .contains("Trailing bytes after verifier key id");
+    final IllegalArgumentException trailingProofBoxField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTrailingProofBoxField()));
+    assert trailingProofBoxField.getMessage().contains("Trailing bytes after proof");
     final IllegalArgumentException malformedProofBytes =
         captureIllegalArgument(
             () ->
@@ -1480,6 +1535,9 @@ public final class KagemushaRecursiveSpendProverTest {
         recursiveSpendBundleWithCurrentNoteField(
             2, numericPayload(concat(new byte[16], new byte[] {1}))),
           "amount"},
+      {
+        recursiveSpendBundleWithCurrentNoteField(2, numericPayloadWithTrailingField()),
+          "Trailing bytes after field decode"},
     };
     for (final Object[] malformedCurrentNote : malformedCurrentNotes) {
       final byte[] archive = (byte[]) malformedCurrentNote[0];
@@ -1489,6 +1547,18 @@ public final class KagemushaRecursiveSpendProverTest {
               () -> KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive));
       assert malformedNote.getMessage().contains(expectedField);
     }
+    final IllegalArgumentException trailingBundleField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTrailingBundleField()));
+    assert trailingBundleField.getMessage().contains("Trailing bytes after bundle");
+    final IllegalArgumentException trailingCurrentNoteField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTrailingCurrentNoteField()));
+    assert trailingCurrentNoteField.getMessage().contains("Trailing bytes after field decode");
     final IllegalArgumentException malformedDomain =
         captureIllegalArgument(
             () ->
@@ -1500,6 +1570,12 @@ public final class KagemushaRecursiveSpendProverTest {
                             TEST_NORITO_COMPACT_LEN_FLAG))));
     assert malformedDomain.getMessage().contains("bundle.accumulator.domain");
     final Object[][] malformedAccumulatorFields = {
+      {
+        1,
+        kagemushaNoritoString(
+            "kagemusha-recursive-spend-abi-chain", TEST_NORITO_COMPACT_LEN_FLAG),
+        "bundle.accumulator.chain_id"
+      },
       {2, fixedArrayPayload((byte) 0x01, 15), "asset"},
       {2, fixedArrayPayload((byte) 0x01, 17), "asset"},
       {3, fixedArrayPayload((byte) 0x02, 31), "initial_root"},
@@ -1531,6 +1607,12 @@ public final class KagemushaRecursiveSpendProverTest {
                       recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement)));
       assert malformedField.getMessage().contains(expectedField);
     }
+    final IllegalArgumentException trailingAccumulatorField =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithTrailingAccumulatorField()));
+    assert trailingAccumulatorField.getMessage().contains("Trailing bytes after accumulator");
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts();
     assertArchiveSchema(
@@ -3559,6 +3641,139 @@ public final class KagemushaRecursiveSpendProverTest {
         NoritoHeader.COMPACT_LEN);
   }
 
+  private static byte[] recursiveSpendBundleWithTrailingBundleField() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    bundleFields.add(
+        kagemushaNoritoString("ignored-extra-bundle-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendVerifyResultWithTrailingField() {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT)));
+    fields.add(new byte[] {1});
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendLineageWitnessWithTrailingField() {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    fields.add(kagemushaNoritoString("ignored-extra-lineage-witness-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendLineageWitnessWithTrailingPreviousProofsField() {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    fields.set(
+        3,
+        concat(
+            fields.get(3),
+            encodeFields(
+                Collections.singletonList(
+                    kagemushaNoritoString(
+                        "ignored-extra-previous-proofs-field", TEST_NORITO_COMPACT_LEN_FLAG)))));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendLineageWitnessWithTrailingPreviousProofField() {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    final List<byte[]> previousProofs = new ArrayList<>(sequencePayloads(fields.get(3)));
+    assert !previousProofs.isEmpty();
+    final List<byte[]> previousProofFields = new ArrayList<>(fieldPayloads(previousProofs.get(0)));
+    previousProofFields.add(
+        kagemushaNoritoString("ignored-extra-previous-proof-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    previousProofs.set(0, encodeFields(previousProofFields));
+    fields.set(3, encodeSequence(previousProofs));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() {
+    final List<byte[]> fields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS)));
+    final List<byte[]> previousProofs = new ArrayList<>(sequencePayloads(fields.get(3)));
+    assert !previousProofs.isEmpty();
+    final List<byte[]> previousProofFields = new ArrayList<>(fieldPayloads(previousProofs.get(0)));
+    final List<byte[]> verifierKeyIdFields =
+        new ArrayList<>(fieldPayloads(previousProofFields.get(0)));
+    verifierKeyIdFields.add(
+        kagemushaNoritoString(
+            "ignored-extra-previous-verifier-key-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    previousProofFields.set(0, encodeFields(verifierKeyIdFields));
+    previousProofs.set(0, encodeFields(previousProofFields));
+    fields.set(3, encodeSequence(previousProofs));
+    return NoritoCodec.encode(
+        encodeFields(fields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithTrailingAccumulatorField() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> accumulatorFields = new ArrayList<>(fieldPayloads(bundleFields.get(0)));
+    accumulatorFields.add(
+        kagemushaNoritoString(
+            "ignored-extra-accumulator-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    bundleFields.set(0, encodeFields(accumulatorFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
   private static byte[] recursiveSpendBundleWithCurrentNoteField(
       final int fieldIndex, final byte[] replacement) {
     final List<byte[]> bundleFields =
@@ -3571,6 +3786,28 @@ public final class KagemushaRecursiveSpendProverTest {
     final List<byte[]> currentNoteFields =
         new ArrayList<>(fieldPayloads(accumulatorFields.get(22)));
     currentNoteFields.set(fieldIndex, Arrays.copyOf(replacement, replacement.length));
+    accumulatorFields.set(22, encodeFields(currentNoteFields));
+    bundleFields.set(0, encodeFields(accumulatorFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithTrailingCurrentNoteField() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> accumulatorFields = new ArrayList<>(fieldPayloads(bundleFields.get(0)));
+    final List<byte[]> currentNoteFields =
+        new ArrayList<>(fieldPayloads(accumulatorFields.get(22)));
+    currentNoteFields.add(
+        kagemushaNoritoString(
+            "ignored-extra-current-note-field", TEST_NORITO_COMPACT_LEN_FLAG));
     accumulatorFields.set(22, encodeFields(currentNoteFields));
     bundleFields.set(0, encodeFields(accumulatorFields));
     return NoritoCodec.encode(
@@ -3614,6 +3851,12 @@ public final class KagemushaRecursiveSpendProverTest {
         Arrays.asList(
             concat(littleEndianU32(mantissa.length), mantissa),
             littleEndianU32(scale)));
+  }
+
+  private static byte[] numericPayloadWithTrailingField() {
+    return concat(
+        numericPayload(new byte[] {1}),
+        encodeFields(Collections.singletonList(littleEndianU32(0x42))));
   }
 
   private static byte[] littleEndianU32(final int value) {
@@ -3670,6 +3913,86 @@ public final class KagemushaRecursiveSpendProverTest {
     }
     return NoritoCodec.encode(
         mutatedPayload,
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithProofBoxBackend(final String proofBackend) {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    final List<byte[]> proofBoxFields = new ArrayList<>(fieldPayloads(proofFields.get(3)));
+    proofBoxFields.set(
+        0, kagemushaNoritoString(proofBackend, TEST_NORITO_COMPACT_LEN_FLAG));
+    proofFields.set(3, encodeFields(proofBoxFields));
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithTrailingVerifierKeyIdField() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    final List<byte[]> verifierKeyIdFields = new ArrayList<>(fieldPayloads(proofFields.get(0)));
+    verifierKeyIdFields.add(
+        kagemushaNoritoString(
+            "ignored-extra-verifier-key-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    proofFields.set(0, encodeFields(verifierKeyIdFields));
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithTrailingRecursiveProofField() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    proofFields.add(
+        kagemushaNoritoString(
+            "ignored-extra-recursive-proof-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithTrailingProofBoxField() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    final List<byte[]> proofBoxFields = new ArrayList<>(fieldPayloads(proofFields.get(3)));
+    proofBoxFields.add(
+        kagemushaNoritoString("ignored-extra-proof-box-field", TEST_NORITO_COMPACT_LEN_FLAG));
+    proofFields.set(3, encodeFields(proofBoxFields));
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
         KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
         RAW_PAYLOAD_ADAPTER,
         NoritoHeader.COMPACT_LEN);
@@ -3790,6 +4113,16 @@ public final class KagemushaRecursiveSpendProverTest {
       encoded[index] = kagemushaNoritoField(fields.get(index), TEST_NORITO_COMPACT_LEN_FLAG);
     }
     return concat(encoded);
+  }
+
+  private static byte[] encodeSequence(final List<byte[]> fields) {
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    encoder.writeUInt(fields.size(), 64);
+    for (final byte[] field : fields) {
+      encoder.writeLength(field.length, true);
+      encoder.writeBytes(field);
+    }
+    return encoder.toByteArray();
   }
 
   private static byte[] fixedArrayPayload(final byte value, final int count) {
@@ -3985,6 +4318,14 @@ public final class KagemushaRecursiveSpendProverTest {
     } catch (final IllegalArgumentException expected) {
       assert message.equals(expected.getMessage());
     }
+  }
+
+  private static void assertLineageWitnessTrailingFieldRejected(
+      final byte[] archive, final String expected) {
+    final IllegalArgumentException error =
+        captureIllegalArgument(
+            () -> KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(archive));
+    assert error.getMessage().contains(expected);
   }
 
   private static IllegalArgumentException captureIllegalArgument(final Runnable runnable) {

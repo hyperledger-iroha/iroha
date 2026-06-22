@@ -51,6 +51,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             ("x--iroha--signature_canary_unknown_leak", "canary_unknown_leak"),
             ("unexpected\x1bcanary_key", "\x1b"),
             ("unexpected_canary_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:

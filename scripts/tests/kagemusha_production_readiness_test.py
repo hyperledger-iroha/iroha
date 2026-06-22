@@ -665,6 +665,24 @@ def write_passing_lineage_proof_log(path: Path) -> None:
     )
 
 
+def write_incomplete_started_lineage_proof_log(path: Path) -> None:
+    test_name = readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+    path.write_text(
+        "\n".join(
+            (
+                "   Compiling iroha_core v2.0.0-rc.2.0 (/tmp/iroha/crates/iroha_core)",
+                "    Finished `test` profile [unoptimized] target(s) in 8m 24s",
+                "     Running unittests src/lib.rs (target/debug/deps/iroha_core-hash)",
+                "",
+                "running 1 test",
+                f"test {test_name} ...",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+
 def write_abi7_fail_closed_marker_files(repo: Path) -> None:
     write_abi7_fixture_files(repo)
     core_path = repo / "crates/iroha_core/src/zk.rs"
@@ -1748,6 +1766,238 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         for digest in summary["artifact_sha256"].values():
             self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    def test_stale_localnet_lifecycle_evidence_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generated_at_utc"] = "2026-06-05T23:59:59Z"
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(
+                evidence_path,
+                min_generated_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "test localnet lifecycle cutoff",
+                )[0],
+            )
+
+        self.assertFalse(summary["ok"])
+        self.assertIn(
+            "localnet_lifecycle_evidence_stale",
+            {item["code"] for item in summary["blockers"]},
+        )
+
+    def test_localnet_lifecycle_evidence_rejects_noncanonical_timestamp(self) -> None:
+        for timestamp in (
+            "2026-06-06 00:00:00Z",
+            "2026-06-06T00:00:00+00:00",
+        ):
+            with self.subTest(timestamp=timestamp):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    evidence["generated_at_utc"] = timestamp
+                    write_json(evidence_path, evidence)
+
+                    summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+                self.assertFalse(summary["ok"])
+                self.assertIn(
+                    "localnet_lifecycle_evidence_timestamp_noncanonical",
+                    {item["code"] for item in summary["blockers"]},
+                )
+
+    def test_localnet_lifecycle_evidence_rejects_missing_or_nonstring_timestamp(
+        self,
+    ) -> None:
+        cases: tuple[object, ...] = (None, "", True, 7, [])
+        for generated_at_utc in cases:
+            with self.subTest(generated_at_utc=repr(generated_at_utc)):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    if generated_at_utc is None:
+                        del evidence["generated_at_utc"]
+                    else:
+                        evidence["generated_at_utc"] = generated_at_utc
+                    write_json(evidence_path, evidence)
+
+                    summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+                self.assertFalse(summary["ok"])
+                self.assertIn(
+                    "localnet_lifecycle_evidence_timestamp_missing",
+                    {item["code"] for item in summary["blockers"]},
+                )
+
+    def test_localnet_lifecycle_evidence_rejects_timestamp_string_shape(self) -> None:
+        cases = (
+            (
+                " 2026-06-06T00:00:00Z ",
+                {
+                    "localnet_lifecycle_evidence_timestamp_surrounding_whitespace",
+                    "localnet_lifecycle_evidence_timestamp_noncanonical",
+                },
+            ),
+            (
+                "2026-06-06T00:00:00Z\u0000",
+                {"localnet_lifecycle_evidence_timestamp_control_character"},
+            ),
+        )
+        for generated_at_utc, expected_codes in cases:
+            with self.subTest(generated_at_utc=repr(generated_at_utc)):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    evidence["generated_at_utc"] = generated_at_utc
+                    write_json(evidence_path, evidence)
+
+                    summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+                self.assertFalse(summary["ok"])
+                codes = {item["code"] for item in summary["blockers"]}
+                self.assertTrue(expected_codes.issubset(codes), codes)
+                rendered = json.dumps(summary)
+                self.assertNotIn("\u0000", rendered)
+                if "\u0000" in generated_at_utc:
+                    self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+
+    def test_future_localnet_lifecycle_evidence_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generated_at_utc"] = "2026-06-06T00:05:01Z"
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(
+                evidence_path,
+                max_generated_at=readiness.parse_utc_timestamp(
+                    "2026-06-06T00:05:00Z",
+                    "test localnet lifecycle max timestamp",
+                )[0],
+            )
+
+        self.assertFalse(summary["ok"])
+        self.assertIn(
+            "localnet_lifecycle_evidence_future_dated",
+            {item["code"] for item in summary["blockers"]},
+        )
+
+    def test_localnet_lifecycle_evidence_redacts_secret_identity_values(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            evidence["localnet_run_id"] = "token=supersecret-run"
+            evidence["chain_id"] = "token=supersecret-chain"
+            acceptance["run_id"] = "token=supersecret-run"
+            acceptance["chain_id"] = "token=supersecret-chain"
+            acceptance["target"] = "token=supersecret-target"
+            acceptance["peer_ids"] = [
+                "peer-0@production-localnet",
+                "peer-1@production-localnet",
+                "token=supersecret-peer",
+                "peer-3@production-localnet",
+            ]
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertFalse(summary["ok"])
+        rendered = json.dumps(summary, sort_keys=True)
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("localnet_lifecycle_evidence_run_id", codes)
+        self.assertIn("localnet_lifecycle_evidence_chain_id", codes)
+        self.assertIn("localnet_lifecycle_evidence_target", codes)
+        self.assertIn("localnet_lifecycle_evidence_peer_ids", codes)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_localnet_lifecycle_evidence_redacts_control_identity_values(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            evidence["localnet_run_id"] = "production-4-peer-localnet-\x1b[31m"
+            evidence["chain_id"] = "kagemusha-production-localnet-\x1b[31m"
+            acceptance["run_id"] = "production-4-peer-localnet-\x1b[31m"
+            acceptance["chain_id"] = "kagemusha-production-localnet-\x1b[31m"
+            acceptance["target"] = "localnet\x1b[31m"
+            acceptance["peer_ids"] = [
+                "peer-0@production-localnet",
+                "peer-1@production-localnet",
+                "peer-\x1b[31m@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertFalse(summary["ok"])
+        rendered = json.dumps(summary, sort_keys=True)
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("localnet_lifecycle_evidence_run_id", codes)
+        self.assertIn("localnet_lifecycle_evidence_chain_id", codes)
+        self.assertIn("localnet_lifecycle_evidence_target", codes)
+        self.assertIn("localnet_lifecycle_evidence_peer_ids", codes)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn("debug", rendered)
+        self.assertNotIn("\\u001b", rendered)
+        self.assertNotIn("\x1b", rendered)
+
+    def test_localnet_lifecycle_evidence_rejects_unexpected_top_level_field_with_redaction(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["token=supersecret"] = "must not leak"
+            evidence["debug\x1b[31m"] = "must not leak"
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertFalse(summary["ok"])
+        rendered = json.dumps(summary["blockers"])
+        self.assertIn("localnet_lifecycle_evidence_unexpected_field", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("debug\x1b[31m", rendered)
+        self.assertNotIn("\u001b", rendered)
+
+    def test_localnet_lifecycle_evidence_rejects_unexpected_acceptance_field_with_redaction(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            acceptance["token=supersecret"] = "must not leak"
+            acceptance["debug\x1b[31m"] = "must not leak"
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertFalse(summary["ok"])
+        rendered = json.dumps(summary["blockers"])
+        self.assertIn(
+            "localnet_lifecycle_evidence_acceptance_unexpected_field",
+            rendered,
+        )
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("debug\x1b[31m", rendered)
+        self.assertNotIn("\u001b", rendered)
 
     def test_localnet_lifecycle_evidence_rejects_adversarial_inputs(self) -> None:
         def set_acceptance(field: str, value: object):
@@ -18039,6 +18289,97 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
 
+    def test_android_signed_evidence_freshness_redacts_secret_slot_after_sanitize(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return (
+                    [
+                        direct_android_signed_evidence_report(
+                            slot="token=supersecret-slot",
+                            signed_at_utc="2026-06-05T23:59:59Z",
+                            signed_evidence_signer_public_key_sha256=signer_digest,
+                        )
+                    ],
+                    [],
+                )
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    trusted,
+                    min_signed_at=readiness.parse_utc_timestamp(
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "test cutoff",
+                    )[0],
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        self.assertFalse(summary["ok"])
+        rendered = json.dumps(summary, sort_keys=True)
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("android_device_lab_report_unsafe_material", codes)
+        self.assertIn("android_signed_evidence_stale", codes)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_android_signed_evidence_freshness_redacts_control_slot_after_sanitize(
+        self,
+    ) -> None:
+        unsafe_slot = "slot-\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return (
+                    [
+                        direct_android_signed_evidence_report(
+                            slot=unsafe_slot,
+                            signed_at_utc="2026-06-06T00:05:01Z",
+                            signed_evidence_signer_public_key_sha256=signer_digest,
+                        )
+                    ],
+                    [],
+                )
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    trusted,
+                    max_signed_at=readiness.parse_utc_timestamp(
+                        "2026-06-06T00:05:00Z",
+                        "test max timestamp",
+                    )[0],
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        self.assertFalse(summary["ok"])
+        rendered = json.dumps(summary, sort_keys=True)
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("android_device_lab_report_unsafe_material", codes)
+        self.assertIn("android_signed_evidence_future_dated", codes)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn(unsafe_slot, rendered)
+        self.assertNotIn("\\u001b", rendered)
+        self.assertNotIn("\x1b", rendered)
+
     def test_signed_evidence_freshness_uses_validated_report_timestamp(self) -> None:
         min_signed_at = readiness.parse_utc_timestamp(
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
@@ -19543,6 +19884,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_redacts_control_direct_values(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            device_model="Pixel 6\x1b[31m",
+            offline_wallet_apk_path="evidence/offline-wallet\x1b[31m.apk",
+            signed_evidence_signer_public_key_sha256="1" * 63 + "\x1b",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+        rendered = json.dumps({"blockers": blockers, "summary": summary}, sort_keys=True)
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            [
+                "android_signed_evidence_summary_invalid",
+                "android_signed_evidence_summary_invalid",
+                "android_signed_evidence_summary_invalid",
+            ],
+        )
+        self.assertEqual(
+            {item["field"] for item in blockers},
+            {"device_model", "offline_wallet_apk_path", "signer_public_key_sha256"},
+        )
+        self.assertEqual(summary, {})
+        self.assertNotIn("Pixel 6", rendered)
+        self.assertNotIn("offline-wallet", rendered)
+        self.assertNotIn("\\u001b", rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_android_rollup_rejects_unsafe_trusted_signer_map_before_root_classify(
         self,
@@ -23189,6 +23561,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {item["code"] for item in result["blockers"]},
             )
 
+    def test_compact_key_evidence_rejects_missing_or_nonstring_timestamp(self) -> None:
+        cases: tuple[object, ...] = (None, "", False, 0, [])
+        for generated_at_utc in cases:
+            with self.subTest(generated_at_utc=repr(generated_at_utc)):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    if generated_at_utc is None:
+                        del evidence["generated_at_utc"]
+                    else:
+                        evidence["generated_at_utc"] = generated_at_utc
+                    write_json(evidence_path, evidence)
+
+                    result = readiness.check_compact_key_evidence(evidence_path)
+
+                self.assertFalse(result["ok"])
+                self.assertIn(
+                    "compact_key_evidence_timestamp_missing",
+                    {item["code"] for item in result["blockers"]},
+                )
+
     def test_compact_key_evidence_rejects_timestamp_string_shape(self) -> None:
         cases = (
             (
@@ -23628,6 +24021,49 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "compact_key_evidence_generator_log_path",
             {item["code"] for item in result["blockers"]},
         )
+
+    def test_compact_key_evidence_rejects_secret_generator_log_path_without_leak(
+        self,
+    ) -> None:
+        unsafe_path = "token=supersecret"
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generator_log_path"] = unsafe_path
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+            rendered = json.dumps(result["blockers"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_path",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn(unsafe_path, rendered)
+
+    def test_compact_key_evidence_rejects_control_generator_log_path_without_leak(
+        self,
+    ) -> None:
+        unsafe_path = "debug\x1b[31m.log"
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generator_log_path"] = unsafe_path
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_path",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn("debug", rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_compact_key_evidence_rejects_secret_size_field_without_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -34243,6 +34679,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {item["code"] for item in result["blockers"]},
             )
 
+    def test_lineage_proof_evidence_rejects_missing_or_nonstring_timestamp(
+        self,
+    ) -> None:
+        cases: tuple[object, ...] = (None, "", False, 0, [])
+        for generated_at_utc in cases:
+            with self.subTest(generated_at_utc=repr(generated_at_utc)):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    if generated_at_utc is None:
+                        del evidence["generated_at_utc"]
+                    else:
+                        evidence["generated_at_utc"] = generated_at_utc
+                    write_json(evidence_path, evidence)
+
+                    result = readiness.check_lineage_proof_evidence(evidence_path)
+
+                self.assertFalse(result["ok"])
+                self.assertIn(
+                    "lineage_proof_evidence_timestamp_missing",
+                    {item["code"] for item in result["blockers"]},
+                )
+
     def test_lineage_proof_evidence_rejects_timestamp_string_shape(self) -> None:
         cases = (
             (
@@ -34323,6 +34782,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("lineage_proof_evidence_artifact_digest", codes)
         self.assertIn("lineage_proof_evidence_test_status", codes)
         self.assertIn("lineage_proof_evidence_test_command", codes)
+
+    def test_lineage_proof_evidence_rejects_secret_log_path_without_leak(
+        self,
+    ) -> None:
+        unsafe_path = "token=supersecret-proof.log"
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["tests"]["record_archive_proof"]["log_path"] = unsafe_path
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("lineage_proof_evidence_test_log_path", codes)
+        self.assertNotIn("lineage_proof_evidence_test_log_missing", codes)
+        self.assertNotIn(unsafe_path, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_evidence_rejects_control_log_path_without_leak(
+        self,
+    ) -> None:
+        unsafe_path = "debug\x1b[31m-proof.log"
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["tests"]["record_archive_proof"]["log_path"] = unsafe_path
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("lineage_proof_evidence_test_log_path", codes)
+        self.assertNotIn("lineage_proof_evidence_test_log_missing", codes)
+        self.assertNotIn("debug", rendered)
+        self.assertNotIn("\\u001b", rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_lineage_proof_evidence_rejects_float_scalar_claims(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -35034,6 +35534,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIsNone(digest)
         self.assertEqual(errors, ["production proof log could not be read"])
 
+    def test_lineage_proof_log_rejects_incomplete_started_production_run(
+        self,
+    ) -> None:
+        test_name = readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = Path(temp) / "record-archive-proof.log"
+            write_incomplete_started_lineage_proof_log(log_path)
+
+            digest, errors = readiness.validate_lineage_proof_log(log_path, test_name)
+
+        self.assertIsNotNone(digest)
+        self.assertIn(
+            "--proof-log must contain the passing production proof test line",
+            errors,
+        )
+        self.assertIn(
+            "--proof-log must contain only the single production proof test line",
+            errors,
+        )
+        self.assertIn(
+            "--proof-log must contain a passing cargo test result",
+            errors,
+        )
+        self.assertIn(
+            "--proof-log must contain exactly one cargo test result for one passed production test",
+            errors,
+        )
+
     def test_lineage_proof_evidence_rejects_digest_matched_crlf_proof_log(
         self,
     ) -> None:
@@ -35065,6 +35593,40 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(
             "--proof-log must use canonical LF line endings",
             {item.get("issue") for item in result["blockers"]},
+        )
+        self.assertNotIn("record_archive_proof", result["test_log_sha256"])
+
+    def test_lineage_proof_evidence_rejects_digest_matched_incomplete_started_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            log_path = (
+                evidence_path.parent
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_incomplete_started_lineage_proof_log(log_path)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["tests"]["record_archive_proof"]["log_sha256"] = hashlib.sha256(
+                log_path.read_bytes()
+            ).hexdigest()
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_test_log_content",
+            {item["code"] for item in result["blockers"]},
+        )
+        issues = {item.get("issue") for item in result["blockers"]}
+        self.assertIn(
+            "--proof-log must contain the passing production proof test line",
+            issues,
+        )
+        self.assertIn(
+            "--proof-log must contain a passing cargo test result",
+            issues,
         )
         self.assertNotIn("record_archive_proof", result["test_log_sha256"])
 
@@ -38393,6 +38955,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(out.exists())
         self.assertIn("must contain the passing production proof test line", stderr.getvalue())
+
+    def test_lineage_proof_evidence_helper_rejects_incomplete_started_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_incomplete_started_lineage_proof_log(proof_log)
+            out = artifact_dir / "lineage-proof-evidence.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        rendered = stderr.getvalue()
+        self.assertIn(
+            "--proof-log must contain the passing production proof test line",
+            rendered,
+        )
+        self.assertIn(
+            "--proof-log must contain a passing cargo test result",
+            rendered,
+        )
 
     def test_lineage_proof_evidence_helper_rejects_marker_stuffed_proof_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

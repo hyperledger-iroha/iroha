@@ -453,17 +453,8 @@ def _reject_non_ascii_identifier(value: str, label: str) -> None:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise AdapterError(f"{label} contains unknown keys")
-        raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise AdapterError(f"{label} contains unknown keys")
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1061,10 +1052,10 @@ def verify_message_file(
     if not isinstance(message_type, str) or MESSAGE_TYPE_RE.fullmatch(message_type) is None:
         raise AdapterError(f"{sidecar_path} message_type must be lowercase ISO family id")
     if message_type not in ENDPOINTS:
-        raise AdapterError(f"{sidecar_path} has unsupported message_type {message_type!r}")
+        raise AdapterError(f"{sidecar_path} has unsupported message_type")
     if message_type in LEGACY_MESSAGE_TYPES and not allow_legacy_colr007:
         raise AdapterError(
-            f"{sidecar_path} uses legacy message_type {message_type!r}; "
+            f"{sidecar_path} uses legacy message_type; "
             "use colr.012 for production collateral substitution confirmations"
         )
 

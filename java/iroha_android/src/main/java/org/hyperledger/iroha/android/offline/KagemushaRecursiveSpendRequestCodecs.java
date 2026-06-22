@@ -1369,7 +1369,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN.equals(domain),
         "bundle.accumulator.domain must be "
             + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
-    final String chainId = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readChainId);
+    final String chainId =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readAccumulatorChainId);
     final String asset = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readAssetDefinitionId);
     final byte[] initialRoot = readField(decoder, child -> readFixedBytes(child, 32, "initial_root"));
     final byte[] finalRoot = readField(decoder, child -> readFixedBytes(child, 32, "final_root"));
@@ -2428,6 +2429,16 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static String readChainId(final NoritoDecoder decoder) {
     return readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+  }
+
+  private static String readAccumulatorChainId(final NoritoDecoder decoder) {
+    try {
+      final String chainId = readChainId(decoder);
+      require(decoder.remaining() == 0, "bundle.accumulator.chain_id has trailing bytes");
+      return chainId;
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalArgumentException("bundle.accumulator.chain_id", error);
+    }
   }
 
   private static String readAssetDefinitionId(final NoritoDecoder decoder) {

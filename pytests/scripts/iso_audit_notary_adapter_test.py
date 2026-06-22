@@ -287,6 +287,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("x--iroha--signature_audit_unknown_leak", "audit_unknown_leak"),
             ("unexpected\x1baudit_key", "\x1b"),
             ("unexpected_audit_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -2870,14 +2871,15 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 2)
-                    self.assertIn("contains unknown keys: operator_note", stderr)
+                    self.assertIn("contains unknown keys", stderr)
+                    self.assertNotIn("operator_note", stderr)
 
     def test_unknown_or_malformed_audit_index_record_fields_are_rejected(self):
         cases = [
             (
                 "unknown-record-field",
                 lambda record: record.update({"operator_note": "publish anyway"}),
-                "contains unknown keys: operator_note",
+                "contains unknown keys",
             ),
             (
                 "padded-state",

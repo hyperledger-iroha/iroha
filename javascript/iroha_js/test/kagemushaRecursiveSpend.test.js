@@ -328,6 +328,13 @@ function kagemushaNumericPayload(mantissa, scale = 0) {
   ]);
 }
 
+function kagemushaNumericPayloadWithTrailingField() {
+  return Buffer.concat([
+    kagemushaNumericPayload(Buffer.from([1])),
+    kagemushaNoritoField(kagemushaU32Payload(0x42)),
+  ]);
+}
+
 function kagemushaZk1Tlv(tag, payload) {
   const payloadBuffer = Buffer.from(payload);
   const length = Buffer.alloc(4);
@@ -620,6 +627,26 @@ function kagemushaReadAllFields(payload) {
   return fields;
 }
 
+function kagemushaReadSequenceFields(payload) {
+  const buffer = Buffer.from(payload);
+  assert.ok(buffer.length >= 8, "sequence payload must include a u64 count");
+  const count = Number(buffer.readBigUInt64LE(0));
+  assert.ok(Number.isSafeInteger(count), "sequence count must fit in Number");
+  const fields = [];
+  let offset = 8;
+  for (let index = 0; index < count; index += 1) {
+    const field = kagemushaReadField(buffer, offset);
+    fields.push(field.payload);
+    offset = field.offset;
+  }
+  assert.equal(offset, buffer.length);
+  return fields;
+}
+
+function kagemushaEncodeSequenceFields(fields) {
+  return Buffer.concat([u64LE(fields.length), ...fields.map((field) => kagemushaNoritoField(field))]);
+}
+
 function recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement) {
   const payload = assertKagemushaArchiveSchema(
     sharedRecursiveSpendArchive("init_bundle"),
@@ -628,6 +655,129 @@ function recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement) {
   const bundleFields = kagemushaReadAllFields(payload);
   const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
   accumulatorFields[fieldIndex] = Buffer.from(replacement);
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingBundleField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  bundleFields.push(kagemushaNoritoString("ignored-extra-bundle-field"));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendVerifyResultWithTrailingField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendAbi7Archive("verify_result"),
+    KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
+  );
+  const fields = kagemushaReadAllFields(payload);
+  fields.push(Buffer.from([0x01]));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("lineage_witness_append_result"),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+  );
+  const fields = kagemushaReadAllFields(payload);
+  fields.push(kagemushaNoritoString("ignored-extra-lineage-witness-field"));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingPreviousProofsField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("lineage_witness_append_result"),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+  );
+  const fields = kagemushaReadAllFields(payload);
+  fields[3] = Buffer.concat([
+    fields[3],
+    kagemushaNoritoField(kagemushaNoritoString("ignored-extra-previous-proofs-field")),
+  ]);
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingPreviousProofField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("lineage_witness_append_result"),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+  );
+  const fields = kagemushaReadAllFields(payload);
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadAllFields(previousProofs[0]);
+  previousProofFields.push(kagemushaNoritoString("ignored-extra-previous-proof-field"));
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("lineage_witness_append_result"),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+  );
+  const fields = kagemushaReadAllFields(payload);
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadAllFields(previousProofs[0]);
+  const verifierKeyIdFields = kagemushaReadAllFields(previousProofFields[0]);
+  verifierKeyIdFields.push(kagemushaNoritoString("ignored-extra-previous-verifier-key-field"));
+  previousProofFields[0] = Buffer.concat(
+    verifierKeyIdFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingAccumulatorField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
+  accumulatorFields.push(kagemushaNoritoString("ignored-extra-accumulator-field"));
   bundleFields[0] = Buffer.concat(
     accumulatorFields.map((field) => kagemushaNoritoField(field)),
   );
@@ -647,6 +797,28 @@ function recursiveSpendBundleWithCurrentNoteField(fieldIndex, replacement) {
   const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
   const currentNoteFields = kagemushaReadAllFields(accumulatorFields[22]);
   currentNoteFields[fieldIndex] = Buffer.from(replacement);
+  accumulatorFields[22] = Buffer.concat(
+    currentNoteFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingCurrentNoteField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
+  const currentNoteFields = kagemushaReadAllFields(accumulatorFields[22]);
+  currentNoteFields.push(kagemushaNoritoString("ignored-extra-current-note-field"));
   accumulatorFields[22] = Buffer.concat(
     currentNoteFields.map((field) => kagemushaNoritoField(field)),
   );
@@ -731,6 +903,78 @@ function recursiveSpendBundleWithProofBackend(proofBackend) {
   return kagemushaNoritoFrameFromSchemaHash(
     kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
     payload,
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithProofBoxBackend(proofBackend) {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const proofFields = kagemushaReadAllFields(bundleFields[1]);
+  const proofBoxFields = kagemushaReadAllFields(proofFields[3]);
+  proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  proofFields[3] = Buffer.concat(proofBoxFields.map((field) => kagemushaNoritoField(field)));
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingVerifierKeyIdField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const proofFields = kagemushaReadAllFields(bundleFields[1]);
+  const verifierKeyIdFields = kagemushaReadAllFields(proofFields[0]);
+  verifierKeyIdFields.push(kagemushaNoritoString("ignored-extra-verifier-key-field"));
+  proofFields[0] = Buffer.concat(
+    verifierKeyIdFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingRecursiveProofField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const proofFields = kagemushaReadAllFields(bundleFields[1]);
+  proofFields.push(kagemushaNoritoString("ignored-extra-recursive-proof-field"));
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingProofBoxField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const proofFields = kagemushaReadAllFields(bundleFields[1]);
+  const proofBoxFields = kagemushaReadAllFields(proofFields[3]);
+  proofBoxFields.push(kagemushaNoritoString("ignored-extra-proof-box-field"));
+  proofFields[3] = Buffer.concat(proofBoxFields.map((field) => kagemushaNoritoField(field)));
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
     TEST_NORITO_COMPACT_LEN_FLAG,
   );
 }
@@ -1664,6 +1908,13 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
   assert.equal(abi7Result.valid, true);
   assert.equal(abi7Result.witnesslessRedeemSupported, false);
   assert.equal(abi7Result.lineageWitnessRequired, true);
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendVerifyResult(
+        recursiveSpendVerifyResultWithTrailingField(),
+      ),
+    /verifyResult has trailing bytes/u,
+  );
 
   const initBundle = decodeKagemushaRecursiveSpendBundle(
     sharedRecursiveSpendArchive("init_bundle"),
@@ -1705,6 +1956,34 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
         recursiveSpendBundleWithProofBackend("halo2/kzg"),
       ),
     /bundle\.proof_backend/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),
+      ),
+    /bundle\.proof_backend/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithTrailingVerifierKeyIdField(),
+      ),
+    /verifierKeyId has trailing bytes/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithTrailingRecursiveProofField(),
+      ),
+    /recursiveProof has trailing bytes/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithTrailingProofBoxField(),
+      ),
+    /proof has trailing bytes/,
   );
   assert.throws(
     () =>
@@ -1754,6 +2033,11 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
       ),
     /amount/,
   );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingBundleField()),
+    /bundle has trailing bytes/,
+  );
   const malformedCurrentNoteFieldLengths = [
     [0, kagemushaFixedArrayPayload(0x04, 31), /noteCommitment/],
     [0, kagemushaFixedArrayPayload(0x04, 33), /noteCommitment/],
@@ -1761,6 +2045,7 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
     [1, kagemushaFixedArrayPayload(0x05, 33), /spendNullifier/],
     [2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/],
     [2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/],
+    [2, kagemushaNumericPayloadWithTrailingField(), /amount/],
   ];
   for (const [fieldIndex, replacement, expectedField] of malformedCurrentNoteFieldLengths) {
     assert.throws(
@@ -1771,6 +2056,11 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
       expectedField,
     );
   }
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingCurrentNoteField()),
+    /currentNote has trailing bytes/,
+  );
 
   assert.throws(
     () =>
@@ -1781,8 +2071,13 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
             "iroha:kagemusha:v1:recursive-spend-accumulator-digest",
           ),
         ),
-      ),
+    ),
     /bundle\.accumulator\.domain/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingAccumulatorField()),
+    /accumulator has trailing bytes/,
   );
   const malformedAccumulatorFields = [
     [
@@ -2178,6 +2473,38 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
       }),
     /lineageWitness/,
   );
+  const malformedLineageWitnesses = [
+    [
+      recursiveSpendLineageWitnessWithTrailingField(),
+      /lineageWitness has trailing bytes/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
+      /lineageWitness\.previousRecursiveProofs/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithTrailingPreviousProofField(),
+      /lineageWitness\.previousRecursiveProofs/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
+      /lineageWitness\.previousRecursiveProofs\.verifierKeyId/,
+    ],
+  ];
+  for (const [lineageWitnessArchive, expectedError] of malformedLineageWitnesses) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendArchive("init_bundle"),
+          recipient: recursiveSpendRecipient(),
+          publicAmount: "7",
+          redeemProof,
+          lineageWitness: lineageWitnessArchive,
+          lineageVerifierRecord: verifierRecord,
+        }),
+      expectedError,
+    );
+  }
   const blockHeightEncoders = [
     [
       "init",

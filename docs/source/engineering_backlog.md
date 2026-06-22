@@ -289,6 +289,15 @@ Direct strict XSD preflight diagnostics now report reviewed missing-schema or
 schema-only gap classes without echoing the reviewed rationale text, and final
 readiness XSD gap blockers/warnings copy only path and message-definition labels
 instead of archived free-form gap reasons.
+The rail gateway adapter, receipt verifier, direct evidence verification, and
+final readiness also reject unsupported receipt-kind and rail-message-type
+values with label-only diagnostics, including stage receipt-kind mismatch
+blockers that no longer print the unexpected archived kind. Unsupported canary
+stage-name diagnostics are also label-only and no longer echo the unexpected
+stage label. Direct evidence replay and final readiness trust blockers now keep
+non-production or unsupported embedded-signature policy values out of
+diagnostics as well. Direct evidence replay also rejects unsupported or
+local-only child command flags without echoing the archived flag text.
 Operator evidence verification now rejects canary summaries whose
 `config_path` still points at checked-in
 `fixtures/iso20022/operator_canary/` runbook templates, and final readiness
@@ -6542,8 +6551,8 @@ redistributable schemas, and official trust/revocation bundles.
     those trees to the CI gate. The latest audit has 18,156 errors after the
     source-only false positives are excluded.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
-- Carry Petal renderer-specific capture gates beyond the core PNG encode,
-  binary-grid `eval-capture`, binary-grid `simulate-realtime`, and
+- Carry Petal renderer-specific capture gates beyond the core PNG/Katakana
+  encode, PNG `eval-capture`, PNG `simulate-realtime`, and
   `score-styles` report.
   - Added deterministic core capture scoring for Petal Stream payloads, with a
     default profile baseline of 12/12 successful decode attempts
@@ -6552,29 +6561,46 @@ redistributable schemas, and official trust/revocation bundles.
   - Wired `iroha offline petal score-styles` to the scorer for the published
     `sora-temple-default` style set with explicit profile, seed,
     `--min-success-ratio-bps`, and `--target-effective-bps` report metadata.
+  - Added the deterministic `sora-temple-expanded` style set, which scores the
+    default `sora-temple` candidate and a `sora-temple-high-contrast` hardening
+    candidate that widens dark/light luminance separation while preserving
+    capture attempts and jitter.
   - Wired `iroha offline petal encode --format png --channel binary-grid` to
     render the decode-critical Petal grid as a deterministic single-frame PNG
     with an `iroha.offline.petal.encode.v1` manifest.
+  - Wired `iroha offline petal encode --format png --channel katakana-base94
+    --style sora-temple-command` to render deterministic RGB command tiles that
+    preserve decode-critical center luminance and solid calibration cells.
   - Wired `iroha offline petal encode --format gif --channel binary-grid`
     behind the existing `offline-visual-codecs` feature to emit a deterministic
-    single-frame GIF and the same encode manifest, while default builds fail
-    closed with a feature-enable diagnostic.
-  - Wired `iroha offline petal eval-capture --channel binary-grid` to replay
-    PNG frames through deterministic cell-center sampling, decode them with the
-    Petal sample decoder, and fail closed with early-abort accounting when the
-    success gate becomes unreachable.
+    GIF and the same encode manifest, while default builds fail closed with a
+    feature-enable diagnostic.
+  - Wired `iroha offline petal encode --format gif --channel katakana-base94
+    --style sora-temple-command` behind the same feature to emit deterministic
+    animated command tiles in a single GIF manifest entry.
+  - Added bounded `encode --animation-frames` support: PNG writes one
+    deterministic file per frame, and GIF writes a single animated file whose
+    manifest entry records the internal encoded frame count.
+  - Wired `iroha offline petal eval-capture` to replay binary-grid or
+    Katakana-base94 PNG frames through deterministic cell-center sampling,
+    decode them with the Petal sample decoder, and fail closed with early-abort
+    accounting when the success gate becomes unreachable.
   - Added opt-in `eval-capture --perturb-capture` support, which re-renders the
     sampled binary grid through the deterministic capture profile for
     seed/profile-stable per-frame capture attempts.
-  - Wired `iroha offline petal simulate-realtime --channel binary-grid` to
-    replay PNG frames in deterministic loop/source order, report every attempt,
-    and write the first recovered payload only after a successful decode.
+  - Added bounded deterministic cell-grid capture models for downscale,
+    box-blur, horizontal motion blur, seeded sensor noise, and exposure offset
+    so aggressive capture assumptions can be replayed without host-dependent
+    image-processing libraries.
+  - Wired `iroha offline petal simulate-realtime` to replay binary-grid or
+    Katakana-base94 PNG frames in deterministic loop/source order, report every
+    attempt, and write the first recovered payload only after a successful
+    decode.
   - Added opt-in `simulate-realtime --perturb-capture` support, expanding
     replay attempts across loop, source-frame, and capture-attempt indices.
   - Recorded the CLI JSON baseline in `status.md`: `recommended_style=sora-temple`,
     `capture_success_ratio_bps=10000`, `resolved_grid_size=33`,
     `effective_payload_bits_per_second=5376`, and `overall_score_bps=10000`.
-  - Remaining work is renderer-specific: add multi-frame animated GIF, Katakana
-    visual channels, distance/blur/exposure perturbation models, and expanded
-    style sets, then keep the default style honest under aggressive capture and
-    add a stronger variant only if `sora-temple` cannot meet the agreed gate.
+  - Remaining work is renderer-specific: add Katakana preset support, GIF
+    replay, and renderer-specific Katakana style scoring beyond the binary-grid
+    default and high-contrast hardening candidates.

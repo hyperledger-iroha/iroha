@@ -24,6 +24,41 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertGreaterThan(abi7.encodedBytes, 0)
         XCTAssertEqual(abi7.chainAdmissionReason.isEmpty, abi7.chainAdmissible)
         XCTAssertEqual(!abi7.lineageWitnessRequired, abi7.witnesslessRedeemSupported)
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
+                Self.recursiveSpendVerifyResultWithTrailingField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("verifyResult")
+            )
+        }
+    }
+
+    func testLineageWitnessRejectsTrailingFields() throws {
+        let malformedWitnesses: [(Data, KagemushaRecursiveSpendRequestCodecError)] = [
+            (try Self.recursiveSpendLineageWitnessWithTrailingField(), .invalidArchive("lineageWitness")),
+            (
+                try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
+                .invalidArchive("lineageWitness.previousRecursiveProofs")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofField(),
+                .invalidArchive("lineageWitness.previousRecursiveProofs")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.verifierKeyId")
+            )
+        ]
+        for (archive, expectedError) in malformedWitnesses {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(archive)
+            ) { error in
+                XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, expectedError)
+            }
+        }
     }
 
     func testDecodeBundleExtractsLineageSummariesFromFixtureArchives() throws {
@@ -77,6 +112,46 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
                 .invalidArchive("bundle.proof_backend")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithProofBoxBackend("halo2/kzg")
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle.proof_backend")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTrailingRecursiveProofField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTrailingVerifierKeyIdField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTrailingProofBoxField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
             )
         }
         XCTAssertThrowsError(
@@ -187,6 +262,13 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 ),
                 .invalidField("amount")
             ),
+            (
+                try Self.recursiveSpendBundleWithCurrentNoteField(
+                    fieldIndex: 2,
+                    replacement: Self.numericPayloadWithTrailingField()
+                ),
+                .invalidArchive("field")
+            ),
         ]
         for (archive, expectedError) in malformedCurrentNotes {
             XCTAssertThrowsError(
@@ -194,6 +276,26 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, expectedError)
             }
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTrailingBundleField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTrailingCurrentNoteField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("field")
+            )
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -233,6 +335,16 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, expectedError)
             }
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTrailingAccumulatorField()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
+            )
         }
     }
 
@@ -901,6 +1013,131 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
     }
 
+    private static func recursiveSpendBundleWithTrailingBundleField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        bundleFields.append(
+            noritoString("ignored-extra-bundle-field", flags: NoritoHeader.compactLen)
+        )
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendVerifyResultWithTrailingField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi7, name: "verify_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.verifyResultWireName
+        )
+        var fields = try fieldPayloads(payload)
+        fields.append(Data([0x01]))
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.verifyResultWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithTrailingField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        fields.append(noritoString("ignored-extra-lineage-witness-field", flags: NoritoHeader.compactLen))
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithTrailingPreviousProofsField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        fields[3].append(
+            noritoField(
+                noritoString("ignored-extra-previous-proofs-field", flags: NoritoHeader.compactLen),
+                flags: NoritoHeader.compactLen
+            )
+        )
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithTrailingPreviousProofField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        var previousProofs = try sequencePayloads(fields[3])
+        XCTAssertFalse(previousProofs.isEmpty)
+        var previousProofFields = try fieldPayloads(previousProofs[0])
+        previousProofFields.append(
+            noritoString("ignored-extra-previous-proof-field", flags: NoritoHeader.compactLen)
+        )
+        previousProofs[0] = encodeFields(previousProofFields, flags: NoritoHeader.compactLen)
+        fields[3] = encodeSequence(previousProofs)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        var previousProofs = try sequencePayloads(fields[3])
+        XCTAssertFalse(previousProofs.isEmpty)
+        var previousProofFields = try fieldPayloads(previousProofs[0])
+        var verifierKeyIdFields = try fieldPayloads(previousProofFields[0])
+        verifierKeyIdFields.append(
+            noritoString("ignored-extra-previous-verifier-key-field", flags: NoritoHeader.compactLen)
+        )
+        previousProofFields[0] = encodeFields(verifierKeyIdFields, flags: NoritoHeader.compactLen)
+        previousProofs[0] = encodeFields(previousProofFields, flags: NoritoHeader.compactLen)
+        fields[3] = encodeSequence(previousProofs)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithTrailingAccumulatorField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var accumulatorFields = try fieldPayloads(bundleFields[0])
+        accumulatorFields.append(
+            noritoString("ignored-extra-accumulator-field", flags: NoritoHeader.compactLen)
+        )
+        bundleFields[0] = encodeFields(accumulatorFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
     private static func recursiveSpendBundleWithCurrentNoteField(
         fieldIndex: Int,
         replacement: Data
@@ -913,6 +1150,26 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         var accumulatorFields = try fieldPayloads(bundleFields[0])
         var currentNoteFields = try fieldPayloads(accumulatorFields[22])
         currentNoteFields[fieldIndex] = replacement
+        accumulatorFields[22] = encodeFields(currentNoteFields, flags: NoritoHeader.compactLen)
+        bundleFields[0] = encodeFields(accumulatorFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithTrailingCurrentNoteField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var accumulatorFields = try fieldPayloads(bundleFields[0])
+        var currentNoteFields = try fieldPayloads(accumulatorFields[22])
+        currentNoteFields.append(
+            noritoString("ignored-extra-current-note-field", flags: NoritoHeader.compactLen)
+        )
         accumulatorFields[22] = encodeFields(currentNoteFields, flags: NoritoHeader.compactLen)
         bundleFields[0] = encodeFields(accumulatorFields, flags: NoritoHeader.compactLen)
         return noritoEncode(
@@ -951,6 +1208,13 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         var scalePayload = Data()
         appendUInt32LE(scale, to: &scalePayload)
         return encodeFields([mantissaPayload, scalePayload], flags: NoritoHeader.compactLen)
+    }
+
+    private static func numericPayloadWithTrailingField() -> Data {
+        var extraPayload = Data()
+        appendUInt32LE(0x42, to: &extraPayload)
+        return numericPayload(Data([1]))
+            + encodeFields([extraPayload], flags: NoritoHeader.compactLen)
     }
 
     private static func fixedArrayPayload(_ value: UInt8, count: Int) -> Data {
@@ -1001,6 +1265,84 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         return noritoEncode(
             typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
             payload: mutatedPayload,
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithProofBoxBackend(_ proofBackend: String) throws
+        -> Data
+    {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var proofFields = try fieldPayloads(bundleFields[1])
+        var proofBoxFields = try fieldPayloads(proofFields[3])
+        proofBoxFields[0] = noritoString(proofBackend, flags: NoritoHeader.compactLen)
+        proofFields[3] = encodeFields(proofBoxFields, flags: NoritoHeader.compactLen)
+        bundleFields[1] = encodeFields(proofFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithTrailingVerifierKeyIdField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var proofFields = try fieldPayloads(bundleFields[1])
+        var verifierKeyIdFields = try fieldPayloads(proofFields[0])
+        verifierKeyIdFields.append(
+            noritoString("ignored-extra-verifier-key-field", flags: NoritoHeader.compactLen)
+        )
+        proofFields[0] = encodeFields(verifierKeyIdFields, flags: NoritoHeader.compactLen)
+        bundleFields[1] = encodeFields(proofFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithTrailingRecursiveProofField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var proofFields = try fieldPayloads(bundleFields[1])
+        proofFields.append(
+            noritoString("ignored-extra-recursive-proof-field", flags: NoritoHeader.compactLen)
+        )
+        bundleFields[1] = encodeFields(proofFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithTrailingProofBoxField() throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var proofFields = try fieldPayloads(bundleFields[1])
+        var proofBoxFields = try fieldPayloads(proofFields[3])
+        proofBoxFields.append(
+            noritoString("ignored-extra-proof-box-field", flags: NoritoHeader.compactLen)
+        )
+        proofFields[3] = encodeFields(proofBoxFields, flags: NoritoHeader.compactLen)
+        bundleFields[1] = encodeFields(proofFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
             flags: NoritoHeader.compactLen
         )
     }
@@ -1087,6 +1429,30 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         fields.reduce(into: Data()) { out, field in
             out.append(noritoField(field, flags: flags))
         }
+    }
+
+    private static func sequencePayloads(_ payload: Data) throws -> [Data] {
+        var reader = TestCompactReader(data: payload)
+        let count = try reader.readUInt64LE()
+        guard count <= UInt64(Int.max) else {
+            XCTFail("test sequence count is too large")
+            return []
+        }
+        var fields: [Data] = []
+        for _ in 0..<Int(count) {
+            fields.append(try reader.readField())
+        }
+        XCTAssertEqual(reader.remaining, 0)
+        return fields
+    }
+
+    private static func encodeSequence(_ fields: [Data]) -> Data {
+        var encoded = Data()
+        appendUInt64LE(UInt64(fields.count), to: &encoded)
+        for field in fields {
+            encoded.append(noritoField(field, flags: NoritoHeader.compactLen))
+        }
+        return encoded
     }
 
     private static func noritoField(_ payload: Data, flags: UInt8) -> Data {

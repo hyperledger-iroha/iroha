@@ -305,6 +305,22 @@ def _read_all_fields(payload: bytes) -> list[bytes]:
     return fields
 
 
+def _read_sequence_fields(payload: bytes) -> list[bytes]:
+    assert len(payload) >= 8
+    count = int.from_bytes(payload[:8], "little")
+    fields: list[bytes] = []
+    offset = 8
+    for _ in range(count):
+        field, offset = _read_field(payload, offset)
+        fields.append(field)
+    assert offset == len(payload)
+    return fields
+
+
+def _encode_sequence_fields(fields: list[bytes]) -> bytes:
+    return _u64_le(len(fields)) + _encode_test_fields(fields)
+
+
 def _recursive_spend_bundle_with_accumulator_field(
     field_index: int,
     replacement: bytes,
@@ -316,6 +332,138 @@ def _recursive_spend_bundle_with_accumulator_field(
     bundle_fields = _read_all_fields(payload)
     accumulator_fields = _read_all_fields(bundle_fields[0])
     accumulator_fields[field_index] = replacement
+    bundle_fields[0] = _encode_test_fields(accumulator_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_trailing_bundle_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    bundle_fields.append(kagemusha._kagemusha_string("ignored-extra-bundle-field"))
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_verify_result_with_trailing_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_abi7_archive("verify_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    fields.append(b"\x01")
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_lineage_witness_with_trailing_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    fields.append(kagemusha._kagemusha_string("ignored-extra-lineage-witness-field"))
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_lineage_witness_with_trailing_previous_proofs_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    fields[3] += kagemusha._kagemusha_field(
+        kagemusha._kagemusha_string("ignored-extra-previous-proofs-field")
+    )
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_lineage_witness_with_trailing_previous_proof_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    previous_proofs = _read_sequence_fields(fields[3])
+    assert previous_proofs
+    previous_proof_fields = _read_all_fields(previous_proofs[0])
+    previous_proof_fields.append(
+        kagemusha._kagemusha_string("ignored-extra-previous-proof-field")
+    )
+    previous_proofs[0] = _encode_test_fields(previous_proof_fields)
+    fields[3] = _encode_sequence_fields(previous_proofs)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("lineage_witness_append_result"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    )
+    fields = _read_all_fields(payload)
+    previous_proofs = _read_sequence_fields(fields[3])
+    assert previous_proofs
+    previous_proof_fields = _read_all_fields(previous_proofs[0])
+    verifier_key_id_fields = _read_all_fields(previous_proof_fields[0])
+    verifier_key_id_fields.append(
+        kagemusha._kagemusha_string("ignored-extra-previous-verifier-key-field")
+    )
+    previous_proof_fields[0] = _encode_test_fields(verifier_key_id_fields)
+    previous_proofs[0] = _encode_test_fields(previous_proof_fields)
+    fields[3] = _encode_sequence_fields(previous_proofs)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME
+        ),
+        _encode_test_fields(fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_trailing_accumulator_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    accumulator_fields = _read_all_fields(bundle_fields[0])
+    accumulator_fields.append(kagemusha._kagemusha_string("ignored-extra-accumulator-field"))
     bundle_fields[0] = _encode_test_fields(accumulator_fields)
     return _kagemusha_norito_frame_from_schema_hash(
         kagemusha._norito_schema_hash(
@@ -364,6 +512,86 @@ def _recursive_spend_bundle_with_proof_backend(proof_backend: str) -> bytes:
             kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
         ),
         payload.replace(expected, replacement),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_proof_box_backend(proof_backend: str) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    proof_fields = _read_all_fields(bundle_fields[1])
+    proof_box_fields = _read_all_fields(proof_fields[3])
+    proof_box_fields[0] = kagemusha._kagemusha_string(proof_backend)
+    proof_fields[3] = _encode_test_fields(proof_box_fields)
+    bundle_fields[1] = _encode_test_fields(proof_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_trailing_recursive_proof_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    proof_fields = _read_all_fields(bundle_fields[1])
+    proof_fields.append(kagemusha._kagemusha_string("ignored-extra-recursive-proof-field"))
+    bundle_fields[1] = _encode_test_fields(proof_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_trailing_verifier_key_id_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    proof_fields = _read_all_fields(bundle_fields[1])
+    verifier_key_id_fields = _read_all_fields(proof_fields[0])
+    verifier_key_id_fields.append(
+        kagemusha._kagemusha_string("ignored-extra-verifier-key-field")
+    )
+    proof_fields[0] = _encode_test_fields(verifier_key_id_fields)
+    bundle_fields[1] = _encode_test_fields(proof_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_trailing_proof_box_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    proof_fields = _read_all_fields(bundle_fields[1])
+    proof_box_fields = _read_all_fields(proof_fields[3])
+    proof_box_fields.append(kagemusha._kagemusha_string("ignored-extra-proof-box-field"))
+    proof_fields[3] = _encode_test_fields(proof_box_fields)
+    bundle_fields[1] = _encode_test_fields(proof_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
         _TEST_NORITO_COMPACT_LEN_FLAG,
     )
 
@@ -467,6 +695,26 @@ def _recursive_spend_bundle_with_current_note_field(
     )
 
 
+def _recursive_spend_bundle_with_trailing_current_note_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    accumulator_fields = _read_all_fields(bundle_fields[0])
+    current_note_fields = _read_all_fields(accumulator_fields[22])
+    current_note_fields.append(kagemusha._kagemusha_string("ignored-extra-current-note-field"))
+    accumulator_fields[22] = _encode_test_fields(current_note_fields)
+    bundle_fields[0] = _encode_test_fields(accumulator_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
 def _recursive_spend_bundle_with_equal_current_note_nullifier() -> bytes:
     payload = _kagemusha_archive_payload(
         _shared_recursive_spend_archive("init_bundle"),
@@ -497,6 +745,12 @@ def _numeric_payload(mantissa: bytes, scale: int = 0) -> bytes:
             len(mantissa).to_bytes(4, "little") + mantissa,
             scale.to_bytes(4, "little"),
         ]
+    )
+
+
+def _numeric_payload_with_trailing_field() -> bytes:
+    return _numeric_payload(b"\x01") + kagemusha._kagemusha_field(
+        (0x42).to_bytes(4, "little")
     )
 
 
@@ -2487,6 +2741,10 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
     assert abi7_result.hop_count == 1
     assert abi7_result.encoded_bytes == 13622
     assert abi7_result.lineage_witness_required is True
+    with pytest.raises(ValueError, match=r"Trailing bytes after verify_result"):
+        kagemusha.decode_kagemusha_recursive_spend_verify_result(
+            _recursive_spend_verify_result_with_trailing_field()
+        )
 
     init_summary = kagemusha.decode_kagemusha_recursive_spend_bundle(
         _shared_recursive_spend_archive("init_bundle")
@@ -2533,6 +2791,24 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             _recursive_spend_bundle_with_proof_backend(
                 UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND
             )
+        )
+    with pytest.raises(ValueError, match=r"bundle\.proof_backend"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_proof_box_backend(
+                UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND
+            )
+        )
+    with pytest.raises(ValueError, match=r"Trailing bytes after recursive_proof"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_trailing_recursive_proof_field()
+        )
+    with pytest.raises(ValueError, match=r"Trailing bytes after verifier_key_id"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_trailing_verifier_key_id_field()
+        )
+    with pytest.raises(ValueError, match=r"Trailing bytes after proof"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_trailing_proof_box_field()
         )
     with pytest.raises(ValueError, match=r"bundle\.proof_bytes"):
         kagemusha.decode_kagemusha_recursive_spend_bundle(
@@ -2610,10 +2886,25 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             ),
             "amount",
         ),
+        (
+            _recursive_spend_bundle_with_current_note_field(
+                2,
+                _numeric_payload_with_trailing_field(),
+            ),
+            "amount",
+        ),
     )
     for archive, expected_field in malformed_current_notes:
         with pytest.raises(ValueError, match=expected_field):
             kagemusha.decode_kagemusha_recursive_spend_bundle(archive)
+    with pytest.raises(ValueError, match=r"Trailing bytes after bundle"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_trailing_bundle_field()
+        )
+    with pytest.raises(ValueError, match=r"Trailing bytes after current_note"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_trailing_current_note_field()
+        )
 
     malformed_accumulator_fields = (
         (
@@ -2652,6 +2943,10 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
                     replacement,
                 )
             )
+    with pytest.raises(ValueError, match=r"Trailing bytes after accumulator"):
+        kagemusha.decode_kagemusha_recursive_spend_bundle(
+            _recursive_spend_bundle_with_trailing_accumulator_field()
+        )
 
     record_bundle = _synthetic_kagemusha_record_bundle_archive()
     pallas = _synthetic_pallas_open_envelopes_archive()
@@ -3014,6 +3309,34 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             ),
             lineage_verifier_record=verifier_record,
         )
+    malformed_lineage_witnesses = (
+        (_recursive_spend_lineage_witness_with_trailing_field(), r"lineage_witness"),
+        (
+            _recursive_spend_lineage_witness_with_trailing_previous_proofs_field(),
+            r"lineage_witness\.previous_recursive_proofs",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_trailing_previous_proof_field(),
+            r"lineage_witness\.previous_recursive_proofs",
+        ),
+        (
+            _recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field(),
+            r"lineage_witness\.previous_recursive_proofs\.verifier_key_id",
+        ),
+    )
+    for lineage_witness_archive, expected_error in malformed_lineage_witnesses:
+        with pytest.raises(ValueError, match=expected_error):
+            kagemusha.KagemushaRecursiveSpendRedeemRequest(
+                bundle=_shared_recursive_spend_archive("init_bundle"),
+                recipient=_recursive_spend_recipient(),
+                public_amount="7",
+                redeem_proof=_synthetic_kagemusha_archive(
+                    kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                    0x83,
+                ),
+                lineage_witness=lineage_witness_archive,
+                lineage_verifier_record=verifier_record,
+            )
     with pytest.raises(ValueError, match="lineage_verifier_key"):
         kagemusha.KagemushaRecursiveSpendInitRequest(
             record_bundle=record_bundle,

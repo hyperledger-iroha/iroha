@@ -165,6 +165,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("x--iroha--signature_rail_unknown_leak", "rail_unknown_leak"),
             ("unexpected\x1brail_key", "\x1b"),
             ("unexpected_rail_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -1166,6 +1167,31 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn(hidden, stderr)
             self.assertNotIn("unsupported message_type", stderr)
 
+    def test_unsupported_sidecar_message_type_is_rejected_without_echo(self):
+        hidden = "zzzz.999"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            sidecar["message_type"] = hidden
+            xml_path.with_suffix(".xml.json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(inbox),
+                    "--torii-base-url",
+                    "https://torii.local-bank.bank",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("unsupported message_type", stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_malformed_bearer_token_file_is_rejected_before_network_delivery(self):
         cases = [
             ("empty", b"", "empty"),
@@ -1797,6 +1823,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("legacy message_type", stderr)
+            self.assertNotIn("colr.007", stderr)
             self.assertEqual(requests, [])
 
             with capture_server() as (base_url, requests):
@@ -2298,7 +2325,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
-            self.assertIn("contains unknown keys: operator_note", stderr)
+            self.assertIn("contains unknown keys", stderr)
+            self.assertNotIn("operator_note", stderr)
 
     def test_oversized_sidecar_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

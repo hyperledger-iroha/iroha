@@ -1367,7 +1367,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(domain == KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN) {
             "bundle.accumulator.domain must be ${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN}"
         }
-        val chainId = readField(decoder) { readChainId(it) }
+        val chainId = readField(decoder) { readAccumulatorChainId(it) }
         val asset = readField(decoder) { readAssetDefinitionId(it) }
         val initialRoot = readField(decoder) { it.readFixed32("initial_root") }
         val finalRoot = readField(decoder) { it.readFixed32("final_root") }
@@ -2416,6 +2416,15 @@ private fun bigIntegerFromLittleEndianTwosComplement(bytes: ByteArray): BigInteg
 
 private fun readChainId(decoder: NoritoDecoder): String =
     readField(decoder) { readString(it) }
+
+private fun readAccumulatorChainId(decoder: NoritoDecoder): String =
+    try {
+        val chainId = readChainId(decoder)
+        require(decoder.remaining() == 0) { "bundle.accumulator.chain_id has trailing bytes" }
+        chainId
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException("bundle.accumulator.chain_id", error)
+    }
 
 private fun readAssetDefinitionId(decoder: NoritoDecoder): String {
     val bytes = decoder.readFixedBytes(16, "asset")

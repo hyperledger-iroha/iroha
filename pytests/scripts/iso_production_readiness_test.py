@@ -690,6 +690,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("x--iroha--signature_readiness_unknown_leak", "readiness_unknown_leak"),
             ("unexpected\x1breadiness_key", "\x1b"),
             ("unexpected_readiness_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
@@ -8283,15 +8284,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             canary = duplicate["canary_summaries"][0]
             canary["stage_names"] = ["rail", "rail", "notary", "verify"]
             canary["stage_windows"].insert(1, dict(canary["stage_windows"][0]))
-            cases.append((duplicate, "stage_names must not contain duplicates"))
+            cases.append((duplicate, "stage_names must not contain duplicates", None))
             unsupported = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = unsupported["canary_summaries"][0]
-            canary["stage_names"].append("diagnostic")
+            hidden_stage = "diagnostic"
+            canary["stage_names"].append(hidden_stage)
             extra_window = dict(canary["stage_windows"][0])
-            extra_window["name"] = "diagnostic"
+            extra_window["name"] = hidden_stage
             canary["stage_windows"].append(extra_window)
-            cases.append((unsupported, "stage_names contains unsupported stages"))
-            for offset, (body, message) in enumerate(cases):
+            cases.append((unsupported, "stage_names contains unsupported stages", hidden_stage))
+            for offset, (body, message, hidden) in enumerate(cases):
                 with self.subTest(message=message):
                     refresh_digest(body)
                     mutated_path = write_json(root / f"stage-names-{offset}.summary.json", body)
@@ -8302,6 +8304,8 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if hidden is not None:
+                        self.assertNotIn(hidden, stderr)
 
     def test_compact_stage_names_must_follow_canary_order(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8685,9 +8689,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 1, stderr)
-            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
             self.assertIn("trust.policy_not_require_verified", codes)
             self.assertIn("trust.no_signature_or_x509_pins", codes)
+            blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+            self.assertNotIn("record-only", blocker_text)
 
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             evidence["trust_summaries"][0]["profiles"][0][
@@ -8701,9 +8708,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 1, stderr)
-            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            blockers = json.loads(stdout)["blockers"]
+            codes = {blocker["code"] for blocker in blockers}
             self.assertIn("trust.policy_unsupported", codes)
             self.assertNotIn("trust.policy_not_require_verified", codes)
+            blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+            self.assertNotIn("diagnostic-only", blocker_text)
 
     def test_non_ascii_compact_trust_policy_is_rejected_without_echo(self):
         hidden = "require-verif\u0456ed"

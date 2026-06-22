@@ -2,17 +2,362 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 Kagemusha Current-Note Amount Trailing-Field Coverage
+
+- Added non-C# recursive-spend current-note amount vectors that append a
+  trailing Norito field to an otherwise valid nested `Numeric` amount payload.
+  JavaScript source/dist and Python now pin the amount decoder rejection
+  directly; Swift, Kotlin/JVM, and Android Java pin the generic nested-field
+  drain guard for the same malformed amount shape.
+- Added
+  `--negative-control-sdk-current-note-amount-trailing-field-vectors` to the
+  SDK parity guard, PR workflow, and JavaScript parity meta-test. C# remains a
+  Windows follow-up in `roadmap.md`.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-current-note-amount-trailing-field-vectors`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-current-note-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity guard negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend bundle rejects malformed current notes before native dispatch" javascript/iroha_js/test/package_dist.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q -k "test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs"`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from
+    `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" sh -c 'JAVA_OUT=$(mktemp -d /tmp/iroha-android-kagemusha.XXXXXX); javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest'`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-22 Petal Katakana GIF Encode
+
+- Extended feature-gated `iroha offline petal encode --format gif` support to
+  `--channel katakana-base94 --style sora-temple-command`. Feature builds now
+  emit deterministic animated command-tile GIFs using the same Katakana renderer
+  as PNG, while default builds continue to fail closed with the
+  `offline-visual-codecs` diagnostic.
+- Added tests for no-feature Katakana GIF rejection and feature-enabled
+  Katakana GIF manifests, internal frame counts, GIF headers, and animated
+  frame variation. Binary-grid GIF coverage remains intact.
+- Updated Petal transport docs, engineering backlog notes, and the 20 Petal
+  translation metadata hashes for the revised source page.
+- Validation passed:
+  - `cargo fmt -p iroha_cli`
+  - `cargo test -p iroha_cli offline::tests:: --bin iroha -- --nocapture`
+    (`43` tests)
+  - `cargo test -p iroha_cli encode_gif --bin iroha --features offline-visual-codecs -- --nocapture`
+    (`3` tests)
+  - `cargo clippy -p iroha_cli --bin iroha --no-deps -- -D warnings`
+  - `cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine offline petal encode --input target/codex-petal/payload.bin --output target/codex-petal/katakana-gif --format gif --style sora-temple-command --channel katakana-base94 --dimension 128 --fps 24 --animation-frames 3`
+  - JSON and GIF header assertion `katakana_gif_manifest_ok`
+  - `cargo clippy -p iroha_cli --bin iroha --no-deps --features offline-visual-codecs -- -D warnings`
+  - `cargo fmt -p iroha_cli -- --check`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/source/petal_stream.md docs/source/petal_stream.pt.md docs/source/petal_stream.mn.md docs/source/petal_stream.ru.md docs/source/petal_stream.kk.md docs/source/petal_stream.uz.md docs/source/petal_stream.zh-hans.md docs/source/petal_stream.am.md docs/source/petal_stream.my.md docs/source/petal_stream.az.md docs/source/petal_stream.ja.md docs/source/petal_stream.dz.md docs/source/petal_stream.ka.md docs/source/petal_stream.he.md docs/source/petal_stream.hy.md docs/source/petal_stream.ba.md docs/source/petal_stream.zh-hant.md docs/source/petal_stream.ar.md docs/source/petal_stream.es.md docs/source/petal_stream.ur.md docs/source/petal_stream.fr.md --require-current --max-messages 40`
+    (`20` translations, `0` warnings)
+  - `git diff --check`
+
+## 2026-06-22 Kagemusha Lineage-Witness Trailing-Field Coverage
+
+- Added non-C# recursive-spend lineage-witness trailing-field vectors for the
+  top-level witness, previous-recursive-proof sequence tail, individual
+  previous-proof object, and nested previous-proof verifier-key-id. JavaScript
+  source/dist and Python now reject these through redeem request preflight;
+  Swift, Kotlin/JVM, and Android Java pin the internal decoder directly.
+- Added `--negative-control-sdk-lineage-witness-trailing-field-vectors` to the
+  SDK parity guard, PR workflow, and JavaScript parity meta-test. C# remains a
+  Windows follow-up in `roadmap.md`.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-trailing-field-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity guard negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch" javascript/iroha_js/test/package_dist.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q -k "test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs"`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from
+    `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" sh -c 'JAVA_OUT=$(mktemp -d /tmp/iroha-android-kagemusha.XXXXXX); javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest'`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-22 Petal Katakana PNG Replay
+
+- Implemented deterministic `katakana-base94` PNG output for
+  `iroha offline petal encode` when paired with
+  `--style sora-temple-command`. The renderer writes RGB command tiles while
+  preserving each cell's decode-critical center luminance and solid calibration
+  cells, so the existing Petal sample decoder remains the acceptance path.
+- Allowed `eval-capture` and `simulate-realtime` to replay Katakana-base94 PNG
+  manifests through the same deterministic cell-center sampler. Channel
+  mismatches against manifests now have focused negative coverage, and Katakana
+  GIF remains fail-closed until the animation renderer is wired.
+- Updated Petal transport docs, engineering backlog notes, and the 20 Petal
+  translation metadata hashes for the revised source page.
+- Validation passed:
+  - `cargo fmt -p iroha_cli`
+  - `cargo test -p iroha_cli offline::tests:: --bin iroha -- --nocapture`
+    (`42` tests)
+  - `cargo test -p iroha_cli encode_gif --bin iroha --features offline-visual-codecs -- --nocapture`
+    (`2` tests)
+  - `cargo clippy -p iroha_cli --bin iroha --no-deps -- -D warnings`
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal encode --input target/codex-petal/payload.bin --output target/codex-petal/katakana --format png --style sora-temple-command --channel katakana-base94 --dimension 256 --animation-frames 2`
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal eval-capture --input-dir target/codex-petal/katakana/png --channel katakana-base94 --profile default --min-success-ratio-bps 10000 --output-report target/codex-petal/katakana_eval.json`
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal simulate-realtime --input-dir target/codex-petal/katakana/png --channel katakana-base94 --profile default --simulate-fps 24 --realtime-loops 2 --output-payload target/codex-petal/katakana_decoded.bin --output-report target/codex-petal/katakana_realtime.json`
+  - JSON and payload assertion `katakana_png_replay_ok`
+
+## 2026-06-22 Petal Expanded Style Scoring
+
+- Added `--style-set sora-temple-expanded` for `iroha offline petal
+  score-styles`. The expanded set scores the existing `sora-temple` candidate
+  plus a deterministic `sora-temple-high-contrast` hardening candidate that
+  widens dark/light luminance separation with saturating bounds while
+  preserving capture attempts and jitter.
+- Extended style score reports with per-candidate capture profile metadata.
+  Baseline ties continue to recommend `sora-temple`; a pinned low-contrast
+  profile (`dark_luma=128`, `light_luma=129`, `luminance_jitter=0`) now
+  recommends `sora-temple-high-contrast` while retaining the failed default
+  candidate in the report.
+- Updated Petal transport docs, engineering backlog notes, and the 20 Petal
+  translation metadata hashes for the revised source page.
+- Validation passed:
+  - `cargo fmt -p iroha_cli`
+  - `cargo test -p iroha_cli offline::tests:: --bin iroha -- --nocapture`
+    (`39` tests)
+  - `cargo test -p iroha_cli encode_gif --bin iroha --features offline-visual-codecs -- --nocapture`
+    (`2` tests)
+  - `cargo clippy -p iroha_cli --bin iroha --no-deps -- -D warnings`
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal score-styles --input target/codex-petal/payload.bin --output-report target/codex-petal/style_score_expanded.json --style-set sora-temple-expanded --profile default --fps 24 --target-effective-bps 3000 --seed 0 --min-success-ratio-bps 9500`
+    plus JSON assertion `expanded_baseline_report_ok`
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal score-styles --input target/codex-petal/payload.bin --output-report target/codex-petal/style_score_expanded_low_contrast.json --style-set sora-temple-expanded --profile default --fps 24 --target-effective-bps 3000 --seed 0 --min-success-ratio-bps 9500 --dark-luma 128 --light-luma 129 --luminance-jitter 0 --attempts 4`
+    plus JSON assertion `expanded_low_contrast_report_ok`
+  - `cargo fmt -p iroha_cli -- --check`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/source/petal_stream.md docs/source/petal_stream.pt.md docs/source/petal_stream.mn.md docs/source/petal_stream.ru.md docs/source/petal_stream.kk.md docs/source/petal_stream.uz.md docs/source/petal_stream.zh-hans.md docs/source/petal_stream.am.md docs/source/petal_stream.my.md docs/source/petal_stream.az.md docs/source/petal_stream.ja.md docs/source/petal_stream.dz.md docs/source/petal_stream.ka.md docs/source/petal_stream.he.md docs/source/petal_stream.hy.md docs/source/petal_stream.ba.md docs/source/petal_stream.zh-hant.md docs/source/petal_stream.ar.md docs/source/petal_stream.es.md docs/source/petal_stream.ur.md docs/source/petal_stream.fr.md --require-current --max-messages 40`
+    (`20` translations, `0` warnings)
+  - `git diff --check`
+
+## 2026-06-22 Kagemusha Evidence Redaction Coverage
+
+- Added adversarial compact-key evidence regressions for secret-looking and
+  control-character `generator_log_path` claims, plus Reserved-lineage proof
+  evidence regressions for secret-looking and control-character per-test
+  `log_path` claims. The readiness blockers now have pinned coverage proving
+  unsafe claimed log-path values are either redacted or not echoed before
+  output is serialized.
+- Added localnet lifecycle evidence regressions for secret-looking and
+  control-character summary identity values across `localnet_run_id`,
+  `chain_id`, `target`, and `peer_ids`.
+- Added Android signed-evidence freshness regressions proving stale/future
+  blockers consume sanitized slot reports and redact secret-looking or
+  control-character slot identifiers.
+- Added direct Android signed-evidence summary regressions proving malformed
+  path, digest, and identity fields with control characters are rejected without
+  appearing in blockers or admitted release summaries.
+- Added the new tests, plus the existing compact-key and lineage
+  control-character unexpected-field tests, to the production-readiness guard
+  inventory and documented the evidence log-path redaction/no-leak and localnet
+  identity-summary redaction contracts, Android freshness slot redaction, and
+  direct signed-evidence field no-leak behavior.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_secret_log_path_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_control_log_path_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_secret_generator_log_path_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_control_generator_log_path_without_leak`
+    (`4` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_redacts_secret_identity_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_redacts_control_identity_values`
+    (`2` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_freshness_redacts_secret_slot_after_sanitize scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_freshness_redacts_control_slot_after_sanitize`
+    (`2` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_redacts_control_direct_values`
+    (`1` test)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`1189` tests in `187.143s`)
+
+## 2026-06-22 Kagemusha Verify-Result Trailing-Field Coverage
+
+- Added non-C# ABI-7 recursive-spend verify-result vectors that append an
+  extra Norito field after the ABI-7 optional booleans. JavaScript source/dist,
+  Python, Swift, Kotlin/JVM, and Android Java now reject surplus verify-result
+  payload data instead of silently treating the optional-field boundary as open.
+- Filled the Android Java harness gap by decoding the shared ABI-7
+  `verify_result` fixture alongside ABI-6.
+- Added `--negative-control-sdk-verify-result-trailing-field-vectors` to the
+  SDK parity guard, PR workflow, and JavaScript parity meta-test. C# remains a
+  Windows follow-up in `roadmap.md`.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity guard negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend verify result decodes ABI fixtures" javascript/iroha_js/test/package_dist.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q -k "test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures"`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from
+    `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" sh -c 'JAVA_OUT=$(mktemp -d /tmp/iroha-android-kagemusha.XXXXXX); javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest'`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - targeted `git diff --check`, conflict-marker scan, and generated Python
+    bytecode cleanup check over the touched files
+
+## 2026-06-22 Petal Offline Manifest Path and Capture Gate Fix
+
+- Fixed Petal encode manifests so generated frame entries are stored relative
+  to `manifest.json` (`png/frame_0000.png`, `gif/frame_0000.gif`) while
+  `eval-capture` resolves relative manifest paths from the manifest directory.
+- Fixed capture-gate threshold calculation to use widened integer arithmetic,
+  preventing large perturbation runs from overflowing `attempts *
+  min_success_ratio_bps`.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli offline::tests:: --bin iroha -- --nocapture`
+    (`36` tests)
+  - `cargo test -p iroha_cli encode_gif --bin iroha --features offline-visual-codecs -- --nocapture`
+    (`2` tests)
+  - `cargo clippy -p iroha_cli --bin iroha --no-deps -- -D warnings`
+
+## 2026-06-22 Kagemusha Localnet Unexpected Field Redaction
+
+- Added direct localnet lifecycle evidence regressions for secret-looking and
+  control-character top-level fields, plus nested `localnet_acceptance`
+  unexpected fields. The readiness summary now has pinned coverage proving
+  unsafe localnet evidence field names are redacted instead of echoed.
+- Added the tests to the production-readiness guard inventory and documented
+  the localnet redaction contract in Offline Kagemusha docs.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_rejects_unexpected_top_level_field_with_redaction scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_rejects_unexpected_acceptance_field_with_redaction`
+    (`2` tests)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`1180` tests in `203.651s`)
+
+## 2026-06-22 Kagemusha Evidence Timestamp Presence Guard
+
+- Pinned missing, empty, and non-string `generated_at_utc` rejection for
+  Reserved-lineage proof evidence and ABI-7 compact key evidence, matching the
+  localnet lifecycle timestamp presence/shape/freshness guard. All three
+  release evidence JSON families now have direct adversarial coverage for
+  omitted, malformed, stale, and future-dated generated-at values.
+- Added the new timestamp presence tests to the production-readiness guard
+  inventory and updated Offline Kagemusha docs/roadmap wording for the shared
+  evidence timestamp contract.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_missing_or_nonstring_timestamp scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_missing_or_nonstring_timestamp`
+    (`2` tests)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`1178` tests in `194.648s`)
+
+## 2026-06-22 Kagemusha Summary/Proof Trailing-Field Coverage
+
+- Added non-C# recursive-spend bundle vectors that append a valid extra Norito
+  field to the top-level bundle, accumulator summary, nested current note, nested
+  `verifierKeyId`, recursive-proof, and `ProofBox` objects. JavaScript
+  source/dist, Python, Swift, Kotlin/JVM, and Android Java now pin fail-closed
+  decoding for surplus summary/proof metadata before native dispatch.
+- Added `--negative-control-sdk-bundle-summary-trailing-field-vectors` and
+  `--negative-control-sdk-bundle-proof-trailing-field-vectors` to the SDK
+  parity guard, PR workflow, and JavaScript parity meta-test. C# remains a
+  Windows follow-up in `roadmap.md`.
+- Validation passed:
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend bundle rejects" javascript/iroha_js/test/package_dist.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q -k "test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures"`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from
+    `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" sh -c 'JAVA_OUT=$(mktemp -d /tmp/iroha-android-kagemusha.XXXXXX); javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest'`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-summary-trailing-field-vectors`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-trailing-field-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity guard negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-22 Kagemusha Localnet Evidence Timestamp Guard
+
+- Pinned direct localnet lifecycle evidence timestamp validation so a 4-peer
+  lifecycle report with omitted, non-string, noncanonical,
+  control-character-bearing, stale, or future-dated `generated_at_utc` fails
+  closed even when the localnet artifact hash set is otherwise valid.
+- Added the localnet timestamp presence/shape and stale/future-dated tests to
+  the production-readiness guard inventory and updated Offline Kagemusha
+  docs/roadmap wording for the generated-at gate.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_stale_localnet_lifecycle_evidence_blocks_rollup_section scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_rejects_noncanonical_timestamp scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_rejects_missing_or_nonstring_timestamp scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_localnet_lifecycle_evidence_rejects_timestamp_string_shape scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_future_localnet_lifecycle_evidence_blocks_rollup_section`
+    (`5` tests)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`1176` tests in `195.134s`)
+
+## 2026-06-22 Kagemusha Proof-Box Backend Coverage
+
+- Added non-C# adversarial recursive-spend bundle vectors that mutate only the
+  nested `ProofBox.backend` field to `halo2/kzg` while leaving
+  `verifierKeyId.backend` unchanged. This proves JavaScript source/dist,
+  Python, Swift, Kotlin/JVM, and Android Java reject unsupported proof-box
+  backends before native dispatch instead of only catching verifier metadata.
+- Added `--negative-control-sdk-bundle-proof-box-backend-vectors` to the SDK
+  parity guard, PR workflow, and JavaScript parity meta-test. C# remains a
+  Windows follow-up in `roadmap.md`.
+- Validation passed:
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend bundle rejects unsupported proof backends before native dispatch" javascript/iroha_js/test/package_dist.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q -k "test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures"`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from
+    `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" sh -c 'JAVA_OUT=$(mktemp -d /tmp/iroha-android-kagemusha.XXXXXX); javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest'`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-box-backend-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity guard negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-22 Kagemusha Proof Log Stale Run Guard
+
+- Added adversarial readiness coverage for interrupted Reserved-lineage proof
+  logs that contain compile output and a started production test line but never
+  reach the exact `test ... ok` line or the one-test passing cargo result.
+  The lineage evidence helper rejects that stale log before writing evidence,
+  and digest-matched evidence JSON still fails closed without exposing the stale
+  log under `test_log_sha256`.
+- Updated the readiness guard inventory and Offline Kagemusha operator docs so
+  stale started-run logs remain part of the production evidence contract.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_log_rejects_incomplete_started_production_run scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_digest_matched_incomplete_started_log scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_rejects_incomplete_started_log`
+    (`3` tests)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`1171` tests in `189.700s`)
+
 ## 2026-06-22 Kagemusha Accumulator Chain-ID Shape
 
 - Tightened non-C# recursive-spend bundle decoders so accumulator `chain_id`
   is treated as a nested Norito string field. JavaScript source/dist and
   Python now reject a raw string payload for the accumulator chain-id field;
-  Swift now reports the same contextual `bundle.accumulator.chain_id` archive
-  error for malformed chain-id payloads.
+  Swift, Kotlin/JVM, and Android Java now report the same contextual
+  `bundle.accumulator.chain_id` archive error for malformed chain-id payloads.
 - Added adversarial raw-chain-id vectors for JavaScript source tests,
-  JavaScript package-dist tests, Python fixture tests, and Swift request-codec
-  tests. C# remains untouched and tracked as a Windows follow-up in
-  `roadmap.md`.
+  JavaScript package-dist tests, Python fixture tests, Swift request-codec
+  tests, Kotlin/JVM request-codec tests, and the Android Java direct harness.
+  C# remains untouched and tracked as a Windows follow-up in `roadmap.md`.
 - Extended the SDK parity guard with source/test markers plus
   `--negative-control-sdk-accumulator-chain-id-shape`, wired through the PR
   workflow and JavaScript meta-test.
@@ -22,6 +367,9 @@ Last updated: 2026-06-22
   - `PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q -k "test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures"`
   - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from
     `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" sh -c 'JAVA_OUT=$(mktemp -d /tmp/iroha-android-kagemusha.XXXXXX); javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest'`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-chain-id-shape`
   - `node --test --test-name-pattern "recursive Kagemusha SDK parity guard negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
@@ -122,6 +470,21 @@ Last updated: 2026-06-22
   failures report only the gap class and affected path, while final readiness
   blocker/warning entries keep only the affected path and message definition id
   instead of copying archived free-form review rationale text.
+- Redacted unsupported receipt-kind and rail-message-type diagnostics in the
+  rail gateway adapter, receipt verifier, direct operator evidence
+  verification, and final readiness replay. Evidence now rejects extra
+  top-level receipt-kind values directly, and stage/receipt-kind mismatch
+  blockers report the mismatch class without printing the unexpected kind or
+  message type supplied by archived evidence.
+- Redacted unsupported canary stage diagnostics in direct evidence command
+  validation and final readiness compact-summary replay so printable but
+  unexpected stage names no longer appear in stderr.
+- Redacted non-production and unsupported embedded-signature policy diagnostics
+  in direct evidence replay and final readiness trust blockers so record-only
+  or unsupported policy values no longer appear in stderr or blocker text.
+- Redacted unsupported and local-only canary child command flag diagnostics in
+  direct evidence replay so archived command flags are reported by mismatch
+  class without printing the supplied flag text.
 - Added adversarial coverage for tampered rail sidecars, audit indexes, raw
   receipts, canary summaries, XSD summaries, and evidence summaries to prove the
   compared digest values are not echoed while the mismatch class remains visible,
@@ -129,7 +492,13 @@ Last updated: 2026-06-22
   expose the receipt digest under test and trust override cases that hide both
   forged and actual CRL/OCSP DER digests, and XSD reviewed-gap reason cases
   that keep internal rationale text out of strict preflight stderr and final
-  readiness JSON.
+  readiness JSON, plus receipt-kind/message-type cases that keep unsupported
+  values out of rail gateway, receipt verifier, evidence, and readiness
+  diagnostics, and canary-stage cases that keep unexpected stage labels out of
+  evidence/readiness errors, plus trust-policy cases that keep record-only and
+  unsupported policy values out of evidence/readiness diagnostics, and canary
+  command-flag cases that keep unsupported or local-only child flags out of
+  evidence stderr.
 - Validation passed:
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_digest_mismatch_diagnostics_do_not_echo_hashes pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_payload_digest_mismatch_is_rejected_without_echo_before_network_delivery pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_tampered_receipt_digest_is_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_canary_summary_digest_tampering_is_rejected pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_tampered_xsd_or_evidence_summary_is_malformed`
@@ -140,24 +509,36 @@ Last updated: 2026-06-22
     (`1` test in `3.614s`)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_strict_reviewed_gap_failures_do_not_echo_reason_text pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_gap_diagnostics_do_not_echo_reviewed_reason_text`
     (`2` tests in `1.783s`)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_empty_and_incomplete_receipt_verifier_stdout_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_kind_specific_metadata pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_executed_stage_receipt_kinds_must_match_receipt_summary pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entry_kinds_must_be_supported pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_kind_summary_lists_must_not_include_unsupported_values pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_preserve_kind_metadata`
+    (`6` tests in `15.714s`)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unsupported_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_colr007_legacy_submission_requires_explicit_local_override pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_unsupported_rail_message_type_is_rejected_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_unsupported_receipt_kind_is_rejected_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_legacy_colr007_rail_receipts_require_explicit_local_override`
+    (`5` tests in `2.622s`)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_secret_or_non_ascii_canary_stage_names_are_rejected_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_compact_stage_names_are_unique_and_supported`
+    (`2` tests in `1.904s`)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_synthetic_record_only_and_insecure_trust_summaries_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_forged_nonproduction_trust_policy_diagnostic_hides_policy_value pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_unsupported_trust_policy_is_rejected_even_with_record_only_override pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_nonproduction_trust_policy_and_zero_pins_block_readiness`
+    (`4` tests in `2.659s`)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_unsupported_child_command_flags_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_secret_or_non_ascii_unsupported_child_command_flags_do_not_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_local_notary_source_diagnostic_flag_is_rejected`
+    (`3` tests in `0.369s`)
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
     (`90` tests in `45.921s`)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
-    (`88` tests in `52.087s`)
+    (`89` tests in `52.036s`)
   - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
-    (`76` tests in `25.906s`)
+    (`78` tests in `27.008s`)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
     (`97` tests in `8.996s`)
   - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
-    (`215` tests in `108.227s`)
+    (`216` tests in `109.169s`)
   - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
-    (`193` tests in `349.525s`)
+    (`194` tests in `348.633s`)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
-    (`922` tests in `603.252s`)
+    (`927` tests in `602.644s`)
   - `git diff --check -- scripts/iso_*.py pytests/scripts/iso_*_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md`
   - Conflict-marker scan over touched ISO scripts/tests/docs/status returned no matches.
   - Cargo.lock diff guard returned no paths.
-  - Focused scan for old reviewed XSD reason-echo diagnostics returned no matches.
+  - Focused scan for old reviewed XSD, unsupported receipt/message type,
+    unsupported canary-stage, trust-policy, and canary child-command flag
+    value-echo diagnostics returned no matches.
 
 ## 2026-06-22 Kagemusha Output Cleanup Sync
 
@@ -167,7 +548,9 @@ Last updated: 2026-06-22
   evidence writers, staged runner rollback, stale-output, and temporary-output
   cleanup, staged finalizer published rollback and temporary staging cleanup, and
   production-readiness `--summary-out` writer, plus the release-bundle `--out`
-  writer and Android raw-puller summary/latest output cleanup helpers, so
+  writer, Android raw-puller summary/latest output cleanup helpers,
+  signed-slot assembler temporary staging cleanup, and raw-puller temporary
+  staging plus partial-install rollback cleanup, so
   failed-write, failed-publication, and post-stage temporary cleanup paths fsync
   the output directory after identity-checked unlink. A failed directory sync is
   now reported as a structured cleanup error instead of treating unlink as
@@ -178,6 +561,7 @@ Last updated: 2026-06-22
 - Validation passed:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
@@ -214,6 +598,8 @@ Last updated: 2026-06-22
     (`4` tests)
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_cleanup_reports_sync_failure scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_published_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_temp_cleanup_reports_failure`
     (`3` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_cleanup_reports_temp_parent_sync_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_cleanup_reports_sync_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_temp_cleanup_reports_sync_failure`
+    (`3` tests)
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-sync-failure`
@@ -222,6 +608,9 @@ Last updated: 2026-06-22
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-temp-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-cleanup-sync-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-sync-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-sync-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-published-cleanup-sync-failure`
   - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-published-cleanup-sync-failure`
@@ -367,18 +756,21 @@ Last updated: 2026-06-22
   requiring `client.toml` because it uses the offline fallback config path.
 - Added `iroha offline petal encode --format png --channel binary-grid`, which
   renders the decode-critical Petal grid as a deterministic single-frame PNG and
-  writes an `iroha.offline.petal.encode.v1` manifest.
+  writes an `iroha.offline.petal.encode.v1` manifest. `--animation-frames`
+  now allows bounded repeated PNG frame files for downstream replay harnesses.
 - Added feature-gated `iroha offline petal encode --format gif --channel
   binary-grid` behind `offline-visual-codecs`, with default builds failing
-  closed before rendering and feature builds writing a deterministic single-frame
-  GIF plus the same encode manifest.
+  closed before rendering and feature builds writing a deterministic animated
+  GIF plus the same encode manifest. GIF manifests now record the single output
+  file and its internal `encoded_frame_count`.
 - Added `iroha offline petal eval-capture --channel binary-grid`, which reads
   the encode manifest, samples PNG frames at deterministic cell centers, decodes
   them with the Petal sample decoder, and emits an
   `iroha.offline.petal.eval_capture.v1` report with early-abort accounting.
   `--perturb-capture` now replays each source frame through deterministic
-  per-frame capture attempts and records the seed, effective profile, and
-  `capture_attempt_index` metadata.
+  per-frame capture attempts and records the seed, effective profile,
+  cell-grid downscale, box-blur, horizontal motion blur, seeded sensor noise,
+  exposure offset, and `capture_attempt_index` metadata.
 - Added `iroha offline petal simulate-realtime --channel binary-grid`, which
   replays PNG frames in deterministic loop/source order, writes the first
   successfully decoded payload, and emits an
@@ -392,16 +784,20 @@ Last updated: 2026-06-22
   passes the 3000 bps throughput gate with `overall_score_bps=10000`.
 - Added adversarial coverage proving a collapsed low-contrast profile fails
   closed at 0/4 successful attempts, plus invalid profile and invalid threshold
-  checks. CLI coverage also verifies PNG/manifest creation, default-build GIF
-  feature rejection, feature-build GIF output, successful binary-grid capture
-  evaluation, perturbed capture success under the default profile, perturbed
-  low-contrast early-abort failure, inactive perturbation override rejection,
-  corrupt-frame failure, early abort when the gate is unreachable,
-  manifest-free directory guardrails, decimal ratio parsing, realtime
-  loop/source/capture-attempt replay, corrupt realtime frames without stale
-  payload writes, and rejection of zero FPS, zero realtime loops, invalid
+  checks. CLI coverage also verifies PNG/manifest creation, multi-frame PNG
+  manifest/file accounting, default-build GIF feature rejection, feature-build
+  GIF output, feature-build animated GIF internal frame counts, successful
+  binary-grid capture evaluation, perturbed capture success under the default
+  profile, exact deterministic downscale/blur/exposure transforms, report
+  metadata for bounded capture models, perturbed low-contrast early-abort
+  failure, inactive perturbation override rejection, invalid downscale/blur/
+  motion-blur/noise/exposure bounds, corrupt-frame failure, early abort when the gate is
+  unreachable, manifest-free directory guardrails, decimal ratio parsing,
+  realtime loop/source/capture-attempt replay, corrupt realtime frames without
+  stale payload writes, and rejection of zero FPS, zero realtime loops, invalid
   capture thresholds, impossible grid geometry, unbounded dimensions, undersized
-  dimensions, and renderer-backed channels that are not wired yet.
+  dimensions, invalid animation frame counts, and renderer-backed channels that
+  are not wired yet.
 - Marked the 20 Petal translated pages as `needs-review` with the current source
   hash after the English CLI status section changed.
 - Validation passed:
@@ -409,18 +805,36 @@ Last updated: 2026-06-22
   - `cargo test -p iroha_data_model petal_stream -- --nocapture`
     (`9` tests)
   - `cargo test -p iroha_cli offline::tests:: --bin iroha -- --nocapture`
-    (`30` tests)
-  - `cargo test -p iroha_cli encode_gif_writes_manifest_and_frame_with_visual_codecs_feature --bin iroha --features offline-visual-codecs -- --nocapture`
-    (`1` test)
+    (`34` tests)
+  - `cargo test -p iroha_cli encode_gif --bin iroha --features offline-visual-codecs -- --nocapture`
+    (`2` tests)
+  - `cargo clippy -p iroha_cli --bin iroha --no-deps -- -D warnings`
   - `cargo run -p iroha_cli --bin iroha -- --machine offline petal score-styles --input target/codex-petal/payload.bin --output-report target/codex-petal/style_score.json --profile default --fps 24 --target-effective-bps 3000 --seed 0 --min-success-ratio-bps 9500`
   - `cargo run -p iroha_cli --bin iroha -- --machine offline petal encode --input target/codex-petal/payload.bin --output target/codex-petal/encode --format png --style sora-temple --channel binary-grid --dimension 128 --fps 24`
     (PNG signature verified)
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal encode --input target/codex-petal/payload.bin --output target/codex-petal/anim-png --format png --style sora-temple --channel binary-grid --dimension 128 --fps 24 --animation-frames 3`
+    (`3` PNG frame files and manifest entries)
   - `cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine offline petal encode --input target/codex-petal/payload.bin --output target/codex-petal/gif --format gif --style sora-temple --channel binary-grid --dimension 128 --fps 24`
     (GIF signature verified)
+  - `cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine offline petal encode --input target/codex-petal/payload.bin --output target/codex-petal/anim-gif --format gif --style sora-temple --channel binary-grid --dimension 128 --fps 24 --animation-frames 4`
+    (`encoded_frame_count=4`)
+  - Python manifest assertion over `target/codex-petal/anim-png/manifest.json`
+    and `target/codex-petal/anim-gif/manifest.json`
+    (`petal_animation_manifest_ok`)
   - `cargo run -p iroha_cli --bin iroha -- --machine offline petal eval-capture --input-dir target/codex-petal/encode/png --channel binary-grid --profile default --min-success-ratio 0.95 --output-report target/codex-petal/encode/capture_eval.json`
     (`gate_passed=true`, `success_ratio_bps=10000`)
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal eval-capture --input-dir target/codex-petal/encode/png --channel binary-grid --profile default --perturb-capture --capture-seed 42 --capture-attempts 12 --min-success-ratio-bps 9500 --output-report target/codex-petal/encode/capture_eval_perturbed.json`
+    (`gate_passed=true`, `success_ratio_bps=10000`, `attempts=12`)
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal eval-capture --input-dir target/codex-petal/encode/png --channel binary-grid --profile default --perturb-capture --capture-attempts 1 --capture-downscale-cells 2 --capture-blur-radius 1 --capture-exposure-offset 12 --min-success-ratio-bps 0 --output-report target/codex-petal/encode/capture_eval_models.json`
+    followed by a Python report assertion
+    (`petal_capture_models_report_ok`)
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal eval-capture --input-dir target/codex-petal/encode/png --channel binary-grid --profile default --perturb-capture --capture-attempts 1 --capture-motion-blur-cells 1 --capture-noise-amplitude 3 --capture-exposure-offset 4 --min-success-ratio-bps 0 --output-report target/codex-petal/encode/capture_eval_motion_noise.json`
+    followed by a Python report assertion
+    (`petal_motion_noise_report_ok`)
   - `cargo run -p iroha_cli --bin iroha -- --machine offline petal simulate-realtime --input-dir target/codex-petal/encode/png --channel binary-grid --profile default --simulate-fps 24 --realtime-loops 3 --output-payload target/codex-petal/encode/realtime_decoded.bin --output-report target/codex-petal/encode/realtime_report.json`
     followed by `cmp -s target/codex-petal/payload.bin target/codex-petal/encode/realtime_decoded.bin`
+  - `cargo run -p iroha_cli --bin iroha -- --machine offline petal simulate-realtime --input-dir target/codex-petal/encode/png --channel binary-grid --profile default --perturb-capture --capture-seed 42 --capture-attempts 2 --simulate-fps 24 --realtime-loops 2 --output-payload target/codex-petal/encode/realtime_decoded_perturbed.bin --output-report target/codex-petal/encode/realtime_report_perturbed.json`
+    followed by `cmp -s target/codex-petal/payload.bin target/codex-petal/encode/realtime_decoded_perturbed.bin`
   - `python3 ci/check_docs_i18n_metadata.py --paths docs/source/petal_stream.md $(rg --files docs/source -g 'petal_stream.*.md' | tr '\n' ' ') --require-current --max-messages 40`
     (`20` translation files)
 

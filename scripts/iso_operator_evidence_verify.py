@@ -1213,17 +1213,8 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise EvidenceError(f"{label} contains unknown keys")
-        raise EvidenceError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise EvidenceError(f"{label} contains unknown keys")
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -2627,7 +2618,7 @@ def _check_stage_command_repository_fixture_paths(
     label: str,
 ) -> None:
     if stage_name not in EXPECTED_STAGE_FLAGS:
-        raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
+        raise EvidenceError(f"{label}.name has unsupported canary stage")
     _check_executed_command_repository_fixture_paths(stage_name, command, label)
 
 
@@ -2785,7 +2776,7 @@ def _check_command_policy(
 def _check_stage_script(stage_name: str, command: list[str], label: str) -> None:
     expected = EXPECTED_STAGE_SCRIPTS.get(stage_name)
     if expected is None:
-        raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
+        raise EvidenceError(f"{label}.name has unsupported canary stage")
     if len(command) < 2:
         raise EvidenceError(
             f"{label}.command must start with a Python interpreter and {expected}"
@@ -2811,9 +2802,7 @@ def _check_canary_stage_sequence(stage_names: list[str], label: str) -> None:
     stage_name_set = set(stage_names)
     unsupported = sorted(stage_name_set - REQUIRED_CANARY_STAGES)
     if unsupported:
-        raise EvidenceError(
-            f"{label} contains unsupported canary stages: " + ", ".join(unsupported)
-        )
+        raise EvidenceError(f"{label} contains unsupported canary stages")
     expected = [
         stage_name
         for stage_name in EXPECTED_CANARY_STAGE_ORDER
@@ -2829,7 +2818,7 @@ def _check_canary_stage_sequence(stage_names: list[str], label: str) -> None:
 def _check_stage_command_flags(stage_name: str, command: list[str], label: str) -> None:
     allowed = EXPECTED_STAGE_FLAGS.get(stage_name)
     if allowed is None:
-        raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
+        raise EvidenceError(f"{label}.name has unsupported canary stage")
     local_only = LOCAL_DIAGNOSTIC_STAGE_FLAGS.get(stage_name, set())
     boolean_flags = STAGE_BOOLEAN_FLAGS.get(stage_name, set())
     value_offsets = _command_separate_value_offsets(
@@ -2856,11 +2845,11 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
                 )
         if flag in local_only:
             raise EvidenceError(
-                f"{label}.command[{offset}] uses local diagnostic flag {flag!r}; "
+                f"{label}.command[{offset}] uses local diagnostic flag; "
                 "production evidence must include persisted source records"
             )
         if flag not in allowed:
-            raise EvidenceError(f"{label}.command[{offset}] uses unsupported flag {flag!r}")
+            raise EvidenceError(f"{label}.command[{offset}] uses unsupported flag")
         if item.startswith(flag + "=") and flag in boolean_flags:
             raise EvidenceError(
                 f"{label}.command[{offset}] boolean flag {flag} must not use =value"
@@ -3967,7 +3956,9 @@ def _check_trust_bundle(
     if policy not in TRUST_SIGNATURE_POLICIES:
         raise EvidenceError(f"{label}.embedded_signature_policy is unsupported")
     if policy != REQUIRE_VERIFIED and not args.allow_record_only_trust:
-        raise EvidenceError(f"{label}.embedded_signature_policy is {policy!r}")
+        raise EvidenceError(
+            f"{label}.embedded_signature_policy does not require verified signatures"
+        )
 
     source_summary: dict[str, str] | None = None
     bundle_sha256 = bundle.get("bundle_sha256")

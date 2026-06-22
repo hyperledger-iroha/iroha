@@ -368,8 +368,10 @@ contains the passing cargo result for the production Reserved-lineage test
 as the exact single expected `test ... ok` line with exactly one one-test cargo
 result, canonical LF line endings, strict UTF-8 bytes, and no trailing
 whitespace or forged result-line suffix, with the log ending in a final LF
-terminator, rerunning the lineage local-file validator immediately before
-reading proof-log text; local release JSON, checked-in source-marker, and
+terminator, and rejects interrupted compile/start logs that only show the
+production test beginning without the final `ok` line and cargo result,
+rerunning the lineage local-file validator immediately before reading
+proof-log text; local release JSON, checked-in source-marker, and
 lineage artifact readers reject padded path components before ancestor
 validation or metadata reads,
 and that the recorded command is the production
@@ -410,11 +412,12 @@ revalidation and capped at 16 MiB before parsing, so post-preflight swaps or
 oversized metadata cannot replace or exhaust the evidence parser before schema
 checks. Unreadable or
 non-UTF-8 ABI-6 manifest and proof-evidence JSON files fail closed as structured
-read blockers instead of tracebacks. Proof evidence
-before the release cutoff, or future-dated beyond the release validator
-clock-skew allowance, remains blocked
-even when every artifact digest is otherwise valid. Its `generated_at_utc`
-timestamp must use canonical UTC `YYYY-MM-DDTHH:MM:SSZ` form, and recorded proof
+read blockers instead of tracebacks. Reserved-lineage proof evidence, ABI-7
+compact key evidence, and localnet lifecycle evidence with omitted, non-string,
+noncanonical, control-character-bearing, stale, or future-dated
+`generated_at_utc` values remain blocked even when every artifact digest is
+otherwise valid. Their timestamps must use canonical UTC
+`YYYY-MM-DDTHH:MM:SSZ` form, and recorded proof
 commands with surrounding whitespace, control characters, or secret-looking
 material such as `token=` are rejected without echoing unsafe command bytes.
 The helper rejects noncanonical `--generated-at-utc`
@@ -439,7 +442,21 @@ evidence packets without capturing workstation paths. Android freshness checks c
 scanner-validated signed-evidence timestamp already present in each accepted slot
 report instead of re-opening slot metadata or signed-evidence JSON during the
 rollup, but still revalidate that it is canonical UTC before comparing
-freshness windows. The rollup rejects symlinked `--repo-root` directories, symlinked
+freshness windows. Their stale/future blockers operate on sanitized Android
+slot reports, so secret-looking or control-character slot identifiers are
+redacted before freshness diagnostics are serialized. Direct signed-evidence
+summary validation also rejects malformed path, digest, and identity fields
+without echoing secret-looking or control-character values. Localnet lifecycle evidence also has direct generated-at
+presence, shape, and freshness coverage, so omitted, non-string, noncanonical,
+control-character-bearing, stale, or future-dated 4-peer lifecycle attestations
+cannot satisfy readiness even when their artifact hashes are otherwise valid.
+Unexpected top-level or nested localnet acceptance fields are rejected and
+redacted through the same secret/control-character display policy as lineage
+and compact evidence. Localnet lifecycle summary identity values, including
+`localnet_run_id`, `chain_id`, `target`, and `peer_ids`, are also passed through
+that display policy so rejected secret-looking or control-character values are
+not emitted in readiness summaries.
+The rollup rejects symlinked `--repo-root` directories, symlinked
 repo-root ancestors, unreadable repo-root metadata, and direct control-character
 or secret-looking repo-root validator inputs before resolving checked-in
 ABI/source trust roots. Surrounding-whitespace, parent-segment, and
@@ -1084,6 +1101,13 @@ surrounding-whitespace
 `--localnet-lifecycle-evidence` paths before running the rollup, so unsafe
 evidence path strings and padded path components are not echoed in summaries or
 diagnostics.
+The ABI-7 compact-key evidence validator applies the same redaction to
+noncanonical `generator_log_path` claims before serializing blocker details, so
+forged secret-looking or control-character log-path values are never echoed
+back in readiness output.
+Reserved-lineage per-test `log_path` mismatches are also rejected before local
+proof-log validation, and forged secret-looking or control-character claimed log
+paths are not echoed in blocker details.
 
 After `scripts/kagemusha_production_readiness.py` writes a ready
 `dist/kagemusha-production-readiness.json`, package release evidence with the
@@ -1614,9 +1638,10 @@ The signed-slot assembler source digest preflights reject blank or noncanonical
 attestation challenge, app-signing, and offline-policy SHA-256 fields before
 unsigned staging output or signed evidence can be published.
 The Android raw puller and signed-slot assembler now also report temporary
-staging directory removal failures and block success when the original staging
-directory cannot be removed; identity-swapped staging directories are still
-preserved instead of removed.
+staging directory removal and cleanup-sync failures, and block success when the
+original staging directory cannot be removed or the containing directory cannot
+be synced afterward; identity-swapped staging directories are still preserved
+instead of removed.
 The signed-slot assembler tightens pre-existing device-lab roots and all staged
 or published slot directories to `0700`, installs copied source artifacts and
 generated JSON/manifest/signature evidence as `0600`, and verifies those modes

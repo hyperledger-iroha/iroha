@@ -3895,6 +3895,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-slot-assembler-publish-stage-identity",
     "--negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
     "--negative-control-android-device-lab-slot-assembler-temp-cleanup-report",
+    "--negative-control-android-device-lab-slot-assembler-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-test-workflow",
     "--negative-control-android-device-lab-format-control-sanitization",
     "--negative-control-android-device-lab-wallet-integrity",
@@ -4112,8 +4113,10 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-raw-puller-install-sync-identity",
     "--negative-control-android-device-lab-raw-puller-install-cleanup-identity",
     "--negative-control-android-device-lab-raw-puller-install-cleanup-report",
+    "--negative-control-android-device-lab-raw-puller-install-cleanup-sync-failure",
     "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
     "--negative-control-android-device-lab-raw-puller-temp-cleanup-report",
+    "--negative-control-android-device-lab-raw-puller-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
     "--negative-control-android-device-lab-raw-puller-install-output-root-identity",
     "--negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
@@ -6832,6 +6835,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab slot assembler temporary cleanup report",
     ],
     [
+      "--negative-control-android-device-lab-slot-assembler-temp-cleanup-sync-failure",
+      /return \["staged slot temporary directory cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android device-lab slot assembler temporary cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-test-workflow",
       /check_android_device_lab_slot_test\.py[\s\S]*?disabled_check_android_device_lab_slot_test\.py/u,
       "Android device-lab validator workflow",
@@ -7922,6 +7930,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android raw puller install cleanup report gate",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-install-cleanup-sync-failure",
+      /return \["raw slot partial install cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android raw puller install cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
       /_file_identity\(temp_parent_stat\) != expected_identity[\s\S]*?False/u,
       "Android raw puller temp cleanup identity gate",
@@ -7930,6 +7943,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-raw-puller-temp-cleanup-report",
       /if pull_errors or cleanup_errors:[\s\S]*?if pull_errors:/u,
       "Android raw puller temp cleanup report gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-temp-cleanup-sync-failure",
+      /return \["raw pull temporary directory cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android raw puller temp cleanup sync gate",
     ],
     [
       "--negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
@@ -11554,8 +11572,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-accumulator-field-length-vectors",
     "--negative-control-sdk-accumulator-hop-count-vectors",
     "--negative-control-sdk-accumulator-chain-id-shape",
+    "--negative-control-sdk-bundle-summary-trailing-field-vectors",
+    "--negative-control-sdk-verify-result-trailing-field-vectors",
+    "--negative-control-sdk-lineage-witness-trailing-field-vectors",
+    "--negative-control-sdk-current-note-amount-trailing-field-vectors",
     "--negative-control-sdk-bundle-proof-circuit-vectors",
     "--negative-control-sdk-bundle-proof-backend-vectors",
+    "--negative-control-sdk-bundle-proof-box-backend-vectors",
+    "--negative-control-sdk-bundle-proof-trailing-field-vectors",
     "--negative-control-sdk-bundle-proof-bytes-vectors",
     "--negative-control-sdk-bundle-proof-public-input-vectors",
     "--negative-control-sdk-bundle-current-note-vectors",
@@ -13706,7 +13730,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorChainIdShapeBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Self\.noritoString\("kagemusha-recursive-spend-abi-chain"[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNoritoString\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?kagemusha\._kagemusha_string\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithAccumulatorField/u,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Self\.noritoString\("kagemusha-recursive-spend-abi-chain"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?testStringPayload\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?kagemushaNoritoString\([\s\S]*?"kagemusha-recursive-spend-abi-chain"[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNoritoString\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?kagemusha\._kagemusha_string\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithAccumulatorField/u,
     "SDK accumulator chain-id shape negative control must mutate non-C# SDK test vectors and package dist",
   );
   assert.match(
@@ -13738,6 +13762,159 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorChainIdShapeBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator chain-id shape negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleSummaryTrailingFieldVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
+  );
+  assert.match(
+    sdkBundleSummaryTrailingFieldVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_bundle_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_accumulator_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_current_note_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK bundle summary trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.doesNotMatch(
+    sdkBundleSummaryTrailingFieldVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK bundle summary trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkBundleSummaryTrailingFieldVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle summary trailing-field vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleSummaryTrailingFieldVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle summary trailing-field vector drift was not detected for/u,
+    "SDK bundle summary trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleSummaryTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle summary trailing-field vector drift was not detected"\s*\)/u,
+    "SDK bundle summary trailing-field vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleSummaryTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle summary trailing-field vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkVerifyResultTrailingFieldVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
+  );
+  assert.match(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi7, name: "verify_result"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI7, "verify_result"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI7, "verify_result"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi7Archive\("verify_result"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_verify_result_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_abi7_archive\("verify_result"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi7Archive\("verify_result"\)/u,
+    "SDK verify-result trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /verify-result trailing-field[\s\S]*?recursiveSpendVerifyResultWithTrailingField/u,
+    "SDK verify-result trailing-field vector negative control must keep trailing-field labels visible",
+  );
+  assert.doesNotMatch(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK verify-result trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK verify-result trailing-field vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK verify-result trailing-field vector drift was not detected for/u,
+    "SDK verify-result trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK verify-result trailing-field vector drift was not detected"\s*\)/u,
+    "SDK verify-result trailing-field vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK verify-result trailing-field vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkLineageWitnessTrailingFieldVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":'),
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_lineage_witness_with_trailing_field\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result/u,
+    "SDK lineage-witness trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /lineage-witness trailing-field[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField/u,
+    "SDK lineage-witness trailing-field vector negative control must keep trailing-field labels visible",
+  );
+  assert.doesNotMatch(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK lineage-witness trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK lineage-witness trailing-field vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK lineage-witness trailing-field vector drift was not detected for/u,
+    "SDK lineage-witness trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK lineage-witness trailing-field vector drift was not detected"\s*\)/u,
+    "SDK lineage-witness trailing-field vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK lineage-witness trailing-field vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkCurrentNoteAmountTrailingFieldVectorBranch = guard.slice(
+    guard.indexOf(
+      'if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":',
+    ),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
+  );
+  assert.match(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?numericPayloadWithTrailingField[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_numeric_payload_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK current-note amount trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /current-note amount trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
+    "SDK current-note amount trailing-field vector negative control must keep trailing-field labels visible",
+  );
+  assert.doesNotMatch(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK current-note amount trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK current-note amount trailing-field vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK current-note amount trailing-field vector drift was not detected for/u,
+    "SDK current-note amount trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK current-note amount trailing-field vector drift was not detected"\s*\)/u,
+    "SDK current-note amount trailing-field vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK current-note amount trailing-field vector negative control must not unconditionally pass after run_checks",
   );
   const sdkBundleProofCircuitVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
@@ -13780,7 +13957,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkBundleProofBackendVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-backend-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":'),
   );
   assert.match(
     sdkBundleProofBackendVectorBranch,
@@ -13816,6 +13993,89 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkBundleProofBackendVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK bundle proof-backend vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleProofBoxBackendVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":'),
+  );
+  assert.match(
+    sdkBundleProofBoxBackendVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithProofBoxBackend\(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\(KagemushaRecursiveSpendProver\.RECURSIVE_AGGREGATION_PROOF_BACKEND\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithProofBoxBackend\([\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?recursiveSpendBundleWithProofBoxBackend\([\s\S]*?KagemushaRecursiveSpendProver\.RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_proof_box_backend\([\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?_recursive_spend_bundle_with_proof_box_backend\([\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)/u,
+    "SDK bundle proof-box backend vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkBundleProofBoxBackendVectorBranch,
+    /proof-box backend[\s\S]*?halo2\/kzg/u,
+    "SDK bundle proof-box backend vector negative control must keep proof-box backend labels visible",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofBoxBackendVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK bundle proof-box backend vector negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkBundleProofBoxBackendVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle proof-box backend vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleProofBoxBackendVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-box backend vector drift was not detected for/u,
+    "SDK bundle proof-box backend vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofBoxBackendVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-box backend vector drift was not detected"\s*\)/u,
+    "SDK bundle proof-box backend vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofBoxBackendVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle proof-box backend vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleProofTrailingFieldVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":'),
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingProofBoxField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingProofBoxField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingProofBoxField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingProofBoxField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_recursive_proof_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_proof_box_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingProofBoxField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK bundle proof trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_verifier_key_id_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK bundle proof trailing-field vector negative control must mutate verifier-key-id trailing vectors",
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /proof trailing-field[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField/u,
+    "SDK bundle proof trailing-field vector negative control must keep trailing-field labels visible",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK bundle proof trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle proof trailing-field vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof trailing-field vector drift was not detected for/u,
+    "SDK bundle proof trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof trailing-field vector drift was not detected"\s*\)/u,
+    "SDK bundle proof trailing-field vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle proof trailing-field vector negative control must not unconditionally pass after run_checks",
   );
   const sdkBundleProofBytesVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":'),

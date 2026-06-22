@@ -26,7 +26,11 @@ and completed history lives in [`status.md`](./status.md).
   localnetuat/localnetzero labels and joined production/prod aliases such as
   testproduction, stageproduction, and sandboxproduction, and must not mix
   localnet with mainnet labels such as mainnetlocalnet or localnetmainnet
-  before lifecycle evidence can satisfy the release gate. The marker-boundary
+  before lifecycle evidence can satisfy the release gate. Direct
+  Reserved-lineage, compact-key, and localnet lifecycle evidence validation
+  rejects omitted, non-string, noncanonical, control-character-bearing, stale,
+  or future-dated `generated_at_utc` evidence relative to the readiness cutoff
+  and validator clock skew. The marker-boundary
   gate allows legitimate production place names such as localnet-qatar while
   still rejecting suffixed non-production labels such as
   localnet-testlane, localnettestlane, and localnetpreprod1.
@@ -49,7 +53,9 @@ and completed history lives in [`status.md`](./status.md).
   requires the canonical `kagemusha-localnet-lifecycle-acceptance.json`
   acceptance filename before artifact-directory metadata is read. Lineage proof
   logs and ABI-7 compact generator logs likewise reject noncanonical filenames
-  before artifact-directory metadata is read. Symlinked and hardlinked
+  before artifact-directory metadata is read, and interrupted Reserved-lineage
+  compile/start logs without the exact passing test line and one-test cargo
+  result are stale evidence. Symlinked and hardlinked
   canonical `--out` leaf paths
   are now rejected before localnet acceptance input metadata is read. Its
   canonical output corridor now surfaces `--out parent` and `--artifact-dir`
@@ -263,11 +269,38 @@ and completed history lives in [`status.md`](./status.md).
   current-note field shapes for nested note commitments and spend nullifiers;
   the C# mirrors are covered by the managed decoder tests and parity guard,
   with Windows host execution still tracked below.
-  JavaScript, Python, and Swift now also reject raw accumulator `chain_id`
-  string payloads and require the ABI fixture's nested Norito string shape.
+  JavaScript, Python, Swift, Kotlin/JVM, and Android Java now also reject raw
+  accumulator `chain_id` string payloads and require the ABI fixture's nested
+  Norito string shape.
   TODO(C# Windows): add the matching C# managed decoder vector that replaces
   accumulator field index 1 with a raw `chain_id` string payload and confirms
   it rejects before native dispatch.
+  JavaScript, Python, Swift, Kotlin/JVM, and Android Java also include
+  proof-box-only backend vectors that mutate nested `ProofBox.backend` to
+  `halo2/kzg` while leaving verifier metadata unchanged, so decoders prove the
+  proof bytes container is checked directly. TODO(C# Windows): add the matching
+  C# managed decoder vector for proof-box-only backend mutation.
+  The same non-C# decoders now also include trailing-field vectors that append a
+  valid extra Norito field to the nested `verifierKeyId`, recursive-proof, and
+  `ProofBox` objects, proving surplus proof metadata is rejected before native
+  dispatch. TODO(C# Windows): add the matching C# managed decoder vectors for
+  trailing verifier-key-id, recursive-proof, and proof-box fields.
+  Non-C# bundle-summary decoders also pin trailing-field vectors for the
+  top-level bundle, accumulator summary, and nested current note. TODO(C#
+  Windows): add matching C# managed decoder vectors for trailing top-level
+  bundle, accumulator-summary, and current-note fields.
+  Non-C# verify-result decoders now also pin an ABI-7 archive with an extra
+  field after `witnessless_redeem_supported` and `lineage_witness_required`.
+  TODO(C# Windows): add the matching C# managed decoder vector for trailing
+  verify-result fields after the ABI-7 optional booleans.
+  Non-C# lineage-witness decoders now also pin trailing-field vectors for the
+  top-level witness, previous-recursive-proof sequence, individual previous
+  proof, and nested previous-proof verifier-key-id. TODO(C# Windows): add the
+  matching C# managed decoder vectors for lineage-witness trailing fields.
+  Non-C# current-note amount decoders now also pin a nested `Numeric` payload
+  with a valid mantissa/scale plus an extra trailing field. TODO(C# Windows):
+  add the matching C# managed decoder vector for current-note amount trailing
+  fields.
 - Kagemusha recursive-spend JVM/Android request objects now reject wrong-schema
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
@@ -458,6 +491,9 @@ and completed history lives in [`status.md`](./status.md).
   - Confirm the Windows C# pass includes the managed bundle-summary decoder
     vector that replaces accumulator field index 1 with a raw `chain_id`
     string payload and rejects it before native dispatch.
+  - Confirm the Windows C# pass includes the managed bundle-summary decoder
+    vector that mutates only nested `ProofBox.backend` to `halo2/kzg` while
+    leaving verifier metadata unchanged, and rejects it before native dispatch.
   - Confirm the Windows C# pass includes the same managed bundle current-note
     malformed vectors already covered on macOS: all-zero note commitment,
     all-zero spend nullifier, note/nullifier aliasing, zero amount, and the
@@ -1249,7 +1285,17 @@ and completed history lives in [`status.md`](./status.md).
   values, and staged run-report JSON duplicate or unexpected field diagnostics
   redact unsafe keys, including nested lineage key-log profile and entry-field
   names. Readiness evidence unexpected-field diagnostics now redact both
-  control-character and secret-looking field names before blocker serialization.
+  control-character and secret-looking field names before blocker serialization,
+  and compact-key evidence canonical `generator_log_path` diagnostics redact
+  unsafe claimed path values before they are emitted. Reserved-lineage
+  per-test `log_path` mismatch diagnostics reject forged log-path claims before
+  local proof-log validation and do not emit unsafe claimed values. Localnet
+  lifecycle readiness summaries redact secret-looking or control-character
+  identity values before emitting `localnet_run_id`, `chain_id`, `target`, or
+  `peer_ids`. Android signed-evidence freshness blockers consume the sanitized
+  slot reports, so stale/future diagnostics also redact unsafe slot identifiers.
+  Direct Android signed-evidence summary validation rejects malformed path,
+  digest, and identity fields without emitting unsafe claimed values.
   Release-bundle summary and manifest verification now rejects control-character
   strings anywhere inside those JSON roots, matching the existing global
   secret-material gate.
@@ -1291,7 +1337,7 @@ and completed history lives in [`status.md`](./status.md).
   published files whose current identity still matches the identity captured
   immediately after install while reporting rollback unlink or cleanup-sync
   failures with the original publish failure. Finalizer temporary staging
-  cleanup now also reports removal failures while preserving a
+  cleanup now also reports removal and cleanup-sync failures while preserving a
 	  temp directory whose identity changed before removal. The Android attestation
 	  report writer now also rejects unsafe or aliased `--out` paths through a
 	  non-mutating preflight before harness-result or certificate-chain metadata is

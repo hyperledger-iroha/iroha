@@ -1082,17 +1082,8 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise ReadinessError(f"{label} contains unknown keys")
-        raise ReadinessError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise ReadinessError(f"{label} contains unknown keys")
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -4349,10 +4340,7 @@ def _verify_canary(
         raise ReadinessError(f"{label}.stage_names must not contain duplicates")
     unsupported_stages = sorted(stage_names - REQUIRED_CANARY_STAGES)
     if unsupported_stages:
-        raise ReadinessError(
-            f"{label}.stage_names contains unsupported stages: "
-            + ", ".join(unsupported_stages)
-        )
+        raise ReadinessError(f"{label}.stage_names contains unsupported stages")
     expected_stage_order = [
         stage_name
         for stage_name in EXPECTED_CANARY_STAGE_ORDER
@@ -4682,14 +4670,14 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.policy_unsupported",
-            f"trust profile {profile_id!r} uses unsupported policy {policy!r}",
+            f"trust profile {profile_id!r} uses unsupported embedded signature policy",
             path,
         )
     elif policy != REQUIRE_VERIFIED:
         _blocker(
             blockers,
             "trust.policy_not_require_verified",
-            f"trust profile {profile_id!r} uses {policy!r}",
+            f"trust profile {profile_id!r} does not require verified signatures",
             path,
         )
     if not crl_required:

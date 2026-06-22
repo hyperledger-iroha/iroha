@@ -185,6 +185,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             ("x--iroha--signature_xsd_unknown_leak", "xsd_unknown_leak"),
             ("unexpected\x1bxsd_key", "\x1b"),
             ("unexpected_xsd_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:

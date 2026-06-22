@@ -661,17 +661,8 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        if any(
-            _is_secret_looking_key(key)
-            or _is_control_bearing_key(key)
-            or len(str(key)) > 128
-            or any(ord(ch) > 0x7E for ch in str(key))
-            for key in unknown
-        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
-            raise ReceiptError(f"{label} contains unknown keys")
-        raise ReceiptError(f"{label} contains unknown keys: {', '.join(unknown)}")
+    if set(value) - allowed:
+        raise ReceiptError(f"{label} contains unknown keys")
 
 
 def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -> None:
@@ -1958,10 +1949,10 @@ def _verify_rail_source(
     if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
         raise ReceiptError(f"{path} message_type must be lowercase ISO family id")
     if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
-        raise ReceiptError(f"{path} has unsupported rail message_type {message_type!r}")
+        raise ReceiptError(f"{path} has unsupported rail message_type")
     if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
         raise ReceiptError(
-            f"{path} uses legacy rail message_type {message_type!r}; "
+            f"{path} uses legacy rail message_type; "
             "production evidence must use colr.012"
         )
     if "profile" not in receipt:
@@ -2046,7 +2037,7 @@ def verify_receipt_file(
         _reject_non_ascii_identifier(kind, f"{path} receipt_kind")
         _reject_secret_looking_identifier(kind, f"{path} receipt_kind")
     if kind not in SUPPORTED_KINDS:
-        raise ReceiptError(f"{path} has unsupported receipt_kind {kind!r}")
+        raise ReceiptError(f"{path} has unsupported receipt_kind")
     _reject_unknown_keys(receipt, RECEIPT_KEYS_BY_KIND[kind], str(path))
     require_digest_matches(receipt, RECEIPT_DIGEST_FIELD, str(path))
     _check_status(receipt, path, allow_failed=allow_failed)
@@ -2080,7 +2071,7 @@ def verify_receipt_file(
             allow_default_profile=allow_default_profile,
         )
     else:  # pragma: no cover - guarded above, kept explicit for future kinds.
-        raise ReceiptError(f"{path} has unsupported receipt_kind {kind!r}")
+        raise ReceiptError(f"{path} has unsupported receipt_kind")
 
     return receipt
 

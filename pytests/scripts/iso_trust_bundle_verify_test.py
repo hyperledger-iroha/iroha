@@ -165,6 +165,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("x--iroha--signature_trust_unknown_leak", "trust_unknown_leak"),
             ("unexpected\x1btrust_key", "\x1b"),
             ("unexpected_trust_\uff4bey", "\uff4b"),
+            ("operator_note", "operator_note"),
             ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:

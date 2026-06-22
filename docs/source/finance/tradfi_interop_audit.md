@@ -990,6 +990,15 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `schema_only_reason` or `missing_schema_reason` text, and final readiness
   XSD gap blocker/warning entries now carry only the affected path and message
   definition id instead of archived free-form review rationale.
+  The rail gateway adapter, receipt verifier, direct evidence verification, and
+  final readiness now also reject unsupported receipt-kind and rail-message-type
+  values with label-only diagnostics; stage receipt-kind mismatch blockers
+  identify the mismatch class without printing the unexpected archived kind, and
+  unsupported canary stage-name diagnostics no longer echo the unexpected stage
+  label. Direct evidence replay and final readiness trust blockers also report
+  non-production or unsupported embedded-signature policies without echoing the
+  archived policy value. Direct evidence replay also rejects unsupported or
+  local-only child command flags without echoing the archived flag text.
   Archived profile-catalog paths, including checked-in fixture coordinates, get
   the same readiness recheck when production readiness consumes archived XSD
   summaries.
