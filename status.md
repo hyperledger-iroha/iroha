@@ -2,6 +2,18 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 Telemetry Test Snapshot Sync
+
+- Updated the telemetry unit tests that assert actor-maintained peer, block,
+  and transaction counters to read through `metrics_fresh()` instead of the
+  lazy `metrics()` snapshot. This preserves production lazy metrics behavior
+  while making the tests wait for the telemetry actor's sync barrier.
+- Validation passed:
+  - `cargo test -p iroha_core --features telemetry telemetry::tests::set_online_peers -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry telemetry::tests::commit_blocks -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry telemetry::tests::tx_counters_ignore_time_trigger_failures -- --nocapture`
+  - `cargo fmt --all`
+
 ## 2026-06-22 Kagemusha Current-Note Amount Trailing-Field Coverage
 
 - Added non-C# recursive-spend current-note amount vectors that append a
