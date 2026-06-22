@@ -115,6 +115,57 @@ def test_evm_source_live_cli_redacts_top_level_exception_details(monkeypatch, ca
             assert exception_type.__name__ not in captured.err
 
 
+def test_evm_source_live_cli_omits_runtime_endpoint_and_unknown_summary_fields(
+    monkeypatch,
+    capsys,
+):
+    module = load_live_module()
+
+    monkeypatch.setattr(
+        module,
+        "collect_live_evidence",
+        lambda _args: {
+            "rpc_url": "https://rpc.example.invalid/secret-token-provider",
+            "read_only": True,
+            "block_tag": "finalized",
+            "source_bridge": {"domain": module.SCCP_DOMAIN_ETH},
+            "offline_evidence_args": ["--domain", "eth"],
+            "operator_note": "safe note",
+            "secret-token-summary": "secret-token-value",
+            7: "secret-token-int-key",
+            "_source_args": "private source args",
+        },
+    )
+
+    exit_code = module.main(
+        [
+            "--rpc-url",
+            "https://rpc.example.invalid/secret-token-provider",
+            "--domain",
+            "eth",
+            "--bridge-address",
+            "0x" + "11" * 20,
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == {
+        "block_tag": "finalized",
+        "offline_evidence_args": ["--domain", "eth"],
+        "read_only": True,
+        "source_bridge": {"domain": module.SCCP_DOMAIN_ETH},
+    }
+    assert "rpc_url" not in payload
+    assert "operator_note" not in payload
+    assert "secret-token-summary" not in payload
+    assert "7" not in payload
+    assert "secret-token" not in captured.out
+    assert "private source args" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def fake_opener_for(
     module,
     *,

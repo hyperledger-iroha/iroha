@@ -2873,7 +2873,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             OpenVerifyEnvelopeValidationError::EmptyCircuitId
             | OpenVerifyEnvelopeValidationError::InvalidCircuitId
             | OpenVerifyEnvelopeValidationError::EmptyPublicInputs
-            | OpenVerifyEnvelopeValidationError::EmptyProofBytes => ivm::host::ERR_DECODE,
+            | OpenVerifyEnvelopeValidationError::AllZeroPublicInputs
+            | OpenVerifyEnvelopeValidationError::EmptyProofBytes
+            | OpenVerifyEnvelopeValidationError::AllZeroProofBytes => ivm::host::ERR_DECODE,
         }
     }
 
@@ -19705,7 +19707,7 @@ seiyaku Vault {
         map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
 
-        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 8] = [
+        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 10] = [
             (
                 "empty circuit id",
                 |env| env.circuit_id.clear(),
@@ -19735,6 +19737,11 @@ seiyaku Vault {
                 ivm::host::ERR_DECODE,
             ),
             (
+                "all-zero public inputs",
+                |env| env.public_inputs = vec![0u8; 16],
+                ivm::host::ERR_DECODE,
+            ),
+            (
                 "oversized public inputs",
                 |env| {
                     env.public_inputs = vec![
@@ -19748,6 +19755,11 @@ seiyaku Vault {
             (
                 "empty proof bytes",
                 |env| env.proof_bytes.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "all-zero proof bytes",
+                |env| env.proof_bytes = vec![0u8; 16],
                 ivm::host::ERR_DECODE,
             ),
             (

@@ -22,9 +22,12 @@ use iroha_crypto::{
         BFV_DETERMINISTIC_SEED_MAX_BYTES, BFV_EVALUATION_KEY_MAX_ROTATION_KEYS,
         BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
         BfvBootstrapKeyTranscriptSeed, BfvEvaluationBudget, BfvEvaluationKeyBundle,
-        BfvFullBootstrapCircuitArtifactBundleV1, BfvPublicKey, BfvRotationKeyTranscriptSeed,
-        bfv_balanced_multiplication_depth, ram_lfe_bfv_parameters_v1,
-        validate_bfv_bounded_noise_bound, validate_bfv_exact_residual_multiple_capacity,
+        BfvFullBootstrapCircuitArtifactBundleV1, BfvFullBootstrapReleaseAuditPackageV1,
+        BfvPublicKey, BfvRotationKeyTranscriptSeed, bfv_balanced_multiplication_depth,
+        ram_lfe_bfv_parameters_v1, validate_bfv_bounded_noise_bound,
+        validate_bfv_exact_residual_multiple_capacity,
+        validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1,
+        validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1,
         validate_public_key as validate_bfv_public_key,
     },
     kex::{KeyExchangeScheme as _, X25519Sha256},
@@ -101,7 +104,7 @@ pub const CIPHERTEXT_QUERY_RESPONSE_VERSION_V1: u16 = 1;
 pub const CIPHERTEXT_QUERY_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV input-admission proofs.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_input_admission_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"((service_name,binding_name,key,operation,value_size_bytes,payload_commitment,encryption,governance_tx_hash),(bfv_parameter_digest,bfv_rns_modulus_chain_digest,bfv_key_switch_decomposition_chain_digest),residual_multiple_bound,bound_mode)"}"#;
+    br#"{"schema":"soracloud_fhe_input_admission_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"((service_name,binding_name,key,operation,value_size_bytes,payload_commitment,encryption,governance_tx_hash),(bfv_parameter_digest,bfv_rns_modulus_chain_digest,bfv_key_switch_decomposition_chain_digest),residual_multiple_bound,bound_mode)","bound_contract":{"modes":["exact_residual_multiple","bounded_noise"],"validates_exact_residual_capacity":true,"validates_bounded_noise_capacity":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV input-admission proofs.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1: &str = "soracloud_fhe_input_admission_v1";
 /// Canonical gas schedule id for Soracloud BFV input-admission proofs.
@@ -117,7 +120,7 @@ pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_GAS_SCHEDULE_ID_V1: &str =
     "stark_fri_soracloud_public_key_v1";
 /// Public-input schema for Soracloud BFV bootstrap-key zero-refresh proofs.
 pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_bootstrap_key_zero_refresh_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"bootstrap_key_transcript_zero_refresh_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,refresh_transcript_digest,bootstrap_transcript,bootstrap_round_count,zero_refresh_digest,bootstrap_round_digests,bootstrap_key)","statement_digest_domains":{"exact_raw":"iroha.crypto.fhe.bfv.bootstrap_key_zero_refresh_proof_statement.v1","bounded_raw":"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_zero_refresh_proof_statement.v1","exact_transcript":"iroha.crypto.fhe.bfv.bootstrap_key_transcript_zero_refresh_proof_statement.v1","bounded_transcript":"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_transcript_zero_refresh_proof_statement.v1","separates_exact_and_bounded":true,"separates_raw_and_transcript":true},"refresh_transcript_digest_domains":{"exact":"iroha.crypto.fhe.bfv.refresh_transcript_digest.v1","bounded":"iroha.crypto.fhe.bfv.bounded_noise_refresh_transcript_digest.v1","separates_exact_and_bounded":true},"refresh_transcript_material":{"version":1,"field_count":7,"binds_params":true,"binds_public_key":true,"binds_evaluation_key_digest":true,"binds_rotation_transcripts":true,"binds_bootstrap_transcript":true},"proof_statement_material":{"version":1,"field_count":11,"binds_evaluation_key_digest":true,"binds_refresh_transcript_digest":true,"binds_bootstrap_transcript":true,"binds_bootstrap_round_count":true,"binds_zero_refresh_digest":true,"binds_round_refresh_digests":true,"binds_bootstrap_key":true,"round_refresh_digest_domain":"iroha.crypto.fhe.bfv.bootstrap_key.round_refresh_digest.v1","zero_refresh_digest_domain":"iroha.crypto.fhe.bfv.bootstrap_key.zero_refresh_digest.v1"}}"#;
+    br#"{"schema":"soracloud_fhe_bootstrap_key_zero_refresh_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"bootstrap_key_transcript_zero_refresh_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,refresh_transcript_digest,bootstrap_transcript,bootstrap_round_count,zero_refresh_digest,bootstrap_round_digests,bootstrap_key)","statement_digest_domains":{"exact_raw":"iroha.crypto.fhe.bfv.bootstrap_key_zero_refresh_proof_statement.v1","bounded_raw":"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_zero_refresh_proof_statement.v1","exact_transcript":"iroha.crypto.fhe.bfv.bootstrap_key_transcript_zero_refresh_proof_statement.v1","bounded_transcript":"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_transcript_zero_refresh_proof_statement.v1","separates_exact_and_bounded":true,"separates_raw_and_transcript":true},"refresh_transcript_digest_domains":{"exact":"iroha.crypto.fhe.bfv.refresh_transcript_digest.v1","bounded":"iroha.crypto.fhe.bfv.bounded_noise_refresh_transcript_digest.v1","separates_exact_and_bounded":true},"refresh_transcript_material":{"version":1,"field_count":7,"binds_params":true,"binds_public_key":true,"binds_evaluation_key_digest":true,"binds_rotation_transcripts":true,"binds_bootstrap_transcript":true,"rejects_all_zero_transcript_seeds":true},"proof_statement_material":{"version":1,"field_count":11,"binds_evaluation_key_digest":true,"binds_refresh_transcript_digest":true,"binds_bootstrap_transcript":true,"binds_bootstrap_round_count":true,"binds_zero_refresh_digest":true,"binds_round_refresh_digests":true,"binds_bootstrap_key":true,"round_refresh_digest_domain":"iroha.crypto.fhe.bfv.bootstrap_key.round_refresh_digest.v1","zero_refresh_digest_domain":"iroha.crypto.fhe.bfv.bootstrap_key.zero_refresh_digest.v1"}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV bootstrap-key proofs.
 pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1: &str =
     "soracloud_fhe_bootstrap_key_zero_refresh_v1";
@@ -128,7 +131,15 @@ pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"],"material_proof_input":{"proof_input_material_version":1,"proof_input_material_field_count":6,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_input_material_digest.v1","hashes_proof_input_material":true,"requires_full_bootstrap_material":true,"binds_public_key":true,"binds_governed_evaluation_keys":true,"binds_concrete_artifact_bundle":true,"binds_statement_hash":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_delayed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_delayed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"rejects_placeholder_reviewer_ids":true,"validates_trusted_reviewer_public_key":true,"requires_ed25519_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true}}"#;
+    concat!(
+        r#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"],"material_proof_input":{"proof_input_material_version":1,"proof_input_material_field_count":6,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_input_material_digest.v1","hashes_proof_input_material":true,"requires_full_bootstrap_material":true,"binds_public_key":true,"binds_governed_evaluation_keys":true,"binds_concrete_artifact_bundle":true,"binds_statement_hash":true},"#,
+        r#""release_audit_evidence":{"version":1,"field_count":22,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_evidence_digest.v1","proof_profile_field_count":32,"proof_profile_air_evaluation_material_version":1,"proof_profile_air_evaluation_material_field_count":8,"proof_profile_validates_air_evaluation_material_digest":true,"proof_profile_validates_air_evaluation_trace_material_digest":true,"proof_profile_requires_zero_air_composition_values":true,"proof_profile_validates_artifact_bound_prover_input":true,"proof_profile_rejects_stale_galois_key_set_replay":true,"proof_profile_rejects_stale_proof_key_artifacts":true,"key_evidence_field_count":10,"binds_artifact_bundle_digest":true,"binds_generated_circuit_body_digest":true,"requires_nonzero_generated_circuit_body":true,"binds_evaluator_artifact_set_digest":true,"binds_generated_proof_key_pair":true,"binds_native_payload_digests":true,"rejects_inert_native_payload_digest_sentinels":true,"rejects_non_production_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_non_production_native_payload_digest_sentinels":true,"rejects_case_decorated_placeholder_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels":true,"rejects_padded_placeholder_native_payload_digest_sentinels":true,"rejects_delayed_placeholder_native_payload_digest_sentinels":true,"rejects_binary_decorated_placeholder_native_payload_digest_sentinels":true,"binds_native_circuit_fingerprint":true,"binds_registered_profile_digests":true,"binds_canonical_profile_artifact_digests":true,"requires_distinct_evidence_commitments":true},"#,
+        r#""release_audit_signoff":{"version":1,"field_count":4,"payload_version":1,"payload_field_count":15,"reviewer_id_max_bytes":128,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_evidence_digest":true,"binds_generated_circuit_body_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_delayed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"requires_reviewer_signature":true,"requires_trusted_reviewer_public_key":true,"requires_ed25519_reviewer_public_key":true,"rejects_empty_reviewer_public_key":true,"rejects_all_zero_reviewer_public_key":true},"#,
+        r#""release_audit_record":{"version":1,"field_count":4,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_record_digest.v1","packages_release_audit_evidence":true,"packages_release_audit_signoff":true,"validates_record_against_governed_artifacts":true},"#,
+        r#""release_audit_manifest":{"version":1,"field_count":20,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_manifest_digest.v1","scope":"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1","requires_approved_verdict":true,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_record_digest":true,"binds_release_audit_evidence_digest":true,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_proof_key_pair_commitment":true,"binds_native_circuit_fingerprint":true,"binds_generated_circuit_body_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_delayed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"binds_trusted_reviewer_public_key":true,"binds_ed25519_trusted_reviewer_public_key":true,"rejects_empty_trusted_reviewer_public_key":true,"rejects_all_zero_trusted_reviewer_public_key":true},"#,
+        r#""release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_delayed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_delayed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"rejects_delayed_non_production_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"rejects_placeholder_reviewer_ids":true,"validates_trusted_reviewer_public_key":true,"requires_ed25519_trusted_reviewer_public_key":true,"rejects_empty_trusted_reviewer_public_key":true,"rejects_all_zero_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true,"rejects_placeholder_caller_pinned_package_digest":true,"rejects_placeholder_package_record_digest":true,"rejects_placeholder_package_manifest_digest":true,"rejects_caller_pinned_record_digest_alias":true,"rejects_caller_pinned_manifest_digest_alias":true}}"#
+    )
+    .as_bytes();
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1: &str =
     "soracloud_fhe_full_bootstrap_material_v1";
@@ -139,7 +150,7 @@ pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":15,"trace_field_count":7,"trace_bounds_field_count":6,"binds_galois_key_set_digest":true,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true,"forbids_duplicate_openings":true},"arithmetic_air_contract":{"version":1,"field_count":32,"binds_constraint_system_digest":true,"enforces_goldilocks_field_canonicality":true,"enforces_row_kind_partition":true,"enforces_active_rows_match_witness_material":true,"enforces_full_bootstrap_arithmetic_constraints":true,"enforces_public_padding_rows":true,"enforces_statement_hash_nonzero":true,"enforces_trace_output_matches_claim":true,"enforces_trace_bound_matches_claim":true,"enforces_no_unmasked_private_row_openings":true,"enforces_duplicate_free_openings":true,"composition_challenge_domain":"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_composition_challenge.v1","binds_composition_challenges_to_statement_hash":true,"binds_composition_challenges_to_trace_material_digest":true,"binds_composition_challenges_to_row_index":true,"binds_composition_challenges_to_column_index":true,"maps_zero_composition_challenge_to_one":true},"native_air_envelope":{"validates_merkle_path_shape":true,"validates_merkle_path_roots":true,"validates_fri_query_chain":true,"binds_first_fri_values_to_opened_air_values":true},"artifact_bundle":{"artifact_digest_count":9,"binds_arithmetic_air_constraint_system_artifact":true,"validates_arithmetic_air_constraint_system_material":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_input_material_digest.v1","hashes_proof_input_material":true,"prover_input_material_version":1,"prover_input_material_field_count":11,"air_evaluation_material_version":1,"air_evaluation_material_field_count":8,"binds_release_prover_arithmetic_air_constraint_system_digest":true,"binds_release_prover_arithmetic_air_constraint_system_artifact_digest":true,"binds_release_prover_arithmetic_air_evaluation_material_digest":true,"binds_arithmetic_air_evaluation_trace_material_digest":true,"requires_zero_arithmetic_air_composition_values":true,"binds_arithmetic_trace_material_digest":true,"binds_trace_proof_input_consistency":true,"binds_generated_proof_key_pair":true,"binds_release_prover_verifier_key":true,"validates_artifact_bound_prover_input":true,"rejects_stale_galois_key_set_replay":true,"rejects_stale_proof_key_artifacts":true},"release_audit_evidence":{"version":1,"field_count":22,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_evidence_digest.v1","proof_profile_field_count":32,"proof_profile_air_evaluation_material_version":1,"proof_profile_air_evaluation_material_field_count":8,"proof_profile_validates_air_evaluation_material_digest":true,"proof_profile_validates_air_evaluation_trace_material_digest":true,"proof_profile_requires_zero_air_composition_values":true,"proof_profile_validates_artifact_bound_prover_input":true,"proof_profile_rejects_stale_galois_key_set_replay":true,"proof_profile_rejects_stale_proof_key_artifacts":true,"key_evidence_field_count":9,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_generated_proof_key_pair":true,"binds_native_payload_digests":true,"rejects_inert_native_payload_digest_sentinels":true,"rejects_case_decorated_placeholder_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels":true,"rejects_padded_placeholder_native_payload_digest_sentinels":true,"rejects_delayed_placeholder_native_payload_digest_sentinels":true,"rejects_binary_decorated_placeholder_native_payload_digest_sentinels":true,"binds_native_circuit_fingerprint":true,"requires_distinct_evidence_commitments":true},"release_audit_signoff":{"version":1,"field_count":4,"payload_version":1,"payload_field_count":14,"reviewer_id_max_bytes":128,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_evidence_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_delayed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"requires_reviewer_signature":true,"requires_trusted_reviewer_public_key":true,"requires_ed25519_reviewer_public_key":true},"release_audit_record":{"version":1,"field_count":4,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_record_digest.v1","packages_release_audit_evidence":true,"packages_release_audit_signoff":true,"validates_record_against_governed_artifacts":true},"release_audit_manifest":{"version":1,"field_count":19,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_manifest_digest.v1","scope":"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1","requires_approved_verdict":true,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_record_digest":true,"binds_release_audit_evidence_digest":true,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_proof_key_pair_commitment":true,"binds_native_circuit_fingerprint":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_delayed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"binds_trusted_reviewer_public_key":true,"binds_ed25519_trusted_reviewer_public_key":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_delayed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_delayed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"rejects_placeholder_reviewer_ids":true,"validates_trusted_reviewer_public_key":true,"requires_ed25519_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true}}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":15,"trace_field_count":7,"trace_bounds_field_count":6,"binds_galois_key_set_digest":true,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true,"forbids_duplicate_openings":true},"arithmetic_air_contract":{"version":1,"field_count":33,"binds_constraint_system_digest":true,"enforces_goldilocks_field_canonicality":true,"enforces_row_kind_partition":true,"enforces_active_rows_match_witness_material":true,"enforces_full_bootstrap_arithmetic_constraints":true,"enforces_public_padding_rows":true,"enforces_statement_hash_nonzero":true,"enforces_trace_output_matches_claim":true,"enforces_trace_bound_matches_claim":true,"enforces_no_unmasked_private_row_openings":true,"enforces_duplicate_free_openings":true,"composition_challenge_domain":"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_composition_challenge.v1","composition_challenge_digest_bytes":32,"binds_composition_challenges_to_statement_hash":true,"binds_composition_challenges_to_trace_material_digest":true,"binds_composition_challenges_to_row_index":true,"binds_composition_challenges_to_column_index":true,"maps_zero_composition_challenge_to_one":true},"native_air_envelope":{"validates_merkle_path_shape":true,"validates_merkle_path_roots":true,"validates_fri_query_chain":true,"binds_first_fri_values_to_opened_air_values":true},"artifact_bundle":{"artifact_digest_count":9,"binds_arithmetic_air_constraint_system_artifact":true,"validates_arithmetic_air_constraint_system_material":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_input_material_digest.v1","hashes_proof_input_material":true,"prover_input_material_version":1,"prover_input_material_field_count":11,"air_evaluation_material_version":1,"air_evaluation_material_field_count":8,"binds_release_prover_arithmetic_air_constraint_system_digest":true,"binds_release_prover_arithmetic_air_constraint_system_artifact_digest":true,"binds_release_prover_arithmetic_air_evaluation_material_digest":true,"binds_arithmetic_air_evaluation_trace_material_digest":true,"requires_zero_arithmetic_air_composition_values":true,"binds_arithmetic_trace_material_digest":true,"binds_trace_proof_input_consistency":true,"binds_generated_proof_key_pair":true,"binds_release_prover_verifier_key":true,"validates_artifact_bound_prover_input":true,"rejects_stale_galois_key_set_replay":true,"rejects_stale_proof_key_artifacts":true},"release_audit_evidence":{"version":1,"field_count":22,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_evidence_digest.v1","proof_profile_field_count":32,"proof_profile_air_evaluation_material_version":1,"proof_profile_air_evaluation_material_field_count":8,"proof_profile_validates_air_evaluation_material_digest":true,"proof_profile_validates_air_evaluation_trace_material_digest":true,"proof_profile_requires_zero_air_composition_values":true,"proof_profile_validates_artifact_bound_prover_input":true,"proof_profile_rejects_stale_galois_key_set_replay":true,"proof_profile_rejects_stale_proof_key_artifacts":true,"key_evidence_field_count":10,"binds_artifact_bundle_digest":true,"binds_generated_circuit_body_digest":true,"requires_nonzero_generated_circuit_body":true,"binds_evaluator_artifact_set_digest":true,"binds_generated_proof_key_pair":true,"binds_native_payload_digests":true,"rejects_inert_native_payload_digest_sentinels":true,"rejects_non_production_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_non_production_native_payload_digest_sentinels":true,"rejects_case_decorated_placeholder_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels":true,"rejects_padded_placeholder_native_payload_digest_sentinels":true,"rejects_delayed_placeholder_native_payload_digest_sentinels":true,"rejects_binary_decorated_placeholder_native_payload_digest_sentinels":true,"binds_native_circuit_fingerprint":true,"binds_registered_profile_digests":true,"binds_canonical_profile_artifact_digests":true,"requires_distinct_evidence_commitments":true},"release_audit_signoff":{"version":1,"field_count":4,"payload_version":1,"payload_field_count":15,"reviewer_id_max_bytes":128,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_evidence_digest":true,"binds_generated_circuit_body_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_delayed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"requires_reviewer_signature":true,"requires_trusted_reviewer_public_key":true,"requires_ed25519_reviewer_public_key":true,"rejects_empty_reviewer_public_key":true,"rejects_all_zero_reviewer_public_key":true},"release_audit_record":{"version":1,"field_count":4,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_record_digest.v1","packages_release_audit_evidence":true,"packages_release_audit_signoff":true,"validates_record_against_governed_artifacts":true},"release_audit_manifest":{"version":1,"field_count":20,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_manifest_digest.v1","scope":"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1","requires_approved_verdict":true,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_record_digest":true,"binds_release_audit_evidence_digest":true,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_proof_key_pair_commitment":true,"binds_native_circuit_fingerprint":true,"binds_generated_circuit_body_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_delayed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"binds_trusted_reviewer_public_key":true,"binds_ed25519_trusted_reviewer_public_key":true,"rejects_empty_trusted_reviewer_public_key":true,"rejects_all_zero_trusted_reviewer_public_key":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_delayed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_delayed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"rejects_delayed_non_production_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"rejects_placeholder_reviewer_ids":true,"validates_trusted_reviewer_public_key":true,"requires_ed25519_trusted_reviewer_public_key":true,"rejects_empty_trusted_reviewer_public_key":true,"rejects_all_zero_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true,"rejects_placeholder_caller_pinned_package_digest":true,"rejects_placeholder_package_record_digest":true,"rejects_placeholder_package_manifest_digest":true,"rejects_caller_pinned_record_digest_alias":true,"rejects_caller_pinned_manifest_digest_alias":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1: &str =
     BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
@@ -3362,6 +3373,13 @@ fn validate_bfv_refresh_transcript_seed(
     if seed.is_empty() {
         return Err(SoracloudManifestError::EmptyField { manifest, field });
     }
+    if seed.iter().all(|byte| *byte == 0) {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not be all zero".to_string(),
+        });
+    }
     if seed.len() > BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES {
         return Err(SoracloudManifestError::InvalidField {
             manifest,
@@ -3768,6 +3786,22 @@ pub struct FheExecutionPolicyV1 {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub full_bootstrap_material_proof_statement_digest: Option<Hash>,
+    /// Release audit package approved for governed full-bootstrap artifact execution.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub full_bootstrap_release_audit_package: Option<BfvFullBootstrapReleaseAuditPackageV1>,
+    /// Caller-pinned digest of the approved full-bootstrap release audit package.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub full_bootstrap_release_audit_package_digest: Option<Hash>,
+    /// Trusted reviewer identifier expected by the full-bootstrap release audit package.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub full_bootstrap_release_audit_trusted_reviewer_id: Option<String>,
+    /// Trusted reviewer public key expected by the full-bootstrap release audit package.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub full_bootstrap_release_audit_trusted_reviewer_public_key: Option<PublicKey>,
     /// Maximum admitted ciphertext size in bytes.
     pub max_ciphertext_bytes: NonZeroU64,
     /// Maximum admitted plaintext input size in bytes.
@@ -3892,6 +3926,119 @@ impl FheExecutionPolicyV1 {
                 "full_bootstrap_material_proof_statement_digest",
                 statement_hash,
             )?;
+        }
+        let release_audit_field_count = [
+            self.full_bootstrap_release_audit_package.is_some(),
+            self.full_bootstrap_release_audit_package_digest.is_some(),
+            self.full_bootstrap_release_audit_trusted_reviewer_id
+                .is_some(),
+            self.full_bootstrap_release_audit_trusted_reviewer_public_key
+                .is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if release_audit_field_count > 0 {
+            if !has_full_bootstrap_statement {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_package",
+                    reason: "full-bootstrap release audit fields require a full-bootstrap material proof statement digest"
+                        .to_string(),
+                });
+            }
+            if release_audit_field_count != 4 {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_package",
+                    reason: "full-bootstrap release audit package, package digest, trusted reviewer id, and trusted reviewer public key must be provided together"
+                        .to_string(),
+                });
+            }
+            let package = self
+                .full_bootstrap_release_audit_package
+                .as_ref()
+                .expect("field count confirms package is present");
+            let expected_package_digest = self
+                .full_bootstrap_release_audit_package_digest
+                .expect("field count confirms digest is present");
+            validate_soracloud_fhe_digest_hash(
+                "fhe execution policy",
+                "full_bootstrap_release_audit_package_digest",
+                expected_package_digest,
+            )?;
+            validate_soracloud_no_full_bootstrap_placeholder_digest(
+                "fhe execution policy",
+                "full_bootstrap_release_audit_package_digest",
+                expected_package_digest,
+            )?;
+            if expected_package_digest == package.record_digest {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_package_digest",
+                    reason: "must be distinct from the package record digest".to_string(),
+                });
+            }
+            if expected_package_digest == package.manifest_digest {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_package_digest",
+                    reason: "must be distinct from the package manifest digest".to_string(),
+                });
+            }
+            let actual_package_digest =
+                iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(package)
+                    .map_err(|err| SoracloudManifestError::InvalidField {
+                        manifest: "fhe execution policy",
+                        field: "full_bootstrap_release_audit_package",
+                        reason: err.to_string(),
+                    })?;
+            if expected_package_digest != actual_package_digest {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_package_digest",
+                    reason: "does not match the embedded release audit package".to_string(),
+                });
+            }
+            let reviewer_id = self
+                .full_bootstrap_release_audit_trusted_reviewer_id
+                .as_ref()
+                .expect("field count confirms reviewer id is present");
+            if reviewer_id.trim().is_empty() {
+                return Err(SoracloudManifestError::EmptyField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_trusted_reviewer_id",
+                });
+            }
+            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(reviewer_id).map_err(
+                |err| SoracloudManifestError::InvalidField {
+                    manifest: "fhe execution policy",
+                    field: "full_bootstrap_release_audit_trusted_reviewer_id",
+                    reason: err.to_string(),
+                },
+            )?;
+            let reviewer_public_key = self
+                .full_bootstrap_release_audit_trusted_reviewer_public_key
+                .as_ref()
+                .expect("field count confirms reviewer public key is present");
+            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1(
+                reviewer_public_key,
+            )
+            .map_err(|err| SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "full_bootstrap_release_audit_trusted_reviewer_public_key",
+                reason: err.to_string(),
+            })?;
+            iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_release_audit_package_trusted_reviewer_v1(
+                package,
+                reviewer_id,
+                reviewer_public_key,
+            )
+            .map_err(|err| SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "full_bootstrap_release_audit_package",
+                reason: err.to_string(),
+            })?;
         }
         if has_zero_refresh_statement && has_full_bootstrap_statement {
             return Err(SoracloudManifestError::InvalidField {
@@ -4656,6 +4803,89 @@ fn validate_soracloud_fhe_digest_hash(
     digest_hash: Hash,
 ) -> Result<(), SoracloudManifestError> {
     validate_soracloud_digest_hash(manifest, field, digest_hash)
+}
+
+const SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] = &[
+    b"placeholder BFV full-bootstrap material",
+    b"pending BFV full-bootstrap material",
+    b"placeholder BFV full-bootstrap prover key",
+    b"placeholder BFV full-bootstrap verifier key",
+    b"placeholder BFV full-bootstrap native prover payload",
+    b"placeholder BFV full-bootstrap native verifier payload",
+    b"placeholder BFV full-bootstrap native proof key payload",
+    b"pending BFV full-bootstrap native proof key payload",
+    b"TODO pending BFV full-bootstrap native proof key payload",
+    b"replace-before-production",
+    b"replace before production",
+    b"replace_before_production",
+    b"not for production",
+    b"not-for-production",
+    b"not_for_production",
+    b"not production ready",
+    b"not-production-ready",
+    b"not_production_ready",
+    b"draft",
+    b"draft-only",
+    b"draft only",
+    b"draft_only",
+    b"todo",
+    b"dummy",
+    b"fake",
+    b"mock",
+    b"fixture",
+    b"sample",
+    b"template",
+    b"example",
+];
+
+const SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_DELAY_PREFIXES: &[&[u8]] = &[
+    b"full-bootstrap material before placeholder: ",
+    b"governed material digest before placeholder: ",
+];
+const SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_LEADING_PREFIXES: &[&[u8]] =
+    &[b" ", b"\n", b"\r\n", b"\t", b" \n\t"];
+
+fn validate_soracloud_no_full_bootstrap_placeholder_digest(
+    manifest: &'static str,
+    field: &'static str,
+    digest_hash: Hash,
+) -> Result<(), SoracloudManifestError> {
+    for preimage in SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_PREIMAGES {
+        if digest_hash == Hash::new(*preimage) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason: "must not be a placeholder full-bootstrap digest".to_string(),
+            });
+        }
+        for prefix in SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_DELAY_PREFIXES {
+            let mut delayed_preimage = Vec::with_capacity(prefix.len() + preimage.len());
+            delayed_preimage.extend_from_slice(prefix);
+            delayed_preimage.extend_from_slice(preimage);
+            if digest_hash == Hash::new(&delayed_preimage) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest,
+                    field,
+                    reason: "must not be a placeholder full-bootstrap digest".to_string(),
+                });
+            }
+            for leading_prefix in SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_LEADING_PREFIXES {
+                let mut leading_delayed_preimage =
+                    Vec::with_capacity(leading_prefix.len() + prefix.len() + preimage.len());
+                leading_delayed_preimage.extend_from_slice(leading_prefix);
+                leading_delayed_preimage.extend_from_slice(prefix);
+                leading_delayed_preimage.extend_from_slice(preimage);
+                if digest_hash == Hash::new(&leading_delayed_preimage) {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest,
+                        field,
+                        reason: "must not be a placeholder full-bootstrap digest".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_soracloud_digest_hash(
@@ -7816,8 +8046,8 @@ pub struct SoraServiceStateEntryV1 {
     pub fhe_residual_multiple_bound: Option<u128>,
     /// Semantics of `fhe_residual_multiple_bound`.
     ///
-    /// `None` means no bound is available; legacy rows with a residual bound and
-    /// no mode are interpreted as [`BfvCiphertextBoundModeV1::ExactResidualMultiple`].
+    /// `None` means no bound mode is available and is only valid when the row
+    /// also omits `fhe_residual_multiple_bound`.
     #[norito(default)]
     pub fhe_bound_mode: Option<BfvCiphertextBoundModeV1>,
     /// Audit sequence of the last update affecting this state key.
@@ -7945,7 +8175,15 @@ fn validate_service_state_fhe_bound_metadata(
         });
     }
     if let Some(bound) = bound {
-        let bound_mode = bound_mode.unwrap_or(BfvCiphertextBoundModeV1::ExactResidualMultiple);
+        let Some(bound_mode) = bound_mode else {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora service state entry",
+                field: "fhe_bound_mode",
+                reason:
+                    "requires explicit bound semantics when fhe_residual_multiple_bound is present"
+                        .to_string(),
+            });
+        };
         validate_soracloud_bfv_ciphertext_bound_capacity(
             bound,
             bound_mode,
@@ -15137,6 +15375,16 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn sample_ed25519_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair")
+    }
+
+    fn sample_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("fixture seed derives BLS keypair")
+    }
+
     fn sample_asset_definition_id(asset_definition_id: &str) -> AssetDefinitionId {
         AssetDefinitionId::parse_address_literal(asset_definition_id)
             .expect("sample asset definition id literal should parse")
@@ -16273,7 +16521,7 @@ mod tests {
 
         assert_eq!(
             hex::encode(soracloud_fhe_input_admission_public_inputs_schema_hash_v1()),
-            "dee5e56e217becc1da55754e40b74e8c5dff705a1d9b6798b99c056bba5db63f",
+            "1cf3dd56010dc765bd671004b1c9262499666ac1c1313573fceb59bae26d6caf",
             "input admission public-input schema hash drifted"
         );
         assert_eq!(
@@ -16283,19 +16531,19 @@ mod tests {
         );
         assert_eq!(
             hex::encode(soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()),
-            "606e60ace7efd5b86c2b24fbc725eb5db190880f23005460fbc51283e53089c5",
+            "27b7ef19754cccb93f3c9eadf50d0628932b2fed661d4ce73d6d1bee9fec692b",
             "bootstrap-key proof public-input schema hash drifted"
         );
         assert_eq!(
             hex::encode(soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()),
-            "21bcae069efb769f2260d00ce21b3acf824b196002a9ad18c1dd2b6120eac72d",
+            "93a89d0202b900ac42fb06e5ff4dd35895668f8ae6a612dc1b9643518799b9dd",
             "full-bootstrap material proof public-input schema hash drifted"
         );
         assert_eq!(
             hex::encode(
                 soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
             ),
-            "01a3653d6717054a678f40854a50c5e397bdebde86e29d8cd8c1db6a689f3a8f",
+            "a05774949fd76135dd5600351e8b6d097c51133832812e1c1594f09215f73de9",
             "full-bootstrap execution proof public-input schema hash drifted"
         );
     }
@@ -16312,6 +16560,17 @@ mod tests {
             schema.contains("residual_multiple_bound,bound_mode"),
             "public schema must advertise input-admission bound fields"
         );
+        for required in [
+            "\"bound_contract\"",
+            "\"modes\":[\"exact_residual_multiple\",\"bounded_noise\"]",
+            "\"validates_exact_residual_capacity\":true",
+            "\"validates_bounded_noise_capacity\":true",
+        ] {
+            assert!(
+                schema.contains(required),
+                "public schema must advertise input-admission bound contract {required}"
+            );
+        }
     }
 
     #[test]
@@ -16429,6 +16688,7 @@ mod tests {
             "\"binds_params\":true",
             "\"binds_public_key\":true",
             "\"binds_rotation_transcripts\":true",
+            "\"rejects_all_zero_transcript_seeds\":true",
             "\"proof_statement_material\"",
             "\"binds_evaluation_key_digest\":true",
             "\"binds_refresh_transcript_digest\":true",
@@ -16450,6 +16710,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header() {
         let schema = std::str::from_utf8(
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
@@ -16479,6 +16740,68 @@ mod tests {
             "\"binds_governed_evaluation_keys\":true",
             "\"binds_concrete_artifact_bundle\":true",
             "\"binds_statement_hash\":true",
+            "\"release_audit_evidence\"",
+            "\"release_audit_evidence\":{\"version\":1,\"field_count\":22",
+            "full_bootstrap_release_audit_evidence_digest.v1",
+            "\"proof_profile_field_count\":32",
+            "\"proof_profile_validates_air_evaluation_material_digest\":true",
+            "\"proof_profile_validates_air_evaluation_trace_material_digest\":true",
+            "\"proof_profile_requires_zero_air_composition_values\":true",
+            "\"proof_profile_validates_artifact_bound_prover_input\":true",
+            "\"proof_profile_rejects_stale_galois_key_set_replay\":true",
+            "\"proof_profile_rejects_stale_proof_key_artifacts\":true",
+            "\"key_evidence_field_count\":10",
+            "\"binds_artifact_bundle_digest\":true",
+            "\"binds_evaluator_artifact_set_digest\":true",
+            "\"binds_generated_proof_key_pair\":true",
+            "\"binds_generated_circuit_body_digest\":true",
+            "\"requires_nonzero_generated_circuit_body\":true",
+            "\"binds_native_payload_digests\":true",
+            "\"rejects_inert_native_payload_digest_sentinels\":true",
+            "\"rejects_non_production_native_payload_digest_sentinels\":true",
+            "\"rejects_whitespace_prefixed_non_production_native_payload_digest_sentinels\":true",
+            "\"rejects_case_decorated_placeholder_native_payload_digest_sentinels\":true",
+            "\"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels\":true",
+            "\"rejects_padded_placeholder_native_payload_digest_sentinels\":true",
+            "\"rejects_delayed_placeholder_native_payload_digest_sentinels\":true",
+            "\"rejects_binary_decorated_placeholder_native_payload_digest_sentinels\":true",
+            "\"binds_native_circuit_fingerprint\":true",
+            "\"binds_registered_profile_digests\":true",
+            "\"binds_canonical_profile_artifact_digests\":true",
+            "\"requires_distinct_evidence_commitments\":true",
+            "\"release_audit_signoff\"",
+            "\"release_audit_signoff\":{\"version\":1,\"field_count\":4",
+            "\"payload_version\":1",
+            "\"payload_field_count\":15",
+            "\"reviewer_id_max_bytes\":128",
+            "\"binds_release_audit_evidence_digest\":true",
+            "\"binds_release_audit_evidence_digest\":true,\"binds_generated_circuit_body_digest\":true",
+            "\"binds_external_audit_report_digest\":true",
+            "\"binds_evidence_archive_digest\":true",
+            "\"requires_reviewer_signature\":true",
+            "\"requires_trusted_reviewer_public_key\":true",
+            "\"requires_ed25519_reviewer_public_key\":true",
+            "\"rejects_empty_reviewer_public_key\":true",
+            "\"rejects_all_zero_reviewer_public_key\":true",
+            "\"release_audit_record\"",
+            "\"release_audit_record\":{\"version\":1,\"field_count\":4",
+            "full_bootstrap_release_audit_record_digest.v1",
+            "\"packages_release_audit_evidence\":true",
+            "\"packages_release_audit_signoff\":true",
+            "\"validates_record_against_governed_artifacts\":true",
+            "\"release_audit_manifest\"",
+            "\"release_audit_manifest\":{\"version\":1,\"field_count\":20",
+            "full_bootstrap_release_audit_manifest_digest.v1",
+            "\"scope\":\"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1\"",
+            "\"requires_approved_verdict\":true",
+            "\"binds_release_audit_record_digest\":true",
+            "\"binds_release_audit_evidence_digest\":true",
+            "\"binds_proof_key_pair_commitment\":true",
+            "\"binds_native_circuit_fingerprint\":true,\"binds_generated_circuit_body_digest\":true",
+            "\"binds_trusted_reviewer_public_key\":true",
+            "\"binds_ed25519_trusted_reviewer_public_key\":true",
+            "\"rejects_empty_trusted_reviewer_public_key\":true",
+            "\"rejects_all_zero_trusted_reviewer_public_key\":true",
             "\"release_audit_package\"",
             "\"release_audit_package\":{\"version\":1,\"field_count\":8",
             "full_bootstrap_release_audit_package_digest.v1",
@@ -16492,13 +16815,13 @@ mod tests {
             "\"rejects_nested_header_external_audit_digests\":true",
             "\"rejects_header_only_external_audit_digests\":true,\"rejects_nested_header_external_audit_digests\":true",
             "\"rejects_whitespace_prefixed_nested_header_external_audit_digests\":true",
-            "\"rejects_delayed_nested_header_external_audit_digests\":true",
             "\"rejects_zero_body_external_audit_digests\":true",
             "\"rejects_blank_body_external_audit_digests\":true",
             "\"rejects_padded_zero_body_external_audit_digests\":true",
             "\"rejects_padded_blank_body_external_audit_digests\":true",
             "\"rejects_case_decorated_placeholder_external_audit_digests\":true",
             "\"rejects_whitespace_prefixed_placeholder_external_audit_digests\":true",
+            "\"rejects_delayed_placeholder_external_audit_digests\":true",
             "\"rejects_placeholder_external_audit_digests\":true",
             "\"rejects_all_zero_audit_artifacts\":true",
             "\"requires_canonical_audit_artifact_headers\":true",
@@ -16511,14 +16834,22 @@ mod tests {
             "\"rejects_delayed_nested_audit_artifact_bodies\":true",
             "\"rejects_placeholder_audit_artifact_bodies\":true",
             "\"rejects_delayed_placeholder_audit_artifact_bodies\":true",
+            "\"rejects_delayed_non_production_audit_artifact_bodies\":true",
             "\"scans_entire_placeholder_audit_artifact_bodies\":true",
             "\"requires_distinct_audit_artifact_bodies\":true",
             "\"validates_package_against_governed_artifacts\":true",
             "\"rejects_placeholder_reviewer_ids\":true",
             "\"validates_trusted_reviewer_public_key\":true",
             "\"requires_ed25519_trusted_reviewer_public_key\":true",
+            "\"rejects_empty_trusted_reviewer_public_key\":true",
+            "\"rejects_all_zero_trusted_reviewer_public_key\":true",
             "\"requires_caller_pinned_package_digest\":true",
             "\"validates_caller_pinned_package_digest\":true",
+            "\"rejects_placeholder_caller_pinned_package_digest\":true",
+            "\"rejects_placeholder_package_record_digest\":true",
+            "\"rejects_placeholder_package_manifest_digest\":true",
+            "\"rejects_caller_pinned_record_digest_alias\":true",
+            "\"rejects_caller_pinned_manifest_digest_alias\":true",
         ] {
             assert!(
                 schema.contains(expected),
@@ -16528,6 +16859,10 @@ mod tests {
         assert!(
             schema.contains(proof_input_material_digest_domain),
             "public schema must advertise the material proof input digest domain"
+        );
+        assert!(
+            !schema.contains("rejects_delayed_nested_header_external_audit_digests"),
+            "digest-only material schema must not advertise arbitrary delayed nested-header rejection without audit artifact bytes"
         );
     }
 
@@ -16582,7 +16917,7 @@ mod tests {
             "\"forbids_unmasked_private_row_openings\":true",
             "\"forbids_duplicate_openings\":true",
             "\"arithmetic_air_contract\"",
-            "\"arithmetic_air_contract\":{\"version\":1,\"field_count\":32",
+            "\"arithmetic_air_contract\":{\"version\":1,\"field_count\":33",
             "\"binds_constraint_system_digest\":true",
             "\"enforces_goldilocks_field_canonicality\":true",
             "\"enforces_row_kind_partition\":true",
@@ -16595,6 +16930,7 @@ mod tests {
             "\"enforces_no_unmasked_private_row_openings\":true",
             "\"enforces_duplicate_free_openings\":true",
             "\"composition_challenge_domain\":\"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_composition_challenge.v1\"",
+            "\"composition_challenge_digest_bytes\":32",
             "\"binds_composition_challenges_to_statement_hash\":true",
             "\"binds_composition_challenges_to_trace_material_digest\":true",
             "\"binds_composition_challenges_to_row_index\":true",
@@ -16642,41 +16978,50 @@ mod tests {
             "\"proof_profile_validates_artifact_bound_prover_input\":true",
             "\"proof_profile_rejects_stale_galois_key_set_replay\":true",
             "\"proof_profile_rejects_stale_proof_key_artifacts\":true",
-            "\"key_evidence_field_count\":9",
+            "\"key_evidence_field_count\":10",
             "\"binds_artifact_bundle_digest\":true",
             "\"binds_evaluator_artifact_set_digest\":true",
             "\"binds_native_payload_digests\":true",
+            "\"binds_generated_circuit_body_digest\":true",
+            "\"requires_nonzero_generated_circuit_body\":true",
             "\"rejects_inert_native_payload_digest_sentinels\":true",
+            "\"rejects_non_production_native_payload_digest_sentinels\":true",
+            "\"rejects_whitespace_prefixed_non_production_native_payload_digest_sentinels\":true",
             "\"rejects_case_decorated_placeholder_native_payload_digest_sentinels\":true",
             "\"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels\":true",
             "\"rejects_padded_placeholder_native_payload_digest_sentinels\":true",
             "\"rejects_delayed_placeholder_native_payload_digest_sentinels\":true",
             "\"rejects_binary_decorated_placeholder_native_payload_digest_sentinels\":true",
             "\"binds_native_circuit_fingerprint\":true",
+            "\"binds_registered_profile_digests\":true",
+            "\"binds_canonical_profile_artifact_digests\":true",
             "\"requires_distinct_evidence_commitments\":true",
             "\"release_audit_signoff\"",
             "\"release_audit_signoff\":{\"version\":1,\"field_count\":4",
             "\"payload_version\":1",
-            "\"payload_field_count\":14",
+            "\"payload_field_count\":15",
             "\"reviewer_id_max_bytes\":128",
             "\"rejects_placeholder_reviewer_ids\":true",
             "\"binds_release_audit_evidence_digest\":true",
+            "\"binds_release_audit_evidence_digest\":true,\"binds_generated_circuit_body_digest\":true",
             "\"binds_external_audit_report_digest\":true",
             "\"binds_evidence_archive_digest\":true",
             "\"rejects_header_only_external_audit_digests\":true",
             "\"rejects_nested_header_external_audit_digests\":true",
             "\"rejects_whitespace_prefixed_nested_header_external_audit_digests\":true",
-            "\"rejects_delayed_nested_header_external_audit_digests\":true",
             "\"rejects_zero_body_external_audit_digests\":true",
             "\"rejects_blank_body_external_audit_digests\":true",
             "\"rejects_padded_zero_body_external_audit_digests\":true",
             "\"rejects_padded_blank_body_external_audit_digests\":true",
             "\"rejects_case_decorated_placeholder_external_audit_digests\":true",
             "\"rejects_whitespace_prefixed_placeholder_external_audit_digests\":true",
+            "\"rejects_delayed_placeholder_external_audit_digests\":true",
             "\"rejects_placeholder_external_audit_digests\":true",
             "\"requires_reviewer_signature\":true",
             "\"requires_trusted_reviewer_public_key\":true",
             "\"requires_ed25519_reviewer_public_key\":true",
+            "\"rejects_empty_reviewer_public_key\":true",
+            "\"rejects_all_zero_reviewer_public_key\":true",
             "\"release_audit_record\"",
             "\"release_audit_record\":{\"version\":1,\"field_count\":4",
             "full_bootstrap_release_audit_record_digest.v1",
@@ -16684,7 +17029,7 @@ mod tests {
             "\"packages_release_audit_signoff\":true",
             "\"validates_record_against_governed_artifacts\":true",
             "\"release_audit_manifest\"",
-            "\"release_audit_manifest\":{\"version\":1,\"field_count\":19",
+            "\"release_audit_manifest\":{\"version\":1,\"field_count\":20",
             "full_bootstrap_release_audit_manifest_digest.v1",
             "\"scope\":\"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1\"",
             "\"requires_approved_verdict\":true",
@@ -16694,13 +17039,12 @@ mod tests {
             "\"binds_artifact_bundle_digest\":true",
             "\"binds_evaluator_artifact_set_digest\":true",
             "\"binds_proof_key_pair_commitment\":true",
-            "\"binds_native_circuit_fingerprint\":true",
+            "\"binds_native_circuit_fingerprint\":true,\"binds_generated_circuit_body_digest\":true",
             "\"binds_external_audit_report_digest\":true",
             "\"binds_evidence_archive_digest\":true",
             "\"rejects_header_only_external_audit_digests\":true",
             "\"rejects_nested_header_external_audit_digests\":true",
             "\"rejects_whitespace_prefixed_nested_header_external_audit_digests\":true",
-            "\"rejects_delayed_nested_header_external_audit_digests\":true",
             "\"rejects_zero_body_external_audit_digests\":true",
             "\"rejects_blank_body_external_audit_digests\":true",
             "\"rejects_padded_zero_body_external_audit_digests\":true",
@@ -16710,6 +17054,8 @@ mod tests {
             "\"rejects_placeholder_external_audit_digests\":true",
             "\"binds_trusted_reviewer_public_key\":true",
             "\"binds_ed25519_trusted_reviewer_public_key\":true",
+            "\"rejects_empty_trusted_reviewer_public_key\":true",
+            "\"rejects_all_zero_trusted_reviewer_public_key\":true",
             "\"release_audit_package\"",
             "\"release_audit_package\":{\"version\":1,\"field_count\":8",
             "full_bootstrap_release_audit_package_digest.v1",
@@ -16726,7 +17072,6 @@ mod tests {
             "\"validates_evidence_archive_bytes\":true,\"rejects_header_only_external_audit_digests\":true",
             "\"rejects_header_only_external_audit_digests\":true,\"rejects_nested_header_external_audit_digests\":true",
             "\"rejects_whitespace_prefixed_nested_header_external_audit_digests\":true",
-            "\"rejects_delayed_nested_header_external_audit_digests\":true",
             "\"rejects_zero_body_external_audit_digests\":true",
             "\"rejects_blank_body_external_audit_digests\":true",
             "\"rejects_padded_zero_body_external_audit_digests\":true",
@@ -16745,14 +17090,22 @@ mod tests {
             "\"rejects_delayed_nested_audit_artifact_bodies\":true",
             "\"rejects_placeholder_audit_artifact_bodies\":true",
             "\"rejects_delayed_placeholder_audit_artifact_bodies\":true",
+            "\"rejects_delayed_non_production_audit_artifact_bodies\":true",
             "\"scans_entire_placeholder_audit_artifact_bodies\":true",
             "\"requires_distinct_audit_artifact_bodies\":true",
             "\"validates_package_against_governed_artifacts\":true",
             "\"rejects_placeholder_reviewer_ids\":true",
             "\"validates_trusted_reviewer_public_key\":true",
             "\"requires_ed25519_trusted_reviewer_public_key\":true",
+            "\"rejects_empty_trusted_reviewer_public_key\":true",
+            "\"rejects_all_zero_trusted_reviewer_public_key\":true",
             "\"requires_caller_pinned_package_digest\":true",
             "\"validates_caller_pinned_package_digest\":true",
+            "\"rejects_placeholder_caller_pinned_package_digest\":true",
+            "\"rejects_placeholder_package_record_digest\":true",
+            "\"rejects_placeholder_package_manifest_digest\":true",
+            "\"rejects_caller_pinned_record_digest_alias\":true",
+            "\"rejects_caller_pinned_manifest_digest_alias\":true",
         ] {
             assert!(
                 schema.contains(required),
@@ -16762,6 +17115,10 @@ mod tests {
         assert!(
             schema.contains(proof_input_material_digest_domain),
             "public schema must advertise the execution proof input digest domain"
+        );
+        assert!(
+            !schema.contains("rejects_delayed_nested_header_external_audit_digests"),
+            "digest-only execution schema must not advertise arbitrary delayed nested-header rejection without audit artifact bytes"
         );
         assert!(
             !schema.contains("output_bound))"),
@@ -20382,6 +20739,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn fhe_job_run_provenance_payload_binds_full_bootstrap_execution_proof_vector() {
         let job = sample_fhe_job_spec();
         let policy = sample_fhe_execution_policy();
@@ -21004,6 +21362,40 @@ mod tests {
         }
     }
 
+    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID: &str = "sora-zk-audit-wg-2026";
+    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY: &[u8] =
+        b"Independent SORA BFV full bootstrap release review confirms governed arithmetic artifacts, verifier keys, and runtime binding are approved for deployment.";
+    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY: &[u8] =
+        b"Archive evidence for the SORA BFV full bootstrap release review binds artifact digests, native circuit payloads, and reviewer approval records.";
+
+    fn sample_full_bootstrap_release_audit_package(
+        reviewer_keypair: &KeyPair,
+    ) -> iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1 {
+        let params = ram_lfe_bfv_parameters_v1();
+        let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let material = sample_full_bootstrap_material(&params);
+        let audit_report_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(
+                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY,
+            )
+            .expect("fixture release audit report bytes are canonical");
+        let audit_archive_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY,
+            )
+            .expect("fixture release audit archive bytes are canonical");
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_v1(
+            &params,
+            &material,
+            &artifacts,
+            &audit_report_bytes,
+            &audit_archive_bytes,
+            SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID,
+            reviewer_keypair.private_key(),
+        )
+        .expect("fixture release audit package validates")
+    }
+
     fn sample_fhe_execution_policy() -> FheExecutionPolicyV1 {
         FheExecutionPolicyV1 {
             schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
@@ -21016,6 +21408,10 @@ mod tests {
             public_key_proof_statement_digest: Some(sample_hash(89)),
             bootstrap_key_zero_refresh_proof_statement_digest: Some(sample_hash(92)),
             full_bootstrap_material_proof_statement_digest: None,
+            full_bootstrap_release_audit_package: None,
+            full_bootstrap_release_audit_package_digest: None,
+            full_bootstrap_release_audit_trusted_reviewer_id: None,
+            full_bootstrap_release_audit_trusted_reviewer_public_key: None,
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
@@ -23115,12 +23511,26 @@ mod tests {
 
     #[test]
     fn service_state_entry_validate_rejects_over_capacity_fhe_bounds() {
+        let mut missing_mode_entry = sample_state_entry();
+        missing_mode_entry.fhe_residual_multiple_bound = Some(17);
+        missing_mode_entry.fhe_bound_mode = None;
+        let error = missing_mode_entry
+            .validate()
+            .expect_err("FHE bounds must explicitly advertise their semantics");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "fhe_bound_mode",
+                ..
+            }
+        ));
+
         let mut exact_entry = sample_state_entry();
         exact_entry.fhe_residual_multiple_bound = Some(u128::MAX);
-        exact_entry.fhe_bound_mode = None;
+        exact_entry.fhe_bound_mode = Some(BfvCiphertextBoundModeV1::ExactResidualMultiple);
         let error = exact_entry
             .validate()
-            .expect_err("legacy exact FHE bound above capacity must be rejected");
+            .expect_err("over-capacity exact FHE bound must be rejected");
         assert!(matches!(
             error,
             SoracloudManifestError::InvalidField {
@@ -23979,6 +24389,276 @@ mod tests {
     }
 
     #[test]
+    fn fhe_execution_policy_validate_rejects_incomplete_release_audit_context() {
+        let mut non_full_bootstrap_policy = sample_fhe_execution_policy();
+        non_full_bootstrap_policy.full_bootstrap_release_audit_package_digest =
+            Some(sample_hash(94));
+        let error = non_full_bootstrap_policy
+            .validate()
+            .expect_err("release-audit fields must require full-bootstrap material policy");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package",
+                ..
+            }
+        ));
+
+        let reviewer_keypair = sample_ed25519_keypair(0x50);
+        let package = sample_full_bootstrap_release_audit_package(&reviewer_keypair);
+        let package_digest =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(&package)
+                .expect("fixture release audit package digest");
+        let mut full_bootstrap_policy = sample_fhe_execution_policy();
+        full_bootstrap_policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        full_bootstrap_policy.full_bootstrap_material_proof_statement_digest =
+            Some(sample_hash(93));
+
+        let mut package_only_policy = full_bootstrap_policy.clone();
+        package_only_policy.full_bootstrap_release_audit_package = Some(package.clone());
+        let error = package_only_policy
+            .validate()
+            .expect_err("release-audit package alone must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("provided together"));
+
+        let mut digest_only_policy = full_bootstrap_policy.clone();
+        digest_only_policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
+        let error = digest_only_policy
+            .validate()
+            .expect_err("release-audit package digest alone must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("provided together"));
+
+        let mut reviewer_id_only_policy = full_bootstrap_policy.clone();
+        reviewer_id_only_policy.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some(SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID.to_string());
+        let error = reviewer_id_only_policy
+            .validate()
+            .expect_err("release-audit trusted reviewer id alone must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("provided together"));
+
+        let mut reviewer_key_only_policy = full_bootstrap_policy;
+        reviewer_key_only_policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(reviewer_keypair.public_key().clone());
+        let error = reviewer_key_only_policy
+            .validate()
+            .expect_err("release-audit trusted reviewer public key alone must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("provided together"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn fhe_execution_policy_validate_binds_release_audit_trusted_reviewer() {
+        let reviewer_keypair = sample_ed25519_keypair(0x51);
+        let package = sample_full_bootstrap_release_audit_package(&reviewer_keypair);
+        let package_digest =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(&package)
+                .expect("fixture release audit package digest");
+
+        let mut policy = sample_fhe_execution_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest = Some(sample_hash(93));
+        policy.full_bootstrap_release_audit_package = Some(package.clone());
+        policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
+        policy.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some(SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID.to_string());
+        policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(reviewer_keypair.public_key().clone());
+        policy
+            .validate()
+            .expect("policy should accept matching trusted release-audit reviewer");
+
+        let mut stale_digest_policy = policy.clone();
+        stale_digest_policy.full_bootstrap_release_audit_package_digest = Some(sample_hash(95));
+        let error = stale_digest_policy
+            .validate()
+            .expect_err("policy must reject a release-audit package digest mismatch");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package_digest",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("does not match"));
+
+        let mut zero_digest_policy = policy.clone();
+        zero_digest_policy.full_bootstrap_release_audit_package_digest =
+            Some(Hash::prehashed([0_u8; Hash::LENGTH]));
+        let error = zero_digest_policy
+            .validate()
+            .expect_err("policy must reject a zero caller-pinned release-audit package digest");
+        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(field, "full_bootstrap_release_audit_package_digest");
+        assert!(
+            reason.contains("zero prehash sentinel"),
+            "unexpected reason: {reason}"
+        );
+
+        for (label, placeholder_digest) in [
+            ("direct", Hash::new(b"not production ready")),
+            (
+                "delayed",
+                Hash::new(b"governed material digest before placeholder: template"),
+            ),
+            (
+                "leading-whitespace delayed",
+                Hash::new(
+                    [
+                        b" \n\t".as_slice(),
+                        b"governed material digest before placeholder: ".as_slice(),
+                        b"template".as_slice(),
+                    ]
+                    .concat(),
+                ),
+            ),
+            ("mock", Hash::new(b"mock")),
+            (
+                "delayed fixture",
+                Hash::new(b"full-bootstrap material before placeholder: fixture"),
+            ),
+        ] {
+            let mut placeholder_digest_policy = policy.clone();
+            placeholder_digest_policy.full_bootstrap_release_audit_package_digest =
+                Some(placeholder_digest);
+            let error = match placeholder_digest_policy.validate() {
+                Ok(()) => panic!(
+                    "policy must reject {label} placeholder caller-pinned release-audit package digest"
+                ),
+                Err(error) => error,
+            };
+            let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
+                panic!("unexpected error: {error}");
+            };
+            assert_eq!(field, "full_bootstrap_release_audit_package_digest");
+            assert!(
+                reason.contains("placeholder full-bootstrap digest"),
+                "unexpected reason: {reason}"
+            );
+        }
+
+        let mut record_digest_alias_policy = policy.clone();
+        record_digest_alias_policy.full_bootstrap_release_audit_package_digest =
+            Some(package.record_digest);
+        let error = record_digest_alias_policy
+            .validate()
+            .expect_err("policy must reject a package record digest as the pinned package digest");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package_digest",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("record digest"));
+
+        let mut manifest_digest_alias_policy = policy.clone();
+        manifest_digest_alias_policy.full_bootstrap_release_audit_package_digest =
+            Some(package.manifest_digest);
+        let error = manifest_digest_alias_policy.validate().expect_err(
+            "policy must reject a package manifest digest as the pinned package digest",
+        );
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package_digest",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("manifest digest"));
+
+        let mut blank_reviewer_policy = policy.clone();
+        blank_reviewer_policy.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some(" \t".to_string());
+        let error = blank_reviewer_policy
+            .validate()
+            .expect_err("policy must reject a blank release-audit trusted reviewer id");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::EmptyField {
+                field: "full_bootstrap_release_audit_trusted_reviewer_id",
+                ..
+            }
+        ));
+
+        let mut placeholder_reviewer_policy = policy.clone();
+        placeholder_reviewer_policy.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some("not-production-ready-reviewer".to_string());
+        let error = placeholder_reviewer_policy
+            .validate()
+            .expect_err("policy must reject placeholder release-audit trusted reviewer ids");
+        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(field, "full_bootstrap_release_audit_trusted_reviewer_id");
+        assert!(
+            reason.contains("placeholder"),
+            "unexpected reason: {reason}"
+        );
+
+        let non_ed25519_reviewer_keypair = sample_bls_keypair(0x53);
+        let mut non_ed25519_reviewer_policy = policy.clone();
+        non_ed25519_reviewer_policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(non_ed25519_reviewer_keypair.public_key().clone());
+        let error = non_ed25519_reviewer_policy
+            .validate()
+            .expect_err("policy must reject non-Ed25519 release-audit trusted reviewer keys");
+        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(
+            field,
+            "full_bootstrap_release_audit_trusted_reviewer_public_key"
+        );
+        assert!(reason.contains("Ed25519"), "unexpected reason: {reason}");
+
+        let wrong_reviewer_keypair = sample_ed25519_keypair(0x52);
+        let mut wrong_reviewer_policy = policy;
+        wrong_reviewer_policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(wrong_reviewer_keypair.public_key().clone());
+        let error = wrong_reviewer_policy
+            .validate()
+            .expect_err("policy must reject a release-audit package signed by another reviewer");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "full_bootstrap_release_audit_package",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("reviewer"));
+    }
+
+    #[test]
     fn fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest() {
         let mut missing_digest = sample_fhe_execution_policy();
         missing_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
@@ -24394,6 +25074,51 @@ mod tests {
             .expect("crypto full-bootstrap proof statement")
             .expect("full-bootstrap statement is present");
         assert_eq!(derived, expected);
+        assert_eq!(
+            transcript
+                .digest_for_evaluation_keys(&params, &evaluation_keys)
+                .expect("derive full-bootstrap refresh transcript digest"),
+            evaluation_keys
+                .refresh_transcript_digest(&params, &public_key, &[], None)
+                .expect("crypto full-bootstrap refresh transcript digest")
+        );
+        let (_, other_public_key, _) = iroha_crypto::fhe_bfv::keygen_from_seed(
+            &params,
+            b"soracloud-full-bootstrap-proof-other-public-key",
+        )
+        .expect("other keygen");
+        let wrong_public_key_transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: other_public_key,
+            ..transcript.clone()
+        };
+        let error = wrong_public_key_transcript
+            .digest_for_evaluation_keys(&params, &evaluation_keys)
+            .expect_err("full-bootstrap refresh transcript digest must reject wrong public keys");
+        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(field, "refresh_transcript");
+        assert!(
+            reason.contains("public-key digest"),
+            "unexpected reason: {reason}"
+        );
+        let error = wrong_public_key_transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::BoundedNoise,
+            )
+            .expect_err(
+                "bounded full-bootstrap refresh transcript digest must reject wrong public keys",
+            );
+        let SoracloudManifestError::InvalidField { field, reason, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(field, "refresh_transcript");
+        assert!(
+            reason.contains("public-key digest"),
+            "unexpected reason: {reason}"
+        );
 
         let refresh_only_keys = BfvEvaluationKeyBundle {
             relinearization_key: relinearization_key.clone(),
@@ -24531,6 +25256,44 @@ mod tests {
         assert!(matches!(
             error,
             SoracloudManifestError::EmptyField {
+                field: "bootstrap_transcript.seed",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_all_zero_seeds() {
+        let mut all_zero_rotation_seed = sample_bfv_refresh_transcript();
+        all_zero_rotation_seed
+            .rotation_transcripts
+            .push(BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 1,
+                seed: vec![0; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES],
+            });
+        let error = all_zero_rotation_seed
+            .validate_seed_bounds()
+            .expect_err("all-zero rotation transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_transcripts.seed",
+                ..
+            }
+        ));
+
+        let mut all_zero_bootstrap_seed = sample_bfv_refresh_transcript();
+        all_zero_bootstrap_seed.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap-test-key".to_string(),
+            max_refresh_rounds: 1,
+            seed: vec![0; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES],
+        });
+        let error = all_zero_bootstrap_seed
+            .validate_seed_bounds()
+            .expect_err("all-zero bootstrap transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
                 field: "bootstrap_transcript.seed",
                 ..
             }

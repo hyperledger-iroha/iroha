@@ -387,6 +387,53 @@ def test_ton_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
             assert exception_type.__name__ not in captured.err
 
 
+def test_ton_live_cli_omits_unknown_summary_fields(monkeypatch, capsys):
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = {
+        "verifier_contract_address": TON_VERIFIER_CONTRACT_ADDRESS,
+        "account_address": TON_VERIFIER_CONTRACT_ADDRESS,
+        "account_status": "active",
+        "account_state_hash": "0x" + fake.account_state_hash.hex(),
+        "last_transaction_lt": "123456",
+        "last_transaction_hash": "0x" + fake.last_transaction_hash.hex(),
+        "code_boc_present": True,
+        "code_boc_base64": base64.b64encode(bytes.fromhex(TON_CODE_BOC_HEX)).decode(
+            "ascii"
+        ),
+        "code_boc_root_hash": "0x" + fake.code_hash.hex(),
+        "code_boc_hash_matches": True,
+        "verifier_code_hash": "0x" + fake.code_hash.hex(),
+        "api_url": "https://toncenter.example/secret-token-provider",
+        "operator_note": "safe note",
+        "secret-token-summary": "secret-token-value",
+        7: "secret-token-int-key",
+    }
+    monkeypatch.setattr(module, "collect_live_evidence", lambda *args, **kwargs: live)
+
+    exit_code = module.main(
+        [
+            "--api-url",
+            "https://toncenter.example",
+            "--verifier-contract-address",
+            TON_VERIFIER_CONTRACT_ADDRESS,
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["verifier_contract_address"] == TON_VERIFIER_CONTRACT_ADDRESS
+    assert payload["account_address"] == TON_VERIFIER_CONTRACT_ADDRESS
+    assert "api_url" not in payload
+    assert "operator_note" not in payload
+    assert "secret-token-summary" not in payload
+    assert "7" not in payload
+    assert "safe note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_live_ton_last_transaction_lt_requires_canonical_ascii_decimal():
     module = load_live_module()
 

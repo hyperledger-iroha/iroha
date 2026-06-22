@@ -10828,7 +10828,22 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
       solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
+  );
+  assert.notEqual(
+    sccpSolanaFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_SOL,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+      solanaTowerReplayVerifierHash: `0x${"bb".repeat(32)}`,
+      solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
+      solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
   );
   assert.throws(
     () =>
@@ -10859,7 +10874,22 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
       tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+  );
+  assert.notEqual(
+    sccpTonFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_TON,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+      tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+      tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
+      tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
   );
 });
 

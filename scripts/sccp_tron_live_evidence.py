@@ -97,6 +97,25 @@ TRON_TRANSACTION_CONTRACT_RESULTS = {
 TRON_MAX_SOLID_BLOCK_EXTRA_HEADERS = 64
 TRON_API_MAX_RESPONSE_BYTES = 1024 * 1024
 TRON_API_MAX_ERROR_BYTES = 4096
+PUBLIC_SUMMARY_FIELDS = (
+    "read_only",
+    "source_bridge",
+    "source_records",
+    "source_record_inputs",
+    "expected_witness_schedule_hash",
+    "source_event_call",
+    "source_event_transaction",
+    "destination_verifier",
+    "route_canary_transaction",
+    "route_canary",
+    "offline_evidence_args",
+    "offline_source_event_args",
+    "full_toml_ready",
+    "offline_full_toml_args",
+    "offline_full_toml_sha256",
+    "torii_destination_query_params",
+    "torii_destination_query_proof_bytes_hex_required",
+)
 TRON_SAFE_FIELD_NAME_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
 )
@@ -7302,6 +7321,10 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _public_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {field: summary[field] for field in PUBLIC_SUMMARY_FIELDS if field in summary}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -7327,7 +7350,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback="SCCP TRON live evidence collection failed",
         )
         parser.exit(2, f"{parser.prog}: error: {detail}\n")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(_public_summary(summary), indent=2, sort_keys=True))
     return 0
 
 

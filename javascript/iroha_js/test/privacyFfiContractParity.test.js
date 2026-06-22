@@ -279,10 +279,24 @@ const EXPECTED_ADVERSARIAL_DEVELOPER_BACKEND_LABELS = Object.freeze([
   "stark/fri/d-e-v",
   "stark/fri/test",
   "stark/fri/t-e-s-t",
+  "stark/fri/todo",
+  "stark/fri/t-o-d-o",
+  "stark/fri/draft-only",
+  "stark/fri/d-r-a-f-t",
+  "stark/fri/pending-audit",
+  "stark/fri/replace-before-mainnet",
+  "stark/fri/not-production-ready",
   "stark/fri/placeholder",
   "halo2/ipa:dev-fixture",
   "halo2/ipa:dev",
   "halo2/ipa:d-e-v",
+  "halo2/ipa:todo-proof",
+  "halo2/ipa:t-o-d-o-proof",
+  "halo2/ipa:draft-proof",
+  "halo2/ipa:d-r-a-f-t-proof",
+  "halo2/ipa:pending-audit",
+  "halo2/ipa:replace-before-production",
+  "halo2/ipa:not-for-production",
   "halo2/ipa:dummy",
   "halo2/ipa:f-a-k-e",
   "halo2/ipa:stub",
@@ -4297,7 +4311,20 @@ test("developer-only privacy backend labels stay rejected before production allo
     }
   }
 
-  const developerOnlyTokens = ["fixture", "dev", "test", "dummy", "fake", "stub", "sample", "placeholder"];
+  const developerOnlyTokens = [
+    "fixture",
+    "dev",
+    "todo",
+    "draft",
+    "pending",
+    "replace",
+    "test",
+    "dummy",
+    "fake",
+    "stub",
+    "sample",
+    "placeholder",
+  ];
   for (const [label, text] of [
     ["Rust classifier", source("crates/iroha_core/src/zk.rs")],
     ["JS instruction builder classifier", source("javascript/iroha_js/src/instructionBuilders.js")],

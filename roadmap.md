@@ -1776,21 +1776,36 @@ and completed history lives in [`status.md`](./status.md).
   native-circuit, and report/archive commitment binding, and reviewer id/key
 	  agreement before publication. The crypto release-audit validator now offers a
 	  single governed-artifacts/trusted-reviewer/caller-pinned-digest gate that
-	  rejects zero or known placeholder pinned package digests before comparison, and
-	  preflights caller-supplied reviewer id/key inputs, including malformed or
+		  rejects zero, known placeholder, or leading-whitespace
+		  delayed-placeholder pinned package digests and record/manifest
+		  digest aliases before stale package validation or comparison can mask the
+		  caller-pinned digest error, and preflights caller-supplied reviewer id/key inputs, including malformed or
 	  all-zero reviewer public-key payloads, before package or artifact validation
-	  can mask malformed trust configuration. Standalone release-audit
+	  can mask malformed trust configuration. Shared execution-policy validation
+	  now also recomputes embedded release package digests and rejects stale,
+	  placeholder, or leading-whitespace delayed-placeholder pinned digests plus
+	  record/manifest digest aliases before runtime policy context can be
+	  admitted, and Core's runtime release-audit context pins the same
+	  package-digest sentinel rejection before artifact execution. Standalone release-audit
 	  signoff, record, and manifest trusted-reviewer validators now share that
 	  caller trust-anchor preflight before stale signed objects are parsed, and
 	  signoff payload construction preflights reviewer id/key plus external
 	  report/archive digests before stale evidence can mask malformed operator
 	  inputs. Release-audit record and package construction now reject malformed
-	  reviewer ids before evidence derivation or audit-byte validation, and
-	  package construction now shares the report/archive byte-pair preflight so
-	  edge-whitespace-normalized copied audit bodies fail before evidence
-	  derivation or record signing. Package digesting now also rejects tampered
-	  signed report/archive bytes through the same digest mismatch gates as
-	  package validation.
+	  reviewer ids, non-Ed25519 reviewer signing keys, and all-zero Ed25519
+	  reviewer private-key payloads before public-key derivation, evidence
+	  derivation, or audit-byte validation, and package construction now shares
+	  the report/archive byte-pair preflight so edge-whitespace-normalized copied
+	  audit bodies fail before evidence derivation or record signing.
+	  Release-audit package validation and digesting now also reject placeholder
+	  stored record/manifest digest sentinels before canonical digest
+	  recomputation can collapse them into generic mismatch diagnostics, and the
+		  material/execution public-input schemas advertise those package digest
+		  sentinels plus caller-pinned record/manifest digest alias rejection under
+		  pinned schema hashes, and Core audited prover tests pin the wrapper-surfaced
+		  record/manifest alias diagnostics. Package digesting now also rejects tampered signed
+	  report/archive bytes through the same digest mismatch gates as package
+	  validation.
 		  Core's audited material and execution prover wrappers require that gate before
 		  native BFV proof attachments are emitted, including copied report/archive body
 		  rejection after edge-whitespace normalization plus refresh transcript
@@ -1803,7 +1818,7 @@ and completed history lives in [`status.md`](./status.md).
 	  the material and execution public-input schemas advertise the package-digest
 	  pin, package-level header-only/nested-header/whitespace-prefixed
 	  nested-header, zero-body, blank-body, padded zero/blank-body, and
-	  placeholder/case-decorated/whitespace-prefixed placeholder
+	  placeholder/case-decorated/whitespace-prefixed/delayed-placeholder
 	  external-digest rejection,
 	  nested, whitespace-prefixed nested, blank, sub-64-byte, and
 	  full-body plus leading-whitespace delayed-placeholder audit-artifact body rejection, canonical audit
@@ -1811,12 +1826,15 @@ and completed history lives in [`status.md`](./status.md).
 	  witness Galois-key-set binding. Standalone release audit evidence
 	  validation now also rejects reused artifact/profile/native-payload commitments
 	  plus empty/all-zero and short, long, padded, binary-decorated,
-	  case-decorated, whitespace-prefixed, draft, `sample`, `template`,
+	  case-decorated, whitespace-prefixed, delayed-content placeholder, draft, `sample`, `template`,
 	  `example`, `not for production`, `not production ready`, or
 	  `replace before production` dash/underscore-variant placeholder
-	  native-payload digest sentinels,
-	  governed material digest admission rejects the same
-	  draft/not-for-production/replacement/sample/template/example marker family
+	  native-payload digest sentinels, with explicit material/execution
+	  schema markers for direct and whitespace-prefixed sample/template/example
+	  native-payload digest sentinel rejection,
+	  governed material digest admission rejects the same direct and
+	  deterministic delayed-content
+	  draft/not-for-production/replacement/sample/template/example/mock/fixture marker family
 	  before circuit material,
 	  proof-key material envelope/profile metadata, blind-rotation accumulator
 	  material, caller-expected material proof-profile digests, material/execution
@@ -1851,10 +1869,20 @@ and completed history lives in [`status.md`](./status.md).
 	  AIR handoff consumes that caller-bound digest before proof emission. Core's
 	  execution native AIR handoff now consumes the artifact-bound release-prover
 	  digest before proof emission as well. The material and execution native AIR
-	  proof wrappers also decode the native STARK/AIR envelope before attachment
-	  construction and reject transcript-label, circuit-id, missing-AIR-section,
-	  or public-digest/statement-hash drift before proof validation can rely on
-	  the wrapper. The
+  proof wrappers also decode the native STARK/AIR envelope before attachment
+  construction and reject transcript-label, circuit-id, missing-AIR-section,
+  or public-digest/statement-hash drift before proof validation can rely on
+  the wrapper. The shared BFV-native verifier now also has a public-padding
+  entry/context path that rejects zero, direct-placeholder, and
+  leading-whitespace delayed-placeholder statement hashes and
+  checks the canonical parameter-profile/domain-tag, statement hash, public
+  slot-capacity/bound-mode header, canonical public openings, and zero public
+  composition samples without private row-major trace material; Core's active
+  full-bootstrap execution admission now consumes that
+  verifier-facing path before governed
+  trace/composition replay, and the release-prover trace-material replay helper
+  now uses the same public-padding gate before explicit row/composition
+  verification. The
 	  shared STARK/AIR
 			  prover and verifier now derive duplicate-free query schedules by
 			  bound-specific transcript rejection sampling without replacement,
@@ -1952,20 +1980,64 @@ and completed history lives in [`status.md`](./status.md).
 				  also checks sampled Merkle path shape, commitments, and FRI/AIR
 				  values before dedicated verifier dispatch; release-audit reviewer admission now
 				  requires Ed25519 public keys across signoff, record, manifest, and
-				  package validation, fail-fast Ed25519 reviewer signing keys during
+				  package validation, rejects empty or all-zero reviewer public-key
+				  payloads before stale signed objects can mask malformed trust
+				  anchors, fail-fast Ed25519 reviewer signing keys during
 				  record/package construction, and advertises that trusted-reviewer
-				  contract in the Soracloud full-bootstrap schemas; release-audit artifact bodies now
-				  reject delayed nested audit report/archive headers anywhere in the body and
-				  advertise those signed-digest and package-byte gates in the same schemas;
-				  generic STARK `OpenVerifyEnvelope` admission now
-				  refuses to route that BFV circuit through the binding AIR fallback.
+				  payload contract in the Soracloud full-bootstrap schemas; Soracloud
+				  FHE execution-policy validation now shares those reviewer-id and
+				  reviewer-public-key preflights, so placeholder reviewer ids fail on
+				  the trusted-reviewer policy field before package-level matching, and Core's
+				  full-bootstrap release-audit runtime context replays that preflight
+				  before governed artifact execution, while the lower exact/bounded
+				  artifact execution and bound wrappers reject valid artifacts if that
+				  context is absent, and the raw artifact-aware crypto execution/bound
+				  helpers are crate-private so external fixtures route through the
+				  release-audited helper surface; Torii signed FHE job preflight
+				  now pins the same field-specific rejection order for placeholder
+				  reviewer IDs and non-Ed25519 reviewer keys before package matching;
+				  the material
+				  and execution full-bootstrap public-input schemas also advertise the enforced
+				  release-audit evidence/signoff/record/manifest, proof-profile,
+				  non-production native-payload digest sentinel,
+				  artifact-binding, trusted-reviewer, and caller-pinned
+				  non-production/placeholder package-digest
+				  subcontracts under pinned material
+				  `93a89d0202b900ac42fb06e5ff4dd35895668f8ae6a612dc1b9643518799b9dd`
+				  and execution
+				  `a05774949fd76135dd5600351e8b6d097c51133832812e1c1594f09215f73de9`
+				  schema hashes; release-audit evidence now also binds registered
+				  BFV profile digests and canonical proof-schema/AIR artifact
+				  envelope digests before aggregate evidence recomputation; crypto now exposes release-audit-gated exact and
+				  bounded artifact-aware execution plus bound helpers that require
+				  the caller-trusted reviewer id/key and caller-pinned package
+				  digest to validate before governed artifact execution or public
+				  bound propagation proceeds, and Core's release-audited execution
+				  prover now recomputes caller-supplied outputs and bounds through
+				  those audited helpers before native proof construction. The signed
+				  Soracloud FHE execution policy and Torii/Core runtime path now
+				  carry the same release-audit package, digest, trusted reviewer id,
+				  and reviewer public key binding, so `FullBootstrapV1`
+				  artifact-backed jobs fail before exact or bounded artifact
+				  execution when that trusted audit context is missing, stale, or
+				  caller-pinned to non-production package digests, including
+				  leading-whitespace delayed-placeholder package-digest sentinels;
+				  release-audit artifact bodies now
+				  reject delayed nested audit report/archive headers anywhere in the body,
+				  reject delayed sample/template/example/mock/fixture audit-body markers before
+				  native material or execution proof generation, and signed digest-only gates
+				  reject deterministic delayed placeholder report/archive sentinels while
+					  advertising the broader package-byte gates in the same schemas;
+					  generic STARK `OpenVerifyEnvelope` admission now
+					  refuses to route that BFV circuit through the binding AIR fallback,
+					  including bare `stark/fri` and alternate production-profile aliases.
 			  Soracloud BFV input-admission, bootstrap-key, full-bootstrap material,
 			  and execution proof attachments now require the canonical BFV STARK/FRI backend
 			  (`stark/fri/sha256-goldilocks`) and advertise that backend in their
 			  public-input schema descriptors, so alternate production STARK profiles
 			  cannot satisfy governed BFV proof gates.
 			  BFV full-bootstrap proof-key profile validation also rejects known
-			  placeholder/draft/not-production/sample/template/example sentinel hashes
+			  placeholder/draft/not-production/sample/template/example/mock/fixture sentinel hashes
 			  plus internal transient before-finalization commitment hashes
 			  in the registered parameter/RNS/decomposition profile, pair, and
 			  material commitment slots
@@ -1981,14 +2053,70 @@ and completed history lives in [`status.md`](./status.md).
 			  domain, statement hash, trace-material digest, row index, column index,
 			  and nonzero remapping policy, so regenerated artifacts cannot silently
 			  fall back to statement-only or coordinate-agnostic composition streams.
-		  Remaining BFV full-bootstrap
-		  production work is the audited arithmetic proof-producing backend plus
+					  Full-bootstrap artifact profile decoding now mirrors encoder/evaluator
+					  admission for hand-crafted release envelopes by rejecting all-zero
+					  outer envelopes and non-empty all-zero inner payloads before
+					  role-specific Norito decoding, including the pre-material proof-key
+					  commitment helper used during release material derivation.
+					  Release-audit evidence digesting now also rejects matched stale
+					  prover/verifier generated-circuit body digests through the public
+					  evidence digest helper, not only standalone evidence validation.
+					  Release-audit signoff payloads now also carry that generated-body
+					  digest as a signed commitment and validate it against evidence
+					  before manifest construction, with regressions covering
+					  stale signoff generated-body commitments and runtime-gate
+					  rejection before exact/bounded execution preflight.
+					  Bounded-noise exact-RNS and target-limb basis-extension bootstrap
+				  round-zero wrappers are now covered by the same chain-before-shape
+				  preflight regressions as indexed and multi-round refresh paths.
+				  Bounded-noise bootstrap proof-statement coverage now also rejects
+				  all-zero nonzero-index refresh rounds and proves refresh-round
+				  tampering or reordering changes the bounded statement digest.
+				  Transcript-bound bootstrap proof-statement coverage now also proves
+				  the bounded-noise API rejects exact encrypted-zero refresh masks
+				  before deriving bounded transcript statements.
+					  Bounded transcript proof-statement coverage now also binds
+					  bootstrap round count/key material and rejects reordered
+					  nonzero-index refresh rounds during deterministic transcript
+					  validation.
+					  Exact transcript proof-statement coverage now mirrors that
+					  round-count/key-material binding and reordered-round rejection
+					  before a transcript-bound statement digest is emitted.
+					  Full-bootstrap evaluation-key bundle coverage now also proves
+					  `FullBootstrapV1` material stays on the material-proof path:
+					  transcript inventory digests admit no-seed material binding,
+					  while exact and bounded zero-refresh transcript statement APIs
+					  explicitly reject full-bootstrap keys and supplied deterministic
+					  bootstrap transcript seeds.
+				  Remaining BFV full-bootstrap
+				  production work is the audited arithmetic proof-producing backend plus
 	  externally audited generated prover/verifier artifacts and report/archive
-	  production with canonical v1 headers, nonzero bodies, and
-		  leading-whitespace-tolerant full-body delayed-placeholder rejection for the
-		  generated circuit, not the
-		  artifact/material/schema/native-envelope/audited-wrapper binding corridor,
-		  including schema-advertised native-envelope Merkle/FRI replay binding.
+	  production with canonical v1 headers and externally audited nonzero
+	  generated-circuit bodies,
+			  not the
+						  artifact/material/schema/native-envelope/audited-wrapper binding corridor,
+							  Core native verifier AIR-digest drift rejection,
+							  native prover/verifier payload generated-circuit body bytes and
+							  release-audit body-digest binding with matched stale digest and
+							  manifest-level generated-circuit body digest binding,
+							  all-zero generated-body adversarial coverage,
+							  including schema-advertised native-envelope Merkle/FRI replay binding and
+						  crypto-canonical execution native-AIR domain tags with bounded
+				  transcript-label attempts, Core release-prover native AIR synthesis
+				  routed through the shared BFV `zk_stark` wrapper,
+				  leading-whitespace delayed-placeholder
+				  external/native/material digest rejection, or the policy-pinned Core/Torii
+				  release-audit runtime gate.
+				  Soracloud public refresh-transcript metadata also rejects all-zero
+					  rotation/bootstrap seeds before crypto refresh-key recomputation can mask
+					  malformed inventory behind unrelated bundle-shape diagnostics, and the
+					  bootstrap-key zero-refresh public-input schema advertises that rejection
+					  under its refreshed pinned schema hash. Core audited release-package
+					  wrappers also preserve field-level transcript diagnostics through exact/bounded
+					  fallback and reject all-zero rotation transcript seeds before native proof
+					  generation. Exact and bounded-noise bootstrap refresh keys also reject
+					  advertised round capacities that exceed deterministic refresh headroom before
+					  transcript recomputation or key-material use.
 - SoraFS/SoraNet first-release KDF identifier cleanup is complete: SoraFS
   envelopes remain V1/version 1 with the transcript-bound hybrid suite label,
   SoraNet advertises only NK2/NK3 suite IDs `0x04`/`0x05`, and old pre-release
@@ -2083,6 +2211,8 @@ and completed history lives in [`status.md`](./status.md).
   That exclusion is intentional current-launch scope, not a hidden
   compatibility lane.
   Do not track that family as remaining SCCP launch work in this cycle.
+  Keep any future compatibility research for that retired family outside SCCP
+  launch readiness until governance explicitly re-opens support.
   Torii OpenAPI SCCP discovery descriptions must carry the same no-support
   sentence so relayers see the exclusion before reading proof manifests.
   Release-readiness and strict bundle source inventories now pin both Torii
@@ -2185,7 +2315,12 @@ and completed history lives in [`status.md`](./status.md).
 	  rendered. TRON live source-event log topic, route-canary log topic, and
 	  metadata runtime-bytecode parser wrappers must also classify helper
 	  `ValueError`s into the same fixed non-match or malformed-metadata
-	  categories. EVM receipt-proof collection
+	  categories. EVM source-live, EVM destination-live, Solana live, TON live,
+	  and TRON live public JSON summaries must also omit runtime RPC/API endpoint
+	  text where present and unknown copied summary roots before output, because
+	  provider URLs and TRON endpoint path overrides can carry tokens even when
+	  the collection itself is read-only.
+	  EVM receipt-proof collection
 	  helper `TypeError`s must also use the fixed top-level CLI fallback before
 	  stderr is emitted, and all-lanes evidence load/validation helper
 	  `TypeError`s must follow the same fallback rule. All-lanes copied hex
@@ -2263,14 +2398,20 @@ and completed history lives in [`status.md`](./status.md).
   template-derived source verifier material cannot satisfy production readiness
   silently. The aggregate all-lanes evidence validator also rejects copied
   source-material records that replay those built-in template component hashes
-  before release readiness can pass. Copied Solana and TON source-adapter audit
-  verifier hashes are rejected at the same boundary if they replay built-in
-  source-material template component hashes, and strict release-bundle public
-  JSON validation rejects the same replay in copied cryptographic-evidence rows
-  and all-lanes source-adapter gate summaries. The source-material role
-  validation release inventory now also pins the Rust production-material
-  placeholder role replay regression directly, so that adversarial coverage
-  cannot disappear while the broader source-material gate remains present.
+  before release readiness can pass. Source-adapter deployment records that
+  replay those template hashes are rejected at the same boundary, including
+  same-value material/deployment replays. Copied Solana and TON source-adapter
+  gate hashes and audit verifier hashes are rejected at the same boundary if
+  they replay built-in source-material template component hashes, and strict
+  release-bundle public JSON validation rejects the same replay in copied
+  cryptographic-evidence rows and all-lanes source-adapter gate summaries. The
+  all-lanes release checklist now rejects copied source-adapter gate hashes and
+  audit hashes that replay the same built-in template material across ETH, BSC,
+  Solana, TON, and TRON before governed deployment readiness can pass. The
+  source-material role validation release inventory now also pins the Rust
+  production-material placeholder role replay regression directly, so that
+  adversarial coverage cannot disappear while the broader source-material gate
+  remains present.
   Readiness and strict-bundle
   sparse tests must remove every uniquely detectable template-rejection marker
   from each inventory row, so lane-specific template hash guards, copied
@@ -2289,6 +2430,13 @@ and completed history lives in [`status.md`](./status.md).
   leaking parser details or tracebacks. Copied all-lanes canonical base64
   metadata helpers must likewise convert `TypeError` decoder failures into
   fixed base64 blockers before public readiness output is rendered.
+  SCCP SDK source-gate transcript parity must stay pinned: Python Torii client,
+  JavaScript source/dist package, Kotlin/JVM, Android Java, and Swift Solana/TON
+  full-light-client gate helpers must write the source-adapter verifier VK hash
+  and deployment receipt hash directly beside the aggregate source-adapter
+  deployment hash. Keep receipt-drift negative checks and the Solana audit-role
+  public-input gate column vectors aligned with the Rust/Python evidence
+  transcript.
   Destination binding recompute, route-allowlist recompute, and destination
   verifier identity checks must apply the same category-only handling for
   helper `SystemExit`, `TypeError`, `ValueError`, and `RuntimeError` failures
@@ -2641,12 +2789,20 @@ and completed history lives in [`status.md`](./status.md).
   names and reject malformed, padded, control-character, Markdown-unsafe,
   non-ASCII, or otherwise unknown copied source-inventory gate names, unknown row
   fields, non-passed validation status, and noncanonical or non-empty row blockers
-  before `--allow-not-ready` diagnostics can render or write public artifacts;
-  the source-inventory marker set must pin that copied blocker rejection
-  explicitly. Readiness-report and strict bundle sparse inventory checks must
-  remove every uniquely detectable public JSON-root marker across duplicate-key,
-  canonical-serialization, UTF-8/JSON parsing, copied public-field schema,
-  source-inventory row-shape, adversarial bundle, redaction, and
+	  before `--allow-not-ready` diagnostics can render or write public artifacts;
+	  the source-inventory marker set must pin that copied blocker rejection
+	  explicitly. Readiness-report and strict bundle sparse inventory checks must
+	  also pin generated-bundle self-verification summaries, so malformed summary
+	  roots, non-boolean `verified`, malformed verifier error lists, hostile
+	  verifier error text, or noncanonical `manifest_sha256` values cannot escape
+	  as tracebacking builder output or unchecked verified-root text. The
+	  standalone strict verifier CLI must sanitize its own public summary before
+	  JSON/text output and exit-code handling, including malformed internal roots,
+	  unknown top-level summary fields, hostile error lists, malformed artifact
+	  rows, and noncanonical `manifest_sha256` values. Sparse
+	  inventory checks must remove every uniquely detectable public JSON-root marker across duplicate-key,
+	  canonical-serialization, UTF-8/JSON parsing, copied public-field schema,
+	  source-inventory row-shape, adversarial bundle, redaction, and
   self-inventory guards.
 - SCCP release-bundle public Markdown roots must stay pinned as a readiness
   source-inventory gate: readiness Markdown and release-note attachments must
@@ -2805,6 +2961,10 @@ and completed history lives in [`status.md`](./status.md).
   failures now render fixed blockers in readiness generation and strict bundle
   verification, so local path-validation details cannot leak into published
   native prover diagnostics.
+  Native prover artifact helper output must also be shape-checked before any
+  byte/hash indexing: non-object metadata, unsafe metadata paths, boolean or
+  non-integer byte counts, and noncanonical SHA-256 text remain category-only
+  blockers in both readiness generation and strict release-bundle verification.
   Portal/mobile runtime SDK selectors for direct byte verification,
   resolver-backed bundle loading, and native prover self-test preflights must
   follow the same canonical text policy before SDK artifact lookup or callbacks
@@ -2868,28 +3028,139 @@ and completed history lives in [`status.md`](./status.md).
   Route-canary summary scalars in the all-lanes checklist must also stay
   canonical: padded or non-string `status` and `evidence_source` values become
   schema blockers before the checklist compares them with the expected passed
-  status or lane-specific evidence source. Release-readiness and bundle
+  status or lane-specific evidence source, and non-boolean copied
+  `evidence_bound`, `message_proof_used`, `receipt_block_finalized`,
+  `raw_data_owner_matches_transaction`, and `signature_recovers_to_owner`
+  values must become explicit boolean-schema blockers before the not-bound,
+  message-proof-used, finalized-receipt, owner-binding, or signature-recovery
+  fallback is applied.
+  The engineering backlog no longer lists those route-canary scalar/exactness
+  checks as open SCCP work because the all-lanes, readiness, and strict-bundle
+  adversarial regressions are green.
+  Release-readiness and bundle
   verification pin that all-lanes route-canary scalar schema as a required
   source-inventory gate before production evidence can pass; readiness and
   strict-bundle inventory tests must remove every route-canary scalar marker
   across script-side status/source extraction, route-allowlist recompute
-  redaction, adversarial numeric/padded `status` and `evidence_source` tests,
-  gate wiring, and self-inventory rows.
+  redaction, adversarial numeric/padded `status`, `evidence_source`, and
+  boolean route-canary field tests, gate wiring, and self-inventory rows.
   The standalone readiness report must also require the active launch checklist
   `ready` value to be exactly boolean `true` before top-level
-  `production_ready` can become true. Malformed lane record, destination-binding,
-  route-allowlist, route-canary, or lane-local blocker containers must likewise
-  become explicit checklist blockers rather than tracebacks, hidden route-canary
-  gaps, or falsely ready no-unresolved-blockers state. Release-readiness and
-  bundle verification now pin that active checklist schema as a required
-  source-inventory gate before production evidence can pass, including every
-  primary readiness-report and strict-verifier marker for blocker collection,
-  lane blocker schemas, source-record role separation, EVM live metadata, EVM
-  source-adapter gate summaries, route-allowlist bindings, route-canary
-  metadata, embedded-evidence matching, and unknown-field redaction. Readiness
+  `production_ready` can become true. Malformed release-checklist roots and
+  non-boolean checklist `ready` values must now become explicit public blockers
+  instead of tracebacks or blocker-free `production_ready = false` reports.
+  Malformed lane record, destination-binding, route-allowlist, route-canary, or
+  lane-local blocker containers must likewise become explicit checklist
+  blockers rather than tracebacks, hidden route-canary gaps, or falsely ready
+  no-unresolved-blockers state. Release-readiness and bundle verification now
+  pin that active checklist schema as a required source-inventory gate before
+  production evidence can pass, including every primary readiness-report and
+  strict-verifier marker for blocker collection, lane blocker schemas,
+  source-record role separation, EVM live metadata, EVM source-adapter gate
+  summaries, route-allowlist bindings, route-canary metadata, embedded-evidence
+  matching, and unknown-field redaction. Readiness
   and strict-bundle sparse tests must remove every uniquely detectable
   active-launch checklist marker across all source rows, including gate wiring
   and self-inventory rows.
+- SCCP all-lanes release-checklist lane identity must stay bounded: copied lane
+  rows must be objects, copied `domain` and `chain` values must be exact
+  production metadata, and non-object rows plus missing, non-integer,
+  unsupported, padded, or mismatched values must become checklist blockers
+  instead of `KeyError`, misleading `None` route-canary source diagnostics, or
+  raw copied chain text in item labels. The all-lanes release checklist source
+  inventory must pin both implementation markers and direct malformed-lane
+  adversarial tests.
+- SCCP all-lanes public summary output must stay fail-closed: malformed summary
+  roots, non-boolean `production_ready`, and malformed public blocker
+  containers must render sanitized not-ready JSON instead of raw copied
+  operator text. Allowlisted roots such as domain lists, lanes, and release
+  checklist must also be shape-checked before copying so hostile scalar or list
+  payloads cannot leak through an otherwise public field name. Unknown
+  top-level summary fields, including sensitive and non-string keys, must be
+  classified and stripped before JSON output so copied values cannot leak and
+  mixed-key summaries cannot crash rendering. The
+  all-lanes exact-boolean inventory must pin the public summary sanitizer and
+  CLI adversarial tests.
+- SCCP release-readiness CLI public report output must use the same fail-closed
+  boundary: malformed report roots, non-boolean `production_ready`, missing or
+  malformed top-level blockers, and hostile blocker text must render sanitized
+  not-ready payloads before JSON/Markdown output or exit-code handling.
+  Allowlisted roots such as evidence, release checklist, corridor, source
+  inventory, artifacts, and submission surfaces must be shape-checked before
+  copying so hostile scalar or list payloads cannot leak through an otherwise
+  public field name. Unknown top-level report fields, including sensitive and
+  non-string keys, must be classified and stripped before output so copied
+  values cannot leak and mixed-key reports cannot crash sorted JSON rendering.
+  The public JSON-root and blocker-list schema inventories must pin the report
+  sanitizer and CLI adversarial tests.
+- SCCP release-readiness Markdown lane rows must stay traceback-safe even when
+  copied all-lanes summaries are malformed: non-object rows must render as
+  blocked rows with `lane summary must be an object`, all record flags set to
+  `no`, and no raw copied operator text. The readiness Markdown source
+  inventory must pin the renderer helper plus generator and strict-verifier
+  adversarial tests.
+- SCCP release-readiness Markdown cryptographic-evidence rows must also stay
+  traceback-safe: non-object rows and malformed public scalar/audit-key values
+  must render as safe placeholder cells or invalid audit markers without raw
+  copied operator text. The readiness Markdown inventory must pin the safe
+  crypto-row cell helper plus generator and strict-verifier adversarial tests.
+- SCCP release-readiness Markdown user-prover submission-surface rows must
+  stay traceback-safe: non-object rows and noncanonical
+  lane/backend/helper/submission/phase/validation values must render as safe
+  invalid placeholders without raw copied operator text. The readiness
+  Markdown inventory must pin the safe user-prover row helper plus generator
+  and strict-verifier adversarial tests.
+- SCCP release-readiness Markdown native-prover bundle rows must stay
+  traceback-safe: non-object bundles and malformed
+  artifact path/hash/SDK/status/blocker fields must render as safe invalid
+  placeholders without raw copied operator text. The readiness Markdown
+  inventory must pin the safe native-prover row helper plus generator and
+  strict-verifier adversarial tests.
+- SCCP release-readiness Markdown source-inventory rows must stay
+  traceback-safe: non-object roots, malformed gate names, scalar gate payloads,
+  invalid statuses, and malformed blocker containers must render as generic
+  object-shape blockers or invalid markers without raw copied operator text.
+  The readiness Markdown inventory must pin the safe source-inventory row helper
+  plus generator and strict-verifier adversarial tests.
+- SCCP release-readiness Markdown release-checklist rows must stay
+  traceback-safe: non-object checklist roots, non-object item rows, malformed
+  item ids, and malformed blocker containers must render as object-shape
+  blockers or invalid markers without raw copied operator text. The readiness
+  Markdown inventory must pin the safe release-checklist row helper plus
+  generator and strict-verifier adversarial tests.
+- SCCP release-readiness Markdown evidence-input and production-corridor rows
+  must stay traceback-safe: malformed artifact rows, unsafe paths,
+  noncanonical hashes, non-object corridor roots, malformed phase keys, and
+  invalid phase statuses must render as invalid markers or empty artifact
+  cells without raw copied operator text. The readiness Markdown inventory must
+  pin the safe input/corridor row helpers plus generator and strict-verifier
+  adversarial tests.
+- SCCP release-readiness Markdown collection roots must stay traceback-safe:
+  malformed cryptographic-evidence, user-prover surface, top-level evidence, or
+  `evidence.lanes` roots must render bounded placeholder rows instead of
+  exceptions or raw copied operator text. The readiness Markdown inventory must
+  pin the safe collection-root helpers plus generator and strict-verifier
+  adversarial tests.
+- SCCP release-readiness Markdown top-level status must fail closed: missing
+  `production_ready`, truthy-string `production_ready`, or scalar copied report
+  roots must render `Status: NOT READY` with bounded placeholder sections
+  instead of exceptions or raw copied operator text. The readiness Markdown
+  inventory must pin the status helper plus generator adversarial tests.
+  The engineering backlog no longer lists the endpoint-redaction,
+  all-lanes/readiness public-summary, bounded Markdown row, active checklist,
+  native-artifact, manifest, release-notes, phase-transcript, self-verifier,
+  and standalone strict-verifier summary items as open SCCP launch work because
+  their direct generator and strict-verifier adversarial regressions are green.
+  Native .NET proof-request canonical replay remains a Windows validation item
+  until a `.NET 8` SDK Windows host captures release evidence. On that Windows
+  machine, record `dotnet --version`, `dotnet --info`, OS version, RID, and CPU
+  architecture; run `dotnet restore csharp/Hyperledger.Iroha.Sdk.sln`; then run
+  `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Sccp" --logger "trx;LogFileName=sccp-dotnet-sdk.trx"`.
+  If Git Bash or WSL is available on the same Windows machine, also run
+  `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`. The
+  blocker clears only after the Windows result counts and TRX/corridor log
+  paths are recorded in `status.md`; fixture parity or a non-Windows run must
+  not be treated as final release evidence for this item.
 - SCCP all-lanes governed evidence blockers must stay schema-aware: destination
   rollout and route allowlist `blockers` fields must be empty lists of
   non-empty canonical strings, and scalar, empty, padded, or non-string entries
@@ -2954,11 +3225,16 @@ and completed history lives in [`status.md`](./status.md).
   live-route-canary blockers in readiness and strict bundle recomputation.
   Route-canary receipt block numbers must also stay exact positive integers:
   numeric-looking strings, hex text, plus-signed text, Unicode-confusable text,
-  and booleans are release blockers, and `receipt_block_finalized` must be
-  exactly boolean `true`, not false, missing/null, truthy text, or numeric
-  values. `evidence_bound` must also be exact boolean `true`;
-  copied truthy strings, numeric values, false, and missing/null flags must
-  remain live-route-canary blockers in readiness and strict bundle
+  and booleans are release blockers, and `message_proof_used` plus
+  `receipt_block_finalized` must be exactly boolean `true`, not false,
+  missing/null, truthy text, or numeric values. Non-boolean copied
+  `message_proof_used` and `receipt_block_finalized` values are explicit schema
+  blockers before the message-proof-used or finalized-receipt blocker is
+  emitted.
+  `evidence_bound` must also be exact boolean `true`; non-boolean copied values
+  are schema blockers before the not-bound blocker is emitted; copied truthy
+  strings, numeric values, false, and missing/null flags must remain
+  live-route-canary blockers in readiness and strict bundle
   recomputation.
   Source-inventory tests must also keep the transaction hash, receipt-block
   hash/root, message-id, positive block-number, finalized-block, and adversarial
@@ -3086,7 +3362,10 @@ and completed history lives in [`status.md`](./status.md).
 	  bundle readiness. The release bundle builder also runs those verifier-owned
 	  transcript checks against copied phase artifacts before Markdown rendering or
 	  public JSON writes, so dry-run, missing, unreadable, or forged copied phase
-	  logs cannot publish before final bundle verification.
+	  logs cannot publish before final bundle verification. Malformed phase
+	  artifact rows must now fail closed with category-only transcript blockers
+	  before either the readiness generator or strict verifier opens a transcript
+	  path.
 - SCCP release readiness now treats release bundle source-copy preflights as a
   production gate: bundle CLI regressions must continue rejecting symlinked or
   control-character evidence inputs, duplicate evidence input sources including
@@ -3172,7 +3451,10 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP release-bundle manifest readiness flags must preserve exact report
   booleans: bundle generation must not truthy-coerce malformed
   `production_ready`, `release_checklist.ready`, or corridor readiness values
-  into public manifest `true` claims. Release-note status rendering, bundle
+  into public manifest `true` claims. Manifest extraction must also fail closed
+  for scalar `release_checklist`, scalar `corridor`, or malformed top-level
+  blocker payloads without crashing or serializing raw copied operator text.
+  Release-note status rendering, bundle
   preflight publication checks, verifier not-ready checks, and generated-bundle
   self-verification should only treat report `production_ready is True` as
   ready. Readiness Markdown row rendering must likewise use exact booleans for
@@ -3206,6 +3488,11 @@ and completed history lives in [`status.md`](./status.md).
   row-set binding, and blocker lines or invalid-marker bullets in a canonical
   blocker section, with no noncanonical trailing content, before the canonical
   attachment comparison runs.
+  Release-note artifact rows must also stay bounded: malformed artifact roots,
+  non-object artifact rows, unsafe paths, non-integer byte counts, and
+  noncanonical hashes must render invalid markers without raw copied operator
+  text, while the attachment artifact remains excluded from its own public
+  artifact table.
   The release bundle
   builder must validate the in-memory
   release-notes attachment with those verifier-owned invariants and canonical
@@ -8060,6 +8347,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC DELIVER delivery-entry commit-evidence delivered-pending wait-state handoff,
 	  RBC DELIVER delivery-entry commit-evidence complete continuation aggregate,
 	  RBC DELIVER delivery-entry commit-evidence continuation envelope aggregate,
+	  RBC DELIVER delivery-entry complete outcome envelope aggregate,
 	  RBC DELIVER commit-evidence branch handoff,
 	  RBC delivered-pending commit-evidence wait-state handoff,
 	  RBC delivered-pending named complete wait-state closure,
@@ -8116,6 +8404,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC delivered-pending spec-step stable-artifact RBC surface,
 	  RBC delivered-pending spec-step stable-artifact complete wait state,
 	  RBC delivered-pending spec-step complete handoff envelope aggregate,
+	  RBC delivered-state complete lifecycle envelope aggregate,
 	  Byzantine fault corruptible-RBC gate matching,
 	  Byzantine fault digest-only corruption step,
 	  RBC INIT gate repairable-state matching,
@@ -8128,6 +8417,7 @@ and completed history lives in [`status.md`](./status.md).
 	  live RBC header/digest handoff gating,
   live RBC chunk handoff gating,
   live RBC READY handoff gating,
+  RBC end-to-end lifecycle envelope aggregate,
   committed-phase terminality,
   committed consensus-state stability,
   committed post-finality GST-only movement,
@@ -8344,6 +8634,7 @@ and completed history lives in [`status.md`](./status.md).
   RBC delivered finality post-state gate split,
   RBC delivered finality pre-GST post-state gate branch,
   RBC delivered finality post-GST terminal branch,
+  RBC delivered finality certified commit envelope aggregate,
   post-finality pre-GST only-enabled gate invariant,
   post-finality pre-GST GST-elapsed terminalization,
   post-finality pre-GST Next/GST-elapsed exclusivity,
@@ -8931,8 +9222,10 @@ and completed history lives in [`status.md`](./status.md).
   envelope matching, and STARK/FRI registry admission applies the same
   trusted-setup label rejection even for keyless records. Verifier-key
   register/update admission also rejects developer-only labels containing
-  `debug` or `mock`, including legacy seeded records attempting to refresh
-  through update. IVM host verifier snapshots and Torii's
+  `debug`, `mock`, todo/draft/pending markers, or replace/not-for-production
+  sentinel aliases across the shared classifier and SDK mirrors, including
+  legacy seeded records attempting to refresh through update. IVM host verifier
+  snapshots and Torii's
   non-consensus proof/prover worker enforce the same trusted-setup and
   developer-only label policy before
   syscall proof verification or broad backend allowlist matching, and Torii
@@ -12430,13 +12723,29 @@ placeholder reuse; the source-material role validation release inventory now
 pins that detector regression directly. Standalone source-adapter deployment
 matching now reconstructs production source verifier material from the
 descriptor, so forged deployment evidence that replays built-in Solana template
-trust-anchor, consensus, message-inclusion, finality-policy, or source-state
-hashes remains fail-closed even when verifier evidence and adapter OpenVerify
-are rebuilt around the forged descriptor. The descriptor-only replay regression
-now also runs across ETH, BSC, Solana, TON, and TRON, proving standalone shape,
-material/deployment matching, and readiness all reject template role-hash
-replays for every active launch lane. Shared
-source-state proof admission now rejects opaque nonzero
+trust-anchor, consensus, message-inclusion, finality-policy, source-state,
+source-bridge emitter, or source-bridge config sentinels remains fail-closed
+even when verifier evidence and adapter OpenVerify are rebuilt around the
+forged descriptor. The descriptor-only replay regression now also runs across
+ETH, BSC, Solana, TON, and TRON, proving standalone shape,
+material/deployment matching, and readiness all reject template role replay for
+every active launch lane. Source-adapter verifier commitment coverage now also
+pins malformed source-verifier evidence after OpenVerify rebuilds, source-domain
+profile drift, deployment-hash pairs without deployment-bound source roles,
+material-only lane-role drift, and the Solana deployment-bound source-state
+drift regression in the source-material role validation inventory. The detailed
+engineering backlog no longer lists the all-lanes deployment
+source-role shape, source-adapter deployment template-hash, public
+source-adapter gate template-replay, malformed outer-envelope verifier
+commitment, or material-only catalog-matching items as open work because their
+direct all-lanes/release-inventory regressions are green.
+Source-gate audit transcripts now also bind the source-adapter verifier-key
+hash and deployment receipt hash explicitly for Solana/TON, and the deployment
+receipt hash explicitly for TRON, so receipt drift changes the governed gate
+hash even when the descriptor remains structurally well-formed. The Python
+source-state/source-bridge/all-lanes/release-bundle tooling now mirrors that
+receipt-bound transcript and pins matching adversarial receipt-drift vectors.
+Shared source-state proof admission now rejects opaque nonzero
 bytes and requires canonical STARK OpenVerify/FastPQ capsules before lane-local
 verification work, and the Solana/TON source-state transcript hash helpers now
 reuse the same canonical-envelope gate before audit-statement binding.
@@ -12453,16 +12762,27 @@ verifies the adapter FastPQ proof and adapter transcript before returning that
 commitment. The lower adapter verification proof gate now also rejects malformed
 source-verifier evidence shape before accepting a rebuilt OpenVerify wrapper, so
 unpaired deployment hashes, unpaired deployment receipts, and zero adapter proof
-or transcript evidence cannot regain a public verifier commitment by recomputing
-the wrapper around the forged evidence hash. The helper now also rejects
+or transcript evidence, plus source-domain profile drift in the evidence
+source-chain label, proof plan, finality model, or adapter circuit id, cannot
+regain a public verifier commitment by recomputing the wrapper around the forged
+evidence hash. Evidence that carries source-adapter deployment hashes must also
+carry the required deployment-bound source-state verifier or source bridge
+emitter role shape, so a deployment hash pair cannot mask missing or template
+lane roles. Solana deployment-bound verifier evidence now also rejects
+shape-valid source-state hash drift after the OpenVerify wrapper is rebuilt,
+keeping audited source-state material pinned to the source-adapter deployment
+descriptor rather than only to the common evidence shape. All-lanes governed
+source-adapter deployment evidence now reports
+those deployment-side source-role shape blockers independently, even if paired
+source material is malformed in the same way. The helper now also rejects
 malformed outer source-proof envelopes before returning a verifier commitment,
 even if the adapter transcript and OpenVerify wrapper are retargeted around
 outer version drift, zero finality height, source-event digest drift, or an
 empty inclusion branch. Material-only evidence must also match the built-in
 source-material catalog exactly before that helper returns a verifier
-commitment, so shape-valid source-chain label, trust-anchor, consensus-id, or
-message-inclusion hash drift cannot be normalized by rebuilding the wrapper
-around a forged evidence hash.
+commitment, so shape-valid trust-anchor, consensus-id, message-inclusion hash,
+or finality-policy id drift cannot be normalized by rebuilding the wrapper around
+a forged evidence hash.
 Deployment-bound transparent proof recovery is now typed for governed
 source-material plus source-adapter deployment evidence. The strict helper keeps
 the destination manifest gate closed until rollout, while the local-admission
@@ -12473,10 +12793,11 @@ serialized finality-proof bytes must match the requested source and target
 domains and pass exact governed material plus source-adapter deployment
 verification before a recovered envelope is returned. ETH/BSC/TRON mainnet
 recovery helpers, plus audited Solana/TON mainnet helpers, reject material-only
-envelopes, copied cross-domain bytes, non-SORA targets, and replayed deployment
-receipts before operator or SDK code can treat the bytes as production evidence,
-and the TRON facade stays pinned to the transaction-Merkle source-call proof
-path. Solana/TON audited source-adapter deployment builders now construct the
+envelopes, copied cross-domain bytes, non-SORA proof targets, non-SORA audited
+deployment targets, and replayed deployment receipts before operator or SDK
+code can treat the bytes as production evidence, and the TRON facade stays
+pinned to the transaction-Merkle source-call proof path. Solana/TON audited
+source-adapter deployment builders now construct the
 full-light-client deployment records directly from governed role hashes and
 reject wrong-lane material, zero audit hashes, duplicate audit roles, and audit
 hashes replayed from existing source material.
@@ -12508,21 +12829,34 @@ and submission-package builders now apply the same bundle-to-manifest
 counterparty binding before deriving statements or relay envelopes, so inbound
 SORA-target messages cannot be packaged under another remote lane's manifest.
 Rust EVM/TRON Groth16 proof-request builders now reject non-canonical bundle
-bytes, bundle/public-input mismatches, and omitted source-proof witness bytes
-for non-SORA source bundles before local UI proving or wrapped proof-result
-submission. The Rust TON native-recursive
-proof-request builder and proof-result wrapper now apply the same canonical
-SCCP bundle/public-input/source-proof gate before local proof generation or
-wallet/liteserver packaging, and the JavaScript, Python, Swift, Kotlin/JVM, and
+bytes, bundle/public-input mismatches, omitted source-proof witness bytes, and
+canonical but mismatched source-proof bytes for non-SORA source bundles before
+local UI proving or wrapped proof-result submission. The Rust TON
+native-recursive proof-request builder and proof-result wrapper now apply the
+same canonical SCCP bundle/public-input/source-proof gate before local proof
+generation or wallet/liteserver packaging, including canonical-but-mismatched
+source-proof replay attempts. The JavaScript, Python, Swift, Kotlin/JVM, and
 Java Android SDK TON request paths now mirror that gate before local prover
 callbacks or wrapped-result submission.
-Python EVM-family and TRON Groth16 request construction now mirrors the
-canonical SCCP bundle/public-input gate as well: valid fixtures carry decoded
-canonical bundle bytes, request hashes commit to those bytes, wrapped-result
-tests use request-bound Groth16 proof tuples, and adversarial tests reject
-arbitrary noncanonical bundle bytes, bundle/public-input mismatches, and
-bundle source-domain drift before local prover callbacks or production wrapper
-canonicality checks.
+JavaScript, Python, Swift, Kotlin/JVM, Java Android, and native .NET
+EVM-family and TRON Groth16 request construction now mirror the canonical SCCP
+bundle/public-input gate as well: valid fixtures carry decoded canonical
+bundle bytes, request hashes commit to those bytes, wrapped-result tests use
+request-bound Groth16 proof tuples, and adversarial tests reject arbitrary
+noncanonical bundle bytes, bundle/public-input mismatches, bundle
+source-domain drift, and copied canonical source-chain envelopes from other
+same-lane bundles before local prover callbacks or production wrapper
+canonicality checks. The strict release inventory pins those replay markers
+across the native SDKs; the native .NET fixture now reproduces the embedded
+canonical source proof byte-for-byte, but still needs Windows `.NET 8` runtime
+validation before final release evidence. The Windows handoff is: capture
+`dotnet --version` and `dotnet --info`, run
+`dotnet restore csharp/Hyperledger.Iroha.Sdk.sln`, run
+`dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Sccp" --logger "trx;LogFileName=sccp-dotnet-sdk.trx"`,
+and, when Git Bash or WSL is present, run
+`bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`; record the
+Windows OS/RID/architecture, pass/fail counts, and log artifact paths in
+`status.md` before clearing the SCCP .NET replay blocker.
 SORA-origin message bundle validation, public-input derivation, package
 builders, proof-job builders, transparent-proof builders, and final
 transparent-proof verification now reject source verifier material and
@@ -13763,9 +14097,11 @@ or ABI behavior.
 	  sets before key shapes, so malformed profiles cannot reach decomposition
 	  math through direct secret/public/rotation/evaluation/bootstrap key checks,
 	  bootstrap-key validators reject declared round-refresh count mismatches
-	  before inspecting refresh ciphertext shapes, refresh-only bootstrap
-	  transcript/proof-statement validation rejects stale public-key digest
-	  metadata, and parameter validation now uses checked raw/scaled exact-arithmetic products instead of saturating
+	  before inspecting refresh ciphertext shapes, refresh-only bootstrap direct
+	  execution rejects inert public-key digest metadata while
+	  transcript/proof-statement validation rejects stale or placeholder
+	  public-key digest metadata, and parameter validation now uses
+	  checked raw/scaled exact-arithmetic products instead of saturating
 	  accumulator guards.
   Key-owner diagnostics now also verify that generated public rotation and
   bootstrap refresh ciphertexts decrypt to zero under the matching secret key,
@@ -13826,8 +14162,10 @@ or ABI behavior.
 		  bounded-noise zero-refresh for `RefreshOnlyV1`, or full material for
 		  `FullBootstrapV1`. Full-bootstrap
 	  refresh transcript digesting omits deterministic zero-refresh bootstrap
-	  transcript seeds, and Core rejects missing, mismatched, stale, or cross-mode
-	  policy statement bindings before execution. The data model now also exposes a
+	  transcript seeds while still checking the bootstrap public-key digest against
+	  the supplied public key, and Core rejects missing, mismatched, stale, or
+	  cross-mode policy statement bindings before execution. The data model now
+	  also exposes a
 	  distinct full-bootstrap material proof attachment with canonical
 	  STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
 	  verifier-key commitment, statement public input, and envelope-hash checks, so
@@ -13873,10 +14211,11 @@ or ABI behavior.
 							  public bound propagation that consume those governed selector schedules
 							  directly. The sample-extraction artifact now carries typed source/output
 							  ciphertext shape and extracted-coefficient metadata, rejects opaque,
-							  wrong-slot-count, bad-component-count, or out-of-range payloads, and crypto
-							  can extract the selected RLWE coefficient into a raw LWE-style sample whose
-							  decrypt matches the selected `c0 + c1 * s` coefficient under the existing
-							  secret polynomial basis, with exact and bounded raw-sample bound propagation.
+							  wrong-slot-count, bad-component-count, or out-of-range payloads. Raw
+							  LWE-style sample extraction, validation, and exact/bounded raw-sample bound
+							  helpers are crate-private, so canonical trace reconstruction can still
+							  extract the selected `c0 + c1 * s` coefficient internally without exposing
+							  a standalone raw-sample proof-material API.
 							  Crypto now composes the governed coefficient-to-slot, blind-rotation, and
 							  raw sample-extraction artifacts into an exact/bounded execution-prefix trace
 							  with propagated bounds, coefficient-zero diagnostic repack output,
@@ -13885,12 +14224,14 @@ or ABI behavior.
 							  exact/bounded final-output entry points now execute that prefix or its bound
 							  propagation through governed sample-switch and slot-to-coefficient output,
 							  so missing Galois keys and malformed executable artifacts fail before
-							  output. Crypto also exposes an explicit coefficient-zero raw-sample repack
-							  diagnostic bridge with exact and bounded coefficient-zero bounds, plus
-							  deterministic exact and bounded raw-sample switch-key material,
-							  secret-consistency checks, switch execution, public bound propagation,
-							  governed artifact carriage, and artifact-aware full-bootstrap output/bound
-							  helpers that run through slot-to-coefficient. Full-bootstrap
+							  output. The coefficient-zero raw-sample repack diagnostic bridge and its
+							  exact/bounded coefficient-zero bounds are crate-private, so external
+							  callers cannot treat that bridge as a standalone output API.
+							  Deterministic exact and bounded raw-sample switch-key material,
+							  secret-consistency checks, governed artifact carriage, and artifact-aware
+							  full-bootstrap output/bound helpers still run through slot-to-coefficient;
+							  standalone switch execution and switch-output bound helpers are
+							  crate-private internal trace stages. Full-bootstrap
 							  artifact-bundle validation now requires executable sample-extraction
 							  switch-key material rather than accepting metadata-only sample-extraction
 							  payloads in the governed bundle. Direct no-artifact registered entrypoints
@@ -13923,7 +14264,13 @@ or ABI behavior.
 							  wrappers fail as bad requests before reaching Core. Data-model and Core
 							  `OpenVerifyEnvelope` admission now also reject all-zero native STARK
 							  envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
-							  material, and full-bootstrap execution proofs, and data-model proof
+							  material, and full-bootstrap execution proofs, while the shared
+							  data-model OpenVerify admission guard rejects non-empty all-zero outer
+							  proof bytes and, after enforcing configured public-input byte bounds,
+							  all-zero public-input metadata before any backend verifier dispatch;
+							  Core STARK verifier-dispatch and preverify coverage now pin those
+							  generic rejections before backend-native proof decoding or dedup/cache
+							  admission. Data-model proof
 							  envelopes plus FHE parameter-set, execution-policy, Soracloud
 							  uploaded-model, private-execution, agent-apartment/autonomy,
 							  training metrics, HF source/shared-lease/violation evidence,
@@ -13991,8 +14338,9 @@ or ABI behavior.
 								  available. Execution native-AIR builder replay also rejects trace-root,
 								  composition-root, and FRI base-root drift before BFV-native proof
 								  wrapping, and the active release-prover execution verifier path rejects
-								  the same composition-root and FRI base-root drift before native proof
-								  acceptance. Crypto-side AIR evaluation validation now recomputes the
+								  the same composition-root and FRI base-root drift plus duplicated or
+								  truncated sampled public-opening sets before native proof acceptance.
+								  Crypto-side AIR evaluation validation now recomputes the
 								  trace-bound composition vector before accepting release-prover input
 								  material. The `zk-preverify` path now has poisoned-cache regressions
 								  for input-admission and bootstrap-key native AIR drift plus
@@ -14148,6 +14496,9 @@ or ABI behavior.
 								  tests also pin the Soracloud FHE public-input schema hashes that
 								  verifier records use for input admission, bootstrap-key proof,
 								  full-bootstrap material proof, and full-bootstrap execution proof gates.
+								  The input-admission schema now advertises the exact-residual and
+								  bounded-noise bound modes plus capacity validation under schema hash
+								  `1cf3dd56010dc765bd671004b1c9262499666ac1c1313573fceb59bae26d6caf`.
 								  The typed crypto schema and full-bootstrap execution schema now advertise
 								  artifact-bound release-prover input validation plus stale
 								  Galois-key-set replay and stale proof-key artifact rejection.
@@ -14155,7 +14506,7 @@ or ABI behavior.
 								  its proof-profile record with field count 27, native proof-circuit
 								  fingerprint material binds the same guarantees with field count 32,
 								  and the current execution schema hash is
-								  `926f4131b1b9853e4f42ba879f01380b8319db18dc430bcf0d707a6ea6e5308b`.
+								  `a05774949fd76135dd5600351e8b6d097c51133832812e1c1594f09215f73de9`.
 								  Bootstrap-key zero-refresh proof statements now also encode a v1
 								  statement-material header plus bootstrap refresh-round count,
 								  zero-refresh digest, and indexed per-round refresh digests, and the
@@ -14216,9 +14567,11 @@ or ABI behavior.
 								  coefficient rows as private witness rows, public deterministic padding
 								  rows, and the rules that transparent native proofs must not open unmasked
 									  private rows or duplicate sampled public rows; Crypto's public
-									  padding-row helpers now reject zero statement hashes before constructing
+									  padding-row helpers now reject zero, direct-placeholder, and
+									  leading-whitespace delayed-placeholder statement hashes before constructing
 									  or validating verifier-facing openings, and Core's native BFV AIR
-										  boundary also validates opened public padding rows against canonical
+										  public-padding verifier shares that gate while validating opened
+										  public padding rows against canonical
 										  statement/slot/mode headers and rejects zero statement hashes,
 										  empty/all-zero AIR roots, or auxiliary generic composition-value
 										  commitments before the dedicated verifier fallback.
@@ -14254,6 +14607,12 @@ or ABI behavior.
 								  release audit package against governed material, concrete artifacts, the
 								  caller-trusted reviewer id/key, and caller-pinned package digest, including
 								  zero and known placeholder pinned-digest rejection; the
+								  lower crypto layer now also offers release-audit-gated exact and bounded
+								  artifact-aware execution and bound helpers that enforce the same trusted
+								  reviewer and caller-pinned package digest boundary before output or bound
+								  derivation, and Core's release-audited execution prover recomputes
+								  caller-supplied outputs and bounds through those audited helpers before
+								  native proof construction;
 								  internal typed prover-input path still requires the caller-supplied
 								  verifier key to match the verifier proof key embedded in the release
 								  prover package. Core now canonicalizes governed
@@ -14282,9 +14641,11 @@ or ABI behavior.
 									  release tooling.
 								  Core typed material proof helpers now derive and validate typed
 								  material before emitting a material-native STARK/FRI proof; the
-								  hash-only material constructor remains fail-closed at the
-								  dedicated-prover boundary. The test-only typed execution proof helper also
-								  derives and validates the canonical
+								  hash-only material/execution constructors are crate-scoped internal
+								  compatibility helpers that remain fail-closed at the dedicated-prover
+								  boundary, leaving release-audit-gated entry points as the public production
+								  prover surfaces. The test-only typed execution proof helper also derives
+								  and validates the canonical
 									  row-major arithmetic trace material from proof input, so stale governed
 									  material, witness, statement material, or native trace rows are rejected
 									  before proof generation is attempted. The native AIR fixture path now
@@ -14292,7 +14653,12 @@ or ABI behavior.
 									  caller-validated trace rows and explicit typed AIR evaluation
 									  composition values, and the Soracloud release-prover handoff builds
 									  that BFV-native envelope directly from
-									  `BfvFullBootstrapExecutionProverInputMaterialV1`. The active Soracloud
+									  `BfvFullBootstrapExecutionProverInputMaterialV1`. The AIR residual
+									  evaluator now validates every opened row coordinate as a canonical
+									  Goldilocks field element before returning the first nonzero
+									  coordinate residual, so malformed tail coordinates cannot be masked by
+									  an earlier mismatch and coordinated same-row trace drifts cannot cancel
+									  back to the zero-composition vector. The active Soracloud
 									  verifier path now reconstructs the governed arithmetic trace and AIR
 									  evaluation material from the public execution proof input and rejects
 									  trace/composition root drift plus opened rows, next rows, or composition
@@ -14300,32 +14666,42 @@ or ABI behavior.
 									  Merkle/FRI validation or the dedicated-verifier fallback. The BFV AIR
 									  composition challenge stream now binds the public statement hash,
 									  canonical row-major trace-material digest, row index, and column
-									  index, remaps zero challenges to one, and the typed AIR contract plus
-									  data-model Soracloud execution proof public-input schema advertise
-									  that exact challenge domain and binding policy with AIR material field
-									  count 32 and refreshed stable schema hashes. The shared explicit STARK AIR
+									  index, reduces the full 32-byte digest into Goldilocks, remaps zero
+									  challenges to one, rejects zero, direct-placeholder, or
+									  leading-whitespace delayed-placeholder digest inputs before challenge
+									  reduction, and the typed AIR contract plus data-model
+									  Soracloud execution proof public-input schema advertise that exact
+									  challenge domain and binding policy with AIR material field count 33
+									  and refreshed stable schema hashes. The shared explicit STARK AIR
 									  builder now self-verifies generated row/composition envelopes before
 									  returning proof bytes to BFV native AIR callers, and the Soracloud
 									  release-prover handoff replays encoded envelope bytes against the exact
 									  typed trace rows and AIR evaluation composition values before returning
-										  proof bytes. Core material native-AIR replay regressions now also pin
+									  proof bytes, while the lower-level BFV native AIR proof builder is
+									  crate-scoped so public proof generation remains on Soracloud's
+									  artifact-bound release-prover path. Core material native-AIR replay
+									  regressions now also pin
 										  composition-root reconstruction drift, FRI
 										  base-root/composition-root mismatch, and sampled governed-material
 										  opening row, next-row, and composition-value drift before wrapping
 										  material proof bytes. Core execution native-AIR replay now likewise
-											  requires governed trace rows and AIR composition values at the lower
-											  BFV boundary before root reconstruction or verifier fallback. Release-audit
+											  uses the crypto-canonical execution AIR domain tag with bounded
+											  transcript-label attempts, and requires governed trace rows and AIR composition values at the lower
+											  BFV boundary before root reconstruction, sampled row-path
+											  shape/root, duplicate/truncated opening-set replay,
+											  first-layer FRI replay, or verifier fallback. Release-audit
 											  trust anchors now reject non-Ed25519 reviewer keys across signoff, record,
 											  manifest, and package validation, and the Soracloud full-bootstrap schemas
 											  advertise the Ed25519 reviewer-key requirement. Release-audit artifact
 											  bodies now reject delayed nested audit report/archive headers anywhere in
-											  the body, and the schemas advertise the delayed nested-header digest/body
-											  rejection gates.
+											  the body, while digest-only schema claims stay limited to exact known
+											  nested-header sentinels that do not require inspecting unknown preimages.
 									  Remaining native-AIR
 									  production work is the BFV arithmetic proof-producing backend plus
 									  release-grade generated prover/verifier artifacts and audit evidence,
 									  not hand-built roots, openings, unbound
-									  composition vectors, or statement-only composition challenges.
+									  composition vectors, statement-only composition challenges, or
+									  prefix-truncated composition challenge reduction.
 									  Crypto release tooling can now derive governed full-bootstrap circuit
 									  material directly from concrete artifact bundles by recomputing every
 									  artifact digest, proof-key material commitment, and generated pair
@@ -14394,6 +14770,7 @@ or ABI behavior.
 										  canonical trace/AIR digest sentinel rejection,
 										  arithmetic-trace, AIR contract material/digest binding,
 										  typed-witness, typed AIR evaluation material trace-digest sentinel rejection,
+										  manifest-level generated-circuit body digest binding,
 										  audited release-package wrapper, release-audit transcript-inventory
 										  preflight, native AIR, attachment-finalization,
 										  statement-recomputation, verifier-record/verifier-artifact admission-floor,
@@ -14468,7 +14845,10 @@ or ABI behavior.
   outputs. Direct key-switch component decomposition and digit
   basis-extension helpers now enforce source/target decomposition-base
   coverage before malformed polynomial shapes can mask the public chain
-  descriptor failure.
+  descriptor failure. Exact, target-limb, and digit basis-extension helpers now
+  validate their constructed RNS polynomial outputs against the target chain
+  before returning, keeping malformed target residues from escaping future
+  basis-conversion changes.
   Rounded ciphertext multiplication now has an RNS exact raw-product bridge
   that decomposes ciphertext components as centered residues, reconstructs
   signed negacyclic products before `t/q` scale-and-rounding, and relinearizes
@@ -14732,8 +15112,9 @@ or ABI behavior.
   the public `iroha_crypto` constants.
   Verifier-backed bounded-noise
   FHE input-admission envelopes now persist bounded metadata after
-  bound-capacity, statement-hash, shared `OpenVerifyEnvelope` admission-shape,
-  active-verifier, and backend proof checks; the data-model proof validator now
+  bound-capacity, statement-hash, shared `OpenVerifyEnvelope` admission-shape
+  including size-first all-zero public-input rejection, active-verifier, and
+  backend proof checks; the data-model proof validator now
   also rejects exact and bounded-noise input-admission bounds that exceed
   registered RAM-LFE BFV capacity before runtime admission, and persisted FHE
   state rows now reject exact or bounded bound metadata that exceeds the same
@@ -14771,6 +15152,9 @@ or ABI behavior.
   recomputes the actual payload length and payload commitment before BFV shape
   checks, statement-hash derivation, envelope validation, or verifier lookup, so
   direct helper use cannot bypass mutation-executor payload metadata binding.
+  Core input-admission regressions now also mutate the proven bound value and
+  bound mode independently, proving both public bound fields are statement-bound
+  before verifier lookup.
   FHE job execution admission now computes deterministic
   output payload-size projections with checked `u64` arithmetic and rejects
   overflow before comparing the projection with `max_ciphertext_bytes`; the
@@ -14808,6 +15192,9 @@ or ABI behavior.
   ciphertext-shape validation, registered identifier slot-cap enforcement, and
   residual-capacity check before core persists their residual metadata; FHE job
   input loading applies the same slot cap to persisted rows before execution.
+  Persisted FHE rows with public bound metadata must now explicitly advertise
+  exact-residual or bounded-noise semantics, and bound-only legacy/corrupt rows
+  fail closed before execution.
   Public production circuit and governed key-material
   rollout for that noise-admission proof remains part of the pending BFV-RNS
   engine.
@@ -14941,8 +15328,9 @@ or ABI behavior.
 			  public refresh ciphertext. Full bootstrapping circuit/key-material
 	  commitments now have a Rust admission/digest/proof-statement surface,
   artifact-aware execution path, verifier-backed Core fixtures, and a
-  data-model material proof envelope, while audited prover/verifier artifact
-  vectors remain an open release item.
+  data-model material proof envelope, with manifest-level generated-circuit
+  body digest binding in release-audit packages, while audited prover/verifier
+  artifact vectors remain an open release item.
 - Keep Soracloud FHE governance parameter fixtures runtime-bound instead of
   descriptor-only. The canonical parameter-set, execution-policy, governance
   bundle, and job-spec fixtures now target the registered `bfv-default`
@@ -14959,7 +15347,10 @@ or ABI behavior.
   coverage before invalid refresh rounds, no-op packed rotations, or
   key-switch schedules can short-circuit validation, and indexed Bootstrap
   refresh helpers preflight requested round capacity before malformed
-  ciphertext shapes enter the addition path.
+  ciphertext shapes enter the addition path. Exact and bounded plaintext-mask
+  selector products are now pinned in the same preflight corridor tests, so
+  packed-rotation public mask products cannot hide a too-narrow product chain
+  behind malformed ciphertext diagnostics.
   Bounded exact-RNS ciphertext multiplication now uses the same exact
   evaluator-chain preflight before operand or relinearization-key shape checks.
   Bounded target-limb basis-extension execution wrappers now share one

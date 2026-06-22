@@ -1027,6 +1027,8 @@ object SccpSourceProofs {
         writeVector(out, SccpSolana.MAINNET_GENESIS_HASH.toByteArray(StandardCharsets.UTF_8))
         out.write(hex32Bytes(materialHash, "sourceVerifierMaterialHash"))
         out.write(hex32Bytes(deploymentHash, "sourceAdapterDeploymentHash"))
+        out.write(adapterVerifierVkHashBytes)
+        out.write(deploymentReceiptHashBytes)
         verifierHashes.forEach { (verifierId, verifierHash) ->
             writeVector(out, verifierId.toByteArray(StandardCharsets.UTF_8))
             out.write(verifierHash)
@@ -1088,6 +1090,12 @@ object SccpSourceProofs {
                     "tonShardAccountsDictionaryVerifierHash",
                 ),
         )
+        val adapterVerifierVkHashBytes = hex32Bytes(
+            adapterVerifierVkHash?.let { normalizeHex32(it) }
+                ?: sourceAdapterVerifierVkHash(normalizedSourceDomain, normalizedTargetDomain),
+            "adapterVerifierVkHash",
+        )
+        val deploymentReceiptHashBytes = nonZeroHex32Bytes(deploymentReceiptHash, "deploymentReceiptHash")
         requireTonFullLightClientAuditRoleSeparation(
             verifierHashes,
             listOf(
@@ -1096,15 +1104,11 @@ object SccpSourceProofs {
                 material.messageInclusionVerifierHash,
                 material.finalityPolicyHash,
                 material.sourceStateVerifierHash,
-                hex32Bytes(
-                    adapterVerifierVkHash
-                        ?: sourceAdapterVerifierVkHash(normalizedSourceDomain, normalizedTargetDomain),
-                    "adapterVerifierVkHash",
-                ),
+                adapterVerifierVkHashBytes,
                 material.sourceBridgeEmitterCodeHash,
                 material.sourceBridgeNetworkId,
                 material.sourceBridgeConfigHash,
-                nonZeroHex32Bytes(deploymentReceiptHash, "deploymentReceiptHash"),
+                deploymentReceiptHashBytes,
             ),
         )
         val materialHash = sourceVerifierMaterialHash(
@@ -1153,6 +1157,8 @@ object SccpSourceProofs {
         out.write(material.sourceStateVerifierHash)
         out.write(hex32Bytes(materialHash, "sourceVerifierMaterialHash"))
         out.write(hex32Bytes(deploymentHash, "sourceAdapterDeploymentHash"))
+        out.write(adapterVerifierVkHashBytes)
+        out.write(deploymentReceiptHashBytes)
         verifierHashes.forEach { (verifierId, verifierHash) ->
             writeVector(out, verifierId.toByteArray(StandardCharsets.UTF_8))
             out.write(verifierHash)

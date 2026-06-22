@@ -1007,6 +1007,13 @@ def tron_dpos_source_gate_hash(
     payload.extend(material_hash)
     payload.extend(deployment_hash)
     payload.extend(adapter_verifier_vk_hash)
+    payload.extend(
+        _require_fixed_bytes(
+            args.deployment_receipt_hash,
+            label="deployment_receipt_hash",
+            byte_length=32,
+        )
+    )
     _push_vec(payload, TRON_SOURCE_TRUST_ANCHOR_ID.encode("utf-8"))
     payload.extend(source_trust_anchor_hash)
     _push_vec(payload, TRON_CONSENSUS_VERIFIER_ID.encode("utf-8"))

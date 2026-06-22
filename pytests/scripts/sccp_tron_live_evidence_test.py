@@ -710,6 +710,62 @@ def test_tron_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
             assert exception_type.__name__ not in captured.err
 
 
+def test_tron_live_cli_omits_runtime_endpoint_and_unknown_summary_fields(
+    monkeypatch,
+    capsys,
+):
+    module = load_live_module()
+
+    monkeypatch.setattr(
+        module,
+        "collect_live_evidence",
+        lambda _args: {
+            "tron_node_url": "https://tron.example.invalid/secret-token-provider",
+            "tron_pro_api_key": "runtime-secret-key",
+            "read_only": True,
+            "constant_endpoint": "wallet/secret-token-constant",
+            "transaction_info_endpoint": "wallet/secret-token-transaction-info",
+            "transaction_endpoint": "wallet/secret-token-transaction",
+            "block_endpoint": "wallet/secret-token-block",
+            "source_bridge": {"address": "TSource"},
+            "offline_evidence_args": ["--source-bridge-address", "TSource"],
+            "operator_note": "safe note",
+            "secret-token-summary": "secret-token-value",
+            7: "secret-token-int-key",
+        },
+    )
+
+    exit_code = module.main(
+        [
+            "--tron-node-url",
+            "https://tron.example.invalid/secret-token-provider",
+            "--source-bridge-address",
+            "TSource",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == {
+        "offline_evidence_args": ["--source-bridge-address", "TSource"],
+        "read_only": True,
+        "source_bridge": {"address": "TSource"},
+    }
+    assert "tron_node_url" not in payload
+    assert "tron_pro_api_key" not in payload
+    assert "constant_endpoint" not in payload
+    assert "transaction_info_endpoint" not in payload
+    assert "transaction_endpoint" not in payload
+    assert "block_endpoint" not in payload
+    assert "operator_note" not in payload
+    assert "secret-token-summary" not in payload
+    assert "7" not in payload
+    assert "secret-token" not in captured.out
+    assert "runtime-secret-key" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_tron_api_key_is_runtime_exact_ascii(tmp_path):
     module = load_live_module()
     key_file = tmp_path / "trongrid.key"

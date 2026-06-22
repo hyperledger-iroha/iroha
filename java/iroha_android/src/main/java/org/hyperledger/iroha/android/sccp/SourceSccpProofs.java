@@ -1399,6 +1399,8 @@ public final class SourceSccpProofs {
     writeVector(out, SOLANA_MAINNET_GENESIS_HASH.getBytes(StandardCharsets.UTF_8));
     write(out, hex32Bytes(materialHash, "sourceVerifierMaterialHash"));
     write(out, hex32Bytes(deploymentHash, "sourceAdapterDeploymentHash"));
+    write(out, adapterVerifierVkHashBytes);
+    write(out, deploymentReceiptHashBytes);
     for (int i = 0; i < verifierHashes.length; i++) {
       writeVector(out, verifierIds[i].getBytes(StandardCharsets.UTF_8));
       write(out, verifierHashes[i]);
@@ -1491,6 +1493,14 @@ public final class SourceSccpProofs {
             tonMasterchainConfigVerifierHash,
             tonValidatorSetTransitionVerifierHash,
             tonShardAccountsDictionaryVerifierHash);
+    final byte[] adapterVerifierVkHashBytes =
+        hex32Bytes(
+            adapterVerifierVkHash == null
+                ? sourceAdapterVerifierVkHash(normalizedSourceDomain, normalizedTargetDomain)
+                : normalizeHex32(adapterVerifierVkHash),
+            "adapterVerifierVkHash");
+    final byte[] deploymentReceiptHashBytes =
+        nonZeroHex32Bytes(deploymentReceiptHash, "deploymentReceiptHash");
 
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
@@ -1506,6 +1516,8 @@ public final class SourceSccpProofs {
     write(out, material.sourceStateVerifierHash);
     write(out, hex32Bytes(materialHash, "sourceVerifierMaterialHash"));
     write(out, hex32Bytes(deploymentHash, "sourceAdapterDeploymentHash"));
+    write(out, adapterVerifierVkHashBytes);
+    write(out, deploymentReceiptHashBytes);
     for (int i = 0; i < verifierHashes.length; i++) {
       writeVector(out, verifierIds[i].getBytes(StandardCharsets.UTF_8));
       write(out, verifierHashes[i]);
