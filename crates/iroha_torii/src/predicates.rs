@@ -63,7 +63,9 @@ use crate::filter::FilterExpr;
 pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
     // Map a JSON DSL filter into a typed predicate tree for committed transactions
     fn parse_acc(s: &str) -> Option<iroha_data_model::account::AccountId> {
-        s.parse().ok()
+        iroha_data_model::account::AccountId::parse_encoded(s)
+            .ok()
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
     }
     fn parse_hash(
         s: &str,

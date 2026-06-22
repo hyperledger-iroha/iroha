@@ -3,6 +3,10 @@ package org.hyperledger.iroha.sdk.sccp
 import java.io.ByteArrayOutputStream
 import org.bouncycastle.crypto.digests.KeccakDigest
 import org.hyperledger.iroha.sdk.crypto.Blake2b
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -11,6 +15,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TronSccpProverTest {
+    private val testSourceChainProofEnvelopeSchema =
+        "iroha_sccp::SccpSourceChainProofEnvelopeV1"
+
     @Test
     fun derivesTronRouteCanaryEvidenceHash() {
         val evidence = sampleTronRouteCanaryEvidence()
@@ -171,6 +178,34 @@ class TronSccpProverTest {
         }
         assertTrue(
             mismatchedNonSoraProof.message?.contains("sourceProofBytes must match bundleBytes finality proof") == true,
+        )
+        val replaySourceFixture = sampleBundleFixture(
+            sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+            nonce = 328L,
+        )
+        val replayBoundSourceFixture = sampleBundleFixture(
+            sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+            finalityProofBytes = testCanonicalSccpSourceProofBytes(
+                sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+                bundle = nonSoraBundle,
+            ),
+        )
+        val replayedCanonicalSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTron.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = replayBoundSourceFixture.publicInputs,
+                    bundleBytes = replayBoundSourceFixture.bundleBytes,
+                    sourceProofBytes = testCanonicalSccpSourceProofBytes(
+                        sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+                        bundle = replaySourceFixture,
+                    ),
+                ),
+            )
+        }
+        assertTrue(
+            replayedCanonicalSourceProof.message?.contains(
+                "sourceProofBytes must match bundleBytes finality proof",
+            ) == true,
         )
         val nonSoraBundleSource = assertFailsWith<IllegalArgumentException> {
             SccpTron.buildProofRequest(
@@ -743,15 +778,18 @@ class TronSccpProverTest {
     private fun sampleBundleBytes(
         sourceDomain: Int = SccpTron.DOMAIN_SORA,
         nonce: Long = 327L,
+        finalityProofBytes: ByteArray = byteArrayOf(0x01, 0x02, 0x03),
     ): ByteArray =
         sampleBundleFixture(
             sourceDomain = sourceDomain,
             nonce = nonce,
+            finalityProofBytes = finalityProofBytes,
         ).bundleBytes
 
     private fun sampleBundleFixture(
         sourceDomain: Int = SccpTron.DOMAIN_SORA,
         nonce: Long = 327L,
+        finalityProofBytes: ByteArray = byteArrayOf(0x01, 0x02, 0x03),
     ): SampleBundleFixture {
         val senderCodec = if (sourceDomain == SccpTron.DOMAIN_SORA) 1 else 2
         val sender = if (sourceDomain == SccpTron.DOMAIN_SORA) {
@@ -801,7 +839,7 @@ class TronSccpProverTest {
         writeTestBytes(bundle, commitmentBytes)
         writeTestBytes(bundle, merkleProof.toByteArray())
         writeTestBytes(bundle, payloadBytes)
-        writeTestBytes(bundle, byteArrayOf(0x01, 0x02, 0x03))
+        writeTestBytes(bundle, finalityProofBytes)
 
         return SampleBundleFixture(
             publicInputs = TronSccpPublicInputsInput(
@@ -814,6 +852,164 @@ class TronSccpProverTest {
             ),
             bundleBytes = bundle.toByteArray(),
         )
+    }
+
+    private data class TestSccpSourceChainProofEnvelope(
+        val sourceDomain: Int,
+        val targetDomain: Int,
+        val sourceChain: String,
+        val sourceProofPlan: Int,
+        val finalityModel: Int,
+        val messageId: String,
+        val payloadHash: String,
+        val sourceEventDigest: String,
+        val commitmentRoot: String,
+        val finalityHeight: Long,
+        val finalityBlockHash: String,
+        val finalizedHeaderHash: String,
+        val receiptOrMessageRoot: String,
+        val consensusProofBytes: ByteArray,
+        val messageInclusionProofBytes: ByteArray,
+        val inclusionBranch: List<ByteArray>,
+    )
+
+    private val testSourceChainProofAdapter = object : TypeAdapter<TestSccpSourceChainProofEnvelope> {
+        override fun encode(encoder: NoritoEncoder, value: TestSccpSourceChainProofEnvelope) {
+            writeTestNoritoField(encoder) { it.writeUInt(1, 8) }
+            writeTestNoritoField(encoder) { it.writeUInt(value.sourceDomain.toLong(), 32) }
+            writeTestNoritoField(encoder) { it.writeUInt(value.targetDomain.toLong(), 32) }
+            writeTestNoritoField(encoder) { writeTestNoritoString(it, value.sourceChain) }
+            writeTestNoritoField(encoder) { it.writeUInt(value.sourceProofPlan.toLong(), 32) }
+            writeTestNoritoField(encoder) { it.writeUInt(value.finalityModel.toLong(), 32) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.messageId.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.payloadHash.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.sourceEventDigest.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.commitmentRoot.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeUInt(value.finalityHeight, 64) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalizedHeaderHash.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.receiptOrMessageRoot.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, value.consensusProofBytes) }
+            writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, value.messageInclusionProofBytes) }
+            writeTestNoritoField(encoder) { writeTestNoritoRawByteVecSequence(it, value.inclusionBranch) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): TestSccpSourceChainProofEnvelope =
+            throw UnsupportedOperationException("test source proof decoding is not used")
+    }
+
+    private fun testCanonicalSccpSourceProofBytes(
+        sourceDomain: Int,
+        bundle: SampleBundleFixture,
+    ): ByteArray {
+        val publicInputs = bundle.publicInputs
+        return NoritoCodec.encode(
+            TestSccpSourceChainProofEnvelope(
+                sourceDomain = sourceDomain,
+                targetDomain = publicInputs.targetDomain,
+                sourceChain = testSourceChainKeyForDomain(sourceDomain),
+                sourceProofPlan = testSourceProofPlanForDomain(sourceDomain),
+                finalityModel = testFinalityModelForDomain(sourceDomain),
+                messageId = publicInputs.messageId,
+                payloadHash = publicInputs.payloadHash,
+                sourceEventDigest = testSccpSourceEventDigest(
+                    sourceDomain = sourceDomain,
+                    targetDomain = publicInputs.targetDomain,
+                    messageId = publicInputs.messageId,
+                    payloadHash = publicInputs.payloadHash,
+                ),
+                commitmentRoot = publicInputs.commitmentRoot,
+                finalityHeight = publicInputs.finalityHeight.toLong(),
+                finalityBlockHash = publicInputs.finalityBlockHash,
+                finalizedHeaderHash = "0x" + "55".repeat(32),
+                receiptOrMessageRoot = "0x" + "66".repeat(32),
+                consensusProofBytes = byteArrayOf(0x71, 0x72),
+                messageInclusionProofBytes = byteArrayOf(0x73, 0x74),
+                inclusionBranch = listOf(ByteArray(32) { 0x75.toByte() }),
+            ),
+            testSourceChainProofEnvelopeSchema,
+            testSourceChainProofAdapter,
+        )
+    }
+
+    private fun testSccpSourceEventDigest(
+        sourceDomain: Int,
+        targetDomain: Int,
+        messageId: String,
+        payloadHash: String,
+    ): String {
+        val payload = ByteArrayOutputStream()
+        payload.write(1)
+        writeTestU32Le(payload, sourceDomain)
+        writeTestU32Le(payload, targetDomain)
+        payload.write(hexBytes(messageId.removePrefix("0x")))
+        payload.write(hexBytes(payloadHash.removePrefix("0x")))
+        return "0x" + hexLower(
+            Blake2b.digest256("sccp:source:event:v1".toByteArray(Charsets.UTF_8) + payload.toByteArray()),
+        )
+    }
+
+    private fun testSourceChainKeyForDomain(domain: Int): String =
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH -> "eth"
+            SccpSourceProofs.DOMAIN_BSC -> "bsc"
+            SccpSolana.DOMAIN_SOLANA -> "sol"
+            SccpTon.DOMAIN_TON -> "ton"
+            SccpTron.DOMAIN_TRON -> "tron"
+            else -> throw IllegalArgumentException("unsupported source domain")
+        }
+
+    private fun testSourceProofPlanForDomain(domain: Int): Int =
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH -> 1
+            SccpSourceProofs.DOMAIN_BSC -> 2
+            SccpSolana.DOMAIN_SOLANA -> 3
+            SccpTon.DOMAIN_TON -> 4
+            SccpTron.DOMAIN_TRON -> 5
+            else -> throw IllegalArgumentException("unsupported source domain")
+        }
+
+    private fun testFinalityModelForDomain(domain: Int): Int =
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH -> 0
+            SccpSourceProofs.DOMAIN_BSC -> 1
+            SccpSolana.DOMAIN_SOLANA -> 2
+            SccpTon.DOMAIN_TON -> 3
+            SccpTron.DOMAIN_TRON -> 4
+            else -> throw IllegalArgumentException("unsupported source domain")
+        }
+
+    private fun writeTestNoritoField(
+        encoder: NoritoEncoder,
+        writePayload: (NoritoEncoder) -> Unit,
+    ) {
+        val child = encoder.childEncoder()
+        writePayload(child)
+        val payload = child.toByteArray()
+        encoder.writeLength(payload.size.toLong(), compact = true)
+        encoder.writeBytes(payload)
+    }
+
+    private fun writeTestNoritoString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), compact = true)
+        encoder.writeBytes(bytes)
+    }
+
+    private fun writeTestNoritoRawByteVec(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeLength(value.size.toLong(), compact = false)
+        encoder.writeBytes(value)
+    }
+
+    private fun writeTestNoritoRawByteVecSequence(encoder: NoritoEncoder, values: List<ByteArray>) {
+        encoder.writeLength(values.size.toLong(), compact = false)
+        values.forEach { value ->
+            val child = encoder.childEncoder()
+            writeTestNoritoRawByteVec(child, value)
+            val payload = child.toByteArray()
+            encoder.writeLength(payload.size.toLong(), compact = true)
+            encoder.writeBytes(payload)
+        }
     }
 
     private fun writeTestBytes(out: ByteArrayOutputStream, value: ByteArray) {

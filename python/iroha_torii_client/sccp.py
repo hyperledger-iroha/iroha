@@ -4601,6 +4601,8 @@ def _solana_full_light_client_gate_hash_for_material_and_deployment(
     out.extend(_write_string(SCCP_SOLANA_MAINNET_GENESIS_HASH, "solanaMainnetGenesisHash"))
     out.extend(_hex_to_bytes(sccp_source_verifier_material_hash(material), "sourceVerifierMaterialHash", 32))
     out.extend(_hex_to_bytes(sccp_source_adapter_engine_deployment_hash(deployment), "sourceAdapterDeploymentHash", 32))
+    out.extend(_hex_to_bytes(deployment["adapter_verifier_vk_hash"], "adapterVerifierVkHash", 32))
+    out.extend(_hex_to_bytes(deployment["deployment_receipt_hash"], "deploymentReceiptHash", 32))
     for role, verifier_hash in zip(audit_roles, audit_hashes):
         out.extend(_write_string(role["verifier_id"], "solanaAuditVerifierId"))
         out.extend(_hex_to_bytes(verifier_hash, "solanaAuditVerifierHash", 32))
@@ -11114,6 +11116,8 @@ def _ton_full_light_client_gate_hash_for_material_and_deployment(
             32,
         )
     )
+    out.extend(_hex_to_bytes(deployment["adapter_verifier_vk_hash"], "adapterVerifierVkHash", 32))
+    out.extend(_hex_to_bytes(deployment["deployment_receipt_hash"], "deploymentReceiptHash", 32))
     for role in (
         _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["masterchain_config"],
         _TON_FULL_LIGHT_CLIENT_AUDIT_ROLES["validator_set_transition"],
@@ -20402,6 +20406,16 @@ def sccp_solana_full_light_client_gate_hash(input_value: Any) -> str:
                         "sourceAdapterDeploymentHash",
                         32,
                     ),
+                    _hex_to_bytes(
+                        deployment["adapter_verifier_vk_hash"],
+                        "adapterVerifierVkHash",
+                        32,
+                    ),
+                    _hex_to_bytes(
+                        deployment["deployment_receipt_hash"],
+                        "deploymentReceiptHash",
+                        32,
+                    ),
                     _write_string(
                         SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
                         "solanaTowerReplayVerifierId",
@@ -20489,6 +20503,16 @@ def sccp_ton_full_light_client_gate_hash(input_value: Any) -> str:
             _hex_to_bytes(
                 sccp_source_adapter_engine_deployment_hash(deployment),
                 "sourceAdapterDeploymentHash",
+                32,
+            ),
+            _hex_to_bytes(
+                deployment["adapter_verifier_vk_hash"],
+                "adapterVerifierVkHash",
+                32,
+            ),
+            _hex_to_bytes(
+                deployment["deployment_receipt_hash"],
+                "deploymentReceiptHash",
                 32,
             ),
         )

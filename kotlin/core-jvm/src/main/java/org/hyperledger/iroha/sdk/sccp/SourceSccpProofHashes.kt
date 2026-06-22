@@ -22,6 +22,9 @@ object SccpSourceProofs {
     const val BSC_MAINNET_CHAIN_ID: Long = 56L
     const val BSC_MAINNET_NETWORK_ID: String =
         "0x0000000000000000000000000000000000000000000000000000000000000038"
+    const val BSC_TESTNET_CHAIN_ID: Long = 97L
+    const val BSC_TESTNET_NETWORK_ID: String =
+        "0x0000000000000000000000000000000000000000000000000000000000000061"
 
     private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private const val BSC_PARLIA_EXTRA_VANITY_BYTES: Int = 32
@@ -540,6 +543,48 @@ object SccpSourceProofs {
         networkId = networkId,
     ).hash
 
+    /** Governed BSC testnet destination binding for UI-side SCCP proof generation. */
+    @JvmStatic
+    @JvmOverloads
+    fun bscTestnetDestinationBinding(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = BSC_TESTNET_NETWORK_ID,
+    ): EvmDestinationBinding {
+        val binding = evmDestinationBinding(
+            sourceDomain = DOMAIN_SORA,
+            targetDomain = DOMAIN_BSC,
+            networkId = networkId,
+            verifierAddress = verifierAddress,
+            bridgeAddress = bridgeAddress,
+            verifierCodeHash = verifierCodeHash,
+            verifierKeyHash = verifierKeyHash,
+        )
+        require(binding.networkId == BSC_TESTNET_NETWORK_ID) {
+            "BSC testnet networkId must be chain id 97"
+        }
+        return binding
+    }
+
+    /** Canonical governed BSC testnet destination binding hash. */
+    @JvmStatic
+    @JvmOverloads
+    fun bscTestnetDestinationBindingHash(
+        verifierAddress: String,
+        bridgeAddress: String,
+        verifierCodeHash: String,
+        verifierKeyHash: String,
+        networkId: String = BSC_TESTNET_NETWORK_ID,
+    ): String = bscTestnetDestinationBinding(
+        verifierAddress = verifierAddress,
+        bridgeAddress = bridgeAddress,
+        verifierCodeHash = verifierCodeHash,
+        verifierKeyHash = verifierKeyHash,
+        networkId = networkId,
+    ).hash
+
     /** Governed TRON destination binding for UI-side SCCP proof generation. */
     @JvmStatic
     @JvmOverloads
@@ -982,6 +1027,8 @@ object SccpSourceProofs {
         writeVector(out, SccpSolana.MAINNET_GENESIS_HASH.toByteArray(StandardCharsets.UTF_8))
         out.write(hex32Bytes(materialHash, "sourceVerifierMaterialHash"))
         out.write(hex32Bytes(deploymentHash, "sourceAdapterDeploymentHash"))
+        out.write(adapterVerifierVkHashBytes)
+        out.write(deploymentReceiptHashBytes)
         verifierHashes.forEach { (verifierId, verifierHash) ->
             writeVector(out, verifierId.toByteArray(StandardCharsets.UTF_8))
             out.write(verifierHash)
@@ -1043,6 +1090,12 @@ object SccpSourceProofs {
                     "tonShardAccountsDictionaryVerifierHash",
                 ),
         )
+        val adapterVerifierVkHashBytes = hex32Bytes(
+            adapterVerifierVkHash?.let { normalizeHex32(it) }
+                ?: sourceAdapterVerifierVkHash(normalizedSourceDomain, normalizedTargetDomain),
+            "adapterVerifierVkHash",
+        )
+        val deploymentReceiptHashBytes = nonZeroHex32Bytes(deploymentReceiptHash, "deploymentReceiptHash")
         requireTonFullLightClientAuditRoleSeparation(
             verifierHashes,
             listOf(
@@ -1051,15 +1104,11 @@ object SccpSourceProofs {
                 material.messageInclusionVerifierHash,
                 material.finalityPolicyHash,
                 material.sourceStateVerifierHash,
-                hex32Bytes(
-                    adapterVerifierVkHash
-                        ?: sourceAdapterVerifierVkHash(normalizedSourceDomain, normalizedTargetDomain),
-                    "adapterVerifierVkHash",
-                ),
+                adapterVerifierVkHashBytes,
                 material.sourceBridgeEmitterCodeHash,
                 material.sourceBridgeNetworkId,
                 material.sourceBridgeConfigHash,
-                nonZeroHex32Bytes(deploymentReceiptHash, "deploymentReceiptHash"),
+                deploymentReceiptHashBytes,
             ),
         )
         val materialHash = sourceVerifierMaterialHash(
@@ -1108,6 +1157,8 @@ object SccpSourceProofs {
         out.write(material.sourceStateVerifierHash)
         out.write(hex32Bytes(materialHash, "sourceVerifierMaterialHash"))
         out.write(hex32Bytes(deploymentHash, "sourceAdapterDeploymentHash"))
+        out.write(adapterVerifierVkHashBytes)
+        out.write(deploymentReceiptHashBytes)
         verifierHashes.forEach { (verifierId, verifierHash) ->
             writeVector(out, verifierId.toByteArray(StandardCharsets.UTF_8))
             out.write(verifierHash)

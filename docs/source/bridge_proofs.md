@@ -24,6 +24,8 @@ discovery route for that network family is part of the current SCCP launch.
 That exclusion is intentional current-launch scope, not a hidden compatibility
 lane.
 Do not track that family as remaining SCCP launch work in this cycle.
+Keep any future compatibility research for that retired family outside SCCP
+launch readiness until governance explicitly re-opens support.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic

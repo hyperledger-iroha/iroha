@@ -440,14 +440,8 @@ fn apply_luminance_jitter(base: u8, jitter: u8, index: usize, attempt: u16, seed
     let folded_seed =
         u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]])
             ^ u32::from_le_bytes([seed_bytes[4], seed_bytes[5], seed_bytes[6], seed_bytes[7]]);
-    let index_bytes = index.to_le_bytes();
-    let truncated_index = u32::from_le_bytes([
-        index_bytes[0],
-        index_bytes[1],
-        index_bytes[2],
-        index_bytes[3],
-    ]);
-    let mixed = truncated_index
+    let index32 = u32::try_from(index).unwrap_or(u32::MAX);
+    let mixed = index32
         .wrapping_mul(1_103_515_245)
         .wrapping_add(u32::from(attempt).wrapping_mul(12_345))
         .wrapping_add(folded_seed.rotate_left(u32::from(attempt % 31)))
@@ -750,6 +744,14 @@ mod tests {
         );
         assert_eq!(apply_luminance_jitter(0, u8::MAX, 0, 0, 0), 0);
         assert_eq!(apply_luminance_jitter(u8::MAX, u8::MAX, 42, 0, 0), u8::MAX);
+    }
+
+    #[test]
+    fn luminance_jitter_folds_high_seed_bits_without_truncating() {
+        let low_seed = apply_luminance_jitter(128, 24, 7, 5, 1);
+        let high_seed = apply_luminance_jitter(128, 24, 7, 5, 2_u64 << 32);
+
+        assert_ne!(low_seed, high_seed);
     }
 
     #[test]

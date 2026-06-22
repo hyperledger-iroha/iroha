@@ -4,12 +4,17 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Sccp;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class SccpEthereumMainnetTests
 {
+    private const string TestSourceChainProofEnvelopeSchema =
+        "iroha_sccp::SccpSourceChainProofEnvelopeV1";
+    private const string TestSourceEventDigestPrefixV1 = "sccp:source:event:v1";
+    private const byte TestNoritoCompactLenFlag = 0x02;
     private const string ExpectedBindingHash =
         "0xc86f9d904df50c4522d01da3773916ebecce816f3fdfa664e2dff7cfbe697c45";
     private const string ExpectedRequestHash =
@@ -826,6 +831,153 @@ public sealed class SccpEthereumMainnetTests
 
     private static byte[] NonSoraProofBundleFinalityBytes()
         => Convert.FromHexString(NonSoraProofBundleFinalityHex);
+
+    private static byte[] TestCanonicalSccpSourceProofBytes(
+        int sourceDomain,
+        int targetDomain,
+        string messageId,
+        string payloadHash,
+        string commitmentRoot,
+        ulong finalityHeight,
+        string finalityBlockHash,
+        string finalizedHeaderHash,
+        string receiptOrMessageRoot,
+        byte[] consensusProof,
+        byte[] messageInclusionProof,
+        IReadOnlyList<byte[]> inclusionBranch)
+    {
+        using var payload = new MemoryStream();
+        WriteTestNoritoField(payload, [1]);
+        WriteTestNoritoField(payload, LeU32(checked((uint)sourceDomain)));
+        WriteTestNoritoField(payload, LeU32(checked((uint)targetDomain)));
+        WriteTestNoritoField(payload, TestNoritoStringPayload(TestSourceChainKeyForDomain(sourceDomain)));
+        WriteTestNoritoField(payload, LeU32(checked((uint)TestSourceProofPlanCodeForDomain(sourceDomain))));
+        WriteTestNoritoField(payload, LeU32(checked((uint)TestFinalityModelCodeForDomain(sourceDomain))));
+        WriteTestNoritoField(payload, TestHex32Bytes(messageId));
+        WriteTestNoritoField(payload, TestHex32Bytes(payloadHash));
+        WriteTestNoritoField(payload, TestHex32Bytes(
+            TestSccpSourceEventDigest(sourceDomain, targetDomain, messageId, payloadHash)));
+        WriteTestNoritoField(payload, TestHex32Bytes(commitmentRoot));
+        WriteTestNoritoField(payload, LeU64(finalityHeight));
+        WriteTestNoritoField(payload, TestHex32Bytes(finalityBlockHash));
+        WriteTestNoritoField(payload, TestHex32Bytes(finalizedHeaderHash));
+        WriteTestNoritoField(payload, TestHex32Bytes(receiptOrMessageRoot));
+        WriteTestNoritoField(payload, TestNoritoRawByteVecPayload(consensusProof));
+        WriteTestNoritoField(payload, TestNoritoRawByteVecPayload(messageInclusionProof));
+        WriteTestNoritoField(payload, TestNoritoRawByteVecSequencePayload(inclusionBranch));
+        return NoritoCodec.Encode(
+            TestSourceChainProofEnvelopeSchema,
+            payload.ToArray(),
+            flags: TestNoritoCompactLenFlag);
+    }
+
+    private static string TestSccpSourceEventDigest(
+        int sourceDomain,
+        int targetDomain,
+        string messageId,
+        string payloadHash)
+    {
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(checked((uint)sourceDomain)));
+        payload.Write(LeU32(checked((uint)targetDomain)));
+        payload.Write(TestHex32Bytes(messageId));
+        payload.Write(TestHex32Bytes(payloadHash));
+        return "0x" + Convert.ToHexString(Blake2b.Hash256(Concat(
+            Encoding.UTF8.GetBytes(TestSourceEventDigestPrefixV1),
+            payload.ToArray()))).ToLowerInvariant();
+    }
+
+    private static string TestSourceChainKeyForDomain(int domain)
+        => domain switch
+        {
+            EthereumMainnetSccp.DomainEthereum => "eth",
+            BscMainnetSccp.DomainBsc => "bsc",
+            3 => "sol",
+            4 => "ton",
+            5 => "tron",
+            _ => throw new ArgumentException("SCCP source domain must support source proofs", nameof(domain)),
+        };
+
+    private static int TestSourceProofPlanCodeForDomain(int domain)
+        => domain switch
+        {
+            EthereumMainnetSccp.DomainEthereum => 1,
+            BscMainnetSccp.DomainBsc => 2,
+            3 => 3,
+            4 => 4,
+            5 => 5,
+            _ => throw new ArgumentException("SCCP source domain must support source proofs", nameof(domain)),
+        };
+
+    private static int TestFinalityModelCodeForDomain(int domain)
+        => domain switch
+        {
+            EthereumMainnetSccp.DomainEthereum => 0,
+            BscMainnetSccp.DomainBsc => 1,
+            3 => 2,
+            4 => 3,
+            5 => 4,
+            _ => throw new ArgumentException("SCCP source domain must support source proofs", nameof(domain)),
+        };
+
+    private static void WriteTestNoritoField(Stream stream, byte[] payload)
+    {
+        stream.Write(TestNoritoCompactLength(checked((ulong)payload.Length)));
+        stream.Write(payload);
+    }
+
+    private static byte[] TestNoritoStringPayload(string value)
+    {
+        var valueBytes = Encoding.UTF8.GetBytes(value);
+        return Concat(TestNoritoCompactLength(checked((ulong)valueBytes.Length)), valueBytes);
+    }
+
+    private static byte[] TestNoritoRawByteVecPayload(byte[] value)
+        => Concat(LeU64(checked((ulong)value.Length)), value);
+
+    private static byte[] TestNoritoRawByteVecSequencePayload(IReadOnlyList<byte[]> values)
+    {
+        using var payload = new MemoryStream();
+        payload.Write(LeU64(checked((ulong)values.Count)));
+        foreach (var value in values)
+        {
+            var element = TestNoritoRawByteVecPayload(value);
+            payload.Write(TestNoritoCompactLength(checked((ulong)element.Length)));
+            payload.Write(element);
+        }
+
+        return payload.ToArray();
+    }
+
+    private static byte[] TestNoritoCompactLength(ulong value)
+    {
+        var output = new List<byte>();
+        do
+        {
+            var current = (byte)(value & 0x7f);
+            value >>= 7;
+            if (value != 0)
+            {
+                current |= 0x80;
+            }
+
+            output.Add(current);
+        } while (value != 0);
+
+        return output.ToArray();
+    }
+
+    private static byte[] TestHex32Bytes(string value)
+    {
+        var body = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
+        if (body.Length != 64)
+        {
+            throw new ArgumentException("SCCP test hex word must be 32 bytes", nameof(value));
+        }
+
+        return Convert.FromHexString(body);
+    }
 
     private static byte[] MutatedNonSoraProofBundle(int offset, byte xorMask)
     {
@@ -5055,6 +5207,21 @@ public sealed class SccpEthereumMainnetTests
     public void MessageProofBundleGateRejectsMissingAndMismatchedNonSoraSourceProof()
     {
         var sourceProofBytes = NonSoraProofBundleFinalityBytes();
+        Assert.Equal(
+            sourceProofBytes,
+            TestCanonicalSccpSourceProofBytes(
+                EthereumMainnetSccp.DomainEthereum,
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
+                "0x" + new string('1', 64),
+                "0x" + new string('2', 64),
+                [0x01],
+                [0x02],
+                [RepeatByte(0x33, 32)]));
         var summary = SccpMessageProofBundles.RequireMatchesPublicInputs(
             BscMainnetSccp.DomainBsc,
             NonSoraProofBundleMessageId,
@@ -5087,7 +5254,35 @@ public sealed class SccpEthereumMainnetTests
             "sourceProofBytes required for non-SORA source bundle",
             missingSourceProof.Message);
 
-        var mismatchedSourceProof = Assert.Throws<ArgumentException>(
+        var replayedCanonicalSourceProof = TestCanonicalSccpSourceProofBytes(
+            EthereumMainnetSccp.DomainEthereum,
+            BscMainnetSccp.DomainBsc,
+            "0x" + new string('4', 64),
+            "0x" + new string('5', 64),
+            "0x" + new string('6', 64),
+            43,
+            "0x" + new string('7', 64),
+            "0x" + new string('8', 64),
+            "0x" + new string('9', 64),
+            [0x04],
+            [0x05],
+            [RepeatByte(0x66, 32)]);
+        Assert.False(sourceProofBytes.SequenceEqual(replayedCanonicalSourceProof));
+        var replayedCanonicalSourceProofError = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
+                NonSoraProofBundleBytes(),
+                replayedCanonicalSourceProof));
+        Assert.Contains(
+            "sourceProofBytes must match bundleBytes finality proof",
+            replayedCanonicalSourceProofError.Message);
+
+        var arbitraryMismatchedSourceProof = Assert.Throws<ArgumentException>(
             () => SccpMessageProofBundles.RequireMatchesPublicInputs(
                 BscMainnetSccp.DomainBsc,
                 NonSoraProofBundleMessageId,
@@ -5099,7 +5294,7 @@ public sealed class SccpEthereumMainnetTests
                 "wrong-source-proof"u8.ToArray()));
         Assert.Contains(
             "sourceProofBytes must match bundleBytes finality proof",
-            mismatchedSourceProof.Message);
+            arbitraryMismatchedSourceProof.Message);
 
         var undecodableBundleBytes = NonSoraProofBundleBytes();
         var undecodableSourceProof = sourceProofBytes.ToArray();

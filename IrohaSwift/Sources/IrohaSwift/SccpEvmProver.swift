@@ -3001,6 +3001,94 @@ public struct BscMainnetLocalAdmissionSubmission: Equatable {
     public let envelopeHex: String
 }
 
+/// Inputs used to package BSC testnet -> SORA local-admission verifier output.
+public struct BscTestnetLocalAdmissionSubmissionInput: Equatable {
+    public let proofBytes: Data
+    public let publicInputsBytes: Data
+    public let bundleBytes: Data
+    public let envelopeBytes: Data
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let proofFamily: String
+    public let verifierBackend: String
+    public let envelopeEncoding: String
+    public let submissionKind: String
+    public let verifierEntrypoint: String
+
+    public init(proofBytes: Data,
+                publicInputsBytes: Data,
+                bundleBytes: Data,
+                envelopeBytes: Data,
+                statementHash: String,
+                sourceVerifierMaterialHash: String,
+                sourceAdapterEngineDeploymentHash: String,
+                sourceDomain: UInt32 = sccpDomainBsc,
+                targetDomain: UInt32 = sccpDomainSora,
+                proofFamily: String = sccpStarkFriProofFamilyV1,
+                verifierBackend: String = sccpEvmGroth16Bn254ProofBackendV1,
+                envelopeEncoding: String = sccpLocalAdmissionEnvelopeEncodingV1,
+                submissionKind: String = sccpLocalAdmissionSubmissionKindV1,
+                verifierEntrypoint: String = sccpLocalAdmissionEntrypointV1) {
+        self.proofBytes = proofBytes
+        self.publicInputsBytes = publicInputsBytes
+        self.bundleBytes = bundleBytes
+        self.envelopeBytes = envelopeBytes
+        self.statementHash = statementHash
+        self.sourceVerifierMaterialHash = sourceVerifierMaterialHash
+        self.sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash
+        self.sourceDomain = sourceDomain
+        self.targetDomain = targetDomain
+        self.proofFamily = proofFamily
+        self.verifierBackend = verifierBackend
+        self.envelopeEncoding = envelopeEncoding
+        self.submissionKind = submissionKind
+        self.verifierEntrypoint = verifierEntrypoint
+    }
+}
+
+/// BSC testnet local-admission payload mirrored from the core SCCP package.
+public struct BscTestnetLocalAdmissionPayload: Equatable {
+    public let version: UInt8
+    public let proofBytes: Data
+    public let proofBytesHex: String
+    public let publicInputsBytes: Data
+    public let publicInputsBytesHex: String
+    public let bundleBytes: Data
+    public let bundleBytesHex: String
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+}
+
+/// BSC testnet -> SORA local-admission package ready for Torii bridge-proof submission.
+public struct BscTestnetLocalAdmissionSubmission: Equatable {
+    public let version: UInt8
+    public let proofFamily: String
+    public let verifierBackend: String
+    public let platformPayload: String
+    public let envelopeEncoding: String
+    public let submissionKind: String
+    public let verifierEntrypoint: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let statementHash: String
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let arguments: [EvmSccpSubmissionArgument]
+    public let localAdmission: BscTestnetLocalAdmissionPayload
+    public let proofBytes: Data
+    public let proofBytesHex: String
+    public let publicInputsBytes: Data
+    public let publicInputsBytesHex: String
+    public let bundleBytes: Data
+    public let bundleBytesHex: String
+    public let envelopeBytes: Data
+    public let envelopeHex: String
+}
+
 /// Inputs used to package Ethereum mainnet -> SORA local-admission verifier output.
 public struct EthereumMainnetLocalAdmissionSubmissionInput: Equatable {
     public let proofBytes: Data
@@ -3206,6 +3294,31 @@ private func requireBscMainnetDestinationBinding(_ request: EvmSccpProofRequest)
     }
 }
 
+private func requireBscTestnetDestinationBinding(_ request: EvmSccpProofRequest) throws {
+    guard request.targetDomain == sccpDomainBsc,
+          request.publicInputs.targetDomain == sccpDomainBsc else {
+        throw EvmSccpProverError.invalidPublicInputs("request.targetDomain")
+    }
+    guard let destinationBinding = request.destinationBinding else {
+        throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding")
+    }
+    guard destinationBinding.targetDomain == sccpDomainBsc else {
+        throw EvmSccpProverError.invalidPublicInputs("destinationBinding.targetDomain")
+    }
+    guard destinationBinding.networkId == sccpBscTestnetNetworkId else {
+        throw EvmSccpProverError.invalidPublicInputs("destinationBinding.networkId")
+    }
+    let expectedHash = try requireEvmDestinationBindingForProofRequest(
+        publicInputs: request.publicInputs,
+        destinationBinding: destinationBinding,
+        backend: request.backend,
+        sourceDomain: request.sourceDomain
+    )
+    guard request.destinationBindingHash == expectedHash else {
+        throw EvmSccpProverError.invalidPublicInputs("destinationBindingHash")
+    }
+}
+
 /// Build a BSC mainnet-only SCCP Groth16 proof request.
 public func buildBscMainnetSccpDestinationProofRequest(
     _ input: EvmSccpProofRequestInput
@@ -3237,6 +3350,43 @@ public func buildBscMainnetSccpDestinationSubmission(
           let destinationBinding = proofResult.destinationBinding,
           destinationBinding.targetDomain == sccpDomainBsc,
           destinationBinding.networkId == sccpBscMainnetNetworkId,
+          destinationBinding.hash == proofResult.destinationBindingHash else {
+        throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding")
+    }
+    return submission
+}
+
+/// Build a BSC testnet-only SCCP Groth16 proof request.
+public func buildBscTestnetSccpDestinationProofRequest(
+    _ input: EvmSccpProofRequestInput
+) throws -> EvmSccpProofRequest {
+    let request = try buildEvmSccpProofRequest(input)
+    try requireBscTestnetDestinationBinding(request)
+    return request
+}
+
+/// Wrap externally generated BSC testnet SCCP Groth16 proof bytes against a checked request.
+public func wrapBscTestnetSccpDestinationProofResult(
+    proofBytes: Data,
+    request: EvmSccpProofRequest
+) throws -> EvmSccpProofResult {
+    try requireBscTestnetDestinationBinding(request)
+    return try wrapEvmSccpProofResult(proofBytes: proofBytes, request: request)
+}
+
+/// Build BSC testnet verifier-contract call data from a wrapped proof result.
+public func buildBscTestnetSccpDestinationSubmission(
+    _ input: EvmSccpSubmissionInput
+) throws -> EvmSccpSubmission {
+    let submission = try buildEvmSccpSubmission(input)
+    guard submission.targetDomain == sccpDomainBsc,
+          input.publicInputs.targetDomain == sccpDomainBsc else {
+        throw EvmSccpProverError.invalidPublicInputs("publicInputs.targetDomain")
+    }
+    guard let proofResult = input.proofResult,
+          let destinationBinding = proofResult.destinationBinding,
+          destinationBinding.targetDomain == sccpDomainBsc,
+          destinationBinding.networkId == sccpBscTestnetNetworkId,
           destinationBinding.hash == proofResult.destinationBindingHash else {
         throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding")
     }
@@ -3286,6 +3436,74 @@ public func buildBscMainnetSccpLocalAdmissionSubmission(
         sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash
     )
     return BscMainnetLocalAdmissionSubmission(
+        version: 1,
+        proofFamily: input.proofFamily,
+        verifierBackend: input.verifierBackend,
+        platformPayload: sccpLocalAdmissionSubmissionKindV1,
+        envelopeEncoding: sccpLocalAdmissionEnvelopeEncodingV1,
+        submissionKind: sccpLocalAdmissionSubmissionKindV1,
+        verifierEntrypoint: sccpLocalAdmissionEntrypointV1,
+        sourceDomain: sccpDomainBsc,
+        targetDomain: sccpDomainSora,
+        statementHash: statementHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
+        arguments: [],
+        localAdmission: payload,
+        proofBytes: proofBytes,
+        proofBytesHex: "0x" + proofBytes.hexEncodedString(),
+        publicInputsBytes: publicInputsBytes,
+        publicInputsBytesHex: "0x" + publicInputsBytes.hexEncodedString(),
+        bundleBytes: bundleBytes,
+        bundleBytesHex: "0x" + bundleBytes.hexEncodedString(),
+        envelopeBytes: envelopeBytes,
+        envelopeHex: "0x" + envelopeBytes.hexEncodedString()
+    )
+}
+
+/// Build a BSC testnet -> SORA local-admission package from native verifier output.
+public func buildBscTestnetSccpLocalAdmissionSubmission(
+    _ input: BscTestnetLocalAdmissionSubmissionInput
+) throws -> BscTestnetLocalAdmissionSubmission {
+    guard input.sourceDomain == sccpDomainBsc, input.targetDomain == sccpDomainSora else {
+        throw EvmSccpProverError.invalidPublicInputs("BSC testnet -> SORA")
+    }
+    guard input.proofFamily == sccpStarkFriProofFamilyV1,
+          input.verifierBackend == sccpEvmGroth16Bn254ProofBackendV1,
+          input.envelopeEncoding == sccpLocalAdmissionEnvelopeEncodingV1,
+          input.submissionKind == sccpLocalAdmissionSubmissionKindV1,
+          input.verifierEntrypoint == sccpLocalAdmissionEntrypointV1 else {
+        throw EvmSccpProverError.invalidPublicInputs("localAdmission.metadata")
+    }
+    let proofBytes = try requireEvmLocalAdmissionBytes(input.proofBytes, field: "proofBytes")
+    let publicInputsBytes = try requireEvmLocalAdmissionBytes(
+        input.publicInputsBytes,
+        field: "publicInputsBytes"
+    )
+    let bundleBytes = try requireEvmLocalAdmissionBytes(input.bundleBytes, field: "bundleBytes")
+    let envelopeBytes = try requireEvmLocalAdmissionBytes(input.envelopeBytes, field: "envelopeBytes")
+    let statementHash = try evmNormalizeHex32(input.statementHash, field: "statementHash")
+    let sourceVerifierMaterialHash = try evmNormalizeHex32(
+        input.sourceVerifierMaterialHash,
+        field: "sourceVerifierMaterialHash"
+    )
+    let sourceAdapterEngineDeploymentHash = try evmNormalizeHex32(
+        input.sourceAdapterEngineDeploymentHash,
+        field: "sourceAdapterEngineDeploymentHash"
+    )
+    let payload = BscTestnetLocalAdmissionPayload(
+        version: 1,
+        proofBytes: proofBytes,
+        proofBytesHex: "0x" + proofBytes.hexEncodedString(),
+        publicInputsBytes: publicInputsBytes,
+        publicInputsBytesHex: "0x" + publicInputsBytes.hexEncodedString(),
+        bundleBytes: bundleBytes,
+        bundleBytesHex: "0x" + bundleBytes.hexEncodedString(),
+        statementHash: statementHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash
+    )
+    return BscTestnetLocalAdmissionSubmission(
         version: 1,
         proofFamily: input.proofFamily,
         verifierBackend: input.verifierBackend,
@@ -3406,6 +3624,36 @@ public final class BscMainnetSccpProver {
         try requireBscMainnetDestinationBinding(request)
         let proofBytes = try await proveFunction(evmSccpProofRequestCallbackSnapshot(request))
         return try wrapBscMainnetSccpDestinationProofResult(proofBytes: proofBytes, request: request)
+    }
+}
+
+/// Local-first BSC testnet SCCP proof wrapper. It enforces BSC target domain and chain id 97.
+public final class BscTestnetSccpProver {
+    public typealias ProveFunction = EvmSccpProver.ProveFunction
+
+    private let witnessProvider: EvmSccpWitnessProvider?
+    private let proveFunction: ProveFunction?
+
+    public init(witnessProvider: EvmSccpWitnessProvider? = nil,
+                proveFunction: ProveFunction? = nil) {
+        self.witnessProvider = witnessProvider
+        self.proveFunction = proveFunction
+    }
+
+    public func buildRequest(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofRequest {
+        let resolved = try await witnessProvider?.resolveWitness(evmSccpWitnessProviderInputSnapshot(input)) ?? input
+        return try buildBscTestnetSccpDestinationProofRequest(resolved)
+    }
+
+    public func prove(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
+        let request = try await buildRequest(input)
+        guard let proveFunction else {
+            throw EvmSccpProverError.localProverUnavailable
+        }
+        try requireProductionEvmSccpProofRequest(request)
+        try requireBscTestnetDestinationBinding(request)
+        let proofBytes = try await proveFunction(evmSccpProofRequestCallbackSnapshot(request))
+        return try wrapBscTestnetSccpDestinationProofResult(proofBytes: proofBytes, request: request)
     }
 }
 
@@ -3545,6 +3793,68 @@ public struct BscMainnetInboundEvidence {
             sourceEventDigest: sourceEventDigest,
             sourceBridgeEmitterAddress: sourceBridgeEmitterAddress
         )
+    }
+}
+
+/// Local-first BSC testnet SCCP API for native proof generation and EVM submission payloads.
+public final class BscTestnetSccp {
+    public typealias ProveFunction = EvmSccpProver.ProveFunction
+    public typealias OutboundSubmitFunction = (EvmSccpSubmission) async throws -> Any
+
+    private let prover: BscTestnetSccpProver
+    private let outboundSubmitFunction: OutboundSubmitFunction?
+
+    public init(witnessProvider: EvmSccpWitnessProvider? = nil,
+                proveFunction: ProveFunction? = nil,
+                outboundSubmitFunction: OutboundSubmitFunction? = nil) {
+        self.prover = BscTestnetSccpProver(witnessProvider: witnessProvider, proveFunction: proveFunction)
+        self.outboundSubmitFunction = outboundSubmitFunction
+    }
+
+    public static func requireTestnetChainId(_ chainId: UInt64) throws {
+        guard chainId == sccpBscTestnetChainId else {
+            throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
+        }
+    }
+
+    public static func destinationBinding(verifierAddress: String,
+                                          bridgeAddress: String,
+                                          verifierCodeHash: String,
+                                          verifierKeyHash: String,
+                                          networkId: String = sccpBscTestnetNetworkId) throws -> EvmSccpDestinationBinding {
+        try sccpBscTestnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash,
+            networkId: networkId
+        )
+    }
+
+    public func buildOutboundProofRequest(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofRequest {
+        try await prover.buildRequest(input)
+    }
+
+    public func proveOutboundToBsc(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
+        try await prover.prove(input)
+    }
+
+    public func buildBscCalldata(_ input: EvmSccpSubmissionInput) throws -> EvmSccpSubmission {
+        try buildBscTestnetSccpDestinationSubmission(input)
+    }
+
+    public func buildLocalAdmissionSubmission(
+        _ input: BscTestnetLocalAdmissionSubmissionInput
+    ) throws -> BscTestnetLocalAdmissionSubmission {
+        try buildBscTestnetSccpLocalAdmissionSubmission(input)
+    }
+
+    public func submitOutboundToBsc(_ input: EvmSccpSubmissionInput) async throws -> Any {
+        let submission = try buildBscCalldata(input)
+        guard let outboundSubmitFunction else {
+            throw EvmSccpProverError.localProverUnavailable
+        }
+        return try await outboundSubmitFunction(submission)
     }
 }
 

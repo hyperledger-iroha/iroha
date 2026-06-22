@@ -1899,6 +1899,7 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       '_norito_archive_bytes_named(instruction_archive, "instruction_archive")',
       'getattr(Instruction, "kagemusha_instruction_archive", None)',
       'getattr(Instruction, "kagemusha_recursive_redeem", None)',
+      "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
       "build_signed_transaction",
       "instructions=(instruction,)",
     ],
@@ -12809,6 +12810,40 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /Android slot assembler exact family matching[\s\S]*?Android device-lab assembler identity field drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
     "Android device-lab assembler identity negative control must only pass after detecting field drift",
   );
+  const nativeBridgeZeroEnvelopePallasGuardBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+    guard.indexOf('if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":'),
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /zero-envelope Pallas archive[\s\S]*?one-envelope Pallas archive[\s\S]*?zero-envelope nested Pallas archives[\s\S]*?one-envelope nested Pallas archives/u,
+    "native bridge zero-envelope Pallas negative control must mutate both guarded nested-Pallas markers",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /if updated == original or "zero-envelope nested Pallas archives" in updated:/u,
+    "native bridge zero-envelope Pallas negative control must remove all nested-Pallas marker occurrences",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Rust C recursive spend nested Pallas guard missing zero-envelope Pallas archive[\s\S]*?Rust C recursive spend nested Pallas guard missing zero-envelope nested Pallas archives[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native bridge zero-envelope Pallas negative control must require both exact missing markers",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "native bridge zero-envelope Pallas negative control must print both exact diagnostics",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge zero-envelope Pallas guard drift was not detected"\s*\)/u,
+    "native bridge zero-envelope Pallas negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "native bridge zero-envelope Pallas negative control must not unconditionally pass after run_checks",
+  );
   const bridgeZk1I10pParserExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":'),
     guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
@@ -12825,7 +12860,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     bridgeZk1I10pParserExactnessBranch,
-    /Rust native bridge ZK1 I10P parser exactness tests[\s\S]*?native bridge ZK1 I10P parser exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"\s*\)/u,
+    /expected_labels\s*=\s*\([\s\S]*?Rust native bridge ZK1 I10P parser exactness tests missing zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads[\s\S]*?Rust native bridge ZK1 I10P parser exactness tests missing I10P payloads with trailing bytes must not be partially decoded[\s\S]*?Rust native bridge ZK1 I10P parser exactness tests missing zk1_read_instance_columns\(&payload\)\.is_none\(\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native bridge ZK1 I10P parser negative control must require every exact mutated parser marker",
+  );
+  assert.match(
+    bridgeZk1I10pParserExactnessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "native bridge ZK1 I10P parser negative control must print every exact parser diagnostic",
+  );
+  assert.match(
+    bridgeZk1I10pParserExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"\s*\)/u,
     "native bridge ZK1 I10P parser negative control must only pass after detecting parser drift",
   );
   assert.doesNotMatch(
@@ -13741,22 +13786,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label: "JavaScript append lineage key boundary branch must require the append boundary label",
     },
     {
-      start: 'if mode == "--negative-control-js-lineage-key-artifact-request-object":',
-      end: 'if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":',
-      marker: "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing function kagemushaNormalizeLineageKeyArtifactsForRequest(",
-      label: "JavaScript lineage key request object branch must require the normalizer label",
-    },
-    {
       start: 'if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":',
       end: 'if mode == "--negative-control-js-note-amount-vectors":',
       marker: "javascript/iroha_js/src/transaction.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction",
       label: "JavaScript instruction transaction builder branch must require the builder label",
-    },
-    {
-      start: 'if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":',
-      end: 'if mode == "--negative-control-csharp-kagemusha-instruction-transaction-builder":',
-      marker: "Python Kagemusha instruction transaction tests missing bad_request_flags[39] = 0x20",
-      label: "Python instruction transaction builder branch must require the malformed-request label",
     },
     {
       start: 'if mode == "--negative-control-python-lineage-key-package-binding":',
@@ -13978,6 +14011,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsLineageKeyArtifactRequestObjectBranch,
     /source_target\s*=\s*"javascript\/iroha_js\/src\/crypto\.js"[\s\S]*?package_target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?function kagemushaNormalizeLineageKeyArtifactsForRequest\([\s\S]*?package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch[\s\S]*?package dist Kagemusha recursive spend typed requests skip lineage key artifact packages before native dispatch/u,
     "JS lineage key artifact request object negative control must mutate source and package-dist request coverage",
+  );
+  assert.match(
+    jsLineageKeyArtifactRequestObjectBranch,
+    /expected_labels\s*=\s*\([\s\S]*?javascript\/iroha_js\/src\/crypto\.js typed recursive spend request codecs missing function kagemushaNormalizeLineageKeyArtifactsForRequest\([\s\S]*?JavaScript package dist recursive spend lineage key artifact request coverage missing package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS lineage key artifact request object negative control must require source and package-dist diagnostics",
+  );
+  assert.match(
+    jsLineageKeyArtifactRequestObjectBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS lineage key artifact request object negative control must print both diagnostics",
   );
   assert.match(
     jsLineageKeyArtifactRequestObjectBranch,
@@ -19465,6 +19508,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS/Python native output header negative control must not unconditionally pass after run_checks",
   );
+  const pythonKagemushaInstructionTransactionBuilderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":'),
+    guard.indexOf('if mode == "--negative-control-csharp-kagemusha-instruction-transaction-builder":'),
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /source_target\s*=\s*"python\/iroha_python\/src\/iroha_python\/kagemusha\.py"[\s\S]*?test_target\s*=\s*"python\/iroha_python\/tests\/kagemusha_test\.py"[\s\S]*?def build_kagemusha_recursive_redeem_transaction\([\s\S]*?instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?instruction = redeem_request_archive[\s\S]*?bad_request_flags\[39\] = 0x20[\s\S]*?run_checks\(mutated\)/u,
+    "Python Kagemusha instruction transaction negative control must mutate builder source and malformed-request test coverage",
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?Python Kagemusha instruction transaction tests missing bad_request_flags\[39\] = 0x20[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Python Kagemusha instruction transaction negative control must require source and test diagnostics",
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Python Kagemusha instruction transaction negative control must print both diagnostics",
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
+    "Python Kagemusha instruction transaction negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python Kagemusha instruction transaction negative control must not unconditionally pass after run_checks",
+  );
   const pythonAbi7FixtureNativeGuardBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":'),
     guard.indexOf('if mode == "--negative-control-abi7-sdk-manifest-coverage":'),
@@ -19539,6 +19611,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     abi7SdkManifestCoverageBranch,
     /ABI-7 SDK fixture manifest coverage[\s\S]*?target not in message[\s\S]*?needle not in message[\s\S]*?raise\s+SystemExit\(0\)/u,
     "ABI-7 SDK fixture manifest coverage negative control must only pass after detecting all injected drifts",
+  );
+  assert.match(
+    abi7SdkManifestCoverageBranch,
+    /detected_messages\s*=\s*\[\][\s\S]*?expected\s*=\s*f"ABI-7 SDK fixture manifest coverage missing \{target\}: \{needle\}"[\s\S]*?detected_messages\.append\(first_lines_for_labels\(message, \(expected,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "ABI-7 SDK fixture manifest coverage negative control must print every exact mutated manifest marker",
   );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");

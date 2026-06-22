@@ -2277,6 +2277,14 @@ class TonSccpProverTest {
             sampleProofRequestInput(sourceStateVerifierHash = "dd".repeat(32)),
         )
         assertNotEquals(request.requestHash, sourceStateBoundRequest.requestHash)
+        val splitBoundaryRequest = SccpTon.buildProofRequest(
+            sampleProofRequestInput(
+                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71)),
+                sourceProofBytes = ByteArray(0),
+                sourceAdapterDeploymentHash = "aa".repeat(32),
+                sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
+            ),
+        )
         val shiftedSplitRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
                 bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
@@ -2285,6 +2293,7 @@ class TonSccpProverTest {
                 sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
             ),
         )
+        assertNotEquals(splitBoundaryRequest.requestHash, shiftedSplitRequest.requestHash)
         assertNotEquals(request.requestHash, shiftedSplitRequest.requestHash)
         val extraneousSoraSourceProof = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(

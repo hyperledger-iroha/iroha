@@ -142,12 +142,15 @@ import {
   EthereumMainnetSccp,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -166,9 +169,12 @@ import {
   verifyBscMainnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifacts,
   BscMainnetSccp,
+  BscMainnetGroth16Bn254ProofAdapter,
   BscMainnetSccpProver,
   BscTestnetSccp,
+  BscTestnetGroth16Bn254ProofAdapter,
   BscTestnetSccpProver,
+  EvmGroth16Bn254ProofAdapter,
   bscMainnetSccpDestinationBinding,
   bscTestnetSccpDestinationBinding,
   buildBscMainnetSccpDestinationProofRequest,
@@ -8231,15 +8237,15 @@ test("package declarations use BSC-specific mainnet native prover bundle types",
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type BscTestnetNativeEvmProverBundleInput =\s+NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-testnet";/u,
+    /export type BscTestnetNativeEvmProverBundleInput = Omit<[\s\S]*NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput>,[\s\S]*"crossSdkFixtureParityArtifact"[\s\S]*"cross_sdk_fixture_parity_artifact"[\s\S]*> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-testnet";[\s\S]*auditHashes\?: BscTestnetNativeEvmProverAuditHashesInput;[\s\S]*audit_hashes\?: BscTestnetNativeEvmProverAuditHashesInput;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type BscMainnetNativeEvmProverBundleInput =\s+NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";/u,
+    /export type BscMainnetNativeEvmProverBundleInput = Omit<[\s\S]*NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput>,[\s\S]*"crossSdkFixtureParityArtifact"[\s\S]*"cross_sdk_fixture_parity_artifact"[\s\S]*> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";[\s\S]*auditHashes\?: BscMainnetNativeEvmProverAuditHashesInput;[\s\S]*audit_hashes\?: BscMainnetNativeEvmProverAuditHashesInput;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundle,[\s\S]*"bundleId" \| "chain"[\s\S]*>[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";/u,
+    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundle,[\s\S]*"bundleId" \| "chain" \| "auditHashes" \| "crossSdkFixtureParityArtifact"[\s\S]*>[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";[\s\S]*readonly auditHashes: Readonly<BscMainnetNativeEvmProverAuditHashes>;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -9641,7 +9647,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     torii_submit_payload_hash: `0x${"d4".repeat(32)}`,
   };
   const parityFixture = {
-    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_ETH,
     chain: "eth",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -10088,7 +10094,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         },
         { destinationBinding: ethereumMainnetBinding },
       ),
-    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+    /crossSdkParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
   const tinySelfTestBundle = hashConsistentNativeProverBundle({
@@ -10209,7 +10215,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key: "artifacts/bsc-mainnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     destination_binding_hash: bscMainnetBinding.bindingHash,
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
@@ -10227,12 +10233,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
           : `0x${(index + 0x41).toString(16).padStart(2, "0").repeat(32)}`,
     })),
   };
+  delete bscMainnetNativeProverBundle.cross_sdk_fixture_parity_artifact;
   const bscMainnetParitySdkResult = {
     ...paritySdkResult,
     destination_binding_hash: bscMainnetBinding.bindingHash,
   };
   const bscMainnetParityFixture = {
-    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-mainnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -10277,9 +10284,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     JSON.stringify(bscMainnetSelfTestFixture),
     "utf8",
   );
+  const {
+    cross_sdk_fixture_parity: _ignoredBscMainnetLegacyParityAudit,
+    ...bscMainnetAuditHashes
+  } = bscMainnetNativeProverBundle.audit_hashes;
   bscMainnetNativeProverBundle.audit_hashes = {
-    ...bscMainnetNativeProverBundle.audit_hashes,
-    cross_sdk_fixture_parity: sha256Hex(bscMainnetParityFixtureBytes),
+    ...bscMainnetAuditHashes,
+    cross_sdk_parity: sha256Hex(bscMainnetParityFixtureBytes),
     native_prover_self_test: sha256Hex(bscMainnetSelfTestFixtureBytes),
   };
   const bscMainnetNativeArtifacts = verifyBscMainnetNativeEvmProverArtifacts(
@@ -10288,7 +10299,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: bscMainnetParityFixtureBytes,
+      crossSdkParityBytes: bscMainnetParityFixtureBytes,
       nativeProverSelfTestBytes: bscMainnetSelfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -10333,6 +10344,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     SCCP_DOMAIN_BSC,
   );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class BscMainnetGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
   const bscTestnetBinding = bscTestnetSccpDestinationBinding({
     verifierAddress: `0x${"33".repeat(20)}`,
@@ -10349,7 +10364,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     destination_binding_hash: bscTestnetBinding.bindingHash,
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
@@ -10367,12 +10382,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
           : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
   };
+  delete bscTestnetNativeProverBundle.cross_sdk_fixture_parity_artifact;
   const bscTestnetParitySdkResult = {
     ...paritySdkResult,
     destination_binding_hash: bscTestnetBinding.bindingHash,
   };
   const bscTestnetParityFixture = {
-    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -10417,9 +10433,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     JSON.stringify(bscTestnetSelfTestFixture),
     "utf8",
   );
+  const {
+    cross_sdk_fixture_parity: _ignoredBscTestnetLegacyParityAudit,
+    ...bscTestnetAuditHashes
+  } = bscTestnetNativeProverBundle.audit_hashes;
   bscTestnetNativeProverBundle.audit_hashes = {
-    ...bscTestnetNativeProverBundle.audit_hashes,
-    cross_sdk_fixture_parity: sha256Hex(bscTestnetParityFixtureBytes),
+    ...bscTestnetAuditHashes,
+    cross_sdk_parity: sha256Hex(bscTestnetParityFixtureBytes),
     native_prover_self_test: sha256Hex(bscTestnetSelfTestFixtureBytes),
   };
   const bscTestnetNativeArtifacts = verifyBscTestnetNativeEvmProverArtifacts(
@@ -10428,7 +10448,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: bscTestnetParityFixtureBytes,
+      crossSdkParityBytes: bscTestnetParityFixtureBytes,
       nativeProverSelfTestBytes: bscTestnetSelfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -10504,12 +10524,23 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
   assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class BscTestnetGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class EvmGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
   assert.match(
     DECLARATIONS_TEXT,
     /buildBscTestnetSccpLocalAdmissionSubmission/u,
   );
+  assert.equal(typeof BscMainnetGroth16Bn254ProofAdapter, "function");
+  assert.equal(typeof BscTestnetGroth16Bn254ProofAdapter, "function");
+  assert.equal(typeof EvmGroth16Bn254ProofAdapter, "function");
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
@@ -10890,7 +10921,22 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
       solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
+  );
+  assert.notEqual(
+    sccpSolanaFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_SOL,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+      solanaTowerReplayVerifierHash: `0x${"bb".repeat(32)}`,
+      solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
+      solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
   );
   assert.throws(
     () =>
@@ -10921,7 +10967,22 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
       tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+  );
+  assert.notEqual(
+    sccpTonFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_TON,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+      tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+      tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
+      tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
   );
 });
 

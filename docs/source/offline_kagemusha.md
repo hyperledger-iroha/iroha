@@ -598,7 +598,8 @@ through ADB `getprop`, each response must be exactly one LF-terminated value
 and the value itself must not require trimming before it can be bound into
 signed slot metadata. Non-zero ADB `getprop` exits are normalized to property
 and exit-code diagnostics instead of copying the raw subprocess command list,
-so configured ADB serials cannot leak through Python exception text. The
+and ADB launch failures report only that the property query could not be
+executed, so configured ADB serials cannot leak through Python exception text. The
 on-device lab exporter also fails closed if
 `Build.MODEL` and `Build.DEVICE` do not both identify the same standard
 Kagemusha matrix family through exact Pixel model/codename matches or the
@@ -1049,10 +1050,13 @@ entry-field names. When the staged subprocess
 terminates with a signal-style negative status, the runner returns a
 conventional nonzero wrapper status while preserving the exact subprocess code
 in the staged marker and report. Spawn-failure coverage exercises the real
-`subprocess.Popen(...)` boundary for both the Reserved-lineage proof runner and
-the ABI-7 compact-key runner, so partially written temporary child logs are
-removed and the caller receives the same conventional staged-runner error even
-when process launch fails before a child can report an exit status.
+`subprocess.Popen(...)` boundary for the Reserved-lineage key-artifact runner,
+Reserved-lineage proof runner, and ABI-7 compact-key runner, so partially
+written temporary child logs are removed and the caller receives the same
+conventional staged-runner error even when process launch fails before a child
+can report an exit status. Those launch failures report only the fixed
+`process launch failed` reason instead of echoing raw process-spawn exception
+text.
 The ABI-7 compact-key staged runner applies the same detached-run contract for
 the key-generation command: it runs the canonical
 `iroha app zk kagemusha recursive-compact-key-artifacts` command from the

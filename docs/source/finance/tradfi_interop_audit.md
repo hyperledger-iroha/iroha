@@ -426,6 +426,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   of operator inbox paths before network delivery, keeps malformed live notary
   anchor JSON, exported-index JSON, store-directory, and persisted record-source
   diagnostics free of operator export/store paths before network delivery,
+  reports audit-notary `--export-dir` discovery and empty `--all` anchor
+  discovery failures with role labels instead of local export paths,
   reports malformed source sidecar JSON and source XML read-limit failures with
   receipt-relative labels instead of local source paths, reports rail gateway
   `--inbox-dir` discovery failures with the `inbox_dir` role label instead of

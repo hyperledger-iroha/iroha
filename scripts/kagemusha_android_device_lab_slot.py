@@ -949,6 +949,8 @@ def _run_adb_getprop(
         raise ValueError(
             f"ADB getprop {prop} failed with exit code {exc.returncode}"
         ) from exc
+    except OSError as exc:
+        raise ValueError(f"ADB getprop {prop} could not be executed") from exc
     stdout = result.stdout
     if stdout.count("\n") != 1 or not stdout.endswith("\n"):
         raise ValueError("adb getprop output must be exactly one LF-terminated value")
@@ -1071,7 +1073,7 @@ def read_device_identity(
                     prop,
                     timeout_seconds=adb_timeout_seconds,
                 )
-            except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+            except ValueError as exc:
                 errors.append(f"adb getprop {prop} failed: {exc}")
                 continue
         if not value:

@@ -28562,7 +28562,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             def failing_runner(_command: list[str], _cwd: Path, log_path: Path) -> int:
                 log_path.write_bytes(b"partial")
-                raise OSError("spawn failed")
+                raise OSError("spawn failed token=compact-secret\x1b[31m")
 
             status, errors = compact_key_staged_runner.run_staged_keygen(
                 args,
@@ -28576,8 +28576,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(
             errors,
-            ["staged recursive compact keygen command could not be run: spawn failed"],
+            [
+                (
+                    "staged recursive compact keygen command could not be run: "
+                    "process launch failed"
+                )
+            ],
         )
+        self.assertNotIn("compact-secret", json.dumps(errors))
+        self.assertNotIn("\x1b", json.dumps(errors))
         self.assertFalse(temp_log.exists())
 
     def test_compact_key_staged_runner_removes_temp_log_on_popen_spawn_failure(
@@ -28604,7 +28611,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 del command, cwd, stderr
                 self.assertTrue(hasattr(stdout, "write"))
                 stdout.write(b"partial compact keygen log\n")
-                raise OSError("spawn failed")
+                raise OSError("spawn failed token=compact-popen-secret\x1b[31m")
 
             with mock.patch.object(
                 compact_key_staged_runner.subprocess,
@@ -28620,8 +28627,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(
             errors,
-            ["staged recursive compact keygen command could not be run: spawn failed"],
+            [
+                (
+                    "staged recursive compact keygen command could not be run: "
+                    "process launch failed"
+                )
+            ],
         )
+        self.assertNotIn("compact-popen-secret", json.dumps(errors))
+        self.assertNotIn("\x1b", json.dumps(errors))
         self.assertFalse(temp_log.exists())
 
     def test_compact_key_staged_runner_removes_temp_log_on_real_popen_spawn_failure(
@@ -28647,10 +28661,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(status, 1)
             self.assertEqual(len(errors), 1)
-            self.assertTrue(
-                errors[0].startswith(
-                    "staged recursive compact keygen command could not be run:"
-                )
+            self.assertEqual(
+                errors[0],
+                (
+                    "staged recursive compact keygen command could not be run: "
+                    "process launch failed"
+                ),
             )
             self.assertTrue(staged_artifact_dir.exists())
             self.assertFalse(temp_log.exists())
@@ -32711,7 +32727,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     log_path.write_text("generated append lineage keys\n", encoding="utf-8")
                     return 0
                 log_path.write_bytes(b"partial")
-                raise OSError("spawn failed")
+                raise OSError("spawn failed token=lineage-proof-secret\x1b[31m")
 
             status, errors = lineage_staged_runner.run_staged_lineage_proof(
                 args,
@@ -32722,8 +32738,66 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(
             errors,
-            ["staged lineage proof command could not be run: spawn failed"],
+            [
+                (
+                    "staged lineage proof command could not be run: "
+                    "process launch failed"
+                )
+            ],
         )
+        self.assertNotIn("lineage-proof-secret", json.dumps(errors))
+        self.assertNotIn("\x1b", json.dumps(errors))
+        self.assertFalse(temp_log.exists())
+
+    def test_lineage_proof_staged_runner_redacts_key_artifact_spawn_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+            init_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+            )
+
+            def failing_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                self.assertEqual(command, init_command)
+                self.assertEqual(cwd, root / "staged")
+                log_path.write_bytes(b"partial init lineage key artifact log\n")
+                raise OSError("spawn failed token=lineage-key-secret\x1b[31m")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=failing_runner,
+            )
+            temp_log = (
+                staged_artifact_dir
+                / ".lineage-init-key-artifacts.log.staged-runner.tmp"
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            [
+                (
+                    "staged init lineage key artifact command could not be run: "
+                    "process launch failed"
+                )
+            ],
+        )
+        self.assertNotIn("lineage-key-secret", json.dumps(errors))
+        self.assertNotIn("\x1b", json.dumps(errors))
         self.assertFalse(temp_log.exists())
 
     def test_lineage_proof_staged_runner_removes_temp_log_on_popen_spawn_failure(
@@ -32779,7 +32853,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     else:
                         self.assert_proof_cwd(cwd)
                         self.stdout.write(b"partial lineage proof log\n")
-                        raise OSError("spawn failed")
+                        raise OSError(
+                            "spawn failed token=lineage-proof-popen-secret\x1b[31m"
+                        )
 
                 def assert_proof_cwd(self, cwd: Path) -> None:
                     self_test.assertEqual(REPO_ROOT, cwd)
@@ -32799,8 +32875,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(
             errors,
-            ["staged lineage proof command could not be run: spawn failed"],
+            [
+                (
+                    "staged lineage proof command could not be run: "
+                    "process launch failed"
+                )
+            ],
         )
+        self.assertNotIn("lineage-proof-popen-secret", json.dumps(errors))
+        self.assertNotIn("\x1b", json.dumps(errors))
         self.assertFalse(temp_log.exists())
 
     def test_lineage_proof_staged_runner_removes_temp_log_on_real_popen_spawn_failure(
@@ -32830,10 +32913,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(status, 1)
             self.assertEqual(len(errors), 1)
-            self.assertTrue(
-                errors[0].startswith(
-                    "staged init lineage key artifact command could not be run:"
-                )
+            self.assertEqual(
+                errors[0],
+                (
+                    "staged init lineage key artifact command could not be run: "
+                    "process launch failed"
+                ),
             )
             self.assertTrue(staged_artifact_dir.exists())
             self.assertFalse(temp_log.exists())

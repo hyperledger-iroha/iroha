@@ -2506,6 +2506,28 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        let synthetic_body_progress_snapshot = if contiguous_frontier {
+            let has_vote_backed_evidence =
+                self.slot_has_vote_backed_consensus_evidence(height, view);
+            self.frontier_slot.as_ref().and_then(|slot| {
+                (slot.height == height
+                    && slot.view == view
+                    && slot.block_hash == block_hash
+                    && slot.body_missing()
+                    && slot.repair_state.last_reason == Some("quorum_timeout")
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc)
+                        || has_vote_backed_evidence))
+                    .then_some((
+                        slot.timers.last_progress_at,
+                        slot.timers.lag_window_started_at,
+                        slot.repair_state.quorum_timeout_rebroadcasted,
+                    ))
+            })
+        } else {
+            None
+        };
         if contiguous_frontier {
             let _ = self.handle_frontier_slot_event(
                 now,
@@ -2515,6 +2537,17 @@ impl Actor {
                     sender: None,
                 },
             );
+            if let Some((last_progress_at, lag_window_started_at, quorum_timeout_rebroadcasted)) =
+                synthetic_body_progress_snapshot
+                && let Some(slot) = self.frontier_slot.as_mut()
+                && slot.height == height
+                && slot.view == view
+                && slot.block_hash == block_hash
+            {
+                slot.timers.last_progress_at = last_progress_at;
+                slot.timers.lag_window_started_at = lag_window_started_at;
+                slot.repair_state.quorum_timeout_rebroadcasted = quorum_timeout_rebroadcasted;
+            }
         }
         let rotate_zero_vote_frontier_immediately = contiguous_frontier && drop_pending;
         let handoff_frontier_quorum_timeout_owner = contiguous_frontier

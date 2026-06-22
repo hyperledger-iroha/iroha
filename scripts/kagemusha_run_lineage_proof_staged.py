@@ -46,6 +46,7 @@ LINEAGE_EXECUTION_REPORT_FILENAMES = {
 }
 MAX_EXECUTION_REPORT_BYTES = 16 * 1024
 STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0
+COMMAND_LAUNCH_FAILURE_DETAIL = "process launch failed"
 DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND = (
     lineage_evidence.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
 )
@@ -1223,13 +1224,16 @@ def _run_lineage_key_artifact_command(
             if runner is not None
             else _run_command_to_log(shlex.split(command), staged_root, temp_log)
         )
-    except OSError as exc:
+    except OSError:
         temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
             temp_log,
             f"staged {profile} lineage key artifact log temporary output",
         )
         return 1, [
-            f"staged {profile} lineage key artifact command could not be run: {exc}",
+            (
+                f"staged {profile} lineage key artifact command could not be run: "
+                f"{COMMAND_LAUNCH_FAILURE_DETAIL}"
+            ),
             *temp_identity_errors,
             *_cleanup_temp_output(
                 temp_log,
@@ -1393,13 +1397,16 @@ def run_staged_lineage_proof(
             if runner is not None
             else _run_command_to_log(command, args.repo_root, temp_log)
         )
-    except OSError as exc:
+    except OSError:
         temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
             temp_log,
             "staged proof log temporary output",
         )
         return 1, [
-            f"staged lineage proof command could not be run: {exc}",
+            (
+                "staged lineage proof command could not be run: "
+                f"{COMMAND_LAUNCH_FAILURE_DETAIL}"
+            ),
             *temp_identity_errors,
             *_cleanup_temp_output(temp_log, "staged proof log", temp_identity),
         ]

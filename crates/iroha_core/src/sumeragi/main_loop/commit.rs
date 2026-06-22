@@ -5225,7 +5225,7 @@ impl Actor {
             )
             .max(
                 payload_materialized_locally
-                    .then(|| self.targeted_payload_rescue_cooldown())
+                    .then(|| self.local_payload_commit_qc_recovery_retry_window())
                     .unwrap_or(Duration::ZERO),
             )
             .max(

@@ -2465,6 +2465,41 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("ABC123", rendered)
         self.assertNotIn("['adb'", rendered)
 
+    def test_kagemusha_slot_assembler_redacts_adb_getprop_oserror_detail(
+        self,
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def failing_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            calls.append(command)
+            raise OSError("adb spawn failed for ABC123 token=getprop-secret\x1b[31m")
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=failing_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial="ABC123",
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                adb_timeout_seconds=7,
+                identity_hints={},
+                errors=errors,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(facts, {})
+        self.assertEqual(len(calls), 4)
+        self.assertIn(
+            "adb getprop ro.build.fingerprint failed: "
+            "ADB getprop ro.build.fingerprint could not be executed",
+            rendered,
+        )
+        self.assertNotIn("ABC123", rendered)
+        self.assertNotIn("getprop-secret", rendered)
+        self.assertNotIn("\x1b", rendered)
+
     def test_kagemusha_slot_assembler_rejects_nonpositive_adb_timeout_before_root_classify(
         self,
     ) -> None:

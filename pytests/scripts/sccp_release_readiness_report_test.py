@@ -8880,7 +8880,7 @@ def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_
     blocker = (
         "SCCP active-launch checklist schema source inventory "
         "scripts/sccp_release_readiness_report.py missing marker: "
-        'release_checklist["ready"] is True'
+        "def _release_checklist_ready_value("
     )
     monkeypatch.setattr(
         report,
@@ -12953,6 +12953,47 @@ def test_release_readiness_report_compares_checklist_ready_exactly(
 
     assert readiness["release_checklist"]["ready"] == "true"
     assert readiness["production_ready"] is False
+    assert "release checklist ready must be boolean" in readiness["blockers"]
+
+
+def test_release_readiness_report_blocks_malformed_checklist_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Malformed release-checklist roots must not crash production readiness."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+
+    def malformed_launch_checklist(
+        evidence_summary,
+        native_prover_bundle=None,
+    ):
+        return "operator secret-token-checklist-root"
+
+    monkeypatch.setattr(
+        report,
+        "_active_launch_release_checklist",
+        malformed_launch_checklist,
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert readiness["release_checklist"] == "operator secret-token-checklist-root"
+    assert readiness["production_ready"] is False
+    assert "release checklist must be an object" in readiness["blockers"]
+    assert "| `<invalid id>` | blocked | release checklist must be an object |" in markdown
+    assert "- release checklist must be an object" in markdown
+    assert "secret-token-checklist-root" not in markdown
+    assert "Traceback" not in markdown
 
 
 def test_release_readiness_report_markdown_compares_row_ready_exactly(
@@ -13009,6 +13050,48 @@ def test_release_readiness_report_markdown_compares_row_ready_exactly(
     assert "| yes | passed |" not in markdown
 
 
+def test_release_readiness_report_markdown_rejects_malformed_top_level_status(
+    tmp_path: Path,
+) -> None:
+    """Top-level readiness status must fail closed without leaking copied roots."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    truthy_status = dict(readiness)
+    truthy_status["production_ready"] = "true"
+    missing_status = dict(readiness)
+    del missing_status["production_ready"]
+
+    truthy_markdown = report._render_markdown(
+        truthy_status,
+        max_blockers_per_lane=4,
+    )
+    missing_markdown = report._render_markdown(
+        missing_status,
+        max_blockers_per_lane=4,
+    )
+    scalar_markdown = report._render_markdown(
+        "operator secret-token-readiness-root",
+        max_blockers_per_lane=4,
+    )
+
+    assert "Status: NOT READY" in truthy_markdown
+    assert "Status: NOT READY" in missing_markdown
+    assert "Status: NOT READY" in scalar_markdown
+    assert "| `<invalid path>` | `<invalid bytes>` | `<invalid sha256>` |" in scalar_markdown
+    assert "lane summary must be an object" in scalar_markdown
+    assert "secret-token-readiness-root" not in scalar_markdown
+    assert "Traceback" not in scalar_markdown
+
+
 def test_release_readiness_report_markdown_marks_malformed_blocker_containers(
     tmp_path: Path,
 ) -> None:
@@ -13040,6 +13123,417 @@ def test_release_readiness_report_markdown_marks_malformed_blocker_containers(
     assert "- `<invalid blockers>`" in markdown
     assert "o<br>p<br>e<br>r<br>a<br>t<br>o<br>r" not in markdown
     assert "- o\n- p\n- e\n- r" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_lane_rows(
+    tmp_path: Path,
+) -> None:
+    """Lane readiness Markdown must not crash or leak copied malformed rows."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    readiness["evidence"]["lanes"][0] = "operator secret-token-row"
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert (
+        "| - | - | blocked | source=no, deploy=no, dest=no, route=no | "
+        "lane summary must be an object |"
+    ) in markdown
+    assert "secret-token-row" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_crypto_rows(
+    tmp_path: Path,
+) -> None:
+    """Crypto evidence Markdown must not crash or leak copied malformed rows."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    readiness["cryptographic_evidence"][0] = "operator secret-token-crypto-row"
+    hostile_row = readiness["cryptographic_evidence"][1]
+    hostile_row["domain"] = "operator secret-token-domain"
+    hostile_row["chain"] = "operator secret-token-chain"
+    hostile_row["evm_source_rpc_chain_id"] = "operator secret-token-chain-id"
+    hostile_row["source_verifier_material_hash"] = "operator secret-token-hash"
+    hostile_row["source_adapter_gate_audit_hashes"] = {
+        "operator|secret-token-audit": "0x" + "44" * 32
+    }
+    hostile_row["route_canary_evidence_source"] = "operator secret-token-source"
+    hostile_row["route_canary_evidence_bound"] = True
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert (
+        "| - | - | `-` | `-` | `-` | `-` | - | - | - | - | - | - | - | "
+        "`- (unbound)` | - | - | - | - | - | - | - | - |"
+    ) in markdown
+    assert "`<invalid source_adapter_gate_audit_hashes>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_input_and_corridor_rows(
+    tmp_path: Path,
+) -> None:
+    """Evidence-input and corridor Markdown must not leak copied malformed rows."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    non_object_inputs = dict(readiness)
+    non_object_inputs["input_artifacts"] = "operator secret-token-input-root"
+    non_object_corridor = dict(readiness)
+    non_object_corridor["corridor"] = "operator secret-token-corridor-root"
+
+    input_root_markdown = report._render_markdown(
+        non_object_inputs,
+        max_blockers_per_lane=4,
+    )
+    corridor_root_markdown = report._render_markdown(
+        non_object_corridor,
+        max_blockers_per_lane=4,
+    )
+
+    assert (
+        "| `<invalid path>` | `<invalid bytes>` | `<invalid sha256>` |"
+        in input_root_markdown
+    )
+    assert "secret-token-input-root" not in input_root_markdown
+    assert (
+        "| `<invalid phase>` | `<invalid status>` | - | - |"
+        in corridor_root_markdown
+    )
+    assert "secret-token-corridor-root" not in corridor_root_markdown
+
+    readiness["input_artifacts"][0] = "operator secret-token-input-row"
+    readiness["input_artifacts"].append(
+        {
+            "path": "operator|secret-token-input",
+            "bytes": "operator secret-token-bytes",
+            "sha256": "operator secret-token-hash",
+        }
+    )
+    phase = next(iter(readiness["corridor"]["phases"]))
+    readiness["corridor"]["phases"][phase] = "operator secret-token-status"
+    readiness["corridor"]["phases"]["operator|secret-token-phase"] = (
+        "operator secret-token-phase-status"
+    )
+    readiness["corridor"]["evidence_artifacts"][phase] = {
+        "path": "operator|secret-token-artifact",
+        "sha256": "operator secret-token-artifact-hash",
+    }
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert markdown.count("`<invalid path>`") >= 2
+    assert "`<invalid bytes>`" in markdown
+    assert "`<invalid sha256>`" in markdown
+    assert "`<invalid phase>`" in markdown
+    assert "`<invalid status>`" in markdown
+    assert "`<invalid evidence_artifact>`" in markdown
+    assert "`<invalid evidence_artifact.sha256>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_collection_roots(
+    tmp_path: Path,
+) -> None:
+    """Markdown section roots must not crash or leak copied scalar payloads."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    crypto_root = dict(readiness)
+    crypto_root["cryptographic_evidence"] = "operator secret-token-crypto-root"
+    user_root = dict(readiness)
+    user_root["user_prover_submission_surfaces"] = (
+        "operator secret-token-user-root"
+    )
+    evidence_root = dict(readiness)
+    evidence_root["evidence"] = "operator secret-token-evidence-root"
+    lanes_root = dict(readiness)
+    lanes_root["evidence"] = dict(readiness["evidence"])
+    lanes_root["evidence"]["lanes"] = "operator secret-token-lanes-root"
+
+    crypto_markdown = report._render_markdown(
+        crypto_root,
+        max_blockers_per_lane=4,
+    )
+    user_markdown = report._render_markdown(
+        user_root,
+        max_blockers_per_lane=4,
+    )
+    evidence_markdown = report._render_markdown(
+        evidence_root,
+        max_blockers_per_lane=4,
+    )
+    lanes_markdown = report._render_markdown(
+        lanes_root,
+        max_blockers_per_lane=4,
+    )
+
+    assert "`- (unbound)`" in crypto_markdown
+    assert (
+        "blocked: submission surface must be an object"
+        in user_markdown
+    )
+    assert "lane summary must be an object" in evidence_markdown
+    assert "lane summary must be an object" in lanes_markdown
+    combined = "\n".join(
+        [crypto_markdown, user_markdown, evidence_markdown, lanes_markdown]
+    )
+    assert "secret-token" not in combined
+    assert "Traceback" not in combined
+
+
+def test_release_readiness_report_markdown_rejects_malformed_user_prover_rows(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown must not crash or leak copied malformed rows."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    readiness["user_prover_submission_surfaces"][0] = (
+        "operator secret-token-user-surface"
+    )
+    hostile_surface = readiness["user_prover_submission_surfaces"][1]
+    hostile_surface["lanes"] = "operator secret-token-lane"
+    hostile_surface["proof_backend"] = "operator secret-token-backend"
+    hostile_surface["on_chain_submission"] = "operator|secret-token-submission"
+    hostile_surface["required_phases"] = ["operator secret-token-phase"]
+    hostile_surface["sdk_helper_symbols_by_sdk"] = {
+        "js-sdk": ["operator|secret-token-helper"]
+    }
+    hostile_surface["validation_status"] = "operator secret-token-validation"
+    hostile_surface["validation_blockers"] = [
+        "operator secret-token-user-surface-blocker"
+    ]
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert (
+        "| `<invalid lanes>` | `<invalid proof_backend>` | "
+        "`<invalid sdk_helper_symbols_by_sdk>` | "
+        "`<invalid on_chain_submission>` | `<invalid required_phases>` | "
+        "blocked: submission surface must be an object |"
+    ) in markdown
+    assert "`<invalid validation_status>`" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_native_prover_bundle(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must not crash or leak copied malformed fields."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    non_object_readiness = dict(readiness)
+    non_object_readiness["native_evm_prover_bundle"] = (
+        "operator secret-token-native-bundle"
+    )
+
+    non_object_markdown = report._render_markdown(
+        non_object_readiness,
+        max_blockers_per_lane=4,
+    )
+
+    assert (
+        "| no | blocked | - | - | - | - | - | - | - | - | - | "
+        "native EVM prover bundle must be an object |"
+    ) in non_object_markdown
+    assert "secret-token-native-bundle" not in non_object_markdown
+
+    hostile_bundle = readiness["native_evm_prover_bundle"]
+    hostile_bundle["artifact"]["path"] = "operator|secret-token-artifact"
+    hostile_bundle["artifact"]["sha256"] = "operator secret-token-artifact-hash"
+    hostile_bundle["proof_artifact_hash"] = "operator secret-token-proof"
+    hostile_bundle["proving_key_hash"] = "operator secret-token-proving-key"
+    hostile_bundle["verifier_key_hash"] = "operator secret-token-verifier-key"
+    hostile_bundle["destination_binding_hash"] = (
+        "operator secret-token-destination-binding"
+    )
+    hostile_bundle["cross_sdk_fixture_parity_artifact"]["path"] = (
+        "operator|secret-token-parity"
+    )
+    hostile_bundle["native_prover_self_test_artifact"]["sha256"] = (
+        "operator secret-token-self-test"
+    )
+    hostile_bundle["sdk_artifacts"][0]["sdk"] = "operator secret-token-sdk"
+    hostile_bundle["validation_status"] = "operator secret-token-status"
+    hostile_bundle["validation_blockers"] = [
+        "operator secret-token-native-blocker"
+    ]
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert "`<invalid artifact>`" in markdown
+    assert "`<invalid artifact.sha256>`" in markdown
+    assert "`<invalid proof_artifact_hash>`" in markdown
+    assert "`<invalid proving_key_hash>`" in markdown
+    assert "`<invalid verifier_key_hash>`" in markdown
+    assert "`<invalid destination_binding_hash>`" in markdown
+    assert "`<invalid cross_sdk_fixture_parity_artifact>`" in markdown
+    assert "`<invalid native_prover_self_test_artifact>`" in markdown
+    assert "`<invalid sdk_artifacts>`" in markdown
+    assert "`<invalid validation_status>`" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_source_inventory_rows(
+    tmp_path: Path,
+) -> None:
+    """Source-inventory Markdown must not leak copied malformed gate rows."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    non_object_readiness = dict(readiness)
+    non_object_readiness["source_inventory"] = (
+        "operator secret-token-source-inventory"
+    )
+
+    non_object_markdown = report._render_markdown(
+        non_object_readiness,
+        max_blockers_per_lane=4,
+    )
+
+    assert (
+        "| `<invalid gate>` | blocked | source inventory must be an object |"
+        in non_object_markdown
+    )
+    assert "secret-token-source-inventory" not in non_object_markdown
+
+    readiness["source_inventory"]["operator|secret-token-gate"] = {
+        "validation_status": "operator secret-token-status",
+        "validation_blockers": ["operator secret-token-blocker"],
+    }
+    readiness["source_inventory"]["proof_request_bundle_gate"] = (
+        "operator secret-token-gate-payload"
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert "`<invalid gate>`" in markdown
+    assert "source inventory gate must be an object" in markdown
+    assert "`<invalid validation_status>`" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_readiness_report_markdown_rejects_malformed_checklist_rows(
+    tmp_path: Path,
+) -> None:
+    """Release-checklist Markdown must not leak copied malformed item rows."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    non_object_readiness = dict(readiness)
+    non_object_readiness["release_checklist"] = (
+        "operator secret-token-release-checklist"
+    )
+
+    non_object_markdown = report._render_markdown(
+        non_object_readiness,
+        max_blockers_per_lane=4,
+    )
+
+    assert (
+        "| `<invalid id>` | blocked | release checklist must be an object |"
+        in non_object_markdown
+    )
+    assert "secret-token-release-checklist" not in non_object_markdown
+
+    readiness["release_checklist"]["items"][0] = (
+        "operator secret-token-checklist-item"
+    )
+    hostile_item = readiness["release_checklist"]["items"][1]
+    hostile_item["id"] = "operator|secret-token-checklist-id"
+    hostile_item["ready"] = "operator secret-token-ready"
+    hostile_item["blockers"] = ["operator secret-token-checklist-blocker"]
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert "release checklist item must be an object" in markdown
+    assert "`<invalid id>`" in markdown
+    assert "`<invalid blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "Traceback" not in markdown
 
 
 def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings(
@@ -13263,12 +13757,12 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         (
             "evidence_bound",
             "true",
-            "route canary evidence is not bound",
+            "route canary evidence_bound must be boolean",
         ),
         (
             "evidence_bound",
             1,
-            "route canary evidence is not bound",
+            "route canary evidence_bound must be boolean",
         ),
         (
             "evidence_bound",
@@ -13290,17 +13784,39 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         (
             "receipt_block_finalized",
             "true",
-            "route canary receipt block must be finalized",
+            "route canary receipt_block_finalized must be boolean",
         ),
         (
             "receipt_block_finalized",
             1,
-            "route canary receipt block must be finalized",
+            "route canary receipt_block_finalized must be boolean",
         ),
         (
             "receipt_block_finalized",
             None,
             "route canary receipt block must be finalized",
+        ),
+    )
+    route_canary_message_proof_used_exactness_cases = (
+        (
+            "message_proof_used",
+            False,
+            "route canary message proof must be used",
+        ),
+        (
+            "message_proof_used",
+            "true",
+            "route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            1,
+            "route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            None,
+            "route canary message proof must be used",
         ),
     )
     route_canary_status_exactness_cases = (
@@ -13435,6 +13951,7 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         *route_canary_status_exactness_cases,
         *route_canary_evidence_source_exactness_cases,
         *route_canary_hex32_exactness_cases,
+        *route_canary_message_proof_used_exactness_cases,
         *route_canary_receipt_finalized_exactness_cases,
     )
 
@@ -14661,6 +15178,103 @@ def test_release_readiness_report_redacts_native_evm_payload_artifact_path_failu
     assert "artifact path detail" not in rendered_blockers
 
 
+def test_release_readiness_report_blocks_malformed_native_evm_artifact_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Native prover artifact metadata must be checked before direct indexing."""
+
+    report = load_report_module()
+    manifest_path = tmp_path / "native-bundle.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    for relative_path in ("proof.bin", "parity.json", "self-test.json"):
+        (tmp_path / relative_path).write_bytes(b"x" * 2048)
+    payload = {
+        "proof_artifact": "proof.bin",
+        "cross_sdk_fixture_parity_artifact": "parity.json",
+        "native_prover_self_test_artifact": "self-test.json",
+    }
+    safe_path = str(tmp_path / "proof.bin")
+    bad_artifacts = (
+        (
+            "malformed",
+            "artifact metadata must be an object",
+        ),
+        (
+            {
+                "path": " secret-token|artifact ",
+                "bytes": 2048,
+                "sha256": "0" * 64,
+            },
+            "artifact path metadata is invalid",
+        ),
+        (
+            {
+                "path": safe_path,
+                "bytes": True,
+                "sha256": "0" * 64,
+            },
+            "artifact bytes metadata is invalid",
+        ),
+        (
+            {
+                "path": safe_path,
+                "bytes": 2048,
+                "sha256": "A" * 64,
+            },
+            "artifact sha256 metadata is invalid",
+        ),
+    )
+    consumers = (
+        (
+            "proof_artifact",
+            lambda: report._native_evm_prover_payload_artifact(
+                manifest_path,
+                payload,
+                "proof_artifact",
+                "proof_artifact_hash",
+                "proof_artifact",
+            ),
+        ),
+        (
+            "cross_sdk_fixture_parity_artifact",
+            lambda: report._native_evm_prover_parity_fixture_status(
+                manifest_path,
+                payload,
+            ),
+        ),
+        (
+            "native_prover_self_test_artifact",
+            lambda: report._native_evm_prover_self_test_status(
+                manifest_path,
+                payload,
+            ),
+        ),
+    )
+
+    rendered_blockers = []
+    for label, consumer in consumers:
+        for artifact, expected_blocker in bad_artifacts:
+            monkeypatch.setattr(
+                report,
+                "_artifact",
+                lambda _path, artifact=artifact: artifact,
+            )
+
+            artifact_summary, blockers = consumer()
+
+            assert artifact_summary is None
+            expected = (
+                f"native EVM Groth16 prover bundle {label} {expected_blocker}"
+            )
+            assert expected in blockers
+            rendered_blockers.extend(blockers)
+
+    rendered = "\n".join(rendered_blockers)
+    assert "secret-token" not in rendered
+    assert "Traceback" not in rendered
+
+
 def test_release_readiness_report_redacts_native_evm_manifest_artifact_path_failure(
     tmp_path: Path,
     monkeypatch,
@@ -14720,6 +15334,178 @@ def test_release_readiness_report_cli_redacts_top_level_exception_details(
             assert "secret-token" not in captured.err
             assert "private-path" not in captured.err
             assert exception_type.__name__ not in captured.err
+
+
+def test_release_readiness_report_cli_suppresses_malformed_report_roots(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI output must fail closed on malformed report roots."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: "operator secret-token-readiness-root",
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == {
+        "production_ready": False,
+        "blockers": ["readiness report must be an object"],
+    }
+    assert "secret-token-readiness-root" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_exit_compares_production_ready_exactly(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI exit status must not truthy-coerce readiness roots."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": "true",
+            "blockers": [],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["production_ready"] is False
+    assert payload["blockers"] == [
+        "readiness report production_ready must be boolean"
+    ]
+
+
+def test_release_readiness_report_cli_suppresses_malformed_report_blockers(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI public blockers must be canonical before output."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": ["operator secret-token-readiness-blocker"],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["production_ready"] is False
+    assert payload["blockers"] == [
+        "readiness report blockers[0] contains sensitive name"
+    ]
+    assert "secret-token-readiness-blocker" not in captured.out
+
+
+def test_release_readiness_report_cli_rejects_unknown_report_fields_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI public report roots must not publish copied unknown fields."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "evidence": {},
+            "operator_note": "safe note",
+            "secret-token-readiness-root": "secret-token-value",
+            7: "secret-token-int-key",
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["production_ready"] is False
+    assert "operator_note" not in payload
+    assert "secret-token-readiness-root" not in payload
+    assert "7" not in payload
+    assert "safe note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+    blockers = "\n".join(payload["blockers"])
+    assert "readiness report contains unknown top-level field: operator_note" in blockers
+    assert (
+        "readiness report contains unknown top-level field name with sensitive name"
+        in blockers
+    )
+    assert "readiness report contains malformed unknown top-level field name" in blockers
+
+
+def test_release_readiness_report_cli_rejects_malformed_allowed_report_roots_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI public report roots must be shaped before output."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "evidence": "operator secret-token-evidence",
+            "release_checklist": "operator secret-token-checklist",
+            "corridor": "operator secret-token-corridor",
+            "inputs": ["operator secret-token-input"],
+            "input_artifacts": ["operator secret-token-artifact"],
+            "native_evm_prover_bundle": "operator secret-token-native-bundle",
+            "source_inventory": "operator secret-token-source-inventory",
+            "cryptographic_evidence": ["operator secret-token-crypto"],
+            "user_prover_submission_surfaces": [
+                "operator secret-token-user-surface"
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == {
+        "production_ready": False,
+        "blockers": [
+            "readiness report evidence must be an object",
+            "readiness report release_checklist must be an object",
+            "readiness report corridor must be an object",
+            "readiness report source_inventory must be an object",
+            "readiness report inputs must be a list of objects",
+            "readiness report input_artifacts must be a list of objects",
+            "readiness report cryptographic_evidence must be a list of objects",
+            "readiness report user_prover_submission_surfaces must be a list of objects",
+            "readiness report native_evm_prover_bundle must be an object",
+        ],
+    }
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
 
 
 def test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields(
@@ -17571,6 +18357,41 @@ def test_release_readiness_report_rejects_duplicate_phase_evidence_assignment(
     ) in completed.stderr
     assert "already set by --phase-evidence rust-sccp=" in completed.stderr
     assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+
+
+def test_release_readiness_report_blocks_malformed_phase_artifact_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Malformed phase artifact rows must become corridor blockers."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+
+    def malformed_phase_evidence(*args, **kwargs):
+        return {"evidence-scripts": "operator secret-token-phase-artifact"}
+
+    monkeypatch.setattr(report, "_parse_phase_evidence", malformed_phase_evidence)
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=missing", "evidence-scripts=passed"],
+        [],
+        require_phase_evidence=True,
+        native_evm_prover_bundle=native_bundle,
+    )
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    blocker = (
+        "production corridor phase evidence-scripts evidence artifact cannot "
+        "be checked: malformed artifact row"
+    )
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert blocker in markdown
+    assert "secret-token-phase-artifact" not in markdown
+    assert "Traceback" not in markdown
 
 
 def test_release_readiness_report_suppresses_duplicate_phase_evidence_paths(

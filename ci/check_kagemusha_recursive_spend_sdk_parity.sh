@@ -11977,6 +11977,7 @@ def check_python(texts, errors):
             "instructions=(instruction,)",
             "_archive_bytes_named(private_key, \"private_key\")",
             "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
+            "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
         ),
         "Python Kagemusha instruction transaction builder",
         errors,
@@ -19735,7 +19736,7 @@ if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":
     raise SystemExit("negative control failed: Python SDK ABI-7 fixture native guard drift was not detected")
 
 if mode == "--negative-control-abi7-sdk-manifest-coverage":
-    first_message = None
+    detected_messages = []
     for target, needles in ABI7_SDK_MANIFEST_COVERAGE.items():
         original = read(target)
         for needle in needles:
@@ -19762,8 +19763,8 @@ if mode == "--negative-control-abi7-sdk-manifest-coverage":
                         "for the wrong reason: "
                         + message.splitlines()[0]
                     )
-                if first_message is None:
-                    first_message = message
+                expected = f"ABI-7 SDK fixture manifest coverage missing {target}: {needle}"
+                detected_messages.append(first_lines_for_labels(message, (expected,))[0])
                 continue
             finally:
                 text_overrides.pop(target, None)
@@ -19773,10 +19774,11 @@ if mode == "--negative-control-abi7-sdk-manifest-coverage":
                 + ": "
                 + needle
             )
-    if first_message is None:
+    if not detected_messages:
         raise SystemExit("negative control failed: ABI-7 SDK fixture manifest coverage drift was not detected")
     print("negative control rejected ABI-7 SDK fixture manifest coverage drift")
-    print(first_message.splitlines()[0])
+    for detected_message in detected_messages:
+        print(detected_message)
     raise SystemExit(0)
 
 if mode == "--negative-control-python-connect-runner-coverage":
@@ -25618,14 +25620,19 @@ if mode == "--negative-control-js-lineage-key-artifact-request-object":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        expected = "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing function kagemushaNormalizeLineageKeyArtifactsForRequest("
-        if expected not in message:
+        expected_labels = (
+            "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing function kagemushaNormalizeLineageKeyArtifactsForRequest(",
+            "JavaScript package dist recursive spend lineage key artifact request coverage missing package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JS lineage key artifact request object drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: JS lineage key artifact request object drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JS lineage key artifact request object drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS lineage key artifact request object drift was not detected"
@@ -25645,7 +25652,11 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
         "buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing",
         1,
     )
-    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+    if (
+        mutated_source == texts[source_target]
+        or "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)" in mutated_source
+        or mutated_test == texts[test_target]
+    ):
         raise SystemExit(
             "negative control failed: unable to mutate JS Kagemusha instruction transaction builder coverage"
         )
@@ -25858,6 +25869,11 @@ if mode == "--negative-control-python-kagemusha-instruction-transaction-builder"
         "def build_kagemusha_recursive_redeem_transaction_unchecked(",
         1,
     )
+    mutated_source = mutated_source.replace(
+        "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
+        "instruction = redeem_request_archive",
+        1,
+    )
     mutated_test = texts[test_target].replace(
         "bad_request_flags[39] = 0x20",
         "bad_request_flags[39] = 0x06",
@@ -25873,14 +25889,19 @@ if mode == "--negative-control-python-kagemusha-instruction-transaction-builder"
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        expected = "Python Kagemusha instruction transaction tests missing bad_request_flags[39] = 0x20"
-        if expected not in message:
+        expected_labels = (
+            "Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
+            "Python Kagemusha instruction transaction tests missing bad_request_flags[39] = 0x20",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python Kagemusha instruction transaction builder drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: Python Kagemusha instruction transaction builder drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python Kagemusha instruction transaction builder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python Kagemusha instruction transaction builder drift was not detected"
@@ -34699,21 +34720,27 @@ if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     updated = updated.replace(
         "zero-envelope nested Pallas archives",
         "one-envelope nested Pallas archives",
-        1,
     )
-    if updated == original:
+    if updated == original or "zero-envelope nested Pallas archives" in updated:
         raise SystemExit("negative control failed: unable to mutate native bridge zero-envelope Pallas guard")
     mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "Rust C recursive spend nested Pallas guard" not in message:
+        expected_labels = (
+            "Rust C recursive spend nested Pallas guard missing zero-envelope Pallas archive",
+            "Rust C recursive spend nested Pallas guard missing zero-envelope nested Pallas archives",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: native bridge zero-envelope Pallas guard drift was not detected"
+                "negative control failed: native bridge zero-envelope Pallas guard drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected native bridge zero-envelope Pallas guard drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: native bridge zero-envelope Pallas guard drift was not detected"
@@ -34747,12 +34774,20 @@ if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "Rust native bridge ZK1 I10P parser exactness tests" not in message:
+        expected_labels = (
+            "Rust native bridge ZK1 I10P parser exactness tests missing zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads",
+            "Rust native bridge ZK1 I10P parser exactness tests missing I10P payloads with trailing bytes must not be partially decoded",
+            "Rust native bridge ZK1 I10P parser exactness tests missing zk1_read_instance_columns(&payload).is_none()",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"
+                "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected native bridge ZK1 I10P parser exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"

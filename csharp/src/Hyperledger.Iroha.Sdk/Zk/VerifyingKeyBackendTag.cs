@@ -367,6 +367,24 @@ public static class VerifyingKeyBackendTags
     private static bool IsDeveloperOnlyBackendLabel(string raw)
     {
         var label = raw.Trim().ToLowerInvariant();
+        var compact = CompactAscii(label);
+        foreach (var fragment in new[]
+                 {
+                     "notforproduction",
+                     "notproduction",
+                     "notproductionready",
+                     "notready",
+                     "replacebeforeproduction",
+                     "replacebeforemainnet",
+                     "draftonly",
+                 })
+        {
+            if (compact.Contains(fragment, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
         var letterRun = new StringBuilder();
         foreach (var token in LowercaseAsciiSegments(label))
         {
@@ -407,12 +425,18 @@ public static class VerifyingKeyBackendTags
             || value.Contains("mock", StringComparison.Ordinal)
             || value.Contains("fixture", StringComparison.Ordinal)
             || value.Contains("dev", StringComparison.Ordinal)
+            || value.Contains("todo", StringComparison.Ordinal)
+            || value.Contains("draft", StringComparison.Ordinal)
+            || value.Contains("pending", StringComparison.Ordinal)
+            || value.Contains("replace", StringComparison.Ordinal)
             || value == "test"
             || value == "dummy"
             || value == "fake"
             || value == "stub"
             || value == "sample"
-            || value == "placeholder";
+            || value == "placeholder"
+            || value == "todo"
+            || value == "draft";
     }
 
     private static bool IsStarkFriProductionBackendLabel(string backend)

@@ -2261,6 +2261,33 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertIn("must not be a symlink", stderr)
             self.assertFalse((target_dir / "nested").exists())
 
+    def test_export_dir_discovery_path_diagnostics_do_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            missing_dir = root / "missing-export"
+            export_file = root / "export-as-file"
+            export_file.write_text("not a directory\n", encoding="utf-8")
+            empty_dir = root / "empty-export"
+            empty_dir.mkdir()
+
+            cases = (
+                (missing_dir, ["--dry-run"], "does not exist"),
+                (export_file, ["--dry-run"], "must be a directory"),
+                (empty_dir, ["--all", "--dry-run"], "has no *.notary.json anchors"),
+            )
+            for path, extra_args, message in cases:
+                with self.subTest(path=path.name):
+                    rc, stdout, stderr = run_main(
+                        ["--export-dir", str(path), *extra_args]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("export_dir", stderr)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(str(path), stderr)
+                    self.assertNotIn(path.name, stderr)
+
     def test_symlinked_export_dir_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2285,7 +2312,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("export_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(export_dir), stderr)
+            self.assertNotIn(export_dir.name, stderr)
 
     def test_symlinked_export_dir_ancestor_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2311,7 +2341,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("export_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(export_dir), stderr)
+            self.assertNotIn(ancestor.name, stderr)
 
     def test_plain_http_endpoint_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:

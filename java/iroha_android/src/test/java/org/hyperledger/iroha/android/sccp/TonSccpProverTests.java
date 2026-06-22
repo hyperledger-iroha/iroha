@@ -3282,6 +3282,20 @@ public final class TonSccpProverTests {
                 repeat("bb", 32)));
     assert !sourceStateBoundRequest.requestHash().equals(request.requestHash())
         : "request hash must bind source-state verifier hash";
+    final TonSccpProver.ProofRequest splitBoundaryRequest =
+        TonSccpProver.buildProofRequest(
+            new TonSccpProver.ProofRequestInput(
+                samplePublicInputs(),
+                sampleTonBundleBytes(new byte[] {0x71}),
+                new byte[0],
+                repeat("56", 32),
+                repeat("78", 32),
+                TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+                repeat("cc", 32),
+                repeat("aa", 32),
+                repeat("bb", 32),
+                TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+                TonSccpProver.DOMAIN_TON));
     final TonSccpProver.ProofRequest shiftedSplitRequest =
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
@@ -3296,6 +3310,8 @@ public final class TonSccpProverTests {
                 repeat("bb", 32),
                 TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
                 TonSccpProver.DOMAIN_TON));
+    assert !splitBoundaryRequest.requestHash().equals(shiftedSplitRequest.requestHash())
+        : "TON request hash must bind bundle finality-proof byte boundaries";
     assert !request.requestHash().equals(shiftedSplitRequest.requestHash())
         : "TON request hash must bind bundle finality proof bytes";
 

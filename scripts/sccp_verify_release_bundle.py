@@ -532,24 +532,29 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "SCCP release-notes attachment invariants source inventory",
     "SCCP readiness Markdown invariants source inventory",
     "evidence-input path/bytes/hash visibility",
+    "evidence-input row suppression",
     "production-corridor phase/status visibility",
     "production-corridor artifact/hash visibility",
+    "production-corridor row suppression",
     "checklist gate/status visibility",
     "checklist blocker-cell visibility",
     "cryptographic row live-EVM visibility",
     "cryptographic row core-hash visibility",
     "cryptographic row route-canary visibility",
+    "cryptographic-evidence root suppression",
     "source-inventory gate/status visibility",
     "source-inventory blocker-cell visibility",
     "user-prover validation-status visibility",
     "user-prover blocker-cell visibility",
     "user-prover helper/phase row visibility",
+    "user-prover root suppression",
     "native-prover validation-status visibility",
     "native-prover blocker-cell visibility",
     "native-prover artifact/hash row visibility",
     "native-prover support-artifact row visibility",
     "lane-readiness status visibility",
     "lane-readiness blocker-cell visibility",
+    "lane-readiness root suppression",
 )
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
@@ -3520,8 +3525,13 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "def _reject_source_material_template_hashes(",
             "for field, template_hash in template_hashes.items():",
             "f\"{field} must be deployed evidence, not built-in template material\"",
+            "def _reject_source_adapter_deployment_template_hashes(",
+            "f\"{field} must be deployed source-adapter evidence, \"",
             "def _reject_source_adapter_audit_template_hashes(",
             "if any(raw == template_hash for template_hash in template_hashes.values()):",
+            "def _source_adapter_gate_template_hash_blockers(",
+            "source adapter gate hash",
+            "source adapter gate audit hashes",
             "not built-in template material",
         ),
     ),
@@ -3529,7 +3539,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
             "test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes",
+            "test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_for_all_lanes",
             "test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays",
+            "test_all_lanes_release_checklist_rejects_source_gate_template_replays",
+            "checklist_source_gate_lane",
             "template_cases = [",
             "eth_module.ETH_TEMPLATE_COMPONENTS.items()",
             "bsc_module.bsc_template_components().items()",
@@ -3539,18 +3552,24 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "for domain, field, template_hash in template_cases:",
             "for domain, audit_fields, template_hashes in cases:",
             "for template_field, template_hash in template_hashes.items():",
+            "source-adapter evidence, not built-in template material",
+            "source adapter gate hash must be deployed evidence",
+            "source adapter gate audit hashes",
             "not built-in template material",
         ),
     ),
     (
         "scripts/sccp_release_bundle.py",
         (
+            "def _source_adapter_gate_template_hashes(",
+            "def _source_adapter_gate_template_hash_errors(",
             "def _source_adapter_gate_template_audit_errors(",
             "all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
             "all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
             "all_lanes._source_material_template_hashes(profile).values()",
             "for audit_field in audit_fields:",
             "if bytes.fromhex(audit_hash[2:]) in template_hashes:",
+            "must be deployed gate evidence, not built-in template material",
             "not built-in template material",
         ),
     ),
@@ -3558,6 +3577,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays",
+            "test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays",
             "all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
             "all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS",
             "for domain, row_chain, audit_fields, template_hashes in cases:",
@@ -3565,6 +3585,9 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "for template_field, template_hash in template_hashes.items():",
             "bundle._cryptographic_evidence_row_bundle_errors(",
             "bundle._source_adapter_gate_semantic_errors(",
+            "verifier._cryptographic_evidence_source_adapter_gate_schema_errors(",
+            "verifier._source_adapter_gate_coherence_errors(",
+            "source_adapter_gate_hash must be deployed gate",
             "not built-in template material",
         ),
     ),
@@ -3838,6 +3861,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "field with sensitive name",
             "field with malformed name",
             "non-string field name",
+            "PUBLIC_SUMMARY_FIELDS = (",
+            "def _public_summary(",
             "solid block header proof is invalid",
             "witness schedule payload is invalid",
             'f"witness schedule transition {index} message is invalid"',
@@ -3867,6 +3892,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_evidence_redacts_route_canary_topic_parser_failures",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
             "def test_live_evidence_preflights_source_records_and_full_rollout_args",
+            "def test_tron_live_cli_omits_runtime_endpoint_and_unknown_summary_fields",
+            "https://tron.example.invalid/secret-token-provider",
+            'assert "constant_endpoint" not in payload',
+            'assert "transaction_info_endpoint" not in payload',
+            'assert "transaction_endpoint" not in payload',
+            'assert "block_endpoint" not in payload',
             "for exception_type in (TypeError, ValueError, RuntimeError):",
             "secret-token-tron-error",
             "secret-token-result-field",
@@ -3940,11 +3971,17 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "raise ValueError(f\"{label}:{line_number}: invalid metadata comment\") from None",
             "source record hash metadata cannot be recomputed",
             "source record hashes cannot be recomputed",
+            "def _check_source_role_shape(",
+            "source_state_verifier_hash must be a non-zero 32-byte hex value",
+            "source_bridge_emitter_address must be a non-zero 20-byte hex value",
         ),
     ),
     (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
+            "def test_all_lanes_evidence_reports_deployment_source_role_shape_independently",
+            "source adapter deployment source_state_verifier_hash must be a non-zero 32-byte hex value",
+            "source adapter deployment source_bridge_emitter_address must be a non-zero 20-byte hex value",
             "def test_all_lanes_evidence_redacts_source_gate_recompute_failures",
             "for exception_type in (TypeError, ValueError, RuntimeError):",
             "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
@@ -3988,6 +4025,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "EVM-family source material constructors must reject reused role hashes",
             "source_verifier_material_production_gate_rejects_builtin_placeholder_role_replay",
             "source_trust_anchor_id",
+            "source_bridge_emitter_code_hash",
+            "source_bridge_network_id",
+            "source_bridge_owner_address",
             "source_bridge_config_hash",
             "domain {source_domain} must classify built-in placeholder replay for {label}",
             "domain {source_domain} must reject built-in placeholder replay for {label}",
@@ -4053,6 +4093,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "unpaired deployment receipt",
             "zero adapter proof hash",
             "zero adapter transcript hash",
+            "deployment hash pair without deployment-bound source roles",
+            "forged Solana {label} proof should fail at the common evidence shape gate",
+            "forged BSC {label} verifier evidence should fail at the common evidence shape gate",
+            "missing source bridge emitter",
+            "zero source bridge emitter code hash",
             "source verifier evidence profile drift must fail common shape before wrapper rebuild",
             "adapter verifier commitment helper must reject source verifier evidence profile drift after OpenVerify rebuild",
             "source verifier evidence chain label drift",
@@ -4066,6 +4111,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "consensus verifier id drift",
             "message-inclusion verifier hash drift",
             "finality policy id drift",
+            "source-state verifier hash drift",
+            "source bridge emitter address drift",
+            "source bridge emitter code-hash drift",
+            "source bridge config owner drift",
             "material-only verifier evidence must not accept deployment-looking fields without deployment context",
             "deployment-aware production verification must reject proofs that do not bind deployment evidence",
             "deployment matching must reject material-only proofs without deployment evidence",
@@ -4077,6 +4126,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "template source-trust-anchor hash replay",
             "standalone Solana deployment shape must reject {label}",
             "deployment matcher must reject malformed Solana {label} even when evidence and OpenVerify are rebuilt",
+            "Solana source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target",
+            "TON source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target",
             "inbound production readiness must only accept source-adapter deployments targeting SORA",
             "generic production verification must reject remote-to-remote source proofs",
             "generic production extraction must stay limited to inbound remote -> SORA proofs",
@@ -4239,6 +4290,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "source bridge runtime bytecode hash must match bridge_code_hash",
             "deployment receipt block receiptsRoot metadata must be verified",
             "Ethereum source deployment receipt block finality metadata must be verified",
+            "PUBLIC_SUMMARY_FIELDS = (",
+            "def _public_summary(",
             "source verifier material hash metadata must match canonical inputs",
             "source adapter engine deployment hash metadata must match canonical inputs",
             "expected source verifier material hash argument must match ",
@@ -4271,6 +4324,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_toml_requires_independent_pins",
             "test_evm_source_live_cli_redacts_top_level_exception_details",
+            "test_evm_source_live_cli_omits_runtime_endpoint_and_unknown_summary_fields",
+            "https://rpc.example.invalid/secret-token-provider",
             "SCCP EVM source live evidence collection failed",
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
@@ -4350,6 +4405,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "route-canary proof sourceDomain does not match expectedSourceDomain()",
             "usedMessageProofs(bytes32) is false",
             'and transaction.get("message_proof_used") is True',
+            "PUBLIC_SUMMARY_FIELDS = (",
+            "def _public_summary(",
             "JSON-RPC returned duplicate JSON keys",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
@@ -4374,6 +4431,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags",
             "test_live_evm_direct_collectors_reject_unstable_block_tag_before_rpc",
             "test_evm_live_cli_redacts_top_level_exception_details",
+            "test_evm_live_cli_omits_runtime_endpoint_and_unknown_summary_fields",
+            "https://rpc.example.invalid/secret-token-provider",
             "SCCP EVM live evidence collection failed",
             "proofBytes offset must be 256 bytes",
             "publicInputs[0] must match event messageId",
@@ -5147,6 +5206,17 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "route canary status must be a non-empty canonical string",
             "canary_evidence_source = canary.get(\"evidence_source\")",
             "live route canary evidence source must be a non-empty canonical string",
+            "route canary evidence_bound must be boolean",
+            "route canary message_proof_used must be boolean",
+            "route canary message proof must be used",
+            "route canary receipt_block_finalized must be boolean",
+            "route canary receipt block must be finalized",
+            "\"raw_data_owner_matches_transaction\"",
+            "route canary raw_data_owner_matches_transaction must be boolean",
+            "route canary raw_data owner must match transaction",
+            "\"signature_recovers_to_owner\"",
+            "route canary signature_recovers_to_owner must be boolean",
+            "route canary signature must recover to owner",
             "route_allowlist_hash cannot be recomputed",
             "except (SystemExit, TypeError, ValueError, RuntimeError):",
         ),
@@ -5163,6 +5233,21 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "\" passed \"",
             "\"evidence_source\",",
             "\" evm_message_proof_accepted_transaction \"",
+            "\"evidence_bound\",",
+            "route canary evidence_bound must be boolean",
+            "\"message_proof_used\",",
+            "route canary message_proof_used must be boolean",
+            "route canary message proof must be used",
+            "\"receipt_block_finalized\",",
+            "route canary receipt_block_finalized must be boolean",
+            "route canary receipt block must be finalized",
+            "def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean_scalars",
+            "\"raw_data_owner_matches_transaction\",",
+            "route canary raw_data_owner_matches_transaction must be boolean",
+            "route canary raw_data owner must match transaction",
+            "\"signature_recovers_to_owner\",",
+            "route canary signature_recovers_to_owner must be boolean",
+            "route canary signature must recover to owner",
         ),
     ),
     (
@@ -5431,7 +5516,18 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             'records.get("destination_rollout") is True',
             '"ready": all(item["ready"] is True for item in items)',
             '"production_ready": not all_blockers',
-            'return 0 if summary["production_ready"] is True else 1',
+            "ALL_LANES_PUBLIC_SUMMARY_FIELDS = (",
+            "def _public_summary_payload(",
+            "field not in public_summary_fields",
+            "if field in summary",
+            'return 0 if summary.get("production_ready") is True else 1',
+            "for lane_index, lane in enumerate(lanes):",
+            "lane summary must be an object",
+            "def _release_checklist_lane_metadata_blockers(",
+            "lane domain must be an integer",
+            "lane domain must be a production remote domain",
+            "lane chain must be a non-empty canonical string",
+            "live route canary evidence source cannot be validated for malformed lane domain",
             "source_adapter_gate hash role",
             'label=f"{lane_label}: source adapter gate hash role"',
             "def _unexpected_audit_hash_field_detail(",
@@ -5440,6 +5536,10 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "source adapter gate audit hashes contains unexpected field with sensitive name",
             "source adapter gate audit hashes contains unexpected field with malformed name",
             "source adapter gate audit hashes contains non-string field name",
+            "def _source_adapter_gate_template_hash_blockers(",
+            "source adapter gate hash",
+            "source adapter gate audit hashes",
+            "not built-in template material",
         ),
     ),
     (
@@ -5448,14 +5548,39 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_release_checklist_compares_item_ready_exactly",
             'item["ready"] = "true"',
             'assert checklist["ready"] is False',
+            "def test_all_lanes_release_checklist_rejects_malformed_lane_metadata",
+            "def test_all_lanes_release_checklist_rejects_malformed_lane_rows",
+            "lane 0: lane summary must be an object",
+            "secret-token-row",
+            "domain.missing",
+            "domain.unsupported",
+            "chain.padded",
+            "chain.mismatch",
+            "live route canary evidence source cannot be validated for malformed lane domain",
             "def test_all_lanes_cli_exit_compares_production_ready_exactly",
-            'module.validate_evidence_bundle = lambda records: {"production_ready": "true"}',
+            'module.validate_evidence_bundle = lambda records: {',
+            '"production_ready": "true",',
+            '"blockers": [],',
+            "def test_all_lanes_cli_suppresses_malformed_summary_roots",
+            "def test_all_lanes_cli_suppresses_malformed_summary_blockers",
+            "def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking",
+            "def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking",
+            "all-lanes summary lanes must be a list of objects",
+            "all-lanes summary release_checklist must be an object",
+            '"secret-token-summary": "secret-token-value"',
+            '"operator_note": "safe note"',
+            '7: "secret-token-int-key"',
             "def test_all_lanes_evidence_rejects_route_canary_hash_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_hash_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_governed_hash_replay",
             "route canary evidence hash for domain 2 must be distinct from domain 1",
             "def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits",
+            "def test_all_lanes_release_checklist_rejects_source_gate_template_replays",
+            "checklist_source_gate_lane",
+            "source adapter gate hash must be deployed evidence",
+            "source adapter gate audit hashes",
+            "not built-in template material",
             "def test_all_lanes_release_checklist_rejects_malformed_source_gate_flags",
             "def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields",
             "secret-token-audit-field",
@@ -5762,7 +5887,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _active_launch_release_checklist(",
-            "release_checklist[\"ready\"] is True",
+            "def _release_checklist_ready_value(",
+            "def _release_checklist_root_blockers(",
+            "release checklist must be an object",
+            "release checklist ready must be boolean",
             "def _active_launch_blockers(",
             "SCCP evidence blocker must be a non-empty canonical string",
             "active launch lane blocker must be a non-empty canonical string",
@@ -5788,6 +5916,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             '("message_id", "message id"),',
             "route canary {label} must be a canonical non-zero bytes32 hex string",
             "route canary receipt block number must be a positive integer",
+            "route canary evidence_bound must be boolean",
+            "route canary message_proof_used must be boolean",
+            "route canary message proof must be used",
+            "route canary receipt_block_finalized must be boolean",
             "route canary receipt block must be finalized",
             "def _active_launch_checklist_schema_gate_inventory_errors(",
             '"active_launch_checklist_schema_gate"',
@@ -5826,6 +5958,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             '("message_id", "message id"),',
             "route canary {field_label} must be a canonical ",
             "route canary receipt block number must be a positive ",
+            "route canary evidence_bound must be boolean",
+            "route canary message_proof_used must be boolean",
+            "route canary message proof must be used",
+            "route canary receipt_block_finalized must be boolean",
             "route canary receipt block must be finalized",
             "def _active_launch_checklist_schema_inventory_errors(",
         ),
@@ -5853,6 +5989,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory",
             "def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_gate",
             "def test_release_readiness_report_compares_checklist_ready_exactly",
+            "def test_release_readiness_report_blocks_malformed_checklist_root",
             "def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id",
             "noncanonical_chain_ids = (",
             '"\\uff11",',
@@ -5871,7 +6008,11 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_malformed_active_route_canary_metadata",
             "receipt_block_number_exactness_cases = (",
             "route_canary_evidence_bound_exactness_cases = (",
+            "route canary evidence_bound must be boolean",
             "route_canary_receipt_finalized_exactness_cases = (",
+            "route canary receipt_block_finalized must be boolean",
+            "route_canary_message_proof_used_exactness_cases = (",
+            "route canary message_proof_used must be boolean",
             "route_canary_status_exactness_cases = (",
             "route_canary_evidence_source_exactness_cases = (",
             "route_canary_hex32_exactness_cases = (",
@@ -5906,12 +6047,17 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_recomputes_active_route_canary_receipt_block_number_exactly",
             "def test_release_bundle_verifier_recomputes_active_route_canary_status_exactly",
             "def test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_exactly",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_message_proof_used_exactly",
             "def test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalized_exactly",
             "def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift",
             "receipt_block_number_exactness_cases = (",
             "route_canary_receipt_block_number_exactness_cases = (",
             "route_canary_evidence_bound_exactness_cases = (",
+            "route canary evidence_bound must be boolean",
             "route_canary_receipt_finalized_exactness_cases = (",
+            "route canary receipt_block_finalized must be boolean",
+            "route_canary_message_proof_used_exactness_cases = (",
+            "route canary message_proof_used must be boolean",
             "route_canary_status_exactness_cases = (",
             "route_canary_evidence_source_exactness_cases = (",
             "route_canary_hex32_exactness_cases = (",
@@ -6288,6 +6434,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "TRON Groth16 proof requests must use canonical SCCP message bundle bytes",
             "SORA-source EVM proof requests must reject canonical but extraneous source proof bytes",
             "SORA-source TRON proof requests must reject canonical but extraneous source proof bytes",
+            "EVM Groth16 proof requests must reject canonical but mismatched source proof bytes",
+            "TRON Groth16 proof requests must reject canonical but mismatched source proof bytes",
             "valid remote-source TRON requests with source proof bytes must still wrap",
             "remote-source TRON requests must reject opaque source proof bytes",
             "wrapped TRON proofs must reject self-consistent remote-source requests with stripped source proof bytes",
@@ -6305,6 +6453,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "built-in placeholder source material must not build jobs for configured source proofs",
             "TON proof requests must reject arbitrary non-canonical SCCP bundle bytes",
             "TON proof requests for non-SORA source bundles must carry source proof bytes",
+            "TON proof requests must reject canonical but mismatched non-SORA source proof bytes",
             "wrapped TON proof results must reject self-consistent requests with stripped non-SORA source proof bytes",
             "fn source_adapter_deployment_binding_hash_rejects_non_launch_routes()",
             "diagnostic zero/zero deployment bindings must remain hashable for canonical fixtures",
@@ -6371,7 +6520,11 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         (
             "rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes",
             "rejects EVM-family and TRON proof requests with non-canonical SCCP bundles",
+            "withCanonicalSourceProofFinality",
+            "sccp-sol-evm-source-proof-replay",
+            "sccp-sol-tron-source-proof-replay",
             "sourceProofBytes required for non-SORA source bundle",
+            "sourceProofBytes must match bundleBytes finality proof",
             "rejects non-empty all-zero source proof bytes in SCCP proof requests",
             "sourceProofBytes must be empty for SORA source bundle",
             "must decode as SccpSourceChainProofEnvelopeV1",
@@ -6618,6 +6771,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "func decodeSccpMessageProofBundleSummary",
             "func requireSccpSourceProofMatchesBundle",
             "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must match bundleBytes and publicInputs",
             "SccpSourceChainProofEnvelopeV1",
             "sccpBundleSourceEventDigest",
@@ -6667,6 +6821,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleTronBundleFixture",
             "sampleEvmGroth16ProofBytes",
             "sampleTronGroth16ProofBytes",
+            "testCanonicalSccpSourceProofBytes",
+            "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes: Data([0x71, 0x72])",
             "func testTonProofRequestHashMatchesCrossSdkVector",
             "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
@@ -6725,6 +6881,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "publicInputs: EvmSccpPublicInputsInput = samplePublicInputs()",
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
+            "testCanonicalSccpSourceProofBytes",
+            "replayedCanonicalSourceProof",
+            "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
@@ -6744,6 +6903,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "publicInputs: TronSccpPublicInputsInput = samplePublicInputs()",
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
+            "testCanonicalSccpSourceProofBytes",
+            "replayedCanonicalSourceProof",
+            "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
@@ -6776,6 +6938,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "sampleGroth16ProofBytes(request.publicInputs())",
             "hexWord(stripHex(publicInputs.messageId()))",
+            "testCanonicalSccpSourceProofBytes",
+            "replayBoundSourceFixture",
+            "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
@@ -6795,6 +6960,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA)",
             "hexWord(stripHex(publicInputs.messageId()))",
+            "testCanonicalSccpSourceProofBytes",
+            "replayBoundSourceFixture",
+            "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
@@ -6841,6 +7009,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "MessageProofBundleGateRejectsTamperedCanonicalBundle",
             "NonSoraProofBundleHex",
             "SampleOutboundBundleHex",
+            "TestCanonicalSccpSourceProofBytes",
+            "replayedCanonicalSourceProof",
             "BscOutboundProofRequestRejectsBundleSourceDomainDrift",
             "sourceProofBytes required for non-SORA source bundle",
             "sourceProofBytes must match bundleBytes finality proof",
@@ -7043,6 +7213,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "JSON contains duplicate key with control character",
             "def _native_evm_prover_forbidden_payload_blockers(",
             "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
+            "def _native_evm_prover_artifact_metadata_blockers(",
+            "artifact metadata must be an object",
+            "artifact bytes metadata is invalid",
+            "artifact sha256 metadata is invalid",
             "file is missing or is not a regular file",
             "cannot be scanned for forbidden prover dependency markers",
             "native EVM Groth16 prover bundle audit_hashes",
@@ -7239,6 +7413,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_native_evm_prover_percent_encoded_path",
             "def test_release_readiness_report_blocks_native_evm_prover_forbidden_path_marker",
             "def test_release_readiness_rejects_missing_native_evm_payload_paths_without_path_leak",
+            "def test_release_readiness_report_blocks_malformed_native_evm_artifact_metadata",
             "ipfs:proof-artifact.bin",
             'assert "secret-token" not in "\\n".join(blockers)',
             "artifacts/eth-mainnet/proof.wasm",
@@ -7390,6 +7565,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_rejects_native_evm_prover_percent_encoded_path_before_copy",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy",
             "def test_release_bundle_rejects_missing_native_evm_payload_without_path_leak",
+            "def test_release_bundle_verifier_blocks_malformed_native_evm_artifact_metadata",
             "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_below_floor_native_evm_proving_key",
@@ -7669,6 +7845,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "_phase_diagnostic_fragment(fragment)",
             "_phase_diagnostic_fragment(forbidden_marker)",
             "def _phase_block_forbidden_output_marker(",
+            "def _phase_transcript_artifact_path(",
+            "evidence artifact cannot be checked: malformed artifact row",
             "def _phase_transcript_errors(",
             "evidence artifact is a dry-run transcript",
             "evidence artifact contains unknown corridor phase marker",
@@ -7754,6 +7932,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "_phase_diagnostic_fragment(fragment)",
             "_phase_diagnostic_fragment(forbidden_marker)",
             "def _phase_block_forbidden_output_marker(",
+            "def _phase_transcript_artifact_path(",
+            "readiness report phase transcript cannot be checked: malformed artifact row",
             "def _phase_transcript_errors(",
             "evidence artifact cannot be read",
             "readiness report phase transcript cannot be checked",
@@ -7803,6 +7983,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         (
             "test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_corridor_phase_transcript_gate",
+            "test_release_readiness_report_blocks_malformed_phase_artifact_rows",
             "test_release_readiness_report_rejects_forged_phase_log",
             "test_release_readiness_report_rejects_output_before_phase_marker",
             "test_release_readiness_report_rejects_prefix_alias_phase_marker",
@@ -7874,6 +8055,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_bundle_verifier_rejects_marker_only_full_corridor_completion",
             "test_release_bundle_verifier_rejects_full_corridor_success_before_command",
             "test_release_bundle_verifier_phase_transcript_inventory_is_independent",
+            "test_release_bundle_verifier_phase_transcript_rejects_malformed_artifact_rows",
             "test_release_bundle_verifier_redacts_phase_transcript_checker_errors",
             "secret-token phase transcript verifier detail",
             "readiness report phase transcript cannot be checked",
@@ -8025,6 +8207,10 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "sdk_results sdk key must be printable ASCII",
             "sdk_results sdk key must not contain whitespace",
             "sdk_results sdk key must be a lowercase SDK id",
+            "def _native_evm_prover_artifact_metadata_blockers(",
+            "artifact metadata must be an object",
+            "artifact bytes metadata is invalid",
+            "artifact sha256 metadata is invalid",
             "def _native_evm_validation_blocker_issue(",
             "def _native_evm_validation_blockers(",
             'return f"{item_label} contains sensitive name"',
@@ -8111,6 +8297,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_redacts_malformed_native_evm_prover_json",
             "test_release_bundle_verifier_redacts_malformed_native_evm_prover_fixture_json",
             "test_release_bundle_verifier_redacts_native_evm_payload_artifact_path_failures",
+            "test_release_bundle_verifier_blocks_malformed_native_evm_artifact_metadata",
             "test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys",
             "test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_keys",
             "secret-token-native-duplicate",
@@ -8469,11 +8656,25 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "SDK test inventory is not UTF-8 text",
             "SDK test inventory cannot be read",
             "SCCP unready transparent-proof config-only source inventory",
+            "def _public_verifier_summary_artifacts(",
+            "def _public_verifier_summary_payload(",
+            "strict verifier summary must be an object",
+            "strict verifier summary contains unknown field name with sensitive name",
+            "strict verifier summary verified must be boolean",
+            'f"{artifact_label} must be an object"',
+            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string",
         ),
     ),
     (
         "scripts/sccp_release_readiness_report.py",
         (
+            "READINESS_REPORT_PUBLIC_FIELDS = (",
+            "def _readiness_report_unknown_field_blocker(",
+            "field not in public_report_fields",
+            "root_errors",
+            "readiness report evidence must be an object",
+            "readiness report user_prover_submission_surfaces must be a list of objects",
+            "if field in report",
             "def _sccp_release_public_json_root_schema_gate_inventory_errors(",
             '"release_public_json_root_schema_gate"',
             "SCCP release public JSON-root schema source inventory",
@@ -8500,6 +8701,9 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "SOURCE_INVENTORY_FIELDS,",
             "validation_status must be passed",
             'f"{inventory_label} validation_blockers must be empty"',
+            "def _strict_verifier_summary_errors(",
+            "strict verifier summary verified must be boolean",
+            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string",
         ),
     ),
     (
@@ -8540,6 +8744,14 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys",
             "test_release_bundle_verifier_rejects_malformed_root_json_fields",
+            "test_generated_bundle_self_verifier_rejects_malformed_summaries",
+            "test_release_bundle_verifier_cli_suppresses_malformed_summary_roots",
+            "test_release_bundle_verifier_cli_exit_compares_verified_exactly",
+            "test_release_bundle_verifier_cli_suppresses_malformed_summary_errors",
+            "test_release_bundle_verifier_cli_rejects_malformed_summary_public_fields",
+            "test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leaking",
+            "strict verifier summary contains unknown field: operator_note",
+            "strict verifier summary errors contains blocker with sensitive name",
             "test_release_bundle_verifier_rejects_non_utf8_manifest_json",
             "test_release_bundle_verifier_rejects_non_utf8_report_summary_json",
             "test_release_bundle_verifier_rejects_missing_report_summary_json_without_path_leak",
@@ -8554,6 +8766,12 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "cannot run release-bundle verifier helper",
             "test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_public_json_root_schema_gate",
+            "def test_release_readiness_report_cli_rejects_unknown_report_fields_without_leaking",
+            "def test_release_readiness_report_cli_rejects_malformed_allowed_report_roots_without_leaking",
+            "readiness report native_evm_prover_bundle must be an object",
+            '"secret-token-readiness-root": "secret-token-value"',
+            '"operator_note": "safe note"',
+            '7: "secret-token-int-key"',
         ),
     ),
 )
@@ -8932,11 +9150,16 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
     (
         "scripts/sccp_release_bundle.py",
         (
+            "def _manifest_report_value(",
+            "def _manifest_report_nested_value(",
+            "def _manifest_report_blockers(",
             "def _release_bundle_manifest(",
             "Build the release manifest without truthy-coercing readiness fields.",
-            '"production_ready": report["production_ready"]',
-            '"release_checklist_ready": report["release_checklist"]["ready"]',
-            '"corridor_ready": report["corridor"]["production_ready"]',
+            '"production_ready": _manifest_report_value(report, "production_ready")',
+            '"release_checklist_ready": _manifest_report_nested_value(',
+            '"corridor_ready": _manifest_report_nested_value(',
+            '"blockers": _manifest_report_blockers(report)',
+            "malformed readiness-root suppression",
             "def _release_bundle_manifest_errors(",
             '_boolean_field_errors("manifest", manifest, "production_ready")',
             '_boolean_field_errors("manifest", manifest, "release_checklist_ready")',
@@ -9004,6 +9227,7 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory",
             "def test_release_bundle_manifest_preserves_malformed_readiness_values",
+            "def test_release_bundle_manifest_suppresses_malformed_readiness_roots",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift",
             "def test_release_bundle_rejects_manifest_drift_before_write",
@@ -9281,6 +9505,10 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _public_blocker_text_issue(",
+            "def _canonical_public_report_blockers(",
+            "def _public_report_payload(",
+            "readiness report must be an object",
+            "readiness report production_ready must be boolean",
             "def _sccp_release_public_blocker_list_schema_gate_inventory_errors(",
             '"release_public_blocker_list_schema_gate"',
             "SCCP release public blocker-list schema source inventory",
@@ -9343,6 +9571,9 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings",
             "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
             "def test_release_readiness_report_blocks_malformed_native_prover_blockers",
+            "def test_release_readiness_report_cli_suppresses_malformed_report_roots",
+            "def test_release_readiness_report_cli_exit_compares_production_ready_exactly",
+            "def test_release_readiness_report_cli_suppresses_malformed_report_blockers",
         ),
     ),
 )
@@ -9429,6 +9660,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "Solana live verifier code hash metadata is invalid",
             "Solana ProgramData executable base64 metadata is invalid",
             "Solana Program account ProgramData address metadata is invalid",
+            "PUBLIC_SUMMARY_FIELDS = (",
+            "def _public_summary(",
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP Solana live evidence collection failed",
@@ -9449,6 +9682,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
+            "PUBLIC_SUMMARY_FIELDS = (",
+            "def _public_summary(",
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP TON live evidence collection failed",
@@ -9764,6 +9999,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "Solana live verifier program id metadata is invalid",
             "Solana ProgramData executable base64 metadata is invalid",
             "Solana Program account ProgramData address metadata is invalid",
+            "def test_solana_live_cli_omits_unknown_summary_fields",
+            '"rpc_url": "https://solana.example.invalid/secret-token-provider"',
+            'assert "rpc_url" not in payload',
+            '"secret-token-summary": "secret-token-value"',
             """parser_exception_types = (
         module.argparse.ArgumentTypeError,
         TypeError,
@@ -9796,6 +10035,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON accountStates returned duplicate JSON keys",
             "TON live account address metadata is invalid",
             "TON live last_transaction_lt metadata is invalid",
+            "def test_ton_live_cli_omits_unknown_summary_fields",
+            '"api_url": "https://toncenter.example/secret-token-provider"',
+            'assert "api_url" not in payload',
+            '"secret-token-summary": "secret-token-value"',
             "secret-token-ton-error",
             "secret-token invalid TON accountStates payload",
             "secret-token hash base64",
@@ -10102,6 +10345,8 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "def _release_notes_attachment(",
+            "def _release_notes_artifact_row_cells(",
+            "def _release_notes_artifact_rows(",
             "def _release_notes_attachment_bundle_errors(",
             "_release_notes_attachment_invariant_errors(",
             "_expected_release_notes_attachment(",
@@ -10109,7 +10354,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "release notes attachment does not match manifest and report",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
             "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
-            'status = "READY" if report["production_ready"] is True else "NOT READY"',
+            'status = "READY" if report.get("production_ready") is True else "NOT READY"',
             "# SCCP Public Release Notes Attachment",
             "Attach `manifest.json` plus every artifact below",
             "`manifest.json` is the verifier root and is intentionally not listed",
@@ -10123,6 +10368,8 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         (
             "def _expected_release_notes_attachment(",
             'status = "READY" if report.get("production_ready") is True else "NOT READY"',
+            "def _release_notes_attachment_artifact_row_cells(",
+            "def _release_notes_attachment_artifact_rows(",
             "def _release_notes_attachment_artifact_row_diagnostic(",
             "[redacted artifact row with sensitive material]",
             "def _release_notes_attachment_invariant_errors(",
@@ -10151,6 +10398,9 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "release notes attachment artifact table header is not followed by separator",
             "release notes attachment artifact table scaffold is not canonical",
             "release notes attachment must not list itself as an artifact",
+            "`<invalid artifact>`",
+            "`<invalid artifact.sha256>`",
+            "release-note artifact-row suppression",
             "release notes attachment does not list artifact",
             "release notes attachment does not list artifact hash",
             "release notes attachment does not list artifact row",
@@ -10175,6 +10425,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def _sccp_release_notes_attachment_invariants_gate_inventory_errors(",
             '"release_notes_attachment_invariants_gate"',
             "SCCP release-notes attachment invariants source inventory",
+            "release-note artifact-row suppression",
         ),
     ),
     (
@@ -10210,6 +10461,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def test_release_bundle_redacts_builder_recompute_and_renderer_errors",
             "def test_release_bundle_release_note_status_compares_ready_exactly",
             "def test_release_bundle_release_notes_mark_malformed_blocker_containers",
+            "def test_release_bundle_release_notes_reject_malformed_artifact_rows",
             "def test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory",
             "def test_release_bundle_verifier_rejects_missing_release_notes_attachment_invariants_inventory_gate",
         ),
@@ -10227,6 +10479,23 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _render_markdown(",
+            "def _readiness_status_markdown_label(",
+            "def _input_artifact_markdown_rows(",
+            "def _corridor_markdown_rows(",
+            "def _cryptographic_evidence_markdown_rows(",
+            "def _user_prover_surface_markdown_rows(",
+            "def _lane_readiness_markdown_rows(",
+            "def _release_checklist_markdown_rows(",
+            "def _lane_readiness_markdown_cells(",
+            "def _cryptographic_evidence_markdown_row_cells(",
+            "def _user_prover_surface_markdown_row_cells(",
+            "def _native_evm_bundle_markdown_row_cells(",
+            "def _source_inventory_markdown_rows(",
+            "lane summary must be an object",
+            "submission surface must be an object",
+            "native EVM prover bundle must be an object",
+            "source inventory must be an object",
+            "source_adapter_gate_audit_hashes",
             "## Release Checklist",
             "## Source Inventory",
             "## Required Release Evidence",
@@ -10250,39 +10519,56 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def _readiness_markdown_string_list_items_presence_errors(",
             "def _markdown_missing_terminal_table_cell_errors(",
             "def _readiness_markdown_report_artifact_path(",
+            "def _readiness_input_artifact_markdown_rows(",
+            "def _readiness_corridor_markdown_rows(",
+            "def _readiness_corridor_phase_markdown_row_cells(",
+            "def _readiness_cryptographic_evidence_markdown_rows(",
+            "def _readiness_user_prover_surface_markdown_rows(",
+            "def _readiness_lane_markdown_rows(",
+            "input_artifact_cells = [",
             "input_artifact_row = (",
             "input artifact row for {artifact_path}",
-            'f"| `{phase}` | {phase_status} |"',
+            "_readiness_corridor_phase_markdown_row_cells(",
+            "corridor_cells = _readiness_corridor_phase_markdown_row_cells(",
             "phase_artifact_row = (",
             "evidence artifact row for phase {phase}",
             "_release_checklist_item_id_malformed_blocker(",
-            'f"| `{item_id}` | {item_status} |"',
-            "checklist_row = f\"| `{item_id}` | {item_status} | {blocker_text} |\"",
+            "def _readiness_release_checklist_markdown_rows(",
+            "checklist_cells = [",
+            "checklist_row = \"| \" + \" | \".join(checklist_cells) + \" |\"",
             "checklist row for gate {item_id}",
-            "evm_source_rpc_chain_id = row.get(\"evm_source_rpc_chain_id\") or \"-\"",
+            "def _readiness_markdown_crypto_row_cells(",
+            "crypto_cells = _readiness_markdown_crypto_row_cells(row)",
             "live EVM cells for domain {domain}",
-            "source_gate_cell = _readiness_markdown_hash_cell(",
             "core cryptographic cells for domain {domain}",
-            "route_canary_row_prefix = (",
+            "route_canary_row_prefix = \"| \" + \" | \".join(crypto_cells) + \" |\"",
             "route-canary cells for domain {domain}",
+            "def _readiness_markdown_user_prover_surface_row_cells(",
             "if _source_inventory_gate_key_blocker(gate) is not None:",
             'f"| `{gate}` | {validation_status} |"',
             "source inventory {gate} status",
             "source_inventory_row = (",
             "source inventory {gate} row",
             "validation_status for lanes {lanes}",
-            "validation_cell = validation_status",
+            "surface_cells = _readiness_markdown_user_prover_surface_row_cells(surface)",
+            "validation_cell = surface_cells[5]",
             "validation cell for lanes {lanes}",
             "user_prover_row_prefix = (",
             "user-prover row for lanes {lanes}",
             "native EVM prover validation_status",
+            "def _readiness_native_evm_bundle_row_cells(",
+            "native_cells = _readiness_native_evm_bundle_row_cells(native_bundle)",
             "native_artifact_row_prefix = (",
             "native EVM prover artifact/hash row",
             "native_support_artifact_row_prefix = (",
             "native EVM prover support-artifact row",
             "native_blocker_text = _readiness_native_evm_validation_blockers_cell(",
             "native EVM prover blocker cell",
-            'f"| {domain} | `{lane.get(\'chain\')}` | {lane_status} |"',
+            "def _readiness_source_inventory_markdown_rows(",
+            "source_inventory_cells = [",
+            "def _readiness_markdown_lane_row_cells(",
+            "lane summary must be an object",
+            "row_prefix = f\"| {domain_cell} | {chain_cell} | {lane_status} |\"",
             "blocker cell for domain {domain}",
             "if type(domain) is not int:",
             "if _source_adapter_gate_audit_key_blocker(audit_key) is not None:",
@@ -10315,10 +10601,18 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row",
             "def test_release_bundle_verifier_markdown_invariants_require_checklist_status",
             "def test_release_bundle_verifier_markdown_invariants_require_checklist_blocker_row",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_input_and_corridor_rows",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_collection_roots",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_checklist_rows",
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_live_evm_row",
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_core_hash_row",
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_rows",
             "def test_release_bundle_verifier_markdown_invariants_require_lane_status",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_lane_rows",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_user_prover_rows",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_native_prover_bundle",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_source_inventory_rows",
             "def test_release_bundle_verifier_markdown_invariants_require_lane_blocker_row",
             "def test_release_bundle_verifier_markdown_invariants_require_source_inventory_rows",
             "def test_release_bundle_verifier_markdown_invariants_require_source_inventory_blocker_row",
@@ -10344,6 +10638,15 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         (
             "def test_release_readiness_report_guards_readiness_markdown_invariants_gate_inventory",
             "def test_release_readiness_report_blocks_missing_readiness_markdown_invariants_gate",
+            "def test_release_readiness_report_markdown_rejects_malformed_top_level_status",
+            "def test_release_readiness_report_markdown_rejects_malformed_checklist_rows",
+            "def test_release_readiness_report_markdown_rejects_malformed_input_and_corridor_rows",
+            "def test_release_readiness_report_markdown_rejects_malformed_collection_roots",
+            "def test_release_readiness_report_markdown_rejects_malformed_lane_rows",
+            "def test_release_readiness_report_markdown_rejects_malformed_crypto_rows",
+            "def test_release_readiness_report_markdown_rejects_malformed_user_prover_rows",
+            "def test_release_readiness_report_markdown_rejects_malformed_native_prover_bundle",
+            "def test_release_readiness_report_markdown_rejects_malformed_source_inventory_rows",
         ),
     ),
 )
@@ -11264,6 +11567,29 @@ def _source_adapter_gate_hash_key_for_domain_chain(
     return ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(domain)
 
 
+def _source_adapter_gate_template_hashes(domain: Any) -> tuple[bytes, ...]:
+    if type(domain) is not int or domain not in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON):
+        return ()
+    all_lanes = _all_lanes_module()
+    profile = all_lanes.LANE_PROFILES.get(domain)
+    if profile is None:
+        return ()
+    return tuple(all_lanes._source_material_template_hashes(profile).values())
+
+
+def _source_adapter_gate_template_hash_errors(
+    label: str,
+    domain: Any,
+    gate_hash: Any,
+) -> list[str]:
+    raw = _canonical_fixed_hex_bytes(gate_hash, byte_length=32)
+    if raw is None or raw not in _source_adapter_gate_template_hashes(domain):
+        return []
+    return [
+        f"{label} must be deployed gate evidence, not built-in template material"
+    ]
+
+
 ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS = {
     "destination_binding_hash",
     "destination_binding_key",
@@ -11485,6 +11811,36 @@ def _is_canonical_sha256_text(value: Any) -> bool:
     )
 
 
+def _native_evm_prover_artifact_metadata_blockers(
+    artifact: Any,
+    label: str,
+) -> list[str]:
+    prefix = f"native EVM Groth16 prover bundle {label}"
+    if not isinstance(artifact, dict):
+        return [f"{prefix} artifact metadata must be an object"]
+
+    blockers: list[str] = []
+    artifact_path = artifact.get("path")
+    if (
+        not isinstance(artifact_path, str)
+        or not artifact_path
+        or artifact_path.strip() != artifact_path
+        or _path_control_character(artifact_path) is not None
+        or _path_markdown_unsafe_character(artifact_path) is not None
+        or _path_percent_encoded_traversal(artifact_path) is not None
+    ):
+        blockers.append(f"{prefix} artifact path metadata is invalid")
+
+    artifact_bytes = artifact.get("bytes")
+    if type(artifact_bytes) is not int or artifact_bytes < 0:
+        blockers.append(f"{prefix} artifact bytes metadata is invalid")
+
+    if not _is_canonical_sha256_text(artifact.get("sha256")):
+        blockers.append(f"{prefix} artifact sha256 metadata is invalid")
+
+    return blockers
+
+
 def _load_module(name: str, path: Path) -> Any:
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -11679,7 +12035,8 @@ def _manifest_artifacts_by_path(
     errors: list[str],
 ) -> dict[str, dict[str, Any]]:
     by_path: dict[str, dict[str, Any]] = {}
-    for artifact in artifacts:
+    artifact_values = artifacts if isinstance(artifacts, list) else [None]
+    for artifact in artifact_values:
         if not isinstance(artifact, dict):
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
@@ -11805,15 +12162,10 @@ def _phase_transcript_errors(
     phase: str,
     artifact: Any,
 ) -> list[str]:
-    if not isinstance(artifact, dict):
-        return []
-    artifact_path = artifact.get("path")
-    if not isinstance(artifact_path, str) or not artifact_path:
-        return []
-    canonical_path, path_errors = _canonical_artifact_path(artifact)
-    if path_errors or canonical_path is None:
-        return []
-    path = bundle_dir.joinpath(*PurePosixPath(canonical_path).parts)
+    path, artifact_path_errors = _phase_transcript_artifact_path(bundle_dir, artifact)
+    if artifact_path_errors:
+        return artifact_path_errors
+    assert path is not None
     try:
         transcript = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -11933,6 +12285,27 @@ def _phase_transcript_errors(
                 f"failure marker: {_phase_diagnostic_fragment(forbidden_marker)}"
             )
     return errors
+
+
+def _phase_transcript_artifact_path(
+    bundle_dir: Path,
+    artifact: Any,
+) -> tuple[Path | None, list[str]]:
+    if not isinstance(artifact, dict):
+        return None, [
+            "readiness report phase transcript cannot be checked: malformed artifact row"
+        ]
+    artifact_path = artifact.get("path")
+    if not isinstance(artifact_path, str) or not artifact_path:
+        return None, [
+            "readiness report phase transcript cannot be checked: missing artifact path"
+        ]
+    canonical_path, path_errors = _canonical_artifact_path(artifact)
+    if path_errors or canonical_path is None:
+        return None, [
+            "readiness report phase transcript cannot be checked: invalid artifact path"
+        ]
+    return bundle_dir.joinpath(*PurePosixPath(canonical_path).parts), []
 
 
 def _sdk_test_inventory_errors(
@@ -14201,6 +14574,22 @@ def _active_launch_route_canary_metadata_blockers(
             f"{lane_label}: route canary receipt block number must be a positive "
             "integer"
         )
+    if (
+        "message_proof_used" in canary
+        and type(canary.get("message_proof_used")) is not bool
+    ):
+        blockers.append(
+            f"{lane_label}: route canary message_proof_used must be boolean"
+        )
+    if canary.get("message_proof_used") is not True:
+        blockers.append(f"{lane_label}: route canary message proof must be used")
+    if (
+        "receipt_block_finalized" in canary
+        and type(canary.get("receipt_block_finalized")) is not bool
+    ):
+        blockers.append(
+            f"{lane_label}: route canary receipt_block_finalized must be boolean"
+        )
     if canary.get("receipt_block_finalized") is not True:
         blockers.append(f"{lane_label}: route canary receipt block must be finalized")
     return blockers
@@ -14522,6 +14911,14 @@ def _native_evm_prover_payload_artifact(
         return None, blockers
     except ValueError:
         blockers.append(f"{prefix} artifact path metadata is invalid")
+        return None, blockers
+
+    metadata_blockers = _native_evm_prover_artifact_metadata_blockers(
+        artifact,
+        label,
+    )
+    if metadata_blockers:
+        blockers.extend(metadata_blockers)
         return None, blockers
 
     if artifact["bytes"] == 0:
@@ -15233,6 +15630,14 @@ def _native_evm_prover_parity_fixture_status(
         blockers.append(f"{prefix} artifact path metadata is invalid")
         return None, blockers
 
+    metadata_blockers = _native_evm_prover_artifact_metadata_blockers(
+        artifact,
+        label,
+    )
+    if metadata_blockers:
+        blockers.extend(metadata_blockers)
+        return None, blockers
+
     if isinstance(manifest_artifact, dict):
         manifest_artifact_path = manifest_artifact.get("path")
         if isinstance(manifest_artifact_path, str) and manifest_artifact_path:
@@ -15405,6 +15810,14 @@ def _native_evm_prover_self_test_status(
         return None, blockers
     except ValueError:
         blockers.append(f"{prefix} artifact path metadata is invalid")
+        return None, blockers
+
+    metadata_blockers = _native_evm_prover_artifact_metadata_blockers(
+        artifact,
+        label,
+    )
+    if metadata_blockers:
+        blockers.extend(metadata_blockers)
         return None, blockers
 
     if isinstance(manifest_artifact, dict):
@@ -16328,6 +16741,13 @@ def _active_launch_release_checklist(
     canary_blockers.extend(
         _active_launch_route_canary_metadata_blockers(lane_label, canary)
     )
+    if (
+        "evidence_bound" in canary
+        and type(canary.get("evidence_bound")) is not bool
+    ):
+        canary_blockers.append(
+            f"{lane_label}: route canary evidence_bound must be boolean"
+        )
     if canary.get("evidence_bound") is not True:
         canary_blockers.append(f"{lane_label}: route canary evidence is not bound")
 
@@ -16382,7 +16802,9 @@ def _active_launch_release_checklist(
     }
 
 
-def _readiness_markdown_record_flags(records: dict[str, bool]) -> str:
+def _readiness_markdown_record_flags(records: Any) -> str:
+    if not isinstance(records, dict):
+        records = {}
     labels = {
         "source_verifier_material": "source",
         "source_adapter_deployment": "deploy",
@@ -16395,20 +16817,65 @@ def _readiness_markdown_record_flags(records: dict[str, bool]) -> str:
     )
 
 
+def _readiness_markdown_lane_row_cells(
+    lane: Any,
+) -> tuple[str, str, str, str, Any]:
+    if not isinstance(lane, dict):
+        return "-", "-", "blocked", _readiness_markdown_record_flags({}), [
+            "lane summary must be an object"
+        ]
+
+    domain = lane.get("domain")
+    chain = lane.get("chain")
+    domain_cell = str(domain) if type(domain) is int else "-"
+    chain_cell = (
+        f"`{chain}`"
+        if type(domain) is int and chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        else "-"
+    )
+    lane_status = "ready" if lane.get("production_ready") is True else "blocked"
+    return (
+        domain_cell,
+        chain_cell,
+        lane_status,
+        _readiness_markdown_record_flags(lane.get("records")),
+        lane.get("blockers"),
+    )
+
+
 def _readiness_markdown_hash_cell(value: Any) -> str:
-    if isinstance(value, str) and value:
+    if _is_nonzero_hex32(value):
         return f"`{value}`"
     return "-"
+
+
+def _readiness_markdown_text_cell(value: Any) -> str:
+    if (
+        isinstance(value, str)
+        and _public_blocker_text_blocker(
+            value,
+            "readiness report Markdown",
+            "cell",
+        )
+        is None
+        and not any(character.isspace() for character in value)
+    ):
+        return f"`{value}`"
+    return "`-`"
 
 
 def _readiness_markdown_audit_hashes_cell(value: Any) -> str:
     if not isinstance(value, dict) or not value:
         return "-"
-    return "<br>".join(
-        f"`{key}`: `{audit_hash}`"
-        for key, audit_hash in sorted(value.items())
-        if isinstance(key, str) and isinstance(audit_hash, str)
-    ) or "-"
+    rows: list[str] = []
+    for key, audit_hash in sorted(value.items(), key=lambda item: str(item[0])):
+        if (
+            _source_adapter_gate_audit_key_blocker(key) is not None
+            or not _is_nonzero_hex32(audit_hash)
+        ):
+            return "`<invalid source_adapter_gate_audit_hashes>`"
+        rows.append(f"`{key}`: `{audit_hash}`")
+    return "<br>".join(rows) if rows else "-"
 
 
 def _readiness_markdown_integer_cell(value: Any) -> str:
@@ -16423,17 +16890,85 @@ def _readiness_markdown_boolean_cell(value: Any) -> str:
     return "-"
 
 
-def _readiness_markdown_sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
+def _readiness_markdown_crypto_row_cells(row: Any) -> list[str]:
+    if not isinstance(row, dict):
+        row = {}
+    domain = row.get("domain")
+    chain = row.get("chain")
+    domain_cell = str(domain) if type(domain) is int else "-"
+    chain_cell = (
+        f"`{chain}`"
+        if type(domain) is int and chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        else "-"
+    )
+    canary_source = row.get("route_canary_evidence_source")
+    safe_canary_source = (
+        canary_source
+        if isinstance(canary_source, str)
+        and _public_blocker_text_blocker(
+            canary_source,
+            "readiness report Markdown",
+            "route_canary_evidence_source",
+        )
+        is None
+        else "-"
+    )
+    if row.get("route_canary_evidence_bound") is not True:
+        safe_canary_source = f"{safe_canary_source} (unbound)"
+    source_gate = _readiness_markdown_hash_cell(row.get("source_adapter_gate_hash"))
+    if row.get("source_adapter_gate_required") is False and source_gate == "-":
+        source_gate = "not required"
+    return [
+        domain_cell,
+        chain_cell,
+        _readiness_markdown_text_cell(row.get("evm_source_rpc_chain_id")),
+        _readiness_markdown_text_cell(row.get("evm_source_block_tag")),
+        _readiness_markdown_text_cell(row.get("evm_destination_rpc_chain_id")),
+        _readiness_markdown_text_cell(row.get("evm_destination_block_tag")),
+        _readiness_markdown_hash_cell(row.get("source_verifier_material_hash")),
+        _readiness_markdown_hash_cell(
+            row.get("source_adapter_engine_deployment_hash")
+        ),
+        _readiness_markdown_hash_cell(row.get("destination_binding_hash")),
+        source_gate,
+        _readiness_markdown_audit_hashes_cell(
+            row.get("source_adapter_gate_audit_hashes")
+        ),
+        _readiness_markdown_hash_cell(row.get("route_allowlist_hash")),
+        _readiness_markdown_hash_cell(row.get("route_canary_evidence_hash")),
+        f"`{safe_canary_source}`",
+        _readiness_markdown_hash_cell(row.get("route_canary_transaction_hash")),
+        _readiness_markdown_integer_cell(
+            row.get("route_canary_receipt_block_number")
+        ),
+        _readiness_markdown_hash_cell(row.get("route_canary_receipt_block_hash")),
+        _readiness_markdown_boolean_cell(
+            row.get("route_canary_receipt_block_finalized")
+        ),
+        _readiness_markdown_hash_cell(row.get("route_canary_block_receipts_root")),
+        _readiness_markdown_hash_cell(row.get("route_canary_message_id")),
+        _readiness_markdown_integer_cell(row.get("route_canary_block_number")),
+        _readiness_markdown_integer_cell(row.get("route_canary_block_timestamp")),
+    ]
+
+
+def _readiness_markdown_sdk_helper_sets_cell(surface: Any) -> str:
+    if not isinstance(surface, dict):
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
+    lanes = surface.get("lanes")
+    expected_helpers_by_sdk = (
+        USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    if expected_helpers_by_sdk is None:
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
     helper_sets = surface.get("sdk_helper_symbols_by_sdk")
     if not isinstance(helper_sets, dict):
         return "`<invalid sdk_helper_symbols_by_sdk>`"
+    if set(helper_sets) != set(expected_helpers_by_sdk):
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
     rows: list[str] = []
-    lanes = surface.get("lanes")
-    expected_helpers_by_sdk = (
-        USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes, {})
-        if isinstance(lanes, str)
-        else {}
-    )
     sdk_order = tuple(
         sdk
         for sdk in (*USER_PROVER_SDK_PHASES, "dotnet-sdk")
@@ -16441,8 +16976,9 @@ def _readiness_markdown_sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
     ) or USER_PROVER_SDK_PHASES
     for sdk in sdk_order:
         helpers = helper_sets.get(sdk)
-        if not isinstance(helpers, list):
-            continue
+        expected_helpers = expected_helpers_by_sdk[sdk]
+        if not isinstance(helpers, list) or tuple(helpers) != expected_helpers:
+            return "`<invalid sdk_helper_symbols_by_sdk>`"
         if any(
             _submission_surface_helper_symbol_blocker(
                 helper,
@@ -16494,6 +17030,132 @@ def _readiness_user_prover_validation_blockers_cell(value: Any) -> str:
     return "<br>".join(value)
 
 
+def _readiness_markdown_user_prover_code_cell(
+    value: Any,
+    *,
+    field_label: str,
+    expected: str | None,
+) -> str:
+    if (
+        isinstance(value, str)
+        and expected is not None
+        and value == expected
+        and _public_blocker_text_blocker(value, "readiness report Markdown", field_label)
+        is None
+        and not any(character.isspace() for character in value)
+    ):
+        return f"`{value}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _readiness_markdown_user_prover_text_cell(
+    value: Any,
+    *,
+    field_label: str,
+    expected: str | None,
+) -> str:
+    if (
+        isinstance(value, str)
+        and expected is not None
+        and value == expected
+        and _public_blocker_text_blocker(value, "readiness report Markdown", field_label)
+        is None
+    ):
+        return value
+    return f"`<invalid {field_label}>`"
+
+
+def _readiness_markdown_user_prover_required_phases_cell(
+    surface: dict[str, Any],
+) -> str:
+    lanes = surface.get("lanes")
+    proof_backend = surface.get("proof_backend")
+    expected_phases = (
+        tuple(_expected_submission_surface_required_phases(lanes, proof_backend))
+        if isinstance(lanes, str) and isinstance(proof_backend, str)
+        else None
+    )
+    required_phases = surface.get("required_phases")
+    if (
+        expected_phases is not None
+        and isinstance(required_phases, list)
+        and tuple(required_phases) == expected_phases
+        and all(
+            isinstance(phase, str)
+            and _submission_surface_required_phase_blocker(phase) is None
+            for phase in required_phases
+        )
+    ):
+        return ", ".join(f"`{phase}`" for phase in required_phases)
+    return "`<invalid required_phases>`"
+
+
+def _readiness_markdown_user_prover_validation_cell(
+    surface: dict[str, Any],
+) -> str:
+    validation_status = surface.get("validation_status")
+    validation = validation_status if validation_status in {"passed", "blocked"} else "blocked"
+    validation_issues: list[str] = []
+    if validation_status not in {"passed", "blocked"}:
+        validation_issues.append("`<invalid validation_status>`")
+    validation_blockers = surface.get("validation_blockers")
+    if not isinstance(validation_blockers, list) or validation_blockers:
+        validation_issues.append(
+            _readiness_user_prover_validation_blockers_cell(validation_blockers)
+        )
+    if validation_issues:
+        validation += ": " + "<br>".join(validation_issues)
+    return validation
+
+
+def _readiness_markdown_user_prover_surface_row_cells(surface: Any) -> list[str]:
+    if not isinstance(surface, dict):
+        return [
+            "`<invalid lanes>`",
+            "`<invalid proof_backend>`",
+            "`<invalid sdk_helper_symbols_by_sdk>`",
+            "`<invalid on_chain_submission>`",
+            "`<invalid required_phases>`",
+            "blocked: submission surface must be an object",
+        ]
+    lanes = surface.get("lanes")
+    expected_backend = (
+        USER_PROVER_REQUIRED_LANE_BACKENDS.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    expected_submission = (
+        USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    return [
+        _readiness_markdown_user_prover_code_cell(
+            lanes,
+            field_label="lanes",
+            expected=(
+                lanes
+                if isinstance(lanes, str)
+                and lanes in USER_PROVER_REQUIRED_LANE_BACKENDS
+                else None
+            ),
+        ),
+        _readiness_markdown_user_prover_code_cell(
+            surface.get("proof_backend"),
+            field_label="proof_backend",
+            expected=expected_backend,
+        ),
+        _readiness_markdown_sdk_helper_sets_cell(surface),
+        _readiness_markdown_user_prover_text_cell(
+            surface.get("on_chain_submission"),
+            field_label="on_chain_submission",
+            expected=expected_submission,
+        ),
+        _readiness_markdown_user_prover_required_phases_cell(surface),
+        _readiness_markdown_user_prover_validation_cell(surface),
+    ]
+
+
 def _readiness_native_evm_validation_blockers_cell(value: Any) -> str:
     field_label = "validation_blockers"
     if not isinstance(value, list):
@@ -16513,23 +17175,469 @@ def _readiness_native_evm_validation_blockers_cell(value: Any) -> str:
     return "<br>".join(value)
 
 
+def _readiness_native_evm_markdown_path_is_safe(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value.strip() == value
+        and value.isascii()
+        and _path_control_character(value) is None
+        and _path_markdown_unsafe_character(value) is None
+        and _path_percent_encoded_traversal(value) is None
+        and not any(
+            marker in value.lower()
+            for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS
+        )
+    )
+
+
+def _readiness_native_evm_markdown_text_is_safe(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and _public_blocker_text_blocker(value, "readiness report Markdown", "cell")
+        is None
+        and not any(character.isspace() for character in value)
+    )
+
+
+def _readiness_native_evm_artifact_path_cell(
+    artifact: Any,
+    *,
+    field_label: str,
+) -> str:
+    if not isinstance(artifact, dict):
+        return "-"
+    artifact_path = artifact.get("path")
+    if _readiness_native_evm_markdown_path_is_safe(artifact_path):
+        return f"`{artifact_path}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _readiness_native_evm_artifact_hash_cell(
+    artifact: Any,
+    *,
+    field_label: str,
+) -> str:
+    if not isinstance(artifact, dict):
+        return "-"
+    artifact_hash = artifact.get("sha256")
+    if _is_canonical_sha256_text(artifact_hash):
+        return f"`{artifact_hash}`"
+    return f"`<invalid {field_label}.sha256>`"
+
+
+def _readiness_native_evm_hex32_cell(value: Any, *, field_label: str) -> str:
+    if value is None:
+        return "-"
+    if _is_nonzero_hex32(value):
+        return f"`{value}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _readiness_native_evm_support_artifact_cell(
+    artifact: Any,
+    *,
+    field_label: str,
+) -> str:
+    if not isinstance(artifact, dict):
+        return "-"
+    artifact_path = artifact.get("path")
+    artifact_hash = artifact.get("sha256")
+    if (
+        _readiness_native_evm_markdown_path_is_safe(artifact_path)
+        and _is_canonical_sha256_text(artifact_hash)
+    ):
+        return f"`{artifact_path}`<br>`{artifact_hash}`"
+    return f"`<invalid {field_label}>`"
+
+
 def _readiness_native_evm_sdk_artifacts_cell(value: Any) -> str:
     if not isinstance(value, list) or not value:
         return "-"
+    by_sdk: dict[str, dict[str, Any]] = {}
+    for row in value:
+        if not isinstance(row, dict):
+            return "`<invalid sdk_artifacts>`"
+        sdk = row.get("sdk")
+        if (
+            not isinstance(sdk, str)
+            or sdk in by_sdk
+            or sdk not in NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS
+        ):
+            return "`<invalid sdk_artifacts>`"
+        by_sdk[sdk] = row
+    if set(by_sdk) != set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        return "`<invalid sdk_artifacts>`"
     rows = [
         "`{sdk}`: `{implementation}` {implementation_hash}".format(
-            sdk=row.get("sdk", "-"),
-            implementation=row.get("implementation", "-"),
+            sdk=sdk,
+            implementation=row.get("implementation"),
             implementation_hash=(
                 f"`{row.get('implementation_hash')}`"
-                if row.get("implementation_hash")
-                else "-"
+                if _is_nonzero_hex32(row.get("implementation_hash"))
+                else "`<invalid implementation_hash>`"
             ),
         )
-        for row in value
-        if isinstance(row, dict)
+        for sdk, row in sorted(by_sdk.items())
+        if row.get("implementation") == NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS[sdk]
+        and _readiness_native_evm_markdown_text_is_safe(sdk)
+        and _readiness_native_evm_markdown_text_is_safe(row.get("implementation"))
     ]
-    return "<br>".join(rows) if rows else "-"
+    if len(rows) != len(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        return "`<invalid sdk_artifacts>`"
+    if any("`<invalid implementation_hash>`" in row for row in rows):
+        return "`<invalid sdk_artifacts>`"
+    return "<br>".join(rows)
+
+
+def _readiness_native_evm_bundle_status_cell(native_bundle: dict[str, Any]) -> str:
+    status = native_bundle.get("validation_status")
+    return status if status in {"passed", "blocked"} else "blocked"
+
+
+def _readiness_native_evm_bundle_blockers_cell(native_bundle: dict[str, Any]) -> str:
+    blockers = _readiness_native_evm_validation_blockers_cell(
+        native_bundle.get("validation_blockers")
+    )
+    if native_bundle.get("validation_status") in {"passed", "blocked"}:
+        return blockers
+    invalid_status = "`<invalid validation_status>`"
+    if blockers == "-":
+        return invalid_status
+    return invalid_status + "<br>" + blockers
+
+
+def _readiness_native_evm_bundle_row_cells(native_bundle: Any) -> list[str]:
+    if not isinstance(native_bundle, dict):
+        return [
+            "no",
+            "blocked",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "native EVM prover bundle must be an object",
+        ]
+    artifact = native_bundle.get("artifact")
+    return [
+        "yes" if native_bundle.get("required") is True else "no",
+        _readiness_native_evm_bundle_status_cell(native_bundle),
+        _readiness_native_evm_artifact_path_cell(
+            artifact,
+            field_label="artifact",
+        ),
+        _readiness_native_evm_artifact_hash_cell(
+            artifact,
+            field_label="artifact",
+        ),
+        _readiness_native_evm_hex32_cell(
+            native_bundle.get("proof_artifact_hash"),
+            field_label="proof_artifact_hash",
+        ),
+        _readiness_native_evm_hex32_cell(
+            native_bundle.get("proving_key_hash"),
+            field_label="proving_key_hash",
+        ),
+        _readiness_native_evm_hex32_cell(
+            native_bundle.get("verifier_key_hash"),
+            field_label="verifier_key_hash",
+        ),
+        _readiness_native_evm_hex32_cell(
+            native_bundle.get("destination_binding_hash"),
+            field_label="destination_binding_hash",
+        ),
+        _readiness_native_evm_support_artifact_cell(
+            native_bundle.get("cross_sdk_fixture_parity_artifact"),
+            field_label="cross_sdk_fixture_parity_artifact",
+        ),
+        _readiness_native_evm_support_artifact_cell(
+            native_bundle.get("native_prover_self_test_artifact"),
+            field_label="native_prover_self_test_artifact",
+        ),
+        _readiness_native_evm_sdk_artifacts_cell(native_bundle.get("sdk_artifacts")),
+        _readiness_native_evm_bundle_blockers_cell(native_bundle),
+    ]
+
+
+def _readiness_source_inventory_gate_cell(gate: Any) -> str:
+    if (
+        isinstance(gate, str)
+        and _release_checklist_item_id_malformed_blocker(
+            "source inventory gate",
+            gate,
+        )
+        is None
+    ):
+        return f"`{gate}`"
+    return "`<invalid gate>`"
+
+
+def _readiness_source_inventory_status_cell(inventory: Any) -> str:
+    if isinstance(inventory, dict) and inventory.get("validation_status") in {
+        "passed",
+        "blocked",
+    }:
+        return inventory["validation_status"]
+    return "blocked"
+
+
+def _readiness_source_inventory_blockers_cell(inventory: Any) -> str:
+    if not isinstance(inventory, dict):
+        return "source inventory gate must be an object"
+    blockers = _readiness_markdown_string_list_cell(
+        inventory.get("validation_blockers"),
+        field_label="validation_blockers",
+    )
+    if inventory.get("validation_status") in {"passed", "blocked"}:
+        return blockers
+    if blockers == "-":
+        return "`<invalid validation_status>`"
+    return "`<invalid validation_status>`<br>" + blockers
+
+
+def _readiness_source_inventory_markdown_rows(
+    source_inventory: Any,
+) -> list[list[str]]:
+    if not isinstance(source_inventory, dict):
+        return [
+            [
+                "`<invalid gate>`",
+                "blocked",
+                "source inventory must be an object",
+            ]
+        ]
+    rows: list[list[str]] = []
+    for gate, inventory in sorted(source_inventory.items(), key=lambda item: str(item[0])):
+        rows.append(
+            [
+                _readiness_source_inventory_gate_cell(gate),
+                _readiness_source_inventory_status_cell(inventory),
+                _readiness_source_inventory_blockers_cell(inventory),
+            ]
+        )
+    return rows
+
+
+def _readiness_release_checklist_item_id_cell(item: Any) -> str:
+    item_id = item.get("id") if isinstance(item, dict) else None
+    if (
+        _release_checklist_item_id_malformed_blocker(
+            "readiness report release_checklist item",
+            item_id,
+        )
+        is None
+    ):
+        return f"`{item_id}`"
+    return "`<invalid id>`"
+
+
+def _readiness_release_checklist_item_status_cell(item: Any) -> str:
+    return "ready" if isinstance(item, dict) and item.get("ready") is True else "blocked"
+
+
+def _readiness_release_checklist_item_blockers_cell(
+    item: Any,
+    *,
+    max_blockers_per_lane: int,
+) -> str:
+    if not isinstance(item, dict):
+        return "release checklist item must be an object"
+    item_blockers = item.get("blockers")
+    blockers = (
+        item_blockers[:max_blockers_per_lane]
+        if isinstance(item_blockers, list)
+        else item_blockers
+    )
+    blocker_text = _readiness_markdown_string_list_cell(
+        blockers,
+        field_label="blockers",
+    )
+    if (
+        isinstance(item_blockers, list)
+        and len(item_blockers) > max_blockers_per_lane
+    ):
+        remaining = len(item_blockers) - max_blockers_per_lane
+        blocker_text += f"<br>... {remaining} more"
+    return blocker_text
+
+
+def _readiness_release_checklist_markdown_rows(
+    release_checklist: Any,
+    *,
+    max_blockers_per_lane: int,
+) -> list[list[str]]:
+    if not isinstance(release_checklist, dict):
+        return [["`<invalid id>`", "blocked", "release checklist must be an object"]]
+    items = release_checklist.get("items")
+    if not isinstance(items, list):
+        return [
+            [
+                "`<invalid id>`",
+                "blocked",
+                "release checklist items must be a list",
+            ]
+        ]
+    return [
+        [
+            _readiness_release_checklist_item_id_cell(item),
+            _readiness_release_checklist_item_status_cell(item),
+            _readiness_release_checklist_item_blockers_cell(
+                item,
+                max_blockers_per_lane=max_blockers_per_lane,
+            ),
+        ]
+        for item in items
+    ]
+
+
+def _readiness_cryptographic_evidence_markdown_rows(
+    value: Any,
+) -> list[list[str]]:
+    if not isinstance(value, list):
+        return [_readiness_markdown_crypto_row_cells(value)]
+    return [_readiness_markdown_crypto_row_cells(row) for row in value]
+
+
+def _readiness_user_prover_surface_markdown_rows(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return [_readiness_markdown_user_prover_surface_row_cells(value)]
+    return [
+        _readiness_markdown_user_prover_surface_row_cells(surface)
+        for surface in value
+    ]
+
+
+def _readiness_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
+    if not isinstance(artifact, dict):
+        return f"`<invalid {field_label}>`"
+    artifact_path = artifact.get("path")
+    if _readiness_native_evm_markdown_path_is_safe(artifact_path):
+        return f"`{artifact_path}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _readiness_artifact_bytes_cell(artifact: Any) -> str:
+    if isinstance(artifact, dict) and type(artifact.get("bytes")) is int:
+        artifact_bytes = artifact["bytes"]
+        if artifact_bytes > 0:
+            return str(artifact_bytes)
+    return "`<invalid bytes>`"
+
+
+def _readiness_artifact_hash_cell(artifact: Any, *, field_label: str) -> str:
+    invalid_label = (
+        field_label if field_label == "sha256" else f"{field_label}.sha256"
+    )
+    if not isinstance(artifact, dict):
+        return f"`<invalid {invalid_label}>`"
+    artifact_hash = artifact.get("sha256")
+    if _is_canonical_sha256_text(artifact_hash):
+        return f"`{artifact_hash}`"
+    return f"`<invalid {invalid_label}>`"
+
+
+def _readiness_input_artifact_markdown_rows(
+    input_artifacts: Any,
+) -> list[list[str]]:
+    if not isinstance(input_artifacts, list):
+        return [
+            [
+                "`<invalid path>`",
+                "`<invalid bytes>`",
+                "`<invalid sha256>`",
+            ]
+        ]
+    return [
+        [
+            _readiness_artifact_path_cell(artifact, field_label="path"),
+            _readiness_artifact_bytes_cell(artifact),
+            _readiness_artifact_hash_cell(artifact, field_label="sha256"),
+        ]
+        for artifact in input_artifacts
+    ]
+
+
+def _readiness_corridor_phase_cell(phase: Any) -> str:
+    if _corridor_phase_key_blocker("readiness report corridor phases", phase) is None:
+        return f"`{phase}`"
+    return "`<invalid phase>`"
+
+
+def _readiness_corridor_status_cell(phase_status: Any) -> str:
+    return (
+        phase_status
+        if phase_status in {"passed", "failed", "skipped", "missing"}
+        else "`<invalid status>`"
+    )
+
+
+def _readiness_corridor_artifact_path_cell(artifact: Any) -> str:
+    if artifact is None:
+        return "-"
+    return _readiness_artifact_path_cell(
+        artifact,
+        field_label="evidence_artifact",
+    )
+
+
+def _readiness_corridor_artifact_hash_cell(artifact: Any) -> str:
+    if artifact is None:
+        return "-"
+    return _readiness_artifact_hash_cell(
+        artifact,
+        field_label="evidence_artifact",
+    )
+
+
+def _readiness_corridor_phase_markdown_row_cells(
+    phase: Any,
+    phase_status: Any,
+    artifact: Any,
+) -> list[str]:
+    return [
+        _readiness_corridor_phase_cell(phase),
+        _readiness_corridor_status_cell(phase_status),
+        _readiness_corridor_artifact_path_cell(artifact),
+        _readiness_corridor_artifact_hash_cell(artifact),
+    ]
+
+
+def _readiness_corridor_markdown_rows(corridor: Any) -> list[list[str]]:
+    if not isinstance(corridor, dict):
+        return [
+            [
+                "`<invalid phase>`",
+                "`<invalid status>`",
+                "-",
+                "-",
+            ]
+        ]
+    phases = corridor.get("phases")
+    if not isinstance(phases, dict):
+        return [
+            [
+                "`<invalid phase>`",
+                "`<invalid status>`",
+                "-",
+                "-",
+            ]
+        ]
+    evidence_artifacts = corridor.get("evidence_artifacts")
+    if not isinstance(evidence_artifacts, dict):
+        evidence_artifacts = {}
+    return [
+        _readiness_corridor_phase_markdown_row_cells(
+            phase,
+            phase_status,
+            evidence_artifacts.get(phase),
+        )
+        for phase, phase_status in phases.items()
+    ]
 
 
 def _readiness_markdown_string_list_items(
@@ -16552,6 +17660,50 @@ def _readiness_markdown_string_list_items(
     return [f"- {item}" for item in value]
 
 
+def _readiness_lane_markdown_rows(
+    evidence: Any,
+    *,
+    max_blockers_per_lane: int,
+) -> list[list[str]]:
+    lanes = evidence.get("lanes") if isinstance(evidence, dict) else None
+    if not isinstance(lanes, list):
+        lanes = [None]
+    rows: list[list[str]] = []
+    for lane in lanes:
+        (
+            domain_cell,
+            chain_cell,
+            lane_status,
+            records_cell,
+            lane_blockers,
+        ) = _readiness_markdown_lane_row_cells(lane)
+        blockers = (
+            lane_blockers[:max_blockers_per_lane]
+            if isinstance(lane_blockers, list)
+            else lane_blockers
+        )
+        blocker_text = _readiness_markdown_string_list_cell(
+            blockers,
+            field_label="blockers",
+        )
+        if (
+            isinstance(lane_blockers, list)
+            and len(lane_blockers) > max_blockers_per_lane
+        ):
+            remaining = len(lane_blockers) - max_blockers_per_lane
+            blocker_text += f"<br>... {remaining} more"
+        rows.append(
+            [
+                domain_cell,
+                chain_cell,
+                lane_status,
+                records_cell,
+                blocker_text,
+            ]
+        )
+    return rows
+
+
 def _render_readiness_markdown(
     report: dict[str, Any],
     *,
@@ -16568,55 +17720,24 @@ def _render_readiness_markdown(
     ]
     lines.append("| Path | Bytes | SHA-256 |")
     lines.append("| --- | ---: | --- |")
-    for artifact in report["input_artifacts"]:
-        lines.append(
-            "| `{path}` | {bytes} | `{sha256}` |".format(
-                path=artifact["path"],
-                bytes=artifact["bytes"],
-                sha256=artifact["sha256"],
-            )
-        )
+    for row in _readiness_input_artifact_markdown_rows(
+        report.get("input_artifacts")
+    ):
+        lines.append("| " + " | ".join(row) + " |")
     lines.extend(["", "## Production Corridor", ""])
     lines.append("| Phase | Status | Evidence Artifact | Evidence SHA-256 |")
     lines.append("| --- | --- | --- | --- |")
-    for phase, phase_status in report["corridor"]["phases"].items():
-        if (
-            _corridor_phase_key_blocker(
-                "readiness report corridor phases",
-                phase,
-            )
-            is not None
-        ):
-            continue
-        artifact = report["corridor"]["evidence_artifacts"].get(phase)
-        artifact_path = f"`{artifact['path']}`" if artifact else "-"
-        artifact_hash = f"`{artifact['sha256']}`" if artifact else "-"
-        lines.append(
-            f"| `{phase}` | {phase_status} | {artifact_path} | {artifact_hash} |"
-        )
+    for row in _readiness_corridor_markdown_rows(report.get("corridor")):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Release Checklist", ""])
     lines.append("| Gate | Status | Blockers |")
     lines.append("| --- | --- | --- |")
-    for item in report["release_checklist"]["items"]:
-        item_status = "ready" if item["ready"] is True else "blocked"
-        item_blockers = item.get("blockers")
-        blockers = (
-            item_blockers[:max_blockers_per_lane]
-            if isinstance(item_blockers, list)
-            else item_blockers
-        )
-        blocker_text = _readiness_markdown_string_list_cell(
-            blockers,
-            field_label="blockers",
-        )
-        if (
-            isinstance(item_blockers, list)
-            and len(item_blockers) > max_blockers_per_lane
-        ):
-            remaining = len(item_blockers) - max_blockers_per_lane
-            blocker_text += f"<br>... {remaining} more"
-        lines.append(f"| `{item['id']}` | {item_status} | {blocker_text} |")
+    for row in _readiness_release_checklist_markdown_rows(
+        report.get("release_checklist"),
+        max_blockers_per_lane=max_blockers_per_lane,
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Cryptographic Evidence", ""])
     lines.append(
@@ -16632,70 +17753,13 @@ def _render_readiness_markdown(
     lines.append(
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
-    for row in report["cryptographic_evidence"]:
-        canary_source = row["route_canary_evidence_source"] or "-"
-        if row["route_canary_evidence_bound"] is not True:
-            canary_source = f"{canary_source} (unbound)"
-        source_gate = _readiness_markdown_hash_cell(row["source_adapter_gate_hash"])
-        if row["source_adapter_gate_required"] is False and source_gate == "-":
-            source_gate = "not required"
+    for row in _readiness_cryptographic_evidence_markdown_rows(
+        report.get("cryptographic_evidence")
+    ):
         lines.append(
-            "| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
-            "`{evm_source_tag}` | `{evm_dest_rpc_chain_id}` | "
-            "`{evm_dest_tag}` | "
-            "{source} | {deploy} | {dest} | "
-            "{source_gate} | {source_gate_audits} | {route} | {canary} | "
-            "`{canary_source}` | {canary_tx} | {canary_receipt_block} | "
-            "{canary_receipt_hash} | {canary_receipt_finalized} | "
-            "{canary_receipts_root} | "
-            "{canary_message_id} | {canary_block} | {canary_timestamp} |".format(
-                domain=row["domain"],
-                chain=row["chain"],
-                evm_source_rpc_chain_id=row["evm_source_rpc_chain_id"] or "-",
-                evm_source_tag=row["evm_source_block_tag"] or "-",
-                evm_dest_rpc_chain_id=row["evm_destination_rpc_chain_id"] or "-",
-                evm_dest_tag=row["evm_destination_block_tag"] or "-",
-                source=_readiness_markdown_hash_cell(
-                    row["source_verifier_material_hash"]
-                ),
-                deploy=_readiness_markdown_hash_cell(
-                    row["source_adapter_engine_deployment_hash"]
-                ),
-                dest=_readiness_markdown_hash_cell(row["destination_binding_hash"]),
-                source_gate=source_gate,
-                source_gate_audits=_readiness_markdown_audit_hashes_cell(
-                    row["source_adapter_gate_audit_hashes"]
-                ),
-                route=_readiness_markdown_hash_cell(row["route_allowlist_hash"]),
-                canary=_readiness_markdown_hash_cell(
-                    row["route_canary_evidence_hash"]
-                ),
-                canary_source=canary_source,
-                canary_tx=_readiness_markdown_hash_cell(
-                    row["route_canary_transaction_hash"]
-                ),
-                canary_receipt_block=_readiness_markdown_integer_cell(
-                    row["route_canary_receipt_block_number"]
-                ),
-                canary_receipt_hash=_readiness_markdown_hash_cell(
-                    row["route_canary_receipt_block_hash"]
-                ),
-                canary_receipt_finalized=_readiness_markdown_boolean_cell(
-                    row["route_canary_receipt_block_finalized"]
-                ),
-                canary_receipts_root=_readiness_markdown_hash_cell(
-                    row["route_canary_block_receipts_root"]
-                ),
-                canary_message_id=_readiness_markdown_hash_cell(
-                    row["route_canary_message_id"]
-                ),
-                canary_block=_readiness_markdown_integer_cell(
-                    row["route_canary_block_number"]
-                ),
-                canary_timestamp=_readiness_markdown_integer_cell(
-                    row["route_canary_block_timestamp"]
-                ),
-            )
+            "| "
+            + " | ".join(row)
+            + " |"
         )
 
     lines.extend(["", "## User Prover Submission Surfaces", ""])
@@ -16704,27 +17768,10 @@ def _render_readiness_markdown(
         "Required Phases | Validation |"
     )
     lines.append("| --- | --- | --- | --- | --- | --- |")
-    for surface in report["user_prover_submission_surfaces"]:
-        required_phases = ", ".join(
-            f"`{phase}`" for phase in surface["required_phases"]
-        )
-        validation = surface["validation_status"]
-        validation_blockers = surface.get("validation_blockers")
-        if not isinstance(validation_blockers, list) or validation_blockers:
-            validation += ": " + _readiness_user_prover_validation_blockers_cell(
-                validation_blockers
-            )
-        lines.append(
-            "| `{lanes}` | `{proof_backend}` | {sdk_helpers} | {submission} | "
-            "{required_phases} | {validation} |".format(
-                lanes=surface["lanes"],
-                proof_backend=surface["proof_backend"],
-                sdk_helpers=_readiness_markdown_sdk_helper_sets_cell(surface),
-                submission=surface["on_chain_submission"],
-                required_phases=required_phases,
-                validation=validation,
-            )
-        )
+    for row in _readiness_user_prover_surface_markdown_rows(
+        report.get("user_prover_submission_surfaces")
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Native Prover Bundle", ""])
     lines.append(
@@ -16733,113 +17780,32 @@ def _render_readiness_markdown(
         "SDK Artifacts | Blockers |"
     )
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-    native_bundle = report["native_evm_prover_bundle"]
-    native_artifact = native_bundle.get("artifact")
-    artifact_path = "-"
-    artifact_hash = "-"
-    if isinstance(native_artifact, dict):
-        artifact_path = f"`{native_artifact.get('path', '-')}`"
-        artifact_hash = f"`{native_artifact.get('sha256', '-')}`"
-    sdk_cell = _readiness_native_evm_sdk_artifacts_cell(
-        native_bundle.get("sdk_artifacts")
-    )
-    native_blocker_text = _readiness_native_evm_validation_blockers_cell(
-        native_bundle.get("validation_blockers")
-    )
-    parity_artifact = native_bundle.get("cross_sdk_fixture_parity_artifact")
-    parity_cell = (
-        f"`{parity_artifact.get('path')}`<br>`{parity_artifact.get('sha256')}`"
-        if isinstance(parity_artifact, dict)
-        else "-"
-    )
-    self_test_artifact = native_bundle.get("native_prover_self_test_artifact")
-    self_test_cell = (
-        f"`{self_test_artifact.get('path')}`<br>`{self_test_artifact.get('sha256')}`"
-        if isinstance(self_test_artifact, dict)
-        else "-"
-    )
     lines.append(
-        "| {required} | {status} | {artifact} | {artifact_hash} | "
-        "{proof_artifact} | {proving_key} | {verifier_key} | {binding} | "
-        "{parity_fixture} | {self_test} | {sdk_artifacts} | {blockers} |".format(
-            required="yes" if native_bundle.get("required") is True else "no",
-            status=native_bundle.get("validation_status", "blocked"),
-            artifact=artifact_path,
-            artifact_hash=artifact_hash,
-            proof_artifact=(
-                f"`{native_bundle.get('proof_artifact_hash')}`"
-                if native_bundle.get("proof_artifact_hash")
-                else "-"
-            ),
-            proving_key=(
-                f"`{native_bundle.get('proving_key_hash')}`"
-                if native_bundle.get("proving_key_hash")
-                else "-"
-            ),
-            verifier_key=(
-                f"`{native_bundle.get('verifier_key_hash')}`"
-                if native_bundle.get("verifier_key_hash")
-                else "-"
-            ),
-            binding=(
-                f"`{native_bundle.get('destination_binding_hash')}`"
-                if native_bundle.get("destination_binding_hash")
-                else "-"
-            ),
-            parity_fixture=parity_cell,
-            self_test=self_test_cell,
-            sdk_artifacts=sdk_cell,
-            blockers=native_blocker_text,
+        "| "
+        + " | ".join(
+            _readiness_native_evm_bundle_row_cells(
+                report.get("native_evm_prover_bundle")
+            )
         )
+        + " |"
     )
 
     lines.extend(["", "## Source Inventory", ""])
     lines.append("| Gate | Status | Blockers |")
     lines.append("| --- | --- | --- |")
-    for gate in sorted(report["source_inventory"]):
-        inventory = report["source_inventory"][gate]
-        blocker_text = _readiness_markdown_string_list_cell(
-            inventory.get("validation_blockers"),
-            field_label="validation_blockers",
-        )
-        lines.append(
-            "| `{gate}` | {status} | {blockers} |".format(
-                gate=gate,
-                status=inventory.get("validation_status", "blocked"),
-                blockers=blocker_text,
-            )
-        )
+    for row in _readiness_source_inventory_markdown_rows(
+        report.get("source_inventory")
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Lane Readiness", ""])
     lines.append("| Domain | Chain | Status | Records | Blockers |")
     lines.append("| --- | --- | --- | --- | --- |")
-    for lane in report["evidence"]["lanes"]:
-        lane_status = "ready" if lane["production_ready"] is True else "blocked"
-        lane_blockers = lane.get("blockers")
-        blockers = (
-            lane_blockers[:max_blockers_per_lane]
-            if isinstance(lane_blockers, list)
-            else lane_blockers
-        )
-        blocker_text = _readiness_markdown_string_list_cell(
-            blockers,
-            field_label="blockers",
-        )
-        if (
-            isinstance(lane_blockers, list)
-            and len(lane_blockers) > max_blockers_per_lane
-        ):
-            remaining = len(lane_blockers) - max_blockers_per_lane
-            blocker_text += f"<br>... {remaining} more"
-        lines.append(
-            "| {domain} | `{chain}` | {status} | {records} | {blockers} |".format(
-                domain=lane["domain"],
-                chain=lane["chain"],
-                status=lane_status,
-                records=_readiness_markdown_record_flags(lane["records"]),
-                blockers=blocker_text,
-            )
-        )
+    for row in _readiness_lane_markdown_rows(
+        report.get("evidence"),
+        max_blockers_per_lane=max_blockers_per_lane,
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Blocking Items", ""])
     lines.extend(
@@ -16878,14 +17844,14 @@ def _render_readiness_markdown(
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
-            "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
+            "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
-            "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
+            "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, malformed readiness-root suppression, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
             "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
-            "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, evidence-input path/bytes/hash visibility, production-corridor phase/status visibility, production-corridor artifact/hash visibility, checklist gate/status visibility, checklist blocker-cell visibility, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, lane-readiness status visibility, lane-readiness blocker-cell visibility, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, release-note artifact-row suppression, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, top-level readiness status fail-closed rendering, evidence-input path/bytes/hash visibility, evidence-input row suppression, production-corridor phase/status visibility, production-corridor artifact/hash visibility, production-corridor row suppression, checklist gate/status visibility, checklist blocker-cell visibility, release-checklist row suppression, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, cryptographic-evidence root suppression, lane-readiness status visibility, lane-readiness blocker-cell visibility, lane-readiness root suppression, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, user-prover root suppression, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, source-inventory row suppression, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, native-prover row suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP transparent OpenVerify summary source inventory must pin schema/verifier-key manifest binding, canonical six-column public-input decoding, and malformed-column adversarial coverage before proof metadata can be published.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
@@ -16968,14 +17934,6 @@ def _expected_release_notes_attachment(
     report: dict[str, Any],
     artifacts: list[Any],
 ) -> str:
-    attachment_artifacts = [
-        artifact
-        for artifact in artifacts
-        if (
-            isinstance(artifact, dict)
-            and artifact.get("path") != "sccp-release-notes-attachment.md"
-        )
-    ]
     status = "READY" if report.get("production_ready") is True else "NOT READY"
     lines = [
         "# SCCP Public Release Notes Attachment",
@@ -16998,14 +17956,8 @@ def _expected_release_notes_attachment(
         "| Artifact | Bytes | SHA-256 |",
         "| --- | ---: | --- |",
     ]
-    for artifact in attachment_artifacts:
-        lines.append(
-            "| `{path}` | {bytes} | `{sha256}` |".format(
-                path=artifact["path"],
-                bytes=artifact["bytes"],
-                sha256=artifact["sha256"],
-            )
-        )
+    for row in _release_notes_attachment_artifact_rows(artifacts):
+        lines.append("| " + " | ".join(row) + " |")
     blocker_lines = _readiness_markdown_string_list_items(
         report.get("blockers"),
         field_label="blockers",
@@ -17014,6 +17966,70 @@ def _expected_release_notes_attachment(
         lines.extend(["", "## Blocking Items", ""])
         lines.extend(blocker_lines)
     return "\n".join(lines) + "\n"
+
+
+def _release_notes_attachment_artifact_path_is_safe(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value.strip() == value
+        and value.isascii()
+        and _path_control_character(value) is None
+        and _path_markdown_unsafe_character(value) is None
+        and _path_percent_encoded_traversal(value) is None
+        and not any(
+            marker in value.lower()
+            for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS
+        )
+    )
+
+
+def _release_notes_attachment_artifact_row_cells(artifact: Any) -> list[str]:
+    if not isinstance(artifact, dict):
+        return [
+            "`<invalid artifact>`",
+            "`<invalid bytes>`",
+            "`<invalid artifact.sha256>`",
+        ]
+    artifact_path = artifact.get("path")
+    path_cell = (
+        f"`{artifact_path}`"
+        if _release_notes_attachment_artifact_path_is_safe(artifact_path)
+        else "`<invalid artifact>`"
+    )
+    artifact_bytes = artifact.get("bytes")
+    bytes_cell = (
+        str(artifact_bytes)
+        if type(artifact_bytes) is int and artifact_bytes >= 0
+        else "`<invalid bytes>`"
+    )
+    artifact_hash = artifact.get("sha256")
+    hash_cell = (
+        f"`{artifact_hash}`"
+        if _is_canonical_sha256_text(artifact_hash)
+        else "`<invalid artifact.sha256>`"
+    )
+    return [path_cell, bytes_cell, hash_cell]
+
+
+def _release_notes_attachment_artifact_rows(artifacts: Any) -> list[list[str]]:
+    if not isinstance(artifacts, list):
+        return [
+            [
+                "`<invalid artifact>`",
+                "`<invalid bytes>`",
+                "`<invalid artifact.sha256>`",
+            ]
+        ]
+    rows: list[list[str]] = []
+    for artifact in artifacts:
+        if (
+            isinstance(artifact, dict)
+            and artifact.get("path") == "sccp-release-notes-attachment.md"
+        ):
+            continue
+        rows.append(_release_notes_attachment_artifact_row_cells(artifact))
+    return rows
 
 
 def _release_notes_attachment_artifact_row_diagnostic(artifact_row: str) -> str:
@@ -17144,11 +18160,8 @@ def _release_notes_attachment_invariant_errors(
     expected_artifact_rows_in_order: list[str] = []
 
     for artifact in artifacts:
-        if not isinstance(artifact, dict):
-            continue
-        path = artifact.get("path")
-        digest = artifact.get("sha256")
-        byte_count = artifact.get("bytes")
+        path = artifact.get("path") if isinstance(artifact, dict) else None
+        digest = artifact.get("sha256") if isinstance(artifact, dict) else None
         if path == "sccp-release-notes-attachment.md":
             self_artifact_row_prefix = f"| `{path}` |"
             if any(line.startswith(self_artifact_row_prefix) for line in lines):
@@ -17156,32 +18169,28 @@ def _release_notes_attachment_invariant_errors(
                     "release notes attachment must not list itself as an artifact"
                 )
             continue
-        if isinstance(path, str) and path not in notes:
+        if _release_notes_attachment_artifact_path_is_safe(path) and path not in notes:
             errors.append("release notes attachment does not list artifact")
-        if isinstance(digest, str) and digest not in notes:
+        if _is_canonical_sha256_text(digest) and digest not in notes:
             errors.append("release notes attachment does not list artifact hash")
-        if (
-            isinstance(path, str)
-            and path
-            and isinstance(digest, str)
-            and digest
-            and type(byte_count) is int
-            and byte_count >= 0
-        ):
-            artifact_row = f"| `{path}` | {byte_count} | `{digest}` |"
-            expected_artifact_rows.add(artifact_row)
-            expected_artifact_rows_in_order.append(artifact_row)
-            artifact_row_count = artifact_row_counts.get(artifact_row, 0)
-            if artifact_row_count == 0:
-                errors.append(
-                    "release notes attachment does not list artifact row: "
-                    f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
-                )
-            elif artifact_row_count > 1:
-                errors.append(
-                    "release notes attachment lists artifact row more than once: "
-                    f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
-                )
+        artifact_row = (
+            "| "
+            + " | ".join(_release_notes_attachment_artifact_row_cells(artifact))
+            + " |"
+        )
+        expected_artifact_rows.add(artifact_row)
+        expected_artifact_rows_in_order.append(artifact_row)
+        artifact_row_count = artifact_row_counts.get(artifact_row, 0)
+        if artifact_row_count == 0:
+            errors.append(
+                "release notes attachment does not list artifact row: "
+                f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
+            )
+        elif artifact_row_count > 1:
+            errors.append(
+                "release notes attachment lists artifact row more than once: "
+                f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
+            )
     for artifact_row in sorted(set(artifact_row_counts) - expected_artifact_rows):
         if artifact_row.startswith("| `sccp-release-notes-attachment.md` |"):
             continue
@@ -17552,7 +18561,10 @@ def _readiness_markdown_invariant_errors(
                 _markdown_missing_value_errors(
                     "Evidence Inputs",
                     evidence_section,
-                    artifact.get("sha256"),
+                    _readiness_artifact_hash_cell(
+                        artifact,
+                        field_label="sha256",
+                    ),
                     f"input artifact hash for {artifact_path}",
                 )
             )
@@ -17561,11 +18573,18 @@ def _readiness_markdown_invariant_errors(
             if (
                 type(artifact_bytes) is int
                 and artifact_bytes > 0
-                and isinstance(artifact_hash, str)
-                and artifact_hash
+                and _is_canonical_sha256_text(artifact_hash)
             ):
+                input_artifact_cells = [
+                    _readiness_artifact_path_cell(artifact, field_label="path"),
+                    _readiness_artifact_bytes_cell(artifact),
+                    _readiness_artifact_hash_cell(
+                        artifact,
+                        field_label="sha256",
+                    ),
+                ]
                 input_artifact_row = (
-                    f"| `{artifact_path}` | {artifact_bytes} | `{artifact_hash}` |"
+                    "| " + " | ".join(input_artifact_cells) + " |"
                 )
                 errors.extend(
                     _markdown_missing_value_errors(
@@ -17600,12 +18619,20 @@ def _readiness_markdown_invariant_errors(
                 )
                 errors.extend(
                     _markdown_missing_value_errors(
-                        "Production Corridor",
-                        corridor_section,
-                        f"| `{phase}` | {phase_status} |",
-                        f"status for phase {phase}",
+                    "Production Corridor",
+                    corridor_section,
+                    "| "
+                    + " | ".join(
+                        _readiness_corridor_phase_markdown_row_cells(
+                            phase,
+                            phase_status,
+                            None,
+                        )[:2]
                     )
+                    + " |",
+                    f"status for phase {phase}",
                 )
+            )
         phase_artifacts = corridor.get("evidence_artifacts")
         if isinstance(phase_artifacts, dict):
             for phase, artifact in phase_artifacts.items():
@@ -17637,7 +18664,7 @@ def _readiness_markdown_invariant_errors(
                     _markdown_missing_value_errors(
                         "Production Corridor",
                         corridor_section,
-                        artifact.get("sha256"),
+                        _readiness_corridor_artifact_hash_cell(artifact),
                         f"evidence artifact hash for phase {phase}",
                     )
                 )
@@ -17645,12 +18672,15 @@ def _readiness_markdown_invariant_errors(
                 if (
                     isinstance(phases, dict)
                     and phase in phases
-                    and isinstance(artifact_hash, str)
-                    and artifact_hash
+                    and _is_canonical_sha256_text(artifact_hash)
                 ):
+                    corridor_cells = _readiness_corridor_phase_markdown_row_cells(
+                        phase,
+                        phases[phase],
+                        artifact,
+                    )
                     phase_artifact_row = (
-                        f"| `{phase}` | {phases[phase]} | "
-                        f"`{artifact_path}` | `{artifact_hash}` |"
+                        "| " + " | ".join(corridor_cells) + " |"
                     )
                     errors.extend(
                         _markdown_missing_value_errors(
@@ -17669,6 +18699,14 @@ def _readiness_markdown_invariant_errors(
             for item in items:
                 if not isinstance(item, dict):
                     continue
+                checklist_cells = [
+                    _readiness_release_checklist_item_id_cell(item),
+                    _readiness_release_checklist_item_status_cell(item),
+                    _readiness_release_checklist_item_blockers_cell(
+                        item,
+                        max_blockers_per_lane=4,
+                    ),
+                ]
                 item_id = item.get("id")
                 if (
                     _release_checklist_item_id_malformed_blocker(
@@ -17691,23 +18729,11 @@ def _readiness_markdown_invariant_errors(
                     _markdown_missing_value_errors(
                         "Release Checklist",
                         checklist_section,
-                        f"| `{item_id}` | {item_status} |",
+                        "| " + " | ".join(checklist_cells[:2]) + " |",
                         f"status for gate {item_id}",
                     )
                 )
-                item_blockers = item.get("blockers")
-                rendered_blockers = (
-                    item_blockers[:4]
-                    if isinstance(item_blockers, list)
-                    else item_blockers
-                )
-                blocker_text = _readiness_markdown_string_list_cell(
-                    rendered_blockers,
-                    field_label="blockers",
-                )
-                if isinstance(item_blockers, list) and len(item_blockers) > 4:
-                    blocker_text += f"<br>... {len(item_blockers) - 4} more"
-                checklist_row = f"| `{item_id}` | {item_status} | {blocker_text} |"
+                checklist_row = "| " + " | ".join(checklist_cells) + " |"
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Release Checklist",
@@ -17736,12 +18762,13 @@ def _readiness_markdown_invariant_errors(
             domain = row.get("domain")
             if type(domain) is not int:
                 continue
-            chain = row.get("chain")
+            crypto_cells = _readiness_markdown_crypto_row_cells(row)
+            domain_cell, chain_cell = crypto_cells[0], crypto_cells[1]
             errors.extend(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
                     crypto_section,
-                    domain,
+                    domain_cell,
                     "domain",
                 )
             )
@@ -17749,47 +18776,20 @@ def _readiness_markdown_invariant_errors(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
                     crypto_section,
-                    chain,
+                    chain_cell,
                     f"chain for domain {domain}",
                 )
             )
-            evm_source_rpc_chain_id = row.get("evm_source_rpc_chain_id") or "-"
-            evm_source_block_tag = row.get("evm_source_block_tag") or "-"
-            evm_destination_rpc_chain_id = (
-                row.get("evm_destination_rpc_chain_id") or "-"
-            )
-            evm_destination_block_tag = row.get("evm_destination_block_tag") or "-"
+            live_evm_row_prefix = "| " + " | ".join(crypto_cells[:6]) + " |"
             errors.extend(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
                     crypto_section,
-                    (
-                        f"| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
-                        f"`{evm_source_block_tag}` | "
-                        f"`{evm_destination_rpc_chain_id}` | "
-                        f"`{evm_destination_block_tag}` |"
-                    ),
+                    live_evm_row_prefix,
                     f"live EVM cells for domain {domain}",
                 )
             )
-            source_gate_cell = _readiness_markdown_hash_cell(
-                row.get("source_adapter_gate_hash")
-            )
-            if (
-                row.get("source_adapter_gate_required") is False
-                and source_gate_cell == "-"
-            ):
-                source_gate_cell = "not required"
-            core_crypto_row_prefix = (
-                f"| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
-                f"`{evm_source_block_tag}` | "
-                f"`{evm_destination_rpc_chain_id}` | "
-                f"`{evm_destination_block_tag}` | "
-                f"{_readiness_markdown_hash_cell(row.get('source_verifier_material_hash'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('source_adapter_engine_deployment_hash'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('destination_binding_hash'))} | "
-                f"{source_gate_cell} |"
-            )
+            core_crypto_row_prefix = "| " + " | ".join(crypto_cells[:10]) + " |"
             errors.extend(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
@@ -17798,26 +18798,9 @@ def _readiness_markdown_invariant_errors(
                     f"core cryptographic cells for domain {domain}",
                 )
             )
-            canary_source = row.get("route_canary_evidence_source") or "-"
-            if row.get("route_canary_evidence_bound") is not True:
-                canary_source = f"{canary_source} (unbound)"
             gate_audits = row.get("source_adapter_gate_audit_hashes")
             if _source_adapter_gate_audit_keys_are_markdown_safe(gate_audits):
-                route_canary_row_prefix = (
-                    f"{core_crypto_row_prefix} "
-                    f"{_readiness_markdown_audit_hashes_cell(gate_audits)} | "
-                    f"{_readiness_markdown_hash_cell(row.get('route_allowlist_hash'))} | "
-                    f"{_readiness_markdown_hash_cell(row.get('route_canary_evidence_hash'))} | "
-                    f"`{canary_source}` | "
-                    f"{_readiness_markdown_hash_cell(row.get('route_canary_transaction_hash'))} | "
-                    f"{_readiness_markdown_integer_cell(row.get('route_canary_receipt_block_number'))} | "
-                    f"{_readiness_markdown_hash_cell(row.get('route_canary_receipt_block_hash'))} | "
-                    f"{_readiness_markdown_boolean_cell(row.get('route_canary_receipt_block_finalized'))} | "
-                    f"{_readiness_markdown_hash_cell(row.get('route_canary_block_receipts_root'))} | "
-                    f"{_readiness_markdown_hash_cell(row.get('route_canary_message_id'))} | "
-                    f"{_readiness_markdown_integer_cell(row.get('route_canary_block_number'))} | "
-                    f"{_readiness_markdown_integer_cell(row.get('route_canary_block_timestamp'))} |"
-                )
+                route_canary_row_prefix = "| " + " | ".join(crypto_cells) + " |"
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Cryptographic Evidence",
@@ -17889,6 +18872,7 @@ def _readiness_markdown_invariant_errors(
         for surface in surfaces:
             if not isinstance(surface, dict):
                 continue
+            surface_cells = _readiness_markdown_user_prover_surface_row_cells(surface)
             lanes = surface.get("lanes")
             if (
                 _submission_surface_lanes_blocker(
@@ -18008,14 +18992,9 @@ def _readiness_markdown_invariant_errors(
                 )
                 and isinstance(helper_sets, dict)
             ):
-                helper_cell = _readiness_markdown_sdk_helper_sets_cell(surface)
-                if not helper_cell.startswith("`<invalid "):
-                    required_phases_cell = ", ".join(
-                        f"`{phase}`" for phase in required_phases
-                    )
+                if not any(cell.startswith("`<invalid ") for cell in surface_cells[:5]):
                     user_prover_row_prefix = (
-                        f"| `{lanes}` | `{proof_backend}` | {helper_cell} | "
-                        f"{submission} | {required_phases_cell} |"
+                        "| " + " | ".join(surface_cells[:5]) + " |"
                     )
                     errors.extend(
                         _markdown_missing_value_errors(
@@ -18029,7 +19008,7 @@ def _readiness_markdown_invariant_errors(
             validation_blockers = surface.get("validation_blockers")
             if (
                 isinstance(validation_status, str)
-                and validation_status
+                and validation_status in {"passed", "blocked"}
                 and isinstance(lanes, str)
                 and isinstance(proof_backend, str)
                 and _submission_surface_proof_backend_blocker(
@@ -18038,28 +19017,25 @@ def _readiness_markdown_invariant_errors(
                 )
                 is None
             ):
+                user_prover_validation_row_prefix = (
+                    "| " + " | ".join(surface_cells[:2]) + " |"
+                )
                 errors.extend(
                     _markdown_missing_terminal_table_cell_errors(
                         "User Prover Submission Surfaces",
                         surfaces_section,
-                        row_prefix=f"| `{lanes}` | `{proof_backend}` |",
+                        row_prefix=user_prover_validation_row_prefix,
                         value=validation_status,
                         label=f"validation_status for lanes {lanes}",
                     )
                 )
                 if not isinstance(validation_blockers, list) or validation_blockers:
-                    validation_cell = validation_status
-                    validation_cell += (
-                        ": "
-                        + _readiness_user_prover_validation_blockers_cell(
-                            validation_blockers
-                        )
-                    )
+                    validation_cell = surface_cells[5]
                     errors.extend(
                         _markdown_missing_terminal_table_cell_errors(
                             "User Prover Submission Surfaces",
                             surfaces_section,
-                            row_prefix=f"| `{lanes}` | `{proof_backend}` |",
+                            row_prefix=user_prover_validation_row_prefix,
                             value=validation_cell,
                             label=f"validation cell for lanes {lanes}",
                         )
@@ -18077,14 +19053,15 @@ def _readiness_markdown_invariant_errors(
     native_section = sections.get("## Native Prover Bundle", "")
     native_bundle = report.get("native_evm_prover_bundle")
     if isinstance(native_bundle, dict):
+        native_cells = _readiness_native_evm_bundle_row_cells(native_bundle)
         native_status = native_bundle.get("validation_status")
-        if isinstance(native_status, str) and native_status:
-            required_cell = "yes" if native_bundle.get("required") is True else "no"
+        if native_status in {"passed", "blocked"}:
+            required_cell = native_cells[0]
             errors.extend(
                 _markdown_missing_value_errors(
                     "Native Prover Bundle",
                     native_section,
-                    f"| {required_cell} | {native_status} |",
+                    f"| {required_cell} | {native_cells[1]} |",
                     "native EVM prover validation_status",
                 )
             )
@@ -18110,10 +19087,7 @@ def _readiness_markdown_invariant_errors(
                     and _is_nonzero_hex32(destination_binding_hash)
                 ):
                     native_artifact_row_prefix = (
-                        f"| {required_cell} | {native_status} | "
-                        f"`{native_artifact_path}` | `{native_artifact_hash}` | "
-                        f"`{proof_artifact_hash}` | `{proving_key_hash}` | "
-                        f"`{verifier_key_hash}` | `{destination_binding_hash}` |"
+                        "| " + " | ".join(native_cells[:8]) + " |"
                     )
                     errors.extend(
                         _markdown_missing_value_errors(
@@ -18162,10 +19136,7 @@ def _readiness_markdown_invariant_errors(
                             )
                         ):
                             native_support_artifact_row_prefix = (
-                                f"{native_artifact_row_prefix} "
-                                f"`{parity_path}`<br>`{parity_hash}` | "
-                                f"`{self_test_path}`<br>`{self_test_hash}` | "
-                                f"{_readiness_native_evm_sdk_artifacts_cell(sdk_artifacts)} |"
+                                "| " + " | ".join(native_cells[:11]) + " |"
                             )
                             errors.extend(
                                 _markdown_missing_value_errors(
@@ -18175,15 +19146,13 @@ def _readiness_markdown_invariant_errors(
                                     "native EVM prover support-artifact row",
                                 )
                             )
-            native_blocker_text = _readiness_native_evm_validation_blockers_cell(
-                native_bundle.get("validation_blockers")
-            )
+            native_blocker_text = native_cells[11]
             if native_blocker_text != "-":
                 errors.extend(
                     _markdown_missing_terminal_table_cell_errors(
                         "Native Prover Bundle",
                         native_section,
-                        row_prefix=f"| {required_cell} | {native_status} |",
+                        row_prefix=f"| {required_cell} | {native_cells[1]} |",
                         value=native_blocker_text,
                         label="native EVM prover blocker cell",
                     )
@@ -18205,23 +19174,23 @@ def _readiness_markdown_invariant_errors(
                 continue
             if not isinstance(inventory, dict):
                 continue
+            source_inventory_cells = [
+                _readiness_source_inventory_gate_cell(gate),
+                _readiness_source_inventory_status_cell(inventory),
+                _readiness_source_inventory_blockers_cell(inventory),
+            ]
             validation_status = inventory.get("validation_status")
-            if isinstance(validation_status, str) and validation_status:
+            if validation_status in {"passed", "blocked"}:
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Source Inventory",
                         inventory_section,
-                        f"| `{gate}` | {validation_status} |",
+                        "| " + " | ".join(source_inventory_cells[:2]) + " |",
                         f"source inventory {gate} status",
                     )
                 )
-                validation_blockers = inventory.get("validation_blockers")
-                blocker_text = _readiness_markdown_string_list_cell(
-                    validation_blockers,
-                    field_label="validation_blockers",
-                )
                 source_inventory_row = (
-                    f"| `{gate}` | {validation_status} | {blocker_text} |"
+                    "| " + " | ".join(source_inventory_cells) + " |"
                 )
                 errors.extend(
                     _markdown_missing_value_errors(
@@ -18269,7 +19238,10 @@ def _readiness_markdown_invariant_errors(
                 lane_status = (
                     "ready" if lane.get("production_ready") is True else "blocked"
                 )
-                row_prefix = f"| {domain} | `{lane.get('chain')}` | {lane_status} |"
+                domain_cell, chain_cell, lane_status, _, _ = (
+                    _readiness_markdown_lane_row_cells(lane)
+                )
+                row_prefix = f"| {domain_cell} | {chain_cell} | {lane_status} |"
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Lane Readiness",
@@ -18770,6 +19742,14 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_hash must not be empty when required"
             )
+        errors.extend(
+            _source_adapter_gate_template_hash_errors(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash",
+                row.get("domain"),
+                gate_hash,
+            )
+        )
         if not semantic_audit_hashes:
             errors.append(
                 "readiness report cryptographic evidence row "
@@ -20054,6 +21034,13 @@ def _source_adapter_gate_coherence_errors(
         errors.append(f"{label} required must be true for this lane domain")
         return errors
 
+    errors.extend(
+        _source_adapter_gate_template_hash_errors(
+            f"{label} gate_hash",
+            domain,
+            gate_hash,
+        )
+    )
     expected_gate_key = (
         _source_adapter_gate_hash_key_for_domain_chain(domain, lane.get("chain"))
         if type(domain) is int
@@ -22488,6 +23475,143 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     }
 
 
+def _public_verifier_summary_artifacts(
+    value: Any,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    label = "strict verifier summary"
+    if not isinstance(value, list):
+        return [], [f"{label} artifacts must be a list"]
+
+    public_artifacts: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, artifact in enumerate(value):
+        artifact_label = f"{label} artifact {index}"
+        if not isinstance(artifact, dict):
+            errors.append(f"{artifact_label} must be an object")
+            continue
+        unknown_fields = set(artifact) - ARTIFACT_KEYS
+        if unknown_fields:
+            errors.append(f"{artifact_label} contains unknown field")
+        for key in sorted(ARTIFACT_KEYS - set(artifact)):
+            errors.append(f"{artifact_label} missing field: {key}")
+        artifact_path, path_errors = _canonical_artifact_path(artifact)
+        errors.extend(
+            error.replace("manifest artifact", artifact_label, 1)
+            for error in path_errors
+        )
+        artifact_bytes = artifact.get("bytes")
+        if type(artifact_bytes) is not int or artifact_bytes <= 0:
+            errors.append(f"{artifact_label} bytes must be a positive integer")
+        artifact_sha256 = artifact.get("sha256")
+        if not _is_canonical_sha256_text(artifact_sha256):
+            errors.append(
+                f"{artifact_label} sha256 must be a canonical SHA-256 hex string"
+            )
+        if (
+            not unknown_fields
+            and not path_errors
+            and type(artifact_bytes) is int
+            and artifact_bytes > 0
+            and _is_canonical_sha256_text(artifact_sha256)
+            and artifact_path is not None
+        ):
+            public_artifacts.append(
+                {
+                    "path": artifact_path,
+                    "bytes": artifact_bytes,
+                    "sha256": artifact_sha256,
+                }
+            )
+    return public_artifacts, errors
+
+
+def _public_verifier_summary_payload(summary: Any) -> dict[str, Any]:
+    """Return a fail-closed public strict-verifier summary payload."""
+
+    label = "strict verifier summary"
+    if not isinstance(summary, dict):
+        return {
+            "verified": False,
+            "errors": [f"{label} must be an object"],
+            "artifacts": [],
+            "manifest_sha256": None,
+        }
+
+    errors: list[str] = []
+    public_summary_fields = {
+        "verified",
+        "errors",
+        "artifacts",
+        "manifest_sha256",
+    }
+    for field in sorted(
+        (field for field in summary if field not in public_summary_fields),
+        key=str,
+    ):
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                label,
+                field,
+                "unknown",
+            )
+        )
+
+    raw_errors = summary.get("errors")
+    summary_error_field_errors: list[str] = []
+    if "errors" not in summary:
+        errors.append(f"{label} errors missing")
+    else:
+        summary_error_field_errors = _public_blocker_list_field_errors(
+            label,
+            summary,
+            "errors",
+            allow_empty=True,
+        )
+        if summary_error_field_errors:
+            errors.extend(summary_error_field_errors)
+        else:
+            assert isinstance(raw_errors, list)
+            errors.extend(raw_errors)
+
+    verified = summary.get("verified")
+    if type(verified) is not bool:
+        errors.append("strict verifier summary verified must be boolean")
+    elif not summary_error_field_errors and isinstance(raw_errors, list):
+        if verified and raw_errors:
+            errors.append(f"{label} errors must be empty when verified is true")
+        if not verified and not raw_errors:
+            errors.append(f"{label} errors must not be empty when verified is false")
+
+    artifacts, artifact_errors = _public_verifier_summary_artifacts(
+        summary.get("artifacts")
+    )
+    errors.extend(artifact_errors)
+    if verified is True and not artifacts:
+        errors.append(f"{label} artifacts must be non-empty when verified is true")
+
+    raw_manifest_sha256 = summary.get("manifest_sha256")
+    manifest_sha256 = (
+        raw_manifest_sha256
+        if _is_canonical_sha256_text(raw_manifest_sha256)
+        else None
+    )
+    if raw_manifest_sha256 is not None and manifest_sha256 is None:
+        errors.append(
+            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string"
+        )
+    elif verified is True and manifest_sha256 is None:
+        errors.append(
+            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string"
+        )
+
+    return {
+        "verified": verified is True and not errors,
+        "errors": errors,
+        "artifacts": artifacts,
+        "manifest_sha256": manifest_sha256,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Verify a generated SCCP release-note attachment bundle.",
@@ -22504,7 +23628,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    summary = verify_bundle(args.bundle_dir)
+    summary = _public_verifier_summary_payload(verify_bundle(args.bundle_dir))
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     elif summary["verified"]:

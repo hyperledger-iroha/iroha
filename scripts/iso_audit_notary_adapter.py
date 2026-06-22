@@ -461,7 +461,7 @@ def _ensure_input_directory(
     display_path: bool = True,
 ) -> None:
     display = f"{label} {path}" if display_path else label
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=display)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -472,7 +472,9 @@ def _ensure_input_directory(
         raise AdapterError(f"{display} must be a directory")
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path, *, display_label: str | None = None
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -484,7 +486,8 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise AdapterError(f"{current} must not be a symlink")
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(f"{label} must not be a symlink")
 
 
 def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
@@ -1605,13 +1608,16 @@ def verify_anchor_file(
     )
 
 
-def discover_anchor_paths(export_dir: Path, all_anchors: bool) -> list[Path]:
+def discover_anchor_paths(
+    export_dir: Path, all_anchors: bool, *, display_label: str | None = None
+) -> list[Path]:
     """Return anchor paths to publish in deterministic order."""
 
     if all_anchors:
         anchors = sorted((export_dir / ANCHOR_DIR).glob("*.notary.json"))
         if not anchors:
-            raise AdapterError(f"{export_dir / ANCHOR_DIR} has no *.notary.json anchors")
+            label = display_label or "export_dir.anchors"
+            raise AdapterError(f"{label} has no *.notary.json anchors")
         return anchors
     return [export_dir / LATEST_ANCHOR_FILE]
 
@@ -2155,7 +2161,7 @@ def run(args: argparse.Namespace) -> int:
     response_limit_bytes = _require_positive_cli_int(
         args.response_limit_bytes, "--response-limit-bytes"
     )
-    _ensure_input_directory(args.export_dir, "export_dir")
+    _ensure_input_directory(args.export_dir, "export_dir", display_path=False)
     export_dir = args.export_dir
     endpoints = list(args.endpoint)
     for endpoint in endpoints:
@@ -2170,7 +2176,9 @@ def run(args: argparse.Namespace) -> int:
             anchor_path,
             allow_missing_record_sources=args.allow_missing_record_sources,
         )
-        for anchor_path in discover_anchor_paths(export_dir, args.all)
+        for anchor_path in discover_anchor_paths(
+            export_dir, args.all, display_label="export_dir.anchors"
+        )
     ]
     _reject_unused_anchor_overrides(args, anchors=anchors)
     if args.dry_run:

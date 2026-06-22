@@ -823,31 +823,32 @@ def _ensure_output_directory(path: Path, label: str) -> None:
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path)
+    _reject_symlinked_existing_ancestors(path, display_label=label)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
-            raise AdapterError(f"{label} {path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
-            raise AdapterError(f"{label} {path} must be a directory")
+            raise AdapterError(f"{label} must be a directory")
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
     if stat.S_ISLNK(mode):
-        raise AdapterError(f"{label} {path} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(mode):
-        raise AdapterError(f"{label} {path} must be a directory")
+        raise AdapterError(f"{label} must be a directory")
 
 
-def _ensure_output_file_target(path: Path) -> None:
+def _ensure_output_file_target(path: Path, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else str(path)
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise AdapterError(f"{path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise AdapterError(f"{path} must not be hard-linked")
+            raise AdapterError(f"{label} must not be hard-linked")
 
 
 def _write_text_output(path: Path, text: str) -> None:
@@ -1826,8 +1827,11 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     _ensure_output_directory(receipt_dir, "receipt_dir")
-    for message in messages:
-        _ensure_output_file_target(receipt_output_path(receipt_dir, message))
+    for offset, message in enumerate(messages):
+        _ensure_output_file_target(
+            receipt_output_path(receipt_dir, message),
+            display_label=f"receipt_output[{offset}]",
+        )
 
     failures = 0
     receipts: list[str] = []

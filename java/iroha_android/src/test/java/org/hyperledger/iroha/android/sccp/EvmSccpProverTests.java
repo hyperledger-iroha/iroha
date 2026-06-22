@@ -14,10 +14,17 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class EvmSccpProverTests {
+  private static final String TEST_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA =
+      "iroha_sccp::SccpSourceChainProofEnvelopeV1";
   private static final String ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS =
       "0x" + repeat("ff", 42) + "3f" + repeat("00", 21);
   private static final String ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_PARTICIPATION = "342";
@@ -35,7 +42,9 @@ public final class EvmSccpProverTests {
     rejectsMalformedGroth16ProofTuple();
     buildsContractCallSubmission();
     bscMainnetFacadeRequiresChainId56AndBscTarget();
+    bscTestnetFacadeRequiresChainId97AndBscTarget();
     bscMainnetFacadeBuildsLocalAdmissionSubmission();
+    bscTestnetFacadeBuildsLocalAdmissionSubmission();
     ethereumMainnetFacadeRequiresChainId1AndEthTarget();
     ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot();
     ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary();
@@ -163,6 +172,31 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
     }
     assert threw : "EVM proof requests must bind non-SORA source proofs to bundle finality proofs";
+
+    threw = false;
+    final SampleBundleFixture replaySourceFixture =
+        sampleBundleFixture(SourceSccpProofs.DOMAIN_BSC, EvmSccpProver.DOMAIN_ETH, 328L);
+    final SampleBundleFixture replayBoundSourceFixture =
+        sampleBundleFixture(
+            SourceSccpProofs.DOMAIN_BSC,
+            EvmSccpProver.DOMAIN_ETH,
+            327L,
+            null,
+            testCanonicalSccpSourceProofBytes(SourceSccpProofs.DOMAIN_BSC, nonSoraBundle));
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              replayBoundSourceFixture.publicInputs,
+              replayBoundSourceFixture.bundleBytes,
+              testCanonicalSccpSourceProofBytes(SourceSccpProofs.DOMAIN_BSC, replaySourceFixture),
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
+    }
+    assert threw : "EVM proof requests must reject replayed canonical source proof bytes";
 
     threw = false;
     try {
@@ -1188,6 +1222,124 @@ public final class EvmSccpProverTests {
     assert threw : "BSC request helper must reject ETH public inputs";
   }
 
+  private static void bscTestnetFacadeRequiresChainId97AndBscTarget() {
+    final SourceSccpProofs.EvmDestinationBinding binding =
+        BscTestnetSccpProver.destinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    assert SourceSccpProofs.BSC_TESTNET_NETWORK_ID.equals(binding.networkId)
+        : "BSC testnet binding must default to chain id 97";
+    assert binding.targetDomain == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet binding must target BSC";
+    assert binding.hash.equals(
+            BscTestnetSccpProver.destinationBindingHash(
+                "0x" + repeat("11", 20),
+                "0x" + repeat("22", 20),
+                "0x" + repeat("bb", 32),
+                "0x" + repeat("cc", 32)))
+        : "BSC testnet binding hash helper must match binding";
+
+    final EvmSccpProver.ProofRequest request =
+        BscTestnetSccpProver.buildProofRequest(
+            new EvmSccpProver.ProofRequestInput(
+                samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+                sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
+                new byte[0],
+                repeat("56", 32),
+                binding));
+    assert request.targetDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet request must target BSC";
+    assert binding.hash.equals(request.destinationBindingHash())
+        : "BSC testnet request must bind the BSC testnet destination binding";
+
+    final byte[] proofBytes = sampleGroth16ProofBytes(request.publicInputs());
+    final EvmSccpProver.ProofResult result =
+        BscTestnetSccpProver.wrapProofResult(proofBytes, request);
+    final EvmSccpProver.Submission submission =
+        BscTestnetSccpProver.buildSubmission(new EvmSccpProver.SubmissionInput(result));
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet submission must target BSC";
+    assert Arrays.equals(proofBytes, submission.proofBytes())
+        : "BSC testnet submission must preserve proof bytes";
+
+    boolean threw = false;
+    try {
+      BscTestnetSccpProver.destinationBinding(
+          "0x" + repeat("11", 20),
+          "0x" + repeat("22", 20),
+          "0x" + repeat("bb", 32),
+          "0x" + repeat("cc", 32),
+          SourceSccpProofs.BSC_MAINNET_NETWORK_ID);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 97");
+    }
+    assert threw : "BSC testnet destination helper must reject mainnet network ids";
+
+    final SourceSccpProofs.EvmDestinationBinding mainnetBinding =
+        SourceSccpProofs.bscMainnetDestinationBinding(
+            "0x" + repeat("11", 20),
+            "0x" + repeat("22", 20),
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32));
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+              sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
+              new byte[0],
+              repeat("56", 32),
+              mainnetBinding));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("chain id 97");
+    }
+    assert threw : "BSC testnet request helper must reject mainnet destination bindings";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.wrapProofResult(
+          proofBytes, evmRequestWithDestinationBindingHash(request, "0x" + repeat("99", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("destinationBindingHash");
+    }
+    assert threw : "BSC testnet wrapProofResult must reject forged destinationBindingHash";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildSubmission(
+          new EvmSccpProver.SubmissionInput(evmResultWithProofBase64(result, "AAAA")));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBase64");
+    }
+    assert threw : "BSC testnet submission must reject tampered proofResult";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildProofRequest(
+          sampleProductionProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("target BSC");
+    }
+    assert threw : "BSC testnet request helper must reject ETH public inputs";
+
+    threw = false;
+    try {
+      new BscTestnetSccpProver().prove(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+              sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
+              new byte[0],
+              repeat("56", 32),
+              binding));
+    } catch (final IllegalStateException ex) {
+      threw = ex.getMessage().contains("BSC testnet SCCP Groth16 prover is not linked");
+    }
+    assert threw : "BSC testnet facade must require an app-linked prover";
+  }
+
   private static void bscMainnetFacadeBuildsLocalAdmissionSubmission() {
     final BscMainnetSccp.LocalAdmissionSubmissionInput input =
         new BscMainnetSccp.LocalAdmissionSubmissionInput(
@@ -1331,6 +1483,155 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("proofFamily");
     }
     assert threw : "BSC local admission must reject stale proof families";
+  }
+
+  private static void bscTestnetFacadeBuildsLocalAdmissionSubmission() {
+    final BscTestnetSccpProver.LocalAdmissionSubmissionInput input =
+        new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32));
+    final BscTestnetSccpProver.LocalAdmissionSubmission submission =
+        BscTestnetSccpProver.buildLocalAdmissionSubmission(input);
+    final BscTestnetSccpProver.LocalAdmissionSubmission facadeSubmission =
+        new BscTestnetSccpProver().buildLocalAdmission(input);
+
+    assert BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1.equals(
+            submission.platformPayload())
+        : "BSC testnet local admission platform payload must be local_admission";
+    assert BscTestnetSccpProver.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.equals(
+            submission.envelopeEncoding())
+        : "BSC testnet local admission must use the Norito envelope";
+    assert BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1.equals(
+            submission.verifierEntrypoint())
+        : "BSC testnet local admission must target SubmitBridgeProof";
+    assert submission.sourceDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC testnet local admission source must be BSC";
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_SORA
+        : "BSC testnet local admission target must be SORA";
+    assert submission.arguments().isEmpty()
+        : "BSC testnet local admission must not add call arguments";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "BSC testnet local admission must copy proof bytes";
+    assert Arrays.equals(new byte[] {4, 5, 6}, submission.publicInputsBytes())
+        : "BSC testnet local admission must copy public input bytes";
+    assert Arrays.equals(new byte[] {7, 8, 9}, submission.bundleBytes())
+        : "BSC testnet local admission must copy bundle bytes";
+    assert Arrays.equals(new byte[] {10, 11, 12}, submission.envelopeBytes())
+        : "BSC testnet local admission must copy envelope bytes";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.localAdmission().proofBytes())
+        : "BSC testnet local admission payload must carry proof bytes";
+    assert submission.envelopeHex().equals(facadeSubmission.envelopeHex())
+        : "BSC testnet facade local admission helper must match static helper";
+
+    input.proofBytes()[0] = 99;
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "BSC testnet local admission must not expose mutable proof storage";
+
+    boolean threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              BscTestnetSccpProver.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("BSC -> SORA");
+    }
+    assert threw : "BSC testnet local admission must reject wrong source domains";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {0, 0},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must not be all zero");
+    }
+    assert threw : "BSC testnet local admission must reject all-zero proof bytes";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[0],
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("envelopeBytes must not be empty");
+    }
+    assert threw : "BSC testnet local admission must reject empty envelope bytes";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              BscTestnetSccpProver.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              "abi_tuple_v1",
+              BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("metadata");
+    }
+    assert threw : "BSC testnet local admission must reject stale metadata";
+
+    threw = false;
+    try {
+      BscTestnetSccpProver.buildLocalAdmissionSubmission(
+          new BscTestnetSccpProver.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              "debug-proof-family",
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscTestnetSccpProver.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("metadata");
+    }
+    assert threw : "BSC testnet local admission must reject stale proof families";
   }
 
   private static void ethereumMainnetFacadeRequiresChainId1AndEthTarget() {
@@ -7874,7 +8175,7 @@ public final class EvmSccpProverTests {
 
   private static SampleBundleFixture sampleBundleFixture(
       final int sourceDomain, final int targetDomain, final long nonce) {
-    return sampleBundleFixture(sourceDomain, targetDomain, nonce, null);
+    return sampleBundleFixture(sourceDomain, targetDomain, nonce, null, new byte[] {0x01, 0x02, 0x03});
   }
 
   private static SampleBundleFixture sampleBundleFixture(
@@ -7882,6 +8183,16 @@ public final class EvmSccpProverTests {
       final int targetDomain,
       final long nonce,
       final String recipientOverride) {
+    return sampleBundleFixture(
+        sourceDomain, targetDomain, nonce, recipientOverride, new byte[] {0x01, 0x02, 0x03});
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(
+      final int sourceDomain,
+      final int targetDomain,
+      final long nonce,
+      final String recipientOverride,
+      final byte[] finalityProofBytes) {
     final int recipientCodec = targetDomain == TronSccpProver.DOMAIN_TRON ? 5 : 2;
     final String defaultRecipient =
         targetDomain == TronSccpProver.DOMAIN_TRON
@@ -7945,12 +8256,239 @@ public final class EvmSccpProverTests {
     writeTestBytes(bundle, commitmentBytes);
     writeTestBytes(bundle, merkleProof.toByteArray());
     writeTestBytes(bundle, payloadBytes);
-    writeTestBytes(bundle, new byte[] {0x01, 0x02, 0x03});
+    writeTestBytes(bundle, finalityProofBytes);
 
     return new SampleBundleFixture(
         new EvmSccpProver.PublicInputsInput(
             1, messageId, payloadHash, targetDomain, commitmentRoot, "19", repeat("44", 32)),
         bundle.toByteArray());
+  }
+
+  private static final class TestSccpSourceChainProofEnvelope {
+    final int sourceDomain;
+    final int targetDomain;
+    final String sourceChain;
+    final int sourceProofPlan;
+    final int finalityModel;
+    final String messageId;
+    final String payloadHash;
+    final String sourceEventDigest;
+    final String commitmentRoot;
+    final long finalityHeight;
+    final String finalityBlockHash;
+    final String finalizedHeaderHash;
+    final String receiptOrMessageRoot;
+    final byte[] consensusProofBytes;
+    final byte[] messageInclusionProofBytes;
+    final List<byte[]> inclusionBranch;
+
+    TestSccpSourceChainProofEnvelope(
+        final int sourceDomain,
+        final int targetDomain,
+        final String sourceChain,
+        final int sourceProofPlan,
+        final int finalityModel,
+        final String messageId,
+        final String payloadHash,
+        final String sourceEventDigest,
+        final String commitmentRoot,
+        final long finalityHeight,
+        final String finalityBlockHash,
+        final String finalizedHeaderHash,
+        final String receiptOrMessageRoot,
+        final byte[] consensusProofBytes,
+        final byte[] messageInclusionProofBytes,
+        final List<byte[]> inclusionBranch) {
+      this.sourceDomain = sourceDomain;
+      this.targetDomain = targetDomain;
+      this.sourceChain = sourceChain;
+      this.sourceProofPlan = sourceProofPlan;
+      this.finalityModel = finalityModel;
+      this.messageId = messageId;
+      this.payloadHash = payloadHash;
+      this.sourceEventDigest = sourceEventDigest;
+      this.commitmentRoot = commitmentRoot;
+      this.finalityHeight = finalityHeight;
+      this.finalityBlockHash = finalityBlockHash;
+      this.finalizedHeaderHash = finalizedHeaderHash;
+      this.receiptOrMessageRoot = receiptOrMessageRoot;
+      this.consensusProofBytes = consensusProofBytes;
+      this.messageInclusionProofBytes = messageInclusionProofBytes;
+      this.inclusionBranch = inclusionBranch;
+    }
+  }
+
+  private static final TypeAdapter<TestSccpSourceChainProofEnvelope>
+      TEST_SOURCE_CHAIN_PROOF_ADAPTER =
+          new TypeAdapter<TestSccpSourceChainProofEnvelope>() {
+            @Override
+            public void encode(
+                final NoritoEncoder encoder, final TestSccpSourceChainProofEnvelope value) {
+              writeTestNoritoField(encoder, child -> child.writeUInt(1, 8));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.sourceDomain, 32));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.targetDomain, 32));
+              writeTestNoritoField(encoder, child -> writeTestNoritoString(child, value.sourceChain));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.sourceProofPlan, 32));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityModel, 32));
+              writeTestNoritoField(encoder, child -> child.writeBytes(hexBytes(stripHex(value.messageId))));
+              writeTestNoritoField(encoder, child -> child.writeBytes(hexBytes(stripHex(value.payloadHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.sourceEventDigest))));
+              writeTestNoritoField(encoder, child -> child.writeBytes(hexBytes(stripHex(value.commitmentRoot))));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityHeight, 64));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalizedHeaderHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.receiptOrMessageRoot))));
+              writeTestNoritoField(
+                  encoder, child -> writeTestNoritoRawByteVec(child, value.consensusProofBytes));
+              writeTestNoritoField(
+                  encoder,
+                  child -> writeTestNoritoRawByteVec(child, value.messageInclusionProofBytes));
+              writeTestNoritoField(
+                  encoder, child -> writeTestNoritoRawByteVecSequence(child, value.inclusionBranch));
+            }
+
+            @Override
+            public TestSccpSourceChainProofEnvelope decode(final NoritoDecoder decoder) {
+              throw new UnsupportedOperationException("test source proof decoding is not used");
+            }
+          };
+
+  private static byte[] testCanonicalSccpSourceProofBytes(
+      final int sourceDomain, final SampleBundleFixture bundle) {
+    final EvmSccpProver.PublicInputsInput publicInputs = bundle.publicInputs;
+    return NoritoCodec.encode(
+        new TestSccpSourceChainProofEnvelope(
+            sourceDomain,
+            publicInputs.targetDomain(),
+            testSourceChainKeyForDomain(sourceDomain),
+            testSourceProofPlanForDomain(sourceDomain),
+            testFinalityModelForDomain(sourceDomain),
+            publicInputs.messageId(),
+            publicInputs.payloadHash(),
+            testSccpSourceEventDigest(
+                sourceDomain,
+                publicInputs.targetDomain(),
+                publicInputs.messageId(),
+                publicInputs.payloadHash()),
+            publicInputs.commitmentRoot(),
+            Long.parseLong(publicInputs.finalityHeight()),
+            publicInputs.finalityBlockHash(),
+            "0x" + repeat("55", 32),
+            "0x" + repeat("66", 32),
+            new byte[] {0x71, 0x72},
+            new byte[] {0x73, 0x74},
+            Collections.singletonList(filledBytes(32, 0x75))),
+        TEST_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA,
+        TEST_SOURCE_CHAIN_PROOF_ADAPTER);
+  }
+
+  private static String testSccpSourceEventDigest(
+      final int sourceDomain, final int targetDomain, final String messageId, final String payloadHash) {
+    final ByteArrayOutputStream payload = new ByteArrayOutputStream();
+    payload.write(1);
+    writeTestU32Le(payload, sourceDomain);
+    writeTestU32Le(payload, targetDomain);
+    writeTestRawBytes(payload, hexBytes(stripHex(messageId)));
+    writeTestRawBytes(payload, hexBytes(stripHex(payloadHash)));
+    return "0x"
+        + hexLower(
+            Blake2b.digest256(
+                concatTestBytes(
+                    "sccp:source:event:v1".getBytes(StandardCharsets.UTF_8),
+                    payload.toByteArray())));
+  }
+
+  private static String testSourceChainKeyForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return "eth";
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return "bsc";
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return "sol";
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return "ton";
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return "tron";
+    }
+    throw new IllegalArgumentException("unsupported source domain");
+  }
+
+  private static int testSourceProofPlanForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return 1;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return 2;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return 3;
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return 4;
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return 5;
+    }
+    throw new IllegalArgumentException("unsupported source domain");
+  }
+
+  private static int testFinalityModelForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return 0;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return 1;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return 2;
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return 3;
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return 4;
+    }
+    throw new IllegalArgumentException("unsupported source domain");
+  }
+
+  private static void writeTestNoritoField(
+      final NoritoEncoder encoder, final Consumer<NoritoEncoder> writePayload) {
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayload.accept(child);
+    final byte[] payload = child.toByteArray();
+    encoder.writeLength(payload.length, true);
+    encoder.writeBytes(payload);
+  }
+
+  private static void writeTestNoritoString(final NoritoEncoder encoder, final String value) {
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    encoder.writeLength(bytes.length, true);
+    encoder.writeBytes(bytes);
+  }
+
+  private static void writeTestNoritoRawByteVec(final NoritoEncoder encoder, final byte[] value) {
+    encoder.writeLength(value.length, false);
+    encoder.writeBytes(value);
+  }
+
+  private static void writeTestNoritoRawByteVecSequence(
+      final NoritoEncoder encoder, final List<byte[]> values) {
+    encoder.writeLength(values.size(), false);
+    for (final byte[] value : values) {
+      final NoritoEncoder child = encoder.childEncoder();
+      writeTestNoritoRawByteVec(child, value);
+      final byte[] payload = child.toByteArray();
+      encoder.writeLength(payload.length, true);
+      encoder.writeBytes(payload);
+    }
   }
 
   private static SampleBundleFixture sampleTokenAddBundleFixture(
@@ -8065,6 +8603,12 @@ public final class EvmSccpProverTests {
     for (int index = 0; index < out.length; index++) {
       out[index] = (byte) Integer.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
     }
+    return out;
+  }
+
+  private static byte[] filledBytes(final int length, final int value) {
+    final byte[] out = new byte[length];
+    Arrays.fill(out, (byte) value);
     return out;
   }
 

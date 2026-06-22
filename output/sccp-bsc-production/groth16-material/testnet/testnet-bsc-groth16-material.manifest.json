@@ -1,0 +1,98 @@
+{
+  "schema": "iroha-sccp-bsc-groth16-material-manifest/v1",
+  "generatedAt": "2026-06-22T12:04:06.071Z",
+  "routeId": "taira_bsc_xor",
+  "assetKey": "xor",
+  "bscNetwork": "testnet",
+  "chain": "bsc-testnet",
+  "chainIdHex": "0x61",
+  "networkIdHex": "0x0000000000000000000000000000000000000000000000000000000000000061",
+  "proofBackend": "evm-groth16-bn254-v1",
+  "proofFamily": "stark-fri-v1",
+  "sourceDomain": 0,
+  "targetDomain": 2,
+  "circuitProfile": "sccp-bsc-signal-binding-v1",
+  "publicInputCount": 9,
+  "publicSignalNames": [
+    "message_id",
+    "payload_hash",
+    "target_domain",
+    "commitment_root",
+    "finality_height",
+    "finality_block_hash",
+    "source_domain",
+    "statement_hash",
+    "destination_binding_hash"
+  ],
+  "verifierKeyHash": "0xffd53835a9611acab38e780bad5d2b4b7de278222d99731dd13738be3c5b00ce",
+  "productionReady": false,
+  "productionBlockers": [
+    "circuit profile is only public-signal binding; full SCCP message/finality semantics are not proven",
+    "trusted setup uses a locally generated Powers of Tau file",
+    "phase2 zkey contribution is local single-contributor material",
+    "missing semantic SCCP circuit attestation",
+    "missing circuit security audit attestation",
+    "missing trusted setup ceremony attestation",
+    "missing reproducible build attestation",
+    "R1CS must be at least 65536 bytes for production material",
+    "zkey must be at least 65536 bytes for production material",
+    "SnarkJS self-check must be rerun with the updated materializer before this candidate can be promoted"
+  ],
+  "artifacts": {
+    "circuitSource": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.circom",
+      "sha256": "0x9b66dd2498f1151654dce3376d9dd92a8c7f2f5874117de7286119bcea78b646"
+    },
+    "r1cs": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.r1cs",
+      "sha256": "0x5643950b137ca6b70f57bee526266822e4aa4183e80eeb1d24531481a8a79d98"
+    },
+    "provingKey": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.final.zkey",
+      "sha256": "0xc02a66b8d0c904783472f154cc25d4e999f069749503e8ce8d31ea12f0308ef8"
+    },
+    "snarkjsVerificationKey": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.snarkjs-verification-key.json",
+      "sha256": "0x7ff5483821a2b1c7a27fd0f22486bd2ede14296a69572301b94ee8c066180bef"
+    },
+    "bscVerifierKey": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/testnet-bsc-groth16-verifier-key.json",
+      "sha256": "0x9495af3064d3081e006c7bbc2749d4a2953e2d438ec3bd030385101324c86408"
+    },
+    "witnessWasm": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1_js/sccp-bsc-signal-binding-v1.wasm",
+      "sha256": "0x52dca28d35e2cbeec424f47d898b65eb76d2cc9b8b1e58a3438d60fc012dfc89"
+    },
+    "symbols": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/sccp-bsc-signal-binding-v1.sym",
+      "sha256": "0x49b9820d9283abc129ccead518d2317d0a3b9711ca655c924d9bdbc4967a1a48"
+    },
+    "powersOfTau": {
+      "path": "output/sccp-bsc-production/groth16-material/testnet/powersOfTau28_hez_08_final.ptau",
+      "sha256": "0xd5e0a6382ade6eb15f5d0643b0a2c97cd125d1cb33d19d50b44d388ee372bf6a"
+    }
+  },
+  "trustedSetup": {
+    "localPowersOfTau": true,
+    "localPhase2Contribution": true,
+    "contributionMaterialPersisted": false
+  },
+  "selfChecks": {
+    "snarkjs": {
+      "snarkjsBinary": "snarkjs",
+      "r1csInfo": false,
+      "r1csConstraintCount": null,
+      "r1csPublicInputCount": null,
+      "zkeyVerificationKeyExport": false,
+      "verifierKeyHashMatches": false,
+      "exportedVerifierKeyHash": null
+    }
+  },
+  "attestations": {
+    "semanticSccpCircuit": null,
+    "circuitSecurity": null,
+    "trustedSetup": null,
+    "reproducibleBuild": null
+  },
+  "nextStep": "Do not deploy this as production. Replace or attest the circuit/setup material, then rebuild the native-prover bundle and route manifest."
+}

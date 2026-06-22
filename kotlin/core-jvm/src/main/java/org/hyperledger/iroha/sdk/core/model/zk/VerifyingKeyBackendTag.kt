@@ -311,8 +311,23 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
 
         private fun isDeveloperOnlyBackendLabel(raw: String): Boolean {
             val label = raw.trim().lowercase()
-            val embedded = listOf("debug", "mock", "fixture", "dev")
-            val exact = setOf("test", "dummy", "fake", "stub", "sample", "placeholder")
+            val compact = compactAscii(label)
+            val compactFragments =
+                listOf(
+                    "notforproduction",
+                    "notproduction",
+                    "notproductionready",
+                    "notready",
+                    "replacebeforeproduction",
+                    "replacebeforemainnet",
+                    "draftonly",
+                )
+            if (compactFragments.any { compact.contains(it) }) {
+                return true
+            }
+
+            val embedded = listOf("debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace")
+            val exact = setOf("test", "dummy", "fake", "stub", "sample", "placeholder", "todo", "draft")
             fun isDeveloperOnlyRun(run: String): Boolean =
                 embedded.any { run.contains(it) } || exact.contains(run)
 

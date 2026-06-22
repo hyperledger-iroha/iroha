@@ -42,6 +42,21 @@ EXPECTED_RPC_CHAIN_IDS = {
     evidence.SCCP_DOMAIN_BSC: 56,
 }
 EVM_LIVE_ALLOWED_BLOCK_TAGS = frozenset(("latest", "safe", "finalized"))
+PUBLIC_SUMMARY_FIELDS = (
+    "read_only",
+    "block_tag",
+    "destination_bridge",
+    "route_allowlist_hash",
+    "source_record_hashes",
+    "expected_route_allowlist_hash",
+    "expected_route_allowlist_hash_matches",
+    "route_canary",
+    "route_canary_transaction",
+    "offline_toml_sha256",
+    "offline_evidence_args",
+    "torii_destination_query_params",
+    "torii_destination_query_proof_bytes_hex_required",
+)
 EVM_MESSAGE_PROOF_ACCEPTED_ABI = (
     b"MessageProofAccepted(bytes32,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)"
 )
@@ -2429,6 +2444,10 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _public_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {key: summary[key] for key in PUBLIC_SUMMARY_FIELDS if key in summary}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2449,7 +2468,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback="SCCP EVM live evidence collection failed",
         )
         parser.exit(2, f"{parser.prog}: error: {detail}\n")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(_public_summary(summary), indent=2, sort_keys=True))
     return 0
 
 
