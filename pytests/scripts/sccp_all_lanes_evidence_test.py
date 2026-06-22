@@ -2967,6 +2967,122 @@ def test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lane
         ) in "\n".join(summary["blockers"])
 
 
+def test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_for_all_lanes():
+    module = load_evidence_module()
+    eth_module = module._load_sibling_module("sccp_eth_source_bridge_evidence.py")
+    bsc_module = module._load_sibling_module("sccp_bsc_source_bridge_evidence.py")
+    solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
+    ton_module = module._load_sibling_module("sccp_ton_source_state_evidence.py")
+    tron_module = module._load_sibling_module("sccp_tron_source_bridge_evidence.py")
+    template_cases = [
+        (
+            module.SCCP_DOMAIN_ETH,
+            field,
+            eth_module._evm_family_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            eth_module.ETH_TEMPLATE_COMPONENTS.items()
+        )
+    ]
+    template_cases.extend(
+        (
+            module.SCCP_DOMAIN_BSC,
+            field,
+            bsc_module._evm_family_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            bsc_module.bsc_template_components().items()
+        )
+    )
+    template_cases.extend(
+        (module.SCCP_DOMAIN_SOL, field, template_hash)
+        for field, template_hash in solana_module._template_component_hashes().items()
+    )
+    template_cases.extend(
+        (module.SCCP_DOMAIN_TON, field, template_hash)
+        for field, template_hash in ton_module._template_component_hashes().items()
+    )
+    template_cases.extend(
+        (
+            module.SCCP_DOMAIN_TRON,
+            field,
+            tron_module._tron_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            tron_module.TRON_TEMPLATE_COMPONENTS.items()
+        )
+    )
+
+    assert template_cases
+    for domain, field, template_hash in template_cases:
+        records = complete_bundle(module)
+        material_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        profile = module.LANE_PROFILES[domain]
+        template_value = "0x" + template_hash.hex()
+        records["sccp_source_verifier_materials"][material_index][field] = (
+            template_value
+        )
+        records["sccp_source_adapter_engine_deployments"][material_index][field] = (
+            template_value
+        )
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False, (domain, field)
+        assert (
+            f"domain {domain} ({profile.chain}): {field} must be deployed "
+            "source-adapter evidence, not built-in template material"
+        ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_evidence_reports_deployment_source_role_shape_independently():
+    module = load_evidence_module()
+    cases = (
+        (
+            module.SCCP_DOMAIN_BSC,
+            ("source_bridge_emitter_address",),
+            "source adapter deployment source_bridge_emitter_address must be a non-zero 20-byte hex value",
+        ),
+        (
+            module.SCCP_DOMAIN_SOL,
+            ("source_state_verifier_id", "source_state_verifier_hash"),
+            "source adapter deployment source_state_verifier_hash must be a non-zero 32-byte hex value",
+        ),
+        (
+            module.SCCP_DOMAIN_ETH,
+            ("source_state_verifier_id", "source_state_verifier_hash"),
+            "source adapter deployment source_state_verifier_hash must be empty for this lane",
+        ),
+    )
+
+    for domain, fields, expected_blocker in cases:
+        records = complete_bundle(module)
+        record_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        profile = module.LANE_PROFILES[domain]
+        material = records["sccp_source_verifier_materials"][record_index]
+        deployment = records["sccp_source_adapter_engine_deployments"][record_index]
+        for field in fields:
+            if domain == module.SCCP_DOMAIN_ETH and field == "source_state_verifier_id":
+                material[field] = module.LANE_PROFILES[
+                    module.SCCP_DOMAIN_SOL
+                ].source_state_verifier_id
+                deployment[field] = material[field]
+            elif domain == module.SCCP_DOMAIN_ETH and field == "source_state_verifier_hash":
+                material[field] = hex32(0xE1)
+                deployment[field] = material[field]
+            else:
+                material.pop(field, None)
+                deployment.pop(field, None)
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False, (domain, fields)
+        assert (
+            f"domain {domain} ({profile.chain}): {expected_blocker}"
+            in "\n".join(summary["blockers"])
+        )
+
+
 def test_all_lanes_evidence_rejects_unknown_sections(tmp_path, capsys):
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -6770,6 +6886,56 @@ def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
     )
 
 
+def test_all_lanes_source_gate_transcripts_bind_deployment_receipts():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    cases = (
+        (
+            module.SCCP_DOMAIN_SOL,
+            "solana_full_light_client_gate_hash",
+            "solana_full_light_client_gate_hash does not match source and audit material",
+        ),
+        (
+            module.SCCP_DOMAIN_TON,
+            "ton_full_light_client_gate_hash",
+            "ton_full_light_client_gate_hash does not match source and audit material",
+        ),
+        (
+            module.SCCP_DOMAIN_TRON,
+            "tron_dpos_source_gate_hash",
+            "tron_dpos_source_gate_hash does not match source and deployment material",
+        ),
+    )
+
+    for domain, gate_field, blocker in cases:
+        drifted = copy.deepcopy(records)
+        index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        profile = module.LANE_PROFILES[domain]
+        material = drifted["sccp_source_verifier_materials"][index]
+        deployment = drifted["sccp_source_adapter_engine_deployments"][index]
+        original_gate = deployment[gate_field]
+        deployment["deployment_receipt_hash"] = hex32(0xEB + index)
+        deployment["_comment_source_adapter_engine_deployment_hash"] = (
+            module._canonical_source_record_hashes(profile, material, deployment)[
+                "source_adapter_engine_deployment_hash"
+            ]
+        )
+
+        summary = module.validate_evidence_bundle(drifted)
+
+        assert summary["production_ready"] is False
+        blockers = "\n".join(summary["blockers"])
+        assert f"domain {domain} ({profile.chain}): {blocker}" in blockers
+        source_gate = next(
+            lane["source_adapter_gate"]
+            for lane in summary["lanes"]
+            if lane["domain"] == domain
+        )
+        assert source_gate["gate_hash"] == original_gate
+        assert source_gate["ready"] is False
+        assert blocker in "\n".join(source_gate["blockers"])
+
+
 def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
     monkeypatch,
 ) -> None:
@@ -7232,6 +7398,116 @@ def test_all_lanes_release_checklist_rejects_malformed_lane_containers():
     )
 
 
+def test_all_lanes_release_checklist_rejects_malformed_lane_rows():
+    module = load_evidence_module()
+
+    checklist = module._release_checklist(["operator secret-token-row", 123], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    all_blockers = "\n".join(
+        blocker for item in items.values() for blocker in item["blockers"]
+    )
+
+    assert checklist["ready"] is False
+    for item_id in (
+        "all_required_lane_records",
+        "governed_deployment_evidence",
+        "route_allowlist_binding",
+        "live_route_canary_evidence",
+        "no_unresolved_blockers",
+    ):
+        assert items[item_id]["ready"] is False
+        assert "lane 0: lane summary must be an object" in items[item_id]["blockers"]
+        assert "lane 1: lane summary must be an object" in items[item_id]["blockers"]
+    assert "secret-token-row" not in all_blockers
+    assert "Traceback" not in all_blockers
+
+
+def test_all_lanes_release_checklist_rejects_malformed_lane_metadata():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_BSC,
+        "chain": "bsc",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x5D),
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+    cases = (
+        (
+            "domain.missing",
+            {"domain": None, "chain": "bsc"},
+            "lane bsc: lane domain must be an integer",
+            "lane bsc: live route canary evidence source cannot be validated for malformed lane domain",
+        ),
+        (
+            "domain.string",
+            {"domain": "2", "chain": "bsc"},
+            "lane bsc: lane domain must be an integer",
+            "lane bsc: live route canary evidence source cannot be validated for malformed lane domain",
+        ),
+        (
+            "domain.unsupported",
+            {"domain": 99, "chain": "bsc"},
+            "domain 99 (bsc): lane domain must be a production remote domain",
+            "domain 99 (bsc): live route canary evidence source cannot be validated for malformed lane domain",
+        ),
+        (
+            "chain.padded",
+            {"domain": module.SCCP_DOMAIN_BSC, "chain": " bsc "},
+            "domain 2: lane chain must be a non-empty canonical string",
+            None,
+        ),
+        (
+            "chain.mismatch",
+            {"domain": module.SCCP_DOMAIN_BSC, "chain": "eth"},
+            "domain 2 (eth): lane chain must be bsc",
+            None,
+        ),
+    )
+
+    for case_id, metadata, expected_record_blocker, expected_canary_blocker in cases:
+        lane = copy.deepcopy(base_lane)
+        if metadata["domain"] is None:
+            lane.pop("domain")
+        else:
+            lane["domain"] = metadata["domain"]
+        lane["chain"] = metadata["chain"]
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        record_blockers = "\n".join(items["all_required_lane_records"]["blockers"])
+        canary_blockers = "\n".join(items["live_route_canary_evidence"]["blockers"])
+
+        assert checklist["ready"] is False, case_id
+        assert items["all_required_lane_records"]["ready"] is False, case_id
+        assert expected_record_blocker in record_blockers, case_id
+        if expected_canary_blocker is not None:
+            assert items["live_route_canary_evidence"]["ready"] is False, case_id
+            assert expected_canary_blocker in canary_blockers, case_id
+        assert "None" not in record_blockers
+        assert "Traceback" not in canary_blockers
+
+
 def test_all_lanes_release_checklist_rejects_malformed_lane_blockers():
     module = load_evidence_module()
     base_lane = {
@@ -7328,7 +7604,10 @@ def test_all_lanes_cli_exit_compares_production_ready_exactly(capsys):
     original_validate = module.validate_evidence_bundle
 
     module.load_evidence_bundle = lambda paths: {}
-    module.validate_evidence_bundle = lambda records: {"production_ready": "true"}
+    module.validate_evidence_bundle = lambda records: {
+        "production_ready": "true",
+        "blockers": [],
+    }
     try:
         exit_code = module.main(["evidence.toml"])
     finally:
@@ -7337,7 +7616,139 @@ def test_all_lanes_cli_exit_compares_production_ready_exactly(capsys):
 
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["production_ready"] == "true"
+    assert payload["production_ready"] is False
+    assert payload["blockers"] == [
+        "all-lanes summary production_ready must be boolean"
+    ]
+
+
+def test_all_lanes_cli_suppresses_malformed_summary_roots(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: "operator secret-token-summary"
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == {
+        "production_ready": False,
+        "blockers": ["all-lanes summary must be an object"],
+    }
+    assert "secret-token-summary" not in captured.out
+
+
+def test_all_lanes_cli_suppresses_malformed_summary_blockers(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: {
+        "production_ready": True,
+        "blockers": ["operator secret-token-blocker"],
+    }
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["production_ready"] is False
+    assert payload["blockers"] == [
+        "all-lanes summary blockers[0] contains sensitive name"
+    ]
+    assert "secret-token-blocker" not in captured.out
+
+
+def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: {
+        "production_ready": True,
+        "blockers": [],
+        "required_domains": [1, 2, 3, 4, 5],
+        "lanes": [],
+        "operator_note": "safe note",
+        "secret-token-summary": "secret-token-value",
+        7: "secret-token-int-key",
+    }
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["production_ready"] is False
+    assert "operator_note" not in payload
+    assert "secret-token-summary" not in payload
+    assert "7" not in payload
+    assert "safe note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+    blockers = "\n".join(payload["blockers"])
+    assert "all-lanes summary unexpected field operator_note" in blockers
+    assert "all-lanes summary unexpected field with sensitive name" in blockers
+    assert "all-lanes summary unexpected non-string field name" in blockers
+
+
+def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: {
+        "production_ready": True,
+        "blockers": [],
+        "required_domains": "operator secret-token-required-domains",
+        "supported_launch_domains": ["operator secret-token-supported-domains"],
+        "unsupported_launch_domains": {
+            "operator": "secret-token-unsupported-domains"
+        },
+        "lanes": ["operator secret-token-lane"],
+        "release_checklist": "operator secret-token-release-checklist",
+    }
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == {
+        "production_ready": False,
+        "blockers": [
+            "all-lanes summary required_domains must be a list of integers",
+            "all-lanes summary supported_launch_domains must be a list of integers",
+            "all-lanes summary unsupported_launch_domains must be a list of integers",
+            "all-lanes summary lanes must be a list of objects",
+            "all-lanes summary release_checklist must be an object",
+        ],
+    }
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
 
 
 def test_all_lanes_release_checklist_pinpoints_canary_gaps():
@@ -7498,6 +7909,125 @@ def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits():
         "domain 3 (sol): source adapter gate hash must match "
         "audit_hashes.solana_full_light_client_gate_hash"
     ) in blockers
+
+
+def checklist_source_gate_lane(module, domain, seed):
+    gate_field, audit_fields = module._source_adapter_gate_requirements(domain)
+    profile = module.LANE_PROFILES[domain]
+    gate_hash = hex32(seed)
+    audit_hashes = {
+        field: hex32(seed + index + 1)
+        for index, field in enumerate(audit_fields)
+    }
+    audit_hashes[gate_field] = gate_hash
+    return {
+        "domain": domain,
+        "chain": profile.chain,
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_record_hashes": {
+            "source_verifier_material_hash": hex32(seed + 20),
+            "source_adapter_engine_deployment_hash": hex32(seed + 21),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": gate_hash,
+            "audit_hashes": audit_hashes,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+            "destination_binding_hash": hex32(seed + 22),
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_allowlist_hash": hex32(seed + 23),
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(seed + 24),
+                "evidence_source": module.ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN[
+                    domain
+                ],
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+
+def test_all_lanes_release_checklist_rejects_source_gate_template_replays():
+    module = load_evidence_module()
+    domains = (
+        module.SCCP_DOMAIN_ETH,
+        module.SCCP_DOMAIN_BSC,
+        module.SCCP_DOMAIN_SOL,
+        module.SCCP_DOMAIN_TON,
+        module.SCCP_DOMAIN_TRON,
+    )
+
+    for index, domain in enumerate(domains):
+        seed = 0x81 + index * 0x20
+        template_hashes = module._source_material_template_hashes(
+            module.LANE_PROFILES[domain]
+        )
+        gate_field, audit_fields = module._source_adapter_gate_requirements(domain)
+        component_audit_fields = tuple(
+            field for field in audit_fields if field != gate_field
+        )
+        for template_field, template_hash in template_hashes.items():
+            template_value = "0x" + template_hash.hex()
+
+            gate_lane = checklist_source_gate_lane(module, domain, seed)
+            gate_lane["source_adapter_gate"]["gate_hash"] = template_value
+            gate_lane["source_adapter_gate"]["audit_hashes"][gate_field] = (
+                template_value
+            )
+
+            gate_checklist = module._release_checklist([gate_lane], [])
+            gate_items = {item["id"]: item for item in gate_checklist["items"]}
+            gate_blockers = "\n".join(
+                gate_items["governed_deployment_evidence"]["blockers"]
+            )
+
+            assert gate_checklist["ready"] is False, (domain, template_field)
+            assert (
+                f"domain {domain} ({module.LANE_PROFILES[domain].chain}): "
+                "source adapter gate hash must be deployed evidence, "
+                "not built-in template material"
+            ) in gate_blockers
+            assert (
+                f"domain {domain} ({module.LANE_PROFILES[domain].chain}): "
+                f"source adapter gate audit hashes {gate_field} must be "
+                "deployed evidence, not built-in template material"
+            ) in gate_blockers
+
+            for audit_field in component_audit_fields:
+                audit_lane = checklist_source_gate_lane(module, domain, seed)
+                audit_lane["source_adapter_gate"]["audit_hashes"][audit_field] = (
+                    template_value
+                )
+
+                audit_checklist = module._release_checklist([audit_lane], [])
+                audit_items = {item["id"]: item for item in audit_checklist["items"]}
+                audit_blockers = "\n".join(
+                    audit_items["governed_deployment_evidence"]["blockers"]
+                )
+
+                assert audit_checklist["ready"] is False, (
+                    domain,
+                    audit_field,
+                    template_field,
+                )
+                assert (
+                    f"domain {domain} ({module.LANE_PROFILES[domain].chain}): "
+                    f"source adapter gate audit hashes {audit_field} must be "
+                    "deployed evidence, not built-in template material"
+                ) in audit_blockers
 
 
 def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields():
@@ -7948,6 +8478,140 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
             "evidence_source",
             " evm_message_proof_accepted_transaction ",
             "domain 1 (eth): live route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_bound",
+            "true",
+            "domain 1 (eth): route canary evidence_bound must be boolean",
+        ),
+        (
+            "evidence_bound",
+            1,
+            "domain 1 (eth): route canary evidence_bound must be boolean",
+        ),
+        (
+            "evidence_bound",
+            False,
+            "domain 1 (eth): route canary evidence is not bound",
+        ),
+        (
+            "message_proof_used",
+            "true",
+            "domain 1 (eth): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            1,
+            "domain 1 (eth): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            False,
+            "domain 1 (eth): route canary message proof must be used",
+        ),
+        (
+            "receipt_block_finalized",
+            "true",
+            "domain 1 (eth): route canary receipt_block_finalized must be boolean",
+        ),
+        (
+            "receipt_block_finalized",
+            1,
+            "domain 1 (eth): route canary receipt_block_finalized must be boolean",
+        ),
+        (
+            "receipt_block_finalized",
+            False,
+            "domain 1 (eth): route canary receipt block must be finalized",
+        ),
+    )
+
+    for field, value, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["route_allowlist"]["route_canary"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items["live_route_canary_evidence"]["blockers"])
+
+        assert checklist["ready"] is False, repr((field, value))
+        assert items["live_route_canary_evidence"]["ready"] is False
+        assert expected in blockers
+
+
+def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean_scalars():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_TRON,
+        "chain": "tron",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": hex32(0x71),
+            "audit_hashes": {
+                "tron_receipt_mpt_verifier_hash": hex32(0x72),
+                "tron_solid_block_header_verifier_hash": hex32(0x73),
+                "tron_witness_schedule_verifier_hash": hex32(0x74),
+                "tron_message_event_verifier_hash": hex32(0x75),
+                "tron_signature_recovery_verifier_hash": hex32(0x76),
+            },
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x7C),
+                "evidence_source": module.ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN[
+                    module.SCCP_DOMAIN_TRON
+                ],
+                "evidence_bound": True,
+                "message_proof_used": True,
+                "raw_data_owner_matches_transaction": True,
+                "signature_recovers_to_owner": True,
+            },
+        },
+        "blockers": [],
+    }
+    cases = (
+        (
+            "raw_data_owner_matches_transaction",
+            "true",
+            "domain 5 (tron): route canary raw_data_owner_matches_transaction must be boolean",
+        ),
+        (
+            "raw_data_owner_matches_transaction",
+            1,
+            "domain 5 (tron): route canary raw_data_owner_matches_transaction must be boolean",
+        ),
+        (
+            "raw_data_owner_matches_transaction",
+            False,
+            "domain 5 (tron): route canary raw_data owner must match transaction",
+        ),
+        (
+            "signature_recovers_to_owner",
+            "true",
+            "domain 5 (tron): route canary signature_recovers_to_owner must be boolean",
+        ),
+        (
+            "signature_recovers_to_owner",
+            1,
+            "domain 5 (tron): route canary signature_recovers_to_owner must be boolean",
+        ),
+        (
+            "signature_recovers_to_owner",
+            False,
+            "domain 5 (tron): route canary signature must recover to owner",
         ),
     )
 

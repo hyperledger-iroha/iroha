@@ -2,6 +2,3669 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 BFV diagnostic repack lint surface cleanup
+
+- Test-gated the crate-private raw-sample coefficient-zero diagnostic repack
+  bound wrappers that are only used by crypto unit tests after the diagnostic
+  repack surface was narrowed, removing non-test `iroha_crypto` dead-code
+  warnings without reopening a runtime or public full-bootstrap output API.
+- Kept the private residual/noise bound calculators available to the governed
+  full-bootstrap trace and bound propagation paths.
+- Validation pending.
+
+## 2026-06-22 Soracloud release-audit digest sentinel parity
+
+- Mirrored the crypto full-bootstrap package-digest sentinel set in shared
+  Soracloud FHE execution-policy validation, including leading-whitespace
+  delayed-placeholder caller-pinned package digests, so policy admission fails
+  on the placeholder diagnostic before generic embedded-package mismatch.
+- Extended the Core full-bootstrap release-audit runtime-context regression to
+  pin the same leading-whitespace delayed-placeholder package-digest rejection
+  before artifact-aware exact or bounded execution can run.
+- Cleaned up the staged Petal Stream deterministic capture jitter helper so
+  seed folding, sample-index mixing, and clamped luminance conversion avoid
+  truncating casts under strict clippy while preserving deterministic output.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-audit-digest-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_binds_release_audit_trusted_reviewer --lib -- --nocapture`
+    (`1` passed, `1564` filtered out; finished in 55.09s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-audit-digest-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit --lib -- --nocapture`
+    (`1` passed, `5464` filtered out; finished in 82.33s after rebuild)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-audit-digest-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model luminance_jitter_folds_high_seed_bits_without_truncating --lib -- --nocapture`
+    (`1` passed, `1571` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-audit-digest-sentinels CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-audit-digest-sentinels CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_data_model --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_data_model/src/petal_stream.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - Conflict-marker scan over the same files returned no matches, and
+    `git diff --name-only -- Cargo.lock` remained empty.
+
+## 2026-06-22 BFV full-bootstrap sample-switch execution surface narrowing
+
+- Narrowed the standalone exact/bounded raw-sample switch execution helpers and
+  their propagated output-bound helpers to crate scope, so external callers
+  cannot turn raw full-bootstrap samples into coefficient-zero ciphertexts
+  outside the governed execution-prefix, proof-material, and release-audited
+  artifact-output paths.
+- Kept sample-switch key generation and owner-side secret-consistency
+  diagnostics public for release tooling, while final executable output remains
+  routed through governed artifact material.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-raw-sample-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 8.38s after rebuild)
+
+## 2026-06-22 BFV full-bootstrap raw-sample extraction surface narrowing
+
+- Narrowed the raw LWE-style full-bootstrap sample-extraction helpers,
+  exact/bounded raw-sample bound helpers, and raw-sample validator to crate
+  scope, so external callers cannot build standalone raw-sample proof material
+  outside the governed execution-prefix/proof-material path.
+- Kept raw-sample extraction available internally for canonical trace
+  reconstruction, sample-switch execution, and full-bootstrap arithmetic
+  proof/witness validation.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-raw-sample-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 8.36s after build)
+
+## 2026-06-22 BFV full-bootstrap diagnostic repack surface narrowing
+
+- Narrowed the coefficient-zero raw-sample repack diagnostic helpers and their
+  exact/bounded coefficient-zero bound helpers to crate scope, so external
+  callers cannot treat the diagnostic repack bridge as a standalone
+  full-bootstrap output API.
+- Kept the governed execution-prefix trace, sample-switch, and release-audited
+  artifact output paths intact; the diagnostic repack remains internal proof
+  material only.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-diagnostic-repack-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 8.32s after build)
+
+## 2026-06-22 BFV full-bootstrap audited crypto execution surface
+
+- Narrowed the raw artifact-aware full-bootstrap crypto execution and bound
+  helpers to crate scope, so external callers cannot bypass the release-audit
+  package gate by calling the unaudited exact or bounded artifact path.
+- Routed the Core Soracloud and native STARK full-bootstrap fixture/prover-input
+  builders through the release-audited crypto helpers with deterministic
+  reviewer/package material and release-shaped audit report/archive bytes.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-audited-crypto-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; finished in 236.27s after rebuild)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-audited-crypto-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 344.00s)
+
+## 2026-06-22 Soracloud full-bootstrap runtime audit-context gate
+
+- Hardened Core full-bootstrap artifact execution so exact and bounded
+  artifact-aware execution/bound propagation require a release-audit runtime
+  context before dispatching to release-audited crypto helpers.
+- Kept artifact preflight ahead of the audit-context gate, so drifted bundles,
+  role-swapped envelopes, stale proof-key material, and missing Galois keys
+  still surface the narrower diagnostics once the fixture audit context is
+  present.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-runtime-audit-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+    (`2` passed, `5254` filtered out; finished in 361.73s)
+
+## 2026-06-22 Torii generated-HF proxy target fixture determinism
+
+- Replaced random generated-HF local-read proxy target and pending-response
+  responder peer fixtures with checked deterministic Ed25519 seed material.
+- Kept the primary/local/responder routing roles unchanged while making the
+  proxy-target regressions reproducible.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii resolve_soracloud_local_read_proxy_target --lib --features app_api -- --nocapture`
+    (`2` passed, `2585` filtered out)
+  - `cargo test -j 1 -p iroha_torii soracloud_proxy_response_completes_pending_request --lib --features app_api -- --nocapture`
+    (`1` passed, `2591` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs status.md`
+  - Targeted random/conflict-marker scan over the edited generated-HF
+    proxy-target block returned no matches, and the `Cargo.lock` /
+    `crates/iroha_torii/Cargo.toml` diff guard remained empty.
+
+## 2026-06-22 Torii hosted HTTP proxy fixture determinism
+
+- Replaced remaining random hosted-HTTP proxy fixture keys in the snapshot
+  origin, proxy-candidate filtering, and remote-fallback tests with checked
+  deterministic Ed25519/BLS fixture material.
+- Kept the original peer roles and algorithms intact while making the
+  validator accounts and peer IDs reproducible across runs.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii hosted_http_proxy_candidate_peers_exclude_local_and_visited --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo test -j 1 -p iroha_torii resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo test -j 1 -p iroha_torii proxy_soracloud_public_hosted_http_falls_back_to_remote_peer --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs status.md`
+  - Targeted random/conflict-marker scan over the edited hosted proxy test
+    block returned no matches, and `git diff --name-only -- Cargo.lock
+    crates/iroha_torii/Cargo.toml` remained empty.
+
+## 2026-06-22 Torii hosted HTTP SSE loopback streaming
+
+- Switched the local Soracloud hosted-HTTP loopback proxy from reqwest response
+  setup to a Hyper HTTP/1 connection over a safe Tokio TCP adapter so Torii can
+  return upstream headers and stream SSE body frames without waiting for the
+  full upstream body to finish.
+- Strengthened the hosted SSE regression with a chunked HTTP/1 loopback
+  upstream that flushes the first SSE frame immediately, delays the second
+  frame, and asserts both direct local-proxy and public-runtime router paths
+  choose the local listener and stream promptly.
+- Kept the hosted live-route fixtures on checked deterministic key material for
+  the local vault, ordered vault update, and SSE hosted-peer placements.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii soracloud_public_hosted_http_route_streams_sse_bodies --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo test -j 1 -p iroha_torii soracloud_public_split_app_routes_hosted_live --lib --features app_api -- --nocapture`
+    (`2` passed, `2585` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs crates/iroha_torii/Cargo.toml status.md`
+  - Targeted random/conflict-marker scan over the edited hosted SSE test block
+    returned no matches, and `git diff --name-only -- Cargo.lock` remained
+    empty.
+
+## 2026-06-22 Soracloud full-bootstrap hash-only prover surface narrowing
+
+- Narrowed the material and execution hash-only full-bootstrap prover
+  compatibility helpers to test-only crate scope so external callers and
+  production library builds cannot route proof generation through
+  statement-only fail-closed constructors.
+- Kept the release/audit-aware material and execution prover entry points as
+  the public production surfaces; existing hash-only regressions still pin
+  zero-statement, wrong-verifier-key, and dedicated-prover-unavailable behavior
+  internally.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-hash-only-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark hash_only_entrypoint_stays_fail_closed --lib -- --nocapture`
+    (`2` passed, `5441` filtered out; finished in 12m 24s)
+
+## 2026-06-22 BFV native AIR prover surface narrowing
+
+- Narrowed the Core BFV full-bootstrap native AIR proof builder to crate scope
+  so external callers cannot bypass Soracloud's artifact-bound and
+  release/audit-aware proof-generation entry points with self-consistent
+  prover input material alone.
+- Kept the verifier helpers public while documenting that production proof
+  generation must go through the Soracloud release/audit-aware path before this
+  internal helper is reached.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-prover-surface CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_rejects_stale_prover_input_material --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; finished in 188.96s)
+
+## 2026-06-22 BFV AIR public-padding and challenge digest sentinels
+
+- Hardened BFV full-bootstrap AIR composition challenge derivation so it
+  rejects zero, direct-placeholder, and leading-whitespace delayed-placeholder
+  statement hashes or trace-material digests before reducing the transcript
+  digest into the Goldilocks challenge field.
+- Extended verifier-facing public-padding row construction and opening
+  validation to reject leading-whitespace delayed-placeholder statement hashes
+  before canonical padding rows are built or compared.
+- Added matching Core native STARK public-padding verifier coverage so the
+  public-padding envelope entry/context path rejects the same delayed
+  placeholder statement hash even when the AIR public digest is forged to match.
+- Extended the governed trace/AIR regression to pin those low-level challenge
+  input sentinels alongside the existing full-digest reduction and
+  row/column/trace binding checks.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-padding-boundary CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 734.92s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-padding-boundary CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-core-padding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; finished in 182.52s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-core-padding CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto --package iroha_core -- --check`
+
+## 2026-06-22 ZK backend developer-marker alias guard
+
+- Hardened the shared Rust data-model/Core ZK backend classifiers and the
+  JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C# SDK mirrors so
+  supported family aliases carrying `todo`, `draft`, `pending`, `replace-*`, or
+  `not-for-production` markers fail closed before broad STARK/Halo2 alias
+  matching can admit them.
+- Extended the adversarial backend-label parser/regression surfaces with direct
+  and punctuation-spliced developer marker aliases for Halo2 IPA and STARK/FRI
+  labels while preserving exact pending-production protocol labels.
+- Validation passed:
+  - `cargo fmt --package iroha_core --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-dev-markers CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model backend_tag_catalog_label_parser_rejects_adversarial_supported_family_aliases --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-dev-markers CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-dev-markers CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core developer_only_backends_are_unsupported --lib -- --nocapture`
+    (`1` passed, `5255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-dev-markers CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `node --test --test-name-pattern "developer-only privacy backend labels stay rejected before production allowlists" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`1` passed)
+  - `node --check javascript/iroha_js/src/instructionBuilders.js`
+  - `node --check javascript/iroha_js/src/toriiClient.js`
+  - `node --test --test-name-pattern "privacy proof envelope builder rejects malformed and oversized inputs" javascript/iroha_js/test/instructionBuilders.test.js`
+    (`1` passed)
+  - `node --test --test-name-pattern "verifying key read paths reject unsupported production backends before fetch|verifying key registration rejects unsupported production backends before fetch" javascript/iroha_js/test/toriiClient.test.js`
+    (`2` passed)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/src/iroha_python/_privacy_backends.py python/iroha_python/tests/client_ledger_helpers_test.py`
+  - `swiftc -parse IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift`
+  - `cargo fmt --package iroha_core --package iroha_data_model -- --check`
+  - `git diff --check` scoped to the touched ZK backend classifier, test, and
+    status/planning files
+  - conflict-marker scan over the same touched file set
+  - `git diff --name-only -- Cargo.lock` remained empty
+- Local validation blocked:
+  - Focused Python pytest collection is blocked under `/usr/bin/python3` because
+    that Python 3.9 runtime cannot import `typing.TypeAlias`; no Python 3.11+
+    binary is available on `PATH`.
+  - Focused Kotlin/JVM and Java Android Gradle tests are blocked because no Java
+    runtime is discoverable by Gradle or `/usr/libexec/java_home`.
+  - Focused C# tests are blocked because `dotnet` is not on `PATH`.
+
+## 2026-06-22 BFV AIR challenge contract byte-count binding
+
+- Extended the BFV full-bootstrap arithmetic AIR contract material and
+  Soracloud execution proof public-input schema with
+  `composition_challenge_digest_bytes = 32`, so governed AIR contract digests
+  and schema hashes bind full-digest Goldilocks challenge reduction instead of
+  only domain/input labels.
+- Bumped the first-release AIR contract material field count to `33`, refreshed
+  the Soracloud material/execution schema hash pins, and added crypto
+  regressions proving stale digest-byte counts are rejected at both AIR-contract
+  and public-schema validation.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-slot CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 6.61s after build)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-challenge-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-slot CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 528.17s)
+  - `cargo fmt --package iroha_crypto --package iroha_data_model -- --check`
+  - `git diff --check`
+
+## 2026-06-22 BFV material digest leading-whitespace delayed sentinels
+
+- Hardened the generic full-bootstrap material digest placeholder recognizer so
+  delayed placeholder preimages with the established leading-whitespace wrappers
+  are rejected before governed material validation can accept them.
+- Extended the full-bootstrap circuit-material regression to replay a
+  leading-whitespace delayed native proof-key placeholder digest through a
+  verifier-key material commitment slot.
+- Split the BFV proof public-input schema AIR-contract validation into shape
+  and enforcement-flag helpers so the strict `iroha_crypto` clippy pass remains
+  warning-clean.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-material-leading-delay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-material-leading-delay CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-22 BFV public-padding opening-set replay guard
+
+- Extended Core's BFV native AIR regression so duplicated sampled public
+  openings and truncated opening sets are rejected by both the public-padding
+  verifier and the artifact-bound verifier.
+- This pins the verifier-facing boundary that each sampled public padding row
+  must remain tied to the transcript-derived FRI query set, not just be an
+  individually valid padding row.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-opening-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; 72.04s after build)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-opening-replay CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-22 Sumeragi RBC delivered-state lifecycle envelope
+
+- Added `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope` to the
+  top-level Sumeragi model as the aggregate delivered-state lifecycle theorem,
+  composing delivery persistence, delivered evidence stability, no
+  pre-finality commit certificate, certified commit-vote finality, closed
+  RBC/fault progress gates, delivered-without-finality wait-state constraints,
+  delivered-pending handoff coverage, complete spec-step handoff behavior, and
+  the named delivered-pending wait-state action envelope.
+- Wired the aggregate through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the delivered-state lifecycle
+  envelope in the formal README and roadmap.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-rbc-delivered-state-lifecycle-envelope typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total time `13.139 sec`)
+  - Focused TLC for `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope`
+    using `N = 4`, `F = 1`, `CommitQuorum = 3`, `ViewQuorum = 3`,
+    `StakeQuorum = 8`, `StakePerHonestVote = 3`, `StakePerByzVote = 1`,
+    `MaxView = 4`, and `MaxChunks = 2`
+    (`7799` states generated, `2338` distinct states, depth `24`, no errors,
+    finished in `05h 21min`).
+
+## 2026-06-22 BFV AIR challenge full-digest reduction
+
+- Tightened BFV full-bootstrap arithmetic AIR composition challenge derivation
+  so the Goldilocks challenge reduces the full 32-byte statement/trace/coordinate
+  digest instead of only the low eight bytes.
+- Extended the full-bootstrap witness/material regression to prove high digest
+  limbs affect the field reduction while preserving the existing trace-bound
+  composition-drift checks.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-slot CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 234.81s)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check`
+
+## 2026-06-22 BFV public-padding parameter-profile preflight
+
+- Tightened the BFV full-bootstrap native AIR public-padding context so it
+  compares the caller statement's canonical STARK/FRI parameter profile,
+  including the statement-bound domain tag, before accepting AIR statement
+  metadata or sampled opening replay.
+- Extended the existing Core BFV native AIR public-padding regression to prove
+  the private context accepts the canonical generated envelope and rejects both
+  statement-bound domain-tag drift and canonical parameter-profile drift.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-params CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; finished in 71.83s after build)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 BFV public-padding slot-capacity preflight
+
+- Tightened the BFV full-bootstrap arithmetic trace public-padding row helper
+  so verifier-facing public slot headers must stay within the canonical
+  first-release BFV slot capacity before native STARK/AIR rows or openings are
+  accepted.
+- Extended the crypto witness/material regression and the Core public-padding
+  verifier regression to prove out-of-range slot headers fail at the shared
+  public-padding boundary.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-slot CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 234.61s after build)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; 78.33s after build)
+  - `cargo fmt --package iroha_crypto --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 BFV public-padding placeholder-statement preflight
+
+- Tightened the shared BFV full-bootstrap native AIR public-padding
+  verifier/context so statement admissibility reuses the crypto-layer public
+  padding-row validator, rejecting known placeholder statement hashes as well
+  as the zero sentinel before STARK envelope/context replay.
+- Extended the existing BFV native AIR public-padding regression to cover
+  placeholder-statement rejection through both the public wrapper and the
+  internal AIR context boundary.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; 68.67s after build)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 OpenVerify metadata guard and size-first validation
+
+- Tightened shared `OpenVerifyEnvelope` admission so non-empty all-zero public
+  input metadata is malformed, matching the existing all-zero proof-byte
+  placeholder rejection before verifier dispatch.
+- Public-input length bounds now run before the all-zero content scan, so
+  oversized placeholder metadata fails with `PublicInputsTooLarge` before any
+  content classification.
+- Added Core preverify coverage proving invalid or oversized circuit ids,
+  all-zero public inputs, and all-zero proof bytes are rejected as
+  `MalformedProof` before dedup/cache admission.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-openverify-public-inputs CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model open_verify_envelope_admission_validation_rejects_adversarial_shapes --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-openverify-public-inputs CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core preverify_rejects_noncanonical_envelope_metadata_before_dedup --lib -- --nocapture`
+    (`1` passed, `5255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-openverify-public-inputs CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-openverify-public-inputs CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto --package iroha_core --package iroha_data_model -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/zk.rs crates/iroha_core/src/zk_stark.rs crates/iroha_data_model/src/zk.rs status.md roadmap.md docs/source/engineering_backlog.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/zk.rs crates/iroha_core/src/zk_stark.rs crates/iroha_data_model/src/zk.rs status.md roadmap.md docs/source/engineering_backlog.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-22 BFV public-padding zero-statement preflight
+
+- Tightened the shared BFV full-bootstrap native AIR public-padding
+  verifier/context so zero statement hashes fail before STARK envelope/context
+  replay.
+- Extended the existing BFV native AIR public-padding regression to cover the
+  zero-statement rejection, including the internal AIR context boundary,
+  alongside stale statement hash, slot, bound-mode, private-row, and public-row
+  drift checks.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; 68.68s after build)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 Core governed STARK verifier-key regression validation
+
+- Restored the `zk-stark` Core test-module imports needed by the expanded
+  BFV STARK/FRI alias coverage, unblocking feature-enabled `iroha_core`
+  regression builds.
+- Re-ran governed full-bootstrap execution verifier-key regressions proving
+  wrong-circuit, opaque, and below-floor STARK/FRI verifier-key payloads fail
+  before a governed `VerifyingKeyBox` is admitted.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
+    (`1` passed, `5442` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
+    (`1` passed, `5442` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
+    (`1` passed, `5442` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 Core STARK OpenVerify BFV alias guardrails
+
+- Broadened the generic STARK `OpenVerifyEnvelope` BFV full-bootstrap circuit
+  reservation tests so both construction and verification reject the canonical
+  BFV circuit id through bare `stark/fri`, the canonical BFV SHA256 profile, and
+  an alternate production STARK profile alias before the binding AIR fallback.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-stark-bfv-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark prove_stark_open_verify_envelope_rejects_bfv --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; 0.01s after build)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-stark-bfv-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark verify_stark_open_verify_envelope_rejects_bfv --lib -- --nocapture`
+    (`1` passed, `5442` filtered out; 20.12s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-stark-bfv-alias CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/zk.rs status.md roadmap.md docs/source/engineering_backlog.md`
+
+## 2026-06-22 BFV release-audit signoff generated-body adversarial coverage
+
+- Extended the BFV full-bootstrap release-audit regression so signoff payload
+  validation rejects zero and placeholder generated-circuit body digests through
+  the same signed-commitment sweep as evidence, artifact, proof-key, and audit
+  digests.
+- Added a reviewer-signed stale generated-body signoff case proving standalone
+  signature validation is not enough: evidence and record validation now have
+  explicit coverage for rejecting signed generated-body digest drift.
+- Extended the release-audited exact and bounded full-bootstrap runtime fixture
+  so well-signed stale generated-body packages fail at the audit gate before
+  missing Galois-key or malformed-bound execution preflight.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-manifest-generated-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 399.12s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-signoff-generated-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 167.40s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-signoff-generated-body CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md roadmap.md docs/source/engineering_backlog.md`
+
+## 2026-06-22 BFV release-audit manifest generated-body binding
+
+- Extended the BFV full-bootstrap release-audit manifest layout to carry the
+  generated native circuit body digest committed by the governed prover/verifier
+  proof-key evidence.
+- Manifest validation now rejects zero, placeholder, aliased, or stale
+  generated-circuit body digests and rechecks the manifest field against the
+  signed audit record's proof-key evidence before accepting release packages.
+- Updated the Soracloud full-bootstrap material/execution public-input schemas
+  to advertise both signoff and manifest generated-circuit body digest binding.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-manifest-generated-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 394.55s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-signoff-generated-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 396.11s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-signoff-generated-body CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-manifest-generated-body-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap --lib -- --nocapture`
+    (`2` passed, `1563` filtered out)
+  - `cargo fmt --package iroha_crypto --package iroha_data_model -- --check`
+  - `git diff --check`
+
+## 2026-06-22 Torii signed-query route-handler checked fixtures
+
+- Converted the next Torii signed-query and app-api route-handler fixture cluster
+  from unchecked random key generation to checked deterministic Torii fixture
+  keys.
+- Covered account-permission query fanout classification, transaction query
+  authority routing, target-account route fanout, Nexus fanout route budgets,
+  signed trigger query handlers, account asset/account get fanout handlers,
+  public upstream account asset reads, and space-directory manifest routing.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii signed_query_scope --lib --features app_api -- --nocapture`
+    (`10` passed, `2577` filtered out)
+  - `cargo test -j 1 -p iroha_torii torii_account --lib --features app_api -- --nocapture`
+    (`5` passed, `2582` filtered out)
+  - `cargo test -j 1 -p iroha_torii handler_ --lib --features app_api -- --nocapture`
+    (`83` passed, `2504` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe torii_target_account_routes_fan_out_when_local_scope_is_unknown --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe nexus_fanout --nocapture`
+    (`3` passed, `2584` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe http_route_timeout_covers_read_fanout_proxy_budget --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe public_dataspace_upstream_serves_routed_account_assets --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe routing_space_directory_manifests_reports_inactive_pending_and_uncataloged_expired_rows --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs`
+
+## 2026-06-22 Torii space-directory and proxy checked fixtures
+
+- Converted the adjacent Torii space-directory/explorer handler authority
+  fixtures, proxy timeout signer, and proxy candidate peer-id fixtures from
+  unchecked random key generation to checked deterministic Torii fixture keys.
+- Covered configured dataspace manifest routing, explorer account detail
+  target-account routing, submit-transaction proxy timeout budgeting, and proxy
+  candidate retry/hedging/failure behavior.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii handler_space_directory_manifests --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe handler_explorer_account_detail_uses_target_account_routes_for_internal_reads --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe torii_proxy_attempt_timeout_uses_route_budget_for_queries --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `target/debug/deps/iroha_torii-aaed776a3bfa8dfe execute_torii_proxy_request_across_candidates --nocapture`
+    (`6` passed, `2581` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs`
+
+## 2026-06-22 Torii projection checkpoint checked fixtures
+
+- Converted the Torii projection checkpoint handler authority/account fixtures
+  from unchecked random key generation to checked deterministic Torii fixture
+  keys.
+- Updated the Core IVM OpenVerify envelope error mapping and regression case so
+  all-zero public inputs are handled explicitly alongside all-zero proof bytes.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core enforce_zk_envelope_rejects_shared_open_verify_shape_failures --lib -- --nocapture`
+    (`1` passed, `5255` filtered out)
+  - `cargo test -j 1 -p iroha_torii node_query_projection_checkpoint --lib --features app_api -- --nocapture`
+    (`9` passed, `2578` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_core --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs crates/iroha_core/src/smartcontracts/ivm/host.rs status.md`
+
+## 2026-06-22 Torii pipeline and account checked fixtures
+
+- Converted the Torii block-header, persisted trigger-completion,
+  sealed-reveal, committed-header, queued pipeline-status, typed
+  pipeline-status, account-get, and routed account-read fixtures from unchecked
+  random key generation to checked deterministic Torii fixture keys.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii pipeline_status --lib --features app_api -- --nocapture`
+    (`26` passed, `1` ignored, `2560` filtered out)
+  - `cargo test -j 1 -p iroha_torii account_get_handler --lib --features app_api -- --nocapture`
+    (`2` passed, `2585` filtered out)
+  - `cargo test -j 1 -p iroha_torii account_read_for_routes --lib --features app_api -- --nocapture`
+    (`3` passed, `2584` filtered out)
+  - `cargo test -j 1 -p iroha_torii trigger_completion_query --lib --features app_api -- --nocapture`
+    (`2` passed, `2585` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii commit-QC and SCCP checked fixtures
+
+- Converted the Torii commit-QC, recorded commit-certificate, and recorded
+  SCCP-message helper fixtures from unchecked random key generation to checked
+  deterministic Torii fixture keys, including checked `BlsNormal` derivation for
+  consensus peer identities.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii commit_qc --lib --features app_api -- --nocapture`
+    (`4` passed, `2583` filtered out)
+  - `cargo test -j 1 -p iroha_torii sccp_message --lib --features app_api -- --nocapture`
+    (`64` passed, `2523` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii bridge-submit checked fixtures
+
+- Converted the SCCP bridge proof/message submit test authorities from
+  unchecked random account generation to checked deterministic Torii fixture
+  accounts while preserving the bundle-selection, proof-material, target-domain,
+  and disabled-settlement validation paths.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii bridge_proof_submit --lib --features app_api -- --nocapture`
+    (`3` passed, `2584` filtered out)
+  - `cargo test -j 1 -p iroha_torii bridge_message_submit --lib --features app_api -- --nocapture`
+    (`5` passed, `2582` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii generated-HF checked fixtures
+
+- Converted the generated Hugging Face public-world fixture's lease-member,
+  primary validator, replica validator, and replica peer identities from
+  unchecked random key generation to checked deterministic Torii fixture keys.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii generated_hf --lib --features app_api -- --nocapture`
+    (`8` passed, `2579` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii hosted-HTTP rollout checked fixtures
+
+- Converted the hosted HTTP rollout fixture's shared local validator and peer
+  identities from unchecked random key generation to checked deterministic
+  Torii fixture keys while preserving baseline/canary placement sharing.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii resolve_hosted_http_runtime_target --lib --features app_api -- --nocapture`
+    (`10` passed, `2577` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii signed-query checked fixtures
+
+- Converted the first Torii signed-query scope/routing fixture cluster from
+  unchecked random key generation to checked deterministic Torii fixture keys.
+- Covered trigger inventory query scope, iterable target account builders,
+  asset/domain scope inference, opaque app-level target-domain routing, and
+  private ingress route resolution while preserving query classification
+  behavior.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii signed_query_scope --lib --features app_api -- --nocapture`
+    (`10` passed, `2577` filtered out)
+  - `cargo test -j 1 -p iroha_torii resolve_signed_query_routing_for_app_uses_target --lib --features app_api -- --nocapture`
+    (`3` passed, `2584` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 BFV release-audit generated-body digest-path rejection
+
+- Extended BFV full-bootstrap release-audit evidence coverage so the public
+  evidence digest helper rejects matched stale prover/verifier generated-circuit
+  body digests, not only the standalone evidence validator.
+- Reconciled the release-audit signoff payload schema with manifest validation
+  by adding the generated-circuit body digest commitment to signed payloads,
+  field counts, signed-commitment validation, and evidence binding checks.
+- Added signoff payload regressions proving the signed generated-body digest
+  matches both prover and verifier evidence and stale generated-body
+  commitments fail evidence binding.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out; 395.07s)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 BFV full-bootstrap transcript-statement boundary
+
+- Extended full-bootstrap evaluation-key bundle coverage so `FullBootstrapV1`
+  material still admits transcript inventory digests without deterministic
+  zero-refresh seeds, but exact and bounded zero-refresh transcript statement
+  APIs fail closed instead of hashing full-bootstrap material.
+- Made the transcript-bound zero-refresh proof-statement helper reject
+  `FullBootstrapV1` keys explicitly with a full-bootstrap material-proof
+  boundary error instead of falling through to a generic missing-seed failure.
+- Added bounded coverage proving `FullBootstrapV1` bundles reject supplied
+  deterministic zero-refresh bootstrap transcript seeds across transcript digest
+  and transcript-bound statement APIs.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requires_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 BFV exact transcript refresh-round order binding
+
+- Extended exact transcript-bound bootstrap proof-statement coverage so
+  three-round transcript statements bind bootstrap round count and generated key
+  material.
+- Added a regression proving reordered nonzero-index exact refresh rounds fail
+  closed during deterministic transcript validation before a transcript-bound
+  proof statement digest is emitted.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_transcript_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 BFV bounded transcript refresh-round order binding
+
+- Extended bounded-noise evaluation-key transcript coverage so transcript-bound
+  bootstrap proof statements change when the bounded bootstrap round count and
+  key material change.
+- Added a three-round bounded transcript regression proving reordered
+  nonzero-index refresh rounds fail closed during deterministic transcript
+  validation before a bounded proof statement digest is emitted.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 BFV bootstrap transcript proof-statement mode separation
+
+- Extended transcript-bound bootstrap proof-statement coverage so the
+  bounded-noise proof-statement API rejects exact encrypted-zero refresh masks
+  instead of deriving a bounded statement from exact transcript material.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_transcript_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 BFV bounded-noise bootstrap proof-statement round binding
+
+- Extended bootstrap zero-refresh proof-statement regressions so the
+  bounded-noise statement path rejects all-zero nonzero-index refresh rounds,
+  matching the exact-lift path.
+- Added bounded-noise digest-drift coverage proving tampering any refresh round
+  changes the bounded bootstrap proof-statement digest, not only the exact
+  digest, and proving refresh-round reordering changes the bounded digest.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_zero_refresh_proof_statement_digest_binds_public_material --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 BFV bounded-noise RNS bootstrap wrapper preflight coverage
+
+- Extended bounded-noise RNS preflight regressions to cover the round-zero
+  exact-RNS and target-limb basis-extension bootstrap convenience wrappers, not
+  only their indexed-round and multi-round implementations.
+- The new cases use malformed bootstrap keys and ciphertexts with too-narrow
+  RNS chains, proving the public wrappers reject the chain corridor before key
+  or ciphertext shape errors can mask it.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 Core OpenVerify IVM all-zero proof mapping
+
+- Completed the Core IVM host error-code mapping for the shared
+  `OpenVerifyEnvelopeValidationError::AllZeroProofBytes` admission failure so
+  all-zero proof payloads fail as decode errors instead of breaking compilation
+  when the stricter data-model validator is enabled.
+- Extended the Core OpenVerify envelope shape regression to cover all-zero proof
+  bytes at the host-enforcement boundary.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core enforce_zk_envelope_rejects_shared_open_verify_shape_failures --lib -- --nocapture`
+    (`1` passed, `5255` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-22 Torii routing filter/status checked fixtures
+
+- Converted the remaining Torii routing account-filter candidate,
+  asset-definition filter projection, and Sumeragi telemetry peer fixtures from
+  unchecked random key generation to checked deterministic routing fixture keys.
+- Left the runtime scaffold `try_random_with_algorithm` path untouched because it
+  already propagates key-generation failure explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii account_filter_candidate_ids_extracts_safe_exact_constraints --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo test -j 1 -p iroha_torii defs_filter_projection_matches_name_alias_and_metadata_passthrough --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out)
+  - `cargo test -j 1 -p iroha_torii sumeragi_telemetry_endpoint_returns_snapshot --lib --features telemetry -- --nocapture`
+    (`1` passed, `2664` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features "app_api telemetry" --no-deps -- -D warnings`
+
+## 2026-06-22 BFV generated-circuit digest adversarial coverage
+
+- Added crypto regressions proving canonical native STARK/FRI verifier-key
+  material rejects digest-correct all-zero generated circuit body bytes.
+- Extended release-audit evidence coverage so prover and verifier key evidence
+  with the same stale generated-circuit body digest fails against the canonical
+  generated body digest, not just the prover/verifier equality check.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_native_key_material_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+
+## 2026-06-22 Soracloud bounded-noise input admission validation
+
+- Reviewed the bounded-noise FHE input admission path and found the current
+  implementation already binds `bound_mode` into the statement hash, rechecks
+  payload length and payload commitment before verifier lookup, and persists
+  bounded-noise metadata only after registered STARK verifier-backed admission.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-native-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof --lib -- --nocapture`
+    (`1` passed, `5442` filtered out)
+
+## 2026-06-22 BFV native generated circuit body binding
+
+- Extended canonical BFV full-bootstrap native STARK/FRI prover and verifier
+  payloads from metadata-only layouts to carry deterministic nonzero generated
+  circuit body bytes derived from the typed arithmetic AIR contract, with raw
+  SHA-256 body digests checked during native payload admission.
+- Bound the generated circuit body digest through release-audit proof-key
+  evidence, requiring the generated prover and verifier key evidence to agree on
+  the same canonical body digest before release evidence can validate.
+- Added crypto regressions for missing and digest-correct drifted generated
+  circuit bodies, release-audit evidence coverage for body digest binding, and a
+  Core zk-stark regression proving governed native verifier-key canonicalization
+  rejects generated-body drift before rewriting native payloads to Core STARK
+  verifier-key bytes. Updated Soracloud material/execution schemas to advertise
+  the release-audit generated-body digest binding.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_native_key_material_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_canonicalizes_native_metadata_payload --lib -- --nocapture`
+    (`1` passed, `5441` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_native_generated_body_drift --lib -- --nocapture`
+    (`1` passed, `5442` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body-data CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap --lib -- --nocapture`
+    (`2` passed, `1563` filtered out)
+  - `cargo fmt --package iroha_crypto --package iroha_core --package iroha_data_model -- --check`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-generated-circuit-body CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-22 BFV RNS selector-product preflight coverage
+
+- Extended BFV exact and bounded-noise RNS preflight regressions to cover the
+  plaintext-polynomial selector-product path used by packed rotations, proving
+  too-narrow product chains fail before malformed ciphertexts can mask the RNS
+  corridor error.
+- Split the release-audit evidence distinct-digest entry list out of the
+  validator to keep the crypto clippy line-count gate green without changing
+  digest aliasing behavior.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-inner-payload CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto preflight_chain --lib -- --nocapture`
+    (`2` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-inner-payload CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-inner-payload CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-22 OpenVerify all-zero proof-byte admission guard
+
+- Tightened the shared `OpenVerifyEnvelope` data-model admission validator so
+  non-empty proof payloads made entirely of zero bytes fail at the generic
+  envelope boundary before backend verifier dispatch.
+- Added the all-zero proof-byte case to the existing adversarial
+  OpenVerify-envelope shape regression, alongside unsupported backend,
+  zero verifier-key hash, empty proof, oversized proof, and auxiliary-byte
+  cases.
+- Added Core STARK verifier-dispatch coverage proving an all-zero outer
+  `OpenVerifyEnvelope.proof_bytes` payload is rejected by the runtime path
+  before backend-native proof decoding or verification.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-openverify-zero-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model open_verify_envelope_admission_validation_rejects_adversarial_shapes --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-openverify-zero-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-native-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark verify_stark_open_verify_envelope_rejects_noncanonical_outer_shape --lib -- --nocapture`
+    (`1` passed, `5441` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-22 BFV full-bootstrap artifact all-zero decoder guards
+
+- Mirrored BFV full-bootstrap release-artifact inert-byte guards in the shared
+  artifact decoder and proof-key registered-profile helper, so hand-crafted
+  governed artifacts with all-zero outer envelopes or non-empty all-zero inner
+  payloads fail before role-specific Norito decoding.
+- Added adversarial artifact-bundle coverage that forges a coefficient-to-slot
+  artifact envelope with a matching governed material digest and proves bundle
+  validation rejects all-zero outer envelopes and all-zero inner payloads at the
+  common decoder boundary. Added matching proof-key commitment-helper coverage
+  for the pre-material artifact decoder used during release material derivation.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-inner-payload CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_key_artifact_commitment_helper_rejects_adversarial_envelopes --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-inner-payload CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-inner-payload CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" crates/iroha_crypto/src/fhe_bfv.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (no matches)
+
+## 2026-06-22 Soracloud native verifier AIR digest canonicalization
+
+- Tightened the zk-stark Core canonicalization path for governed BFV
+  full-bootstrap execution verifier-key artifacts so native STARK/FRI verifier
+  payloads now reject arithmetic AIR constraint-system digest drift before they
+  are converted back into Core STARK verifier-key bytes.
+- Added a focused Core regression that mutates only the native verifier payload
+  AIR digest and asserts the governed verifier-key path fails with the native
+  arithmetic AIR constraint-system mismatch.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-native-air-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_native_ --lib -- --nocapture`
+    (`5` passed, `5437` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-native-air-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
+    (`1` passed, `5441` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-native-air-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
+    (`1` passed, `5441` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-native-air-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
+    (`1` passed, `5441` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 BFV bootstrap refresh round-capacity admission
+
+- Tightened exact and bounded-noise BFV bootstrap refresh-key admission so
+  generated keys, refresh transcript/proof-statement validation, owner
+  zero-refresh diagnostics, and direct/RNS refresh evaluators reject advertised
+  `max_refresh_rounds` whose cumulative encrypted-zero refresh budget exceeds
+  centered residual or rounded decoding capacity.
+- Added a crypto regression for narrow one-round parameter profiles where one
+  refresh remains valid, but two-round exact and bounded-noise bootstrap keys
+  fail before refresh-mask derivation, transcript drift, duplicate refresh
+  entries, or execution can mask the capacity problem.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-round-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_keys_reject_overbudget_round_capacity --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-round-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-round-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-round-capacity CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto exact_residual_bound_helpers_track_add_and_bootstrap_capacity --lib -- --nocapture`
+    (`1` passed, `772` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check`
+
+## 2026-06-22 Torii explorer asset-definition checked fixtures
+
+- Converted the Torii explorer asset-definition econometrics and snapshot
+  fixture block leaders/account signers from unchecked random key generation to
+  checked deterministic routing fixture keys.
+- Kept the changes in app-API test fixture setup only, preserving velocity,
+  issuance, holder distribution, Lorenz, concentration, and nearest-rank
+  quantile response behavior while making invalid seed material fail
+  explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii explorer_asset_definition --lib --features app_api -- --nocapture`
+    (`3` passed, `2584` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii asset-definition checked fixtures
+
+- Converted the Torii routing asset-definition query fixture authorities from
+  unchecked random key generation to checked deterministic routing fixture keys.
+- Kept the changes in app-API test fixture setup only, preserving asset
+  definition listing, name/alias/null-alias filtering, metadata sorting, and
+  alias-binding sort-key behavior while making invalid seed material fail
+  explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii asset_definitions_query --lib --features app_api -- --nocapture`
+    (`4` passed, `2583` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii accounts-query checked fixtures
+
+- Converted the Torii routing accounts-query fixture authorities from
+  unchecked random Ed25519 generation to checked deterministic routing fixture
+  keys.
+- Kept the changes in app-API test fixture setup only, preserving account list
+  pagination, alias/canonical I105 filtering, canonical response IDs, and
+  primary-alias-domain aggregation behavior while making invalid seed material
+  fail explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii accounts_query --lib --features app_api -- --nocapture`
+    (`5` passed, `2582` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii space-directory checked fixtures
+
+- Converted the Torii routing space-directory manifest/bindings fixture account
+  IDs from unchecked random key generation to checked deterministic routing
+  fixture keys.
+- Kept the changes in app-API test fixture setup only, preserving manifest
+  status filtering, lifecycle JSON, bindings sorting, alias lookup, and account
+  literal response behavior while making invalid seed material fail explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii space_directory_manifest --lib --features app_api -- --nocapture`
+    (`30` passed, `2557` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Sumeragi RBC delivered finality certified commit envelope
+
+- Added `RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope` to the
+  top-level Sumeragi model as the aggregate delivered-state commit-vote
+  finality theorem, composing provenance, committed delivery completion,
+  current-view commitment, certificate witness installation, witness/artifact
+  changes, live commit-gate crossing, progress quiescence, certified source and
+  finality stacks, latch/artifact coupling, exact commit-vote witness recording,
+  delivered RBC/view-prepare evidence preservation, exact protocol/action
+  frames, committed post-state invariants, and the pre/post-GST gate split.
+- Wired the aggregate through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the certified commit envelope in the
+  formal README and roadmap.
+- Validation passed:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-rbc-delivered-finality-certified-commit-envelope typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total time `12.959 sec`)
+  - Focused TLC for `RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope`
+    using `N = 4`, `F = 1`, `CommitQuorum = 3`, `ViewQuorum = 3`,
+    `StakeQuorum = 8`, `StakePerHonestVote = 3`, `StakePerByzVote = 1`,
+    `MaxView = 4`, and `MaxChunks = 2`
+    (`7799` states generated, `2338` distinct states, depth `25`, no errors,
+    finished in `05h 11min`).
+
+## 2026-06-22 BFV release-audit canonical profile artifact digests
+
+- Tightened BFV full-bootstrap circuit material and standalone release-audit
+  evidence validation so registered parameter/RNS/key-switch profile digests,
+  the proof public-input schema artifact digest, and the arithmetic AIR artifact
+  digest must match the canonical first-release registered BFV profile for the
+  declared bootstrap depth before aggregate evidence recomputation can succeed.
+- Added crypto regressions for drifted release-audit parameter/profile artifact
+  digests and material-level schema/AIR artifact digest drift, and updated the
+  canonical artifact-bundle digest golden to
+  `a445e4eb37bdbe99807f28b859ebaddf0fa5076412856328ef6e20bc4e76e951`.
+- Updated Soracloud full-bootstrap public-input schemas to advertise registered
+  profile digest and canonical profile artifact digest binding, with refreshed
+  schema hashes:
+  - material proof:
+    `93a89d0202b900ac42fb06e5ff4dd35895668f8ae6a612dc1b9643518799b9dd`
+  - execution proof:
+    `a05774949fd76135dd5600351e8b6d097c51133832812e1c1594f09215f73de9`
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-canonical-profile-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-canonical-profile-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-canonical-profile-artifacts-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-canonical-profile-artifacts-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-canonical-profile-artifacts-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+
+## 2026-06-22 Core BFV native AIR test-helper gating
+
+- Narrowed the BFV full-bootstrap native AIR transcript-label, STARK parameter,
+  trace-material envelope builder, and trace-material replay helpers to
+  `all(test, feature = "zk-stark")`, leaving the production shared BFV wrapper
+  and verifier boundary unchanged while removing default library dead-code
+  warnings.
+- Moved the now test-only arithmetic trace validation imports into the same
+  test-gated import group.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-release-reviewer CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_core --features zk-stark --lib`
+    (passed without warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-release-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows --lib -- --nocapture`
+    (`1` passed, `5440` filtered out)
+
+## 2026-06-22 Torii FHE release-audit reviewer preflight coverage
+
+- Added Torii signed FHE job preflight regressions proving placeholder
+  full-bootstrap release-audit trusted reviewer IDs and non-Ed25519 trusted
+  reviewer public keys fail as `FheExecutionPolicyV1` policy errors before
+  release-audit package matching can run.
+- Added a compact release-audited full-bootstrap Torii payload fixture and a
+  deterministic BLS reviewer-key fixture so malformed reviewer-pin cases keep a
+  valid signed request envelope while isolating the trusted-reviewer field under
+  test.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-release-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii release_audit_trusted_reviewer --lib -- --nocapture`
+    (`2` passed, `2585` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-release-reviewer CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-22 Torii repo and permissions checked fixtures
+
+- Converted the Torii routing repo-agreement fixture accounts/block leader and
+  account-permissions JSON fixture authority from unchecked random key
+  generation to checked deterministic routing fixture keys.
+- Kept the changes in app-API test fixture setup only, preserving repo query,
+  pagination, account-permission JSON, and committed block finalization behavior
+  while making invalid seed material fail explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii repo_agreements --lib --features app_api -- --nocapture`
+    (`8` passed, `2577` filtered out; emitted unrelated `iroha_core`
+    Soracloud dead-code warnings)
+  - `cargo test -j 1 -p iroha_torii account_permissions_handler_preserves_structured_payloads --lib --features app_api -- --nocapture`
+    (`1` passed, `2586` filtered out; emitted the same unrelated `iroha_core`
+    Soracloud dead-code warnings)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+    (passed; emitted the same unrelated `iroha_core` Soracloud dead-code
+    warnings while compiling dependencies)
+
+## 2026-06-22 Torii cursor and ingress checked fixtures
+
+- Converted Torii routing cursor-mode query tests, transaction ingress overload
+  test, telemetry lane-admission metric test, and ignored hot-path profile
+  fixture signers from unchecked random key generation to checked deterministic
+  routing fixture keys.
+- Kept the changes in test/telemetry fixture setup only, preserving query,
+  transaction admission, metrics, and load-profile behavior while making
+  invalid seed material fail explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii cursor_mode --lib --features app_api -- --nocapture`
+    (`4` passed, `2581` filtered out)
+  - `cargo test -j 1 -p iroha_torii transaction_ingress_allows_latency_saturated_queue_before_capacity --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out; emitted unrelated `iroha_core`
+    Soracloud dead-code warnings)
+  - `cargo test -j 1 -p iroha_torii transaction_ingress_records_latency_histogram --lib --features "app_api telemetry" -- --nocapture`
+    (`1` passed, `2662` filtered out; emitted the same unrelated `iroha_core`
+    Soracloud dead-code warnings)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features "app_api telemetry" --no-deps -- -D warnings`
+    (passed; emitted the same unrelated `iroha_core` Soracloud dead-code
+    warnings while compiling dependencies)
+
+## 2026-06-22 Core shared BFV native AIR prover wrapper
+
+- Routed the Core full-bootstrap execution release-prover native AIR envelope
+  builder through `zk_stark::prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes`,
+  keeping transcript-label retry, statement-bound domain tags, canonical public
+  openings, and shared verifier replay single-sourced while retaining Core's
+  production envelope byte budget check.
+- Extended the BFV native AIR builder regression to assert the Core release
+  path emits the same bytes as the shared BFV `zk_stark` wrapper before the
+  existing trace/composition replay drift checks.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-shared-bfv-native-wrapper CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows --lib -- --nocapture`
+    (`1` passed, `5440` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-22 BFV proof-key non-production digest sentinels
+
+- Extended the crypto BFV full-bootstrap material/proof-key placeholder digest
+  classifier so direct and delayed `mock`/`fixture` material commitments are
+  rejected alongside the existing placeholder, draft, not-production,
+  sample/template/example, and transient-before-finalization sentinels.
+- Added material and proof-key profile regressions covering `mock` proof-key
+  pair/material commitments and `fixture` verifier-key material commitments
+  before commitment recomputation or governed material matching.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-non-production-digests CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-non-production-digests CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-non-production-digests CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+
+## 2026-06-22 Core execution non-production audit archive gate
+
+- Extended the Core release-audited full-bootstrap execution prover regression
+  so delayed `mock` and `fixture` audit archive body markers fail with the
+  placeholder audit artifact diagnostic before native execution proof
+  generation.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-execution-non-production-audit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_untrusted_or_stale_package --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5440` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-22 Torii routing query/status checked fixtures
+
+- Converted Torii routing query-endpoint, proof roundtrip, governance stream,
+  and status JSON test fixture identities from unchecked random key generation
+  to the existing checked deterministic routing fixture helper.
+- Kept the changes in test-only fixture setup so query handling, proof lookup,
+  governance stream payloads, and status JSON serialization behavior remain
+  unchanged while invalid fixture seed material fails explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii governance_stream --lib --features app_api -- --nocapture`
+    (`3` passed, `2582` filtered out)
+  - `cargo test -j 1 -p iroha_torii status_snapshot_json --lib --features app_api -- --nocapture`
+    (`18` passed, `2567` filtered out)
+  - `cargo test -j 1 -p iroha_torii handle_queries --lib --features app_api -- --nocapture`
+    (`3` passed, `2582` filtered out)
+  - `cargo test -j 1 -p iroha_torii proofs_roundtrip_and_query_via_torii --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 BFV release-audit trusted reviewer policy/runtime preflight
+
+- Exposed crypto BFV full-bootstrap release-audit trusted reviewer id and
+  reviewer public-key preflight helpers so higher layers can reuse the same
+  Ed25519, empty/all-zero, printable-ASCII, and placeholder reviewer-id
+  contract as package/signoff validation.
+- Wired Soracloud FHE execution-policy validation and the Core full-bootstrap
+  release-audit runtime context through those helpers so placeholder trusted
+  reviewer ids and non-Ed25519 reviewer public keys fail before package-level
+  reviewer matching or governed artifact execution.
+- Backfilled the grouped Soracloud manifest fixture with explicit absent
+  release-audit fields and pinned the long schema/provenance/reviewer tests for
+  the stricter data-model test-target clippy pass.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_binds_release_audit_trusted_reviewer --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit --lib -- --nocapture`
+    (`1` passed, `5440` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --features zk-stark --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-release-reviewer-policy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-22 SCCP .NET Windows validation handoff
+
+- Converted the remaining native `.NET` SCCP proof-request canonical replay
+  blocker in `roadmap.md` into an explicit Windows-machine handoff: capture
+  `.NET 8` SDK/version and Windows OS/RID/architecture evidence, run restore,
+  run the filtered SCCP C# test suite with TRX logging, optionally run the
+  `dotnet-sdk` SCCP production-corridor phase under Git Bash or WSL, and record
+  result counts plus artifact paths before clearing the blocker.
+- No `.NET` validation was run on this host; the Windows run remains required
+  release evidence.
+- Validation passed:
+  - `git diff --check -- roadmap.md status.md docs/source/engineering_backlog.md`
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' roadmap.md status.md docs/source/engineering_backlog.md`
+    (no matches)
+
+## 2026-06-22 Core non-production audit-body release gate
+
+- Extended the Core audited full-bootstrap material prover release-audit
+  regression so delayed `mock` and `fixture` audit report body markers fail with
+  the placeholder audit artifact diagnostic before native material proof
+  generation.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-non-production-audit-body CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_audited_prover_rejects_untrusted_or_stale_package --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5440` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-22 Torii asset-holder checked fixture builders
+
+- Converted the shared Torii app-API asset-holder fixture builders, aggregate
+  asset-holder fixture builder, and projection-registry manifest seeding issuer
+  from unchecked random keys to checked deterministic account fixtures.
+- This keeps the fixture account aliases and aggregate projection behavior
+  stable while making invalid fixture seed material fail explicitly.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii asset_holders --lib --features app_api -- --nocapture`
+    (`18` passed, `2567` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii app-api asset checked fixtures
+
+- Converted the next Torii app-API asset, domain, dataspace-scope, and
+  confidential-asset transition fixtures from unchecked random key generation
+  to the local checked deterministic app-API fixture helper.
+- Kept the changes in routing test code only; account, asset, domain, and
+  confidential transition handler behavior is unchanged.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii account_assets --lib --features app_api -- --nocapture`
+    (`13` passed, `2572` filtered out)
+  - `cargo test -j 1 -p iroha_torii domains_query_respects_desc_sort --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo test -j 1 -p iroha_torii confidential_asset_transitions_reports_pending_window_metadata --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Soracloud FHE explicit bound-mode metadata
+
+- Tightened persisted Soracloud FHE state validation so any row carrying
+  `fhe_residual_multiple_bound` must also carry explicit exact-residual or
+  bounded-noise `fhe_bound_mode` metadata. Metadata-free client ciphertext rows
+  are still allowed, but bound-only rows no longer silently default to exact
+  residual semantics.
+- Hardened Core FHE job input loading so legacy/corrupt persisted rows with a
+  public bound but missing mode fail closed before proof verification or
+  evaluator dispatch.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bound-mode-explicit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model service_state_entry_validate_rejects_over_capacity_fhe_bounds --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bound-mode-explicit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_rejects_persisted_fhe_input_without_bound_mode --lib -- --nocapture`
+    (`1` passed, `5255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bound-mode-explicit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_rejects_bounded_noise_persisted_fhe_input --lib -- --nocapture`
+    (`1` passed, `5255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bound-mode-explicit CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bound-mode-explicit CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-22 Torii app-api query checked fixtures
+
+- Added a local checked deterministic keypair helper for Torii app-API query
+  integration fixtures and converted the first account-asset, asset-holder, and
+  sorted transaction-count fixture keys away from unchecked random generation.
+- Kept the fixture changes scoped to `iroha_torii::routing` test code so
+  production query behavior is unchanged while fixture failures now surface as
+  explicit seed-derivation errors.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_torii collect_projected_account_assets_reads_only_scoped_account_assets --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo test -j 1 -p iroha_torii accumulate_asset_holder_quantity_respects_scope_filter --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo test -j 1 -p iroha_torii asset_holder_filter_account_candidates_extracts_safe_exact_constraints --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo test -j 1 -p iroha_torii tx_query_sorted_total_counts_matches --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 Torii non-production package digest preflight
+
+- Extended the Torii full-bootstrap job-run release-audit package digest
+  preflight regression so direct `mock` and delayed `fixture` caller-pinned
+  package digests fail with the placeholder full-bootstrap digest diagnostic
+  before artifact-backed execution.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-policy-non-production-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_placeholder_release_audit_package_digest --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo fmt --package iroha_torii -- --check`
+
+## 2026-06-22 BFV policy non-production package digest preflight
+
+- Extended the Soracloud FHE execution-policy placeholder digest preflight so
+  caller-pinned full-bootstrap release-audit package digests derived from
+  `mock` or delayed `fixture` sentinel bytes fail with the placeholder
+  full-bootstrap digest diagnostic before stale package-digest mismatch checks.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-policy-non-production-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_binds_release_audit_trusted_reviewer --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+
+## 2026-06-22 BFV release-audit non-production sentinel gate
+
+- Extended the BFV full-bootstrap release-audit placeholder classifiers so
+  `mock` and `fixture` audit/proof-key material are rejected alongside
+  sample/template/example sentinels in external audit artifact digests, artifact
+  body scans, reviewer ids, and native payload digest evidence.
+- Updated the Soracloud full-bootstrap material and execution public-input
+  schemas to advertise non-production native-payload and audit-artifact body
+  rejection; refreshed the pinned schema hashes:
+  - material proof:
+    `8fce7ad3add1f9e53794a13d5642fd4f1ca675a45dbd6fd804764606aa312e9b`
+  - execution proof:
+    `5cca8ae20633f7898a9eb650a7de52552d93eee15c1f94523e1990c8ad8a46e9`
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_ --lib -- --nocapture`
+    (`2` passed, `1563` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_placeholder_artifact_digest_predicate_matches_known_shapes --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto native_payload_inert_digest_predicate_matches_leading_whitespace_delayed_placeholder --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_artifact_byte_builders_emit_canonical_headered_bytes --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_external_digests_reject_non_production_body_sentinels --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-non-production-sentinels CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `cargo fmt --package iroha_data_model -- --check`
+
+## 2026-06-22 Torii transaction predicate checked fixtures
+
+- Switched Torii committed-transaction predicate account parsing to the
+  canonical encoded `AccountId::parse_encoded` path so `tx_predicates` filters
+  accept the same universal account literals as the app API handlers.
+- Hardened the remaining `tx_predicates` parity fixtures in
+  `iroha_torii::routing` to use checked deterministic key derivation and fixed
+  the feature-gated smoke tests that had drifted from the current data-model
+  prelude API.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii tx_predicates_parity --lib --features "app_api tx_predicates" -- --nocapture`
+    (`5` passed, `2585` filtered out)
+  - `cargo test -j 1 -p iroha_torii tx_query_integration_smoke --lib --features app_api -- --nocapture`
+    (`18` passed, `2567` filtered out)
+  - `cargo test -j 1 -p iroha_torii explorer_lookup_tests --lib --features app_api -- --nocapture`
+    (`8` passed, `2577` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features "app_api tx_predicates" --no-deps -- -D warnings`
+
+## 2026-06-22 BFV native AIR public-padding verifier
+
+- Added a shared `zk_stark` BFV full-bootstrap public-padding verifier that
+  checks native STARK/FRI envelopes from the public statement hash, slot index,
+  and bound mode without requiring the private row-major trace. The existing
+  release-prover material verifier, Core's active full-bootstrap execution
+  admission, and the release-prover trace-material replay helper now run this
+  verifier-facing path before the stronger governed rows/composition replay.
+- Extended the BFV native AIR regression to prove the public-padding verifier
+  accepts generated public-row envelopes and rejects stale statement hashes,
+  stale public slot/bound-mode headers, generic AIR proofs that open private
+  rows, and drifted public padding row openings.
+- Validation passed:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-verifier CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core bfv_full_bootstrap_air_prover_binds_statement_and_public_openings --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5439` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-verifier CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_accepts_bfv_native_zero_composition_air_active_verifier --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5439` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-verifier CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_accepts_release_prover_native_air_active_verifier --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5439` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-verifier CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_requires_governed_native_air_material --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5439` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-verifier CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows --lib --features zk-stark -- --nocapture`
+    (`1` passed, `5439` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-padding-verifier CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --features zk-stark --no-deps -- -D warnings`
+
+## 2026-06-22 Soracloud Torii placeholder package digest preflight
+
+- Added a Torii full-bootstrap job-run preflight regression proving direct and
+  delayed placeholder caller-pinned release-audit package digests are rejected
+  before artifact-backed full-bootstrap execution can proceed, while preserving
+  the existing empty execution-proof failure order with a valid release-audit
+  fixture.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-release-audit-precheck CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_placeholder_release_audit_package_digest --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-release-audit-precheck CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_empty_execution_proofs_for_full_bootstrap_job --lib --features app_api -- --nocapture`
+    (`1` passed, `2584` filtered out)
+  - `cargo fmt --package iroha_torii -- --check`
+
+## 2026-06-22 SCCP SDK source-gate transcript parity
+
+- Mirrored the receipt-bound Solana and TON full-light-client deployment-gate
+  transcript in the Python Torii client, JavaScript source/dist package, Kotlin
+  JVM SDK, Android Java SDK, and Swift SDK. The SDK helpers now write the
+  source-adapter verifier VK hash and deployment receipt hash directly beside
+  the aggregate source-adapter deployment hash.
+- Updated the Solana and TON SDK pinned gate vectors, the Solana audit-role
+  public-input gate columns, and receipt-drift negative checks so a valid
+  deployment record with a different receipt cannot replay the old gate hash.
+- Validation passed:
+  - `PYTHONPATH=/Users/takemiyamakoto/soramitsudev/iroha/python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_builds_solana_full_light_client_audit_role_proof_requests python/iroha_torii_client/tests/sccp_test.py::test_derives_source_adapter_verifier_vk_hashes_for_ui_tooling python/iroha_torii_client/tests/sccp_test.py::test_builds_ton_full_light_client_audit_role_proof_requests`
+    (`3` passed)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`105` passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`90` passed)
+  - `swift test --filter SccpSolanaProverTests`
+    (`81` passed)
+  - `git diff --check -- ...` across the touched SCCP SDK files
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` across the touched
+    SCCP SDK/docs/status files
+- JVM validation blocked in this shell before tests could start:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest --tests org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest --console=plain`
+    failed with `Unable to locate a Java Runtime`.
+  - `/usr/libexec/java_home -V` also failed with `Unable to locate a Java Runtime`,
+    and no JDK was present under the default system/user Java locations.
+
+## 2026-06-22 Soracloud runtime placeholder package digest gate
+
+- Extended the Core full-bootstrap runtime release-audit policy regression so
+  direct and delayed placeholder caller-pinned package digests fail at the
+  runtime preflight with the release-audit package validation diagnostic,
+  before artifact-backed execution can proceed.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-runtime-policy-placeholder CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit --lib -- --nocapture`
+    (`1` passed, `5439` filtered out)
+
+## 2026-06-22 BFV release-audit digest predicate
+
+- Replaced the BFV full-bootstrap release-audit placeholder artifact digest
+  preimage vector builder with direct digest predicate checks for header-wrapped
+  direct, uppercase, padded, whitespace-prefixed, delayed-placeholder, and
+  leading-whitespace delayed-placeholder plus binary-decorated audit body
+  sentinels, using chunked hashing so uppercase variants do not allocate
+  temporary preimage bodies. The native proof-key payload digest gate now
+  rejects the same leading-whitespace delayed-placeholder sentinel shape.
+- Added cheap chunked-hash and predicate regressions for known report/archive
+  shapes and reran the release-audit package/signoff regression against the new
+  predicate. Focused `iroha_crypto` clippy now passes with the intentional
+  proof-profile boolean capability maps scoped explicitly.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto sha256_chunks_with_optional_ascii_upper_body_matches_contiguous_hash --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto release_audit_placeholder_artifact_digest_predicate_matches_known_shapes --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto native_payload_inert_digest_predicate_matches_leading_whitespace_delayed_placeholder --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_native_key_material_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `771` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-predicate CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-22 SCCP Python source-gate transcript parity
+
+- Mirrored the receipt-bound Solana, TON, and TRON source-gate audit
+  transcripts in the Python evidence/rendering tools so all-lanes and
+  release-bundle checks validate the same deployment-receipt transcript shape
+  as `iroha_sccp`.
+- Updated the Solana, TON, and TRON Python pinned gate vectors and added
+  adversarial receipt-drift regressions proving a structurally valid deployment
+  receipt replay changes the expected source-gate hash.
+- Validation passed:
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`179` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_solana_source_state_evidence_test.py`
+    (`26` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_ton_source_state_evidence_test.py`
+    (`27` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+    (`84` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_gate or full_light_client_gate or tron_dpos_source_gate"`
+    (`14` passed, `691` deselected)
+  - `python3 -m py_compile scripts/sccp_solana_source_state_evidence.py scripts/sccp_ton_source_state_evidence.py scripts/sccp_tron_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+
+## 2026-06-22 BFV native payload digest predicate
+
+- Replaced the BFV full-bootstrap native proof-key payload inert-digest
+  preimage vector builder with direct SHA-256 predicate checks for empty,
+  zero-filled, canonical, uppercase, padded, whitespace-prefixed,
+  delayed-placeholder, and binary-decorated sentinel payloads.
+- Added a focused chunked SHA-256 helper regression and reran the native
+  proof-key material plus release-audit evidence regressions against the new
+  predicate.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-digest-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto sha256_chunks_with_optional_ascii_upper_body_matches_contiguous_hash --lib -- --nocapture`
+    (`1` passed, `769` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-digest-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_native_key_material_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `769` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-digest-predicate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `769` filtered out)
+
+## 2026-06-22 SCCP source-gate deployment receipt transcript binding
+
+- Hardened the Solana, TON, and TRON source-gate audit transcripts so governed
+  deployment evidence binds the deployment receipt explicitly; Solana and TON
+  now also bind the source-adapter verifier-key hash directly beside the
+  deployment hash.
+- Updated the pinned source-gate helper vectors and added adversarial
+  receipt-drift assertions proving structurally valid deployment metadata with
+  a different receipt produces a different gate hash for Solana, TON, and TRON.
+- Validation passed:
+  - `CARGO_TARGET_DIR=target/codex-sccp-gate-transcript CARGO_INCREMENTAL=0 cargo test -p iroha_sccp source_material_and_deployment_hash --lib -- --nocapture`
+    (`3` passed, `266` filtered out)
+  - `CARGO_TARGET_DIR=target/codex-sccp-gate-transcript CARGO_INCREMENTAL=0 cargo test -p iroha_sccp source_adapter_deployment --lib -- --nocapture`
+    (`5` passed, `264` filtered out)
+  - `cargo fmt --package iroha_sccp`
+
+## 2026-06-22 BFV delayed placeholder digest coverage
+
+- Extended the BFV full-bootstrap release-audit regression so delayed
+  placeholder material digests are rejected across release evidence, signoff,
+  manifest, package record/manifest, and caller-pinned package digest
+  boundaries.
+- Extended the execution-witness regression so delayed pending witness digest
+  sentinels are rejected both in public proof statements and witness material
+  digest validation.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-delayed-digest-coverage CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-delayed-digest-coverage CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 BFV material placeholder digest allocation-free gate
+
+- Reworked the generic full-bootstrap placeholder material digest gate so exact
+  marker hashes and deterministic delayed-content marker hashes are checked
+  directly without allocating a generated preimage vector for every material
+  digest field.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-material-digest-delay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 Torii query-filter checked account fixtures
+
+- Hardened the telemetry account-literal fixture and transaction-query filter
+  account fixtures in `crates/iroha_torii/src/routing.rs` so they no longer use
+  unchecked random keypairs.
+- Added a transaction-query helper regression proving the call-site-derived
+  fixture keys produce matching account ids and remain distinct across call
+  sites.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii tx_query_filter_tests --lib --features app_api -- --nocapture`
+    (`33` passed, `2551` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii address_metrics_tests --lib --features "app_api telemetry" -- --nocapture`
+    (`8` passed, `2654` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features "app_api telemetry" --no-deps -- -D warnings`
+
+## 2026-06-22 Soracloud delayed external audit digest schema markers
+
+- Updated the Soracloud full-bootstrap material and execution public-input
+  schemas so release-audit signoff, manifest, and package metadata advertise
+  delayed-placeholder external audit digest rejection.
+- Refreshed the intentional stable schema hashes:
+  - material proof:
+    `8fce7ad3add1f9e53794a13d5642fd4f1ca675a45dbd6fd804764606aa312e9b`
+  - execution proof:
+    `5cca8ae20633f7898a9eb650a7de52552d93eee15c1f94523e1990c8ad8a46e9`
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-delay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-delay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_ --lib -- --nocapture`
+    (`2` passed, `1563` filtered out)
+
+## 2026-06-22 Sumeragi RBC delivery-entry complete outcome envelope
+
+- Added `RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` to compose the
+  full first-delivery outcome surface into one theorem: DELIVER provenance,
+  ready-quorum exit, certified finality, non-final delivered wait-state entry,
+  consensus-frame preservation, finality/pending timer-gate splits, and the
+  commit-evidence continuation envelope.
+- Wired the aggregate through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, and `9873` TLC mutation
+    modes wired consistently)
+  - With Homebrew OpenJDK 21 on `JAVA_HOME`/`PATH`,
+    `target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-rbc-delivery-entry-complete-outcome-envelope typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`).
+  - A focused TLC run over `Sumeragi` with the fast constants,
+    `CHECK_DEADLOCK FALSE`, and only
+    `RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` as the temporal
+    property passed: no errors, `7799` states generated, `2338` distinct states
+    found, `0` states left on queue, depth `24`, and `05h 12min` runtime.
+
+## 2026-06-22 Soracloud policy placeholder package digest gate
+
+- Mirrored the crypto caller-pinned release-audit package digest preflight in
+  `FheExecutionPolicyV1`: direct and delayed full-bootstrap placeholder
+  digests now fail on `full_bootstrap_release_audit_package_digest` before
+  record/manifest alias checks or stale package digest comparison can mask the
+  trust-anchor diagnostic.
+- The material and execution full-bootstrap public-input schemas now advertise
+  `rejects_placeholder_caller_pinned_package_digest` and pin refreshed schema
+  hashes:
+  - material proof:
+    `8fce7ad3add1f9e53794a13d5642fd4f1ca675a45dbd6fd804764606aa312e9b`
+  - execution proof:
+    `5cca8ae20633f7898a9eb650a7de52552d93eee15c1f94523e1990c8ad8a46e9`
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-datamodel-release-audit-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_binds_release_audit_trusted_reviewer --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-datamodel-release-audit-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `/tmp/iroha-codex-bfv-datamodel-release-audit-digest/debug/deps/iroha_data_model-6b973ade77159d86 soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --nocapture`
+    (`1` passed, `1564` filtered out)
+  - `/tmp/iroha-codex-bfv-datamodel-release-audit-digest/debug/deps/iroha_data_model-6b973ade77159d86 soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --nocapture`
+    (`1` passed, `1564` filtered out)
+
+## 2026-06-22 SCCP public-output backlog reconciliation
+
+- Revalidated the SCCP endpoint-redaction, all-lanes/readiness public summary,
+  bounded Markdown row, active checklist, native-artifact, manifest,
+  release-notes, phase-transcript, generated self-verifier, and standalone
+  strict-verifier summary guards, then removed the matching stale items from
+  the detailed engineering backlog.
+- Restated the actual remaining source-chain verifier blockers in the detailed
+  backlog from the current Rust production blocker strings and roadmap
+  checkpoint, so the backlog now distinguishes live verifier/deployment work
+  from completed public-output hardening.
+- Kept the native .NET proof-request canonical replay note open because this
+  host still lacks the `dotnet` SDK needed for local runtime validation.
+- Validation passed:
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_live_cli_omits_runtime_endpoint_and_unknown_summary_fields pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_json_rpc_redacts_transport_and_error_response_details pytests/scripts/sccp_evm_live_evidence_test.py::test_evm_live_cli_omits_runtime_endpoint_and_unknown_summary_fields pytests/scripts/sccp_evm_live_evidence_test.py::test_evm_json_rpc_redacts_transport_and_error_response_details pytests/scripts/sccp_solana_live_evidence_test.py::test_solana_live_cli_omits_unknown_summary_fields pytests/scripts/sccp_solana_live_evidence_test.py::test_solana_json_rpc_redacts_transport_and_error_response_details pytests/scripts/sccp_ton_live_evidence_test.py::test_ton_live_cli_omits_unknown_summary_fields pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_account_states_redacts_transport_and_error_response_details pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_evidence_uses_runtime_only_api_key pytests/scripts/sccp_tron_live_evidence_test.py::test_tron_live_cli_omits_runtime_endpoint_and_unknown_summary_fields pytests/scripts/sccp_tron_live_evidence_test.py::test_tron_api_redacts_transport_and_error_response_details -q`
+    (`11` passed)
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_lane_rows pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_lane_metadata pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_lane_blockers pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_cli_suppresses_malformed_summary_roots pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_cli_suppresses_malformed_summary_blockers pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_suppresses_malformed_report_roots pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_suppresses_malformed_report_blockers pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_unknown_report_fields_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_cli_rejects_malformed_allowed_report_roots_without_leaking pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_top_level_status pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_marks_malformed_blocker_containers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_lane_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_input_and_corridor_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_collection_roots pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_user_prover_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_native_prover_bundle pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_source_inventory_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_rejects_malformed_checklist_rows -q`
+    (`21` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_compares_checklist_ready_exactly pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_checklist_root pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_lane_rows pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_crypto_rows pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_input_and_corridor_rows pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_collection_roots pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_user_prover_rows pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_native_prover_bundle pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_source_inventory_rows pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_rejects_malformed_checklist_rows pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_native_evm_artifact_metadata pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_phase_artifact_rows pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_manifest_preserves_malformed_readiness_values pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_manifest_suppresses_malformed_readiness_roots pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_blocks_malformed_native_evm_artifact_metadata pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_release_notes_mark_malformed_blocker_containers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_release_notes_reject_malformed_artifact_rows pytests/scripts/sccp_release_bundle_test.py::test_generated_bundle_self_verifier_reports_strict_errors pytests/scripts/sccp_release_bundle_test.py::test_generated_bundle_self_verifier_rejects_malformed_summaries pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_cli_suppresses_malformed_summary_roots pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_cli_exit_compares_verified_exactly pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_cli_suppresses_malformed_summary_errors pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_cli_rejects_malformed_summary_public_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leaking pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_phase_transcript_rejects_malformed_artifact_rows -q`
+    (`25` passed)
+  - `rg -n "Replace the remaining SCCP source-chain verifier placeholders|Ethereum still needs recursive source-adapter|BSC still needs recursive|Solana still needs audited Tower|TON still needs governed full-light-client|TRON still needs transaction-Merkle|Native \\.NET SCCP proof-request" docs/source/engineering_backlog.md roadmap.md crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 Soracloud release-audit policy zero package digest gate
+
+- Added a focused data-model regression for `FheExecutionPolicyV1` release
+  audit package digests so a zero caller-pinned digest is rejected on the
+  `full_bootstrap_release_audit_package_digest` field before any package alias
+  comparison can succeed.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-datamodel-release-audit-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_binds_release_audit_trusted_reviewer --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+
+## 2026-06-22 SCCP route-canary scalar backlog reconciliation
+
+- Revalidated the all-lanes route-canary scalar gate and removed the stale
+  backlog entries for active-launch `evidence_source` exactness, exact boolean
+  `evidence_bound`, EVM `message_proof_used` and `receipt_block_finalized`, and
+  TRON owner/signature binding flags.
+- Endpoint-redaction was reconciled in the later public-output pass above.
+  The .NET runtime-validation note remains open because it is a separate
+  host-blocked evidence surface.
+- Validation passed:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_route_canary_scalars or malformed_tron_route_canary_boolean_scalars"`
+    (`2` passed, `176` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "route_canary_message_proof_used_exactly or route_canary_receipt_finalized_exactly or route_canary_evidence_bound_exactly or malformed_active_route_canary_metadata or all_lanes_route_canary_scalar_gate"`
+    (`6` passed, `1091` deselected)
+
+## 2026-06-22 SCCP all-lanes source-gate backlog reconciliation
+
+- Reconciled the SCCP engineering backlog after revalidating the direct
+  all-lanes and strict release-bundle gates for deployment-side source-role
+  shape blockers, source-adapter deployment template-hash rejection, public
+  source-adapter gate template replay, malformed outer-envelope verifier
+  commitment rejection, and material-only catalog matching.
+- Left the native .NET runtime-validation note open because this host still
+  lacks `dotnet`; this pass only removed items with direct current evidence.
+- Validation passed:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "deployment_source_role_shape or source_adapter_deployment_template_hashes or source_adapter_audit_hash_template_replays or release_checklist_rejects_source_gate_template_replays"`
+    (`4` passed, `174` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_template_rejection or source_material_role_validation or source_adapter_gate_template"`
+    (`8` passed, `1089` deselected)
+
+## 2026-06-22 SCCP source-verifier evidence shape inventory
+
+- Pinned the lane-specific source-verifier evidence drift labels in the strict
+  SCCP source-material role validation inventory: source-state verifier hash,
+  source bridge emitter address/code hash, and TRON source bridge owner/config
+  drift now have sparse-marker release-bundle coverage.
+- Reconciled the engineering backlog so verifier commitment helpers, common
+  source-domain profile binding, deployment-bound source-role shape checks, and
+  Solana source-state drift rejection are no longer listed as open SCCP work
+  after the focused Rust proof path passed.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "source_material_role_validation_inventory"`
+    (`1` passed, `704` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_role_validation_gate_inventory"`
+    (`1` passed, `391` deselected)
+  - `CARGO_TARGET_DIR=target/codex-sccp-source-shape CARGO_INCREMENTAL=0 cargo test -p iroha_sccp source_chain_proof_material_requires_plan_specific_adapter_proofs --lib -- --nocapture`
+    (`1` passed, `268` filtered out)
+
+## 2026-06-22 Torii app API checked key fixtures
+
+- Hardened adjacent app API fixture keys in
+  `crates/iroha_torii/src/routing.rs` for contract deploy, SoraDNS directory
+  records, SoraFS pin registration, and SoraFS capacity handlers so each uses
+  deterministic checked Ed25519 seed derivation instead of unchecked random
+  keypairs.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii deploy_tests --lib --features app_api -- --nocapture`
+    (`1` passed, `2582` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii soradns_tests --lib --features app_api -- --nocapture`
+    (`3` passed, `2580` filtered out)
+  - `/tmp/iroha-codex-torii-identifier-checked/debug/deps/iroha_torii-aaed776a3bfa8dfe sorafs_pin_tests --nocapture`
+    (`6` passed, `2577` filtered out)
+  - `/tmp/iroha-codex-torii-identifier-checked/debug/deps/iroha_torii-aaed776a3bfa8dfe sorafs_capacity_tests --nocapture`
+    (`16` passed, `2567` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 BFV material digest delayed placeholder sentinels
+
+- Hardened the generic full-bootstrap material digest placeholder gate so the
+  existing proof-key/native-payload/draft/sample marker family also rejects
+  deterministic delayed-content preimages before governed material validation
+  can accept them.
+- Added a full-bootstrap circuit-material regression for a delayed native
+  proof-key placeholder digest replayed through a `Hash::new(...)`
+  verifier-key digest slot.
+- Updated the BFV backlog/roadmap wording to distinguish direct and
+  delayed-content material digest sentinels.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-material-digest-delay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 BFV native-payload delayed placeholder digest sentinels
+
+- Hardened the full-bootstrap native proof-key payload SHA-256 sentinel set so
+  digest-correct native material with deterministic content before placeholder
+  native-payload text is rejected as inert before native payload decoding.
+- Updated the BFV backlog/roadmap wording to call out delayed-content
+  placeholder native-payload digest sentinels alongside the existing direct,
+  padded, whitespace-prefixed, case-decorated, and binary-decorated families.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-delay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_native_key_material_is_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 BFV release-audit delayed placeholder digest sentinels
+
+- Hardened signed digest-only release-audit report/archive validation to reject
+  deterministic delayed placeholder report/archive preimages before
+  record/signoff/manifest admission can accept placeholder-only external-audit
+  commitments.
+- Updated the BFV backlog/roadmap wording to distinguish those known
+  delayed-placeholder digest sentinels from arbitrary delayed nested-header
+  rejection, which still requires byte-bearing audit artifacts.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 Soracloud audited execution key-entry context gate
+
+- Extended the Core release-audited full-bootstrap execution prover context
+  regression so malformed governed bootstrap-key refresh entries fail before a
+  native execution proof attachment can be emitted.
+- Validation passed:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-audited-execution CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_malformed_evaluation_key_context --lib -- --nocapture`
+    (`1` passed, `5439` filtered out)
+
+## 2026-06-22 Soracloud full-bootstrap transcript wrapper public-key gate
+
+- Mirrored the crypto full-bootstrap refresh-transcript public-key digest gate
+  in the Soracloud data-model wrapper regression: exact and bounded transcript
+  digest derivation now prove wrong-but-valid public keys fail as
+  `refresh_transcript` errors.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-datamodel-full-transcript-digest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1564` filtered out)
+
+## 2026-06-22 Torii repair-worker checked signer fixtures
+
+- Hardened the `repair_worker_tests` signer fixtures in
+  `crates/iroha_torii/src/routing.rs` so the repair action signatures derive
+  deterministic Ed25519 keys through `checked_routing_fixture_keypair` instead
+  of unchecked random keypairs.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii repair_worker_tests --lib --features app_api -- --nocapture`
+    (`2` passed, `2581` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-22 BFV release-audited execution key-entry preflight
+
+- Hardened the release-audited full-bootstrap execution gate so it runs the
+  full `FullBootstrapV1` key execution preflight, including refresh-entry shape
+  validation, before release-audit package, artifact, Galois-key, ciphertext, or
+  bound validation.
+- Added exact and bounded release-audited execution/bound regressions with
+  malformed bootstrap-key entries plus stale package digests, proving key-entry
+  failures are not masked by later audit-package diagnostics.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-digest-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 BFV full-bootstrap transcript public-key digest gate
+
+- Hardened full-bootstrap refresh-transcript inventory validation so
+  `FullBootstrapV1` bundles that omit deterministic zero-refresh bootstrap
+  transcript seeds still compare the stored bootstrap public-key digest against
+  the supplied public key.
+- Extended the full-bootstrap material regression to cover exact and
+  bounded-noise refresh-transcript digests with a wrong but valid public key.
+- Extended the same regression across direct full-bootstrap execution and
+  exact/bounded bound helpers so missing or placeholder public-key digest
+  metadata fails before the no-artifacts fallback path can be reached.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-digest-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requires_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 STARK AIR opening path-index binding
+
+- Extended the generic explicit-composition STARK AIR regression so row,
+  next-row, and composition Merkle path direction-bit retargets are each
+  rejected with `opening Merkle path index mismatch` while the sampled opening
+  index remains unchanged.
+- Validation passed:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-stark-air-path-index CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark explicit_composition_air_envelope_binds_caller_rows_to_fri_queries --lib -- --nocapture`
+    (`1` passed, `5439` filtered out)
+
+## 2026-06-22 SCCP JavaScript EVM/TRON source-proof replay gate
+
+- Added JavaScript EVM-family and TRON proof-request adversarial coverage that
+  builds canonical source-chain proof envelopes for non-SORA bundles, then
+  replays a different same-lane canonical envelope as `sourceProofBytes`.
+- The request builders reject the copied source proof before local prover
+  callbacks, proving the JS gate binds `sourceProofBytes` to the exact bundle
+  finality proof instead of accepting any valid-looking source-chain envelope.
+- Pinned the new JS replay fixture markers in the strict release-bundle
+  proof-request source inventory.
+- Validation passed:
+  - `node --test --test-name-pattern "rejects EVM-family and TRON proof requests with non-canonical SCCP bundles" test/sccpSolanaProver.test.js`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "proof_request_bundle_gate_inventory"`
+    (`2` passed, `1095` deselected)
+
+## 2026-06-22 SCCP native SDK EVM/TRON source-proof replay gate
+
+- Added Swift, Kotlin/JVM, and Java Android EVM-family and TRON proof-request
+  adversarial coverage that builds a canonical SCCP source-chain proof envelope
+  for the request bundle, then replays a different same-lane canonical envelope
+  as `sourceProofBytes`.
+- The native request builders now prove that copied source proofs fail with
+  `sourceProofBytes must match bundleBytes finality proof` before local prover
+  callbacks or wrapped proof submission.
+- Pinned the Swift/Kotlin/Java replay markers in the strict release-bundle
+  native SDK source inventory. Native .NET runtime validation remained blocked
+  here because `dotnet` is unavailable; the follow-up entry below adds the
+  corresponding C# fixture and inventory markers.
+- Validation passed:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testTronProofRequestBindsPublicSignalsAndRelayContext --filter SccpSolanaProverTests/testEvmProofRequestBindsPublicSignalsAndRelayContext --disable-swift-testing`
+    (`2` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "proof_request_bundle_gate_inventory or proof_request_native_sdk_inventory"`
+    (`2` passed, `703` deselected)
+- Validation blocked locally:
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.TronSccpProverTest`
+    failed before Gradle execution because no Java runtime is installed.
+  - `dotnet` is not installed, so native .NET SCCP runtime validation remained
+    blocked in this pass.
+
+## 2026-06-22 SCCP native .NET source-proof replay fixture
+
+- Added native .NET proof-request adversarial coverage that constructs a
+  canonical `SccpSourceChainProofEnvelopeV1` with the public Norito codec,
+  proves it reproduces the embedded non-SORA bundle finality proof byte-for-byte,
+  and then replays a different same-lane canonical source proof as
+  `sourceProofBytes`.
+- Pinned the new .NET replay helper and replay marker in the strict
+  release-bundle native SDK source inventory, matching the Swift/Kotlin/Java
+  replay checks.
+- Validation passed:
+  - independent Python byte-layout check over the C# fixture helper shape
+    confirmed the helper reproduces `NonSoraProofBundleFinalityHex`.
+- Validation blocked locally:
+  - `dotnet` is not installed, so the updated native .NET test could not be
+    executed in this environment.
+
+## 2026-06-22 BFV refresh public-key digest shape gate
+
+- Hardened shared BFV bootstrap-key shape validation so any present
+  public-key digest metadata is screened for nonzero, non-placeholder material
+  before direct exact or bounded bootstrap refresh execution accepts the key.
+- Extended exact and bounded bootstrap refresh regressions to prove placeholder
+  public-key digest metadata fails at the direct refresh API boundary, matching
+  the existing transcript/proof-statement gates.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-digest-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_preserves_plaintext --lib -- --nocapture`
+    (`2` passed, `767` filtered out)
+
+## 2026-06-22 SCCP all-lanes source-gate template replay coverage
+
+- Extended the release-checklist source-adapter gate template-replay regression
+  across ETH, BSC, Solana, TON, and TRON, so every active launch lane now
+  exercises copied built-in source-material template hashes through the copied
+  gate hash before governed-deployment readiness can pass.
+- Kept Solana/TON component-audit replay assertions in the same regression,
+  while ETH/BSC/TRON cover their single primary gate-hash role.
+- Validation passed:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "release_checklist_rejects_source_gate_template_replays"`
+    (`1` passed, `177` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "source_material_role_validation"`
+    (`3` passed, `1094` deselected)
+
+## 2026-06-22 Soracloud FHE input-admission bound replay regression
+
+- Added Core input-admission replay coverage that mutates the proof's public
+  bound value and bound mode independently while leaving the proof statement
+  hash unchanged.
+- The verifier rejects both mutations as statement-hash mismatches before
+  verifier lookup, confirming exact and bounded-noise bound metadata are bound
+  into the admitted payload statement.
+- Validation passed:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-bound-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core fhe_input_admission_proof_binds_actual_payload_metadata --lib -- --nocapture`
+    (`1` passed, `5254` filtered out)
+
+## 2026-06-22 Torii native Norito DTO checked key fixture
+
+- Hardened `multisig_native_norito_dto_tests` in
+  `crates/iroha_torii/src/routing.rs` so the flattened multisig contract-call
+  DTO signer fixture derives a deterministic Ed25519 key through
+  `KeyPair::try_from_seed` instead of an unchecked random keypair.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii multisig_native_norito_dto_tests --lib --features app_api -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs status.md`
+
+## 2026-06-22 BFV RNS basis-extension output validation
+
+- Hardened exact, target-limb, and key-switch digit RNS basis-extension
+  helpers so each constructed output polynomial is validated against the
+  target chain before it leaves the helper boundary.
+- Added explicit assertions to the RNS basis-extension regressions proving
+  exact extension, lossy target-limb extension, and basis-extended key-switch
+  digits remain target-chain-valid.
+- Pinned release-audit evidence aggregate digest distinctness so evaluator
+  artifact-set digests cannot alias artifact-bundle digests before recomputed
+  digest checks run.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-output-validation CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto basis_extension --lib -- --nocapture`
+    (`6` passed, `763` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-audit-evidence-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 Torii multisig selector checked key fixtures
+
+- Hardened `multisig_selector_tests` in
+  `crates/iroha_torii/src/routing.rs` so multisig signer, selector,
+  contract-install authority, detached public-key, hidden-viewer, and
+  asset-transfer control fixtures derive deterministic Ed25519 keys through
+  `KeyPair::try_from_seed` instead of unchecked random keypairs.
+- Added module-local checked keypair/account helpers that delegate to the
+  routing checked fixture helper while leaving the existing large multisig
+  endpoint assertions unchanged.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii multisig_selector_tests --lib --features app_api -- --nocapture`
+    (`42` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs status.md`
+
+## 2026-06-22 SCCP strict verifier summary unknown-field gate
+
+- Hardened the standalone strict release-bundle verifier public summary so
+  copied unknown top-level summary fields fail closed with category-only errors
+  before JSON/text output or exit-code handling.
+- Added an adversarial CLI regression with safe, sensitive, and non-string
+  unknown summary roots, proving the verifier does not print copied operator
+  values while still rejecting the malformed summary.
+- Pinned the new sanitizer regression in the release public JSON-root schema
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "verifier_cli_suppresses_malformed_summary_roots or verifier_cli_exit_compares_verified_exactly or verifier_cli_suppresses_malformed_summary_errors or verifier_cli_rejects_malformed_summary_public_fields or verifier_cli_rejects_unknown_summary_fields_without_leaking"`
+    (`5` passed, `700` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "release_public_json_root_schema"`
+    (`4` passed, `1093` deselected)
+  - `git diff --check -- scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 Soracloud release-audit policy digest binding
+
+- Hardened shared `FheExecutionPolicyV1` validation so policy-pinned
+  full-bootstrap release-audit package digests must match the embedded package
+  before runtime admission can inherit the policy context.
+- Added policy regressions for stale pinned package digests and for
+  record/manifest digest aliases in the package-digest field.
+- Widened the policy regression so every singleton release-audit policy field
+  and blank trusted reviewer ids are rejected before incomplete audit context
+  can reach runtime admission.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-policy-release-audit-fields CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate --lib -- --nocapture`
+    (`12` passed, `1553` filtered out)
+
+## 2026-06-22 SCCP readiness public report root shape gate
+
+- Hardened the release-readiness CLI public JSON renderer so allowlisted
+  `evidence`, `release_checklist`, `corridor`, `source_inventory`,
+  `inputs`, `input_artifacts`, `native_evm_prover_bundle`,
+  `cryptographic_evidence`, and `user_prover_submission_surfaces` roots are
+  shape-checked before copying into public JSON.
+- Added an adversarial CLI regression with secret-looking values under those
+  allowlisted roots, proving malformed evidence, checklist, corridor,
+  inventory, artifact, native prover, and submission-surface roots become
+  category blockers instead of printed operator text.
+- Pinned the new sanitizer regression in the release public JSON-root schema
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "cli_suppresses_malformed_report_roots or cli_exit_compares_production_ready_exactly or cli_suppresses_malformed_report_blockers or cli_rejects_unknown_report_fields_without_leaking or cli_rejects_malformed_allowed_report_roots_without_leaking"`
+    (`5` passed, `387` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "release_public_json_root_schema"`
+    (`4` passed, `1092` deselected)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 BFV release-audited wrapper artifact replay gate
+
+- Extended the BFV full-bootstrap prefix-trace regression so both exact and
+  bounded release-audited execution/bound wrappers reject a valid audit package
+  replayed with stale concrete artifact bytes before missing-Galois or malformed
+  input-bound checks can run.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-audited-wrapper-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 SCCP all-lanes public summary root shape gate
+
+- Hardened the all-lanes CLI public summary renderer so allowlisted
+  `required_domains`, `supported_launch_domains`, `unsupported_launch_domains`,
+  `lanes`, and `release_checklist` roots are shape-checked before copying into
+  public JSON.
+- Added an adversarial CLI regression with secret-looking values under those
+  allowlisted roots, proving malformed domain lists, lane lists, and
+  release-checklist roots become category blockers instead of printed operator
+  text.
+- Pinned the new sanitizer regression in the all-lanes exact-boolean release
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "cli_exit_compares_production_ready_exactly or cli_suppresses_malformed_summary_roots or cli_suppresses_malformed_summary_blockers or cli_rejects_unknown_summary_fields_without_leaking or cli_rejects_malformed_allowed_summary_roots_without_leaking"`
+    (`5` passed, `173` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "all_lanes_release_checklist_exact_boolean"`
+    (`4` passed, `1091` deselected)
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 SCCP Solana and TON public endpoint root redaction
+
+- Strengthened the Solana and TON live CLI public JSON regressions so copied
+  `rpc_url` and `api_url` roots containing secret-looking provider text are
+  stripped before output alongside unknown summary fields.
+- Pinned the explicit endpoint-root omission assertions in the release public
+  scalar-text schema inventory so endpoint redaction remains covered for every
+  active live helper.
+- Validation passed:
+  - `python3 -m py_compile pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py::test_solana_live_cli_omits_unknown_summary_fields pytests/scripts/sccp_ton_live_evidence_test.py::test_ton_live_cli_omits_unknown_summary_fields -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "release_public_scalar_text_schema"`
+    (`4` passed, `1091` deselected)
+  - `git diff --check -- pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 SCCP TRON public endpoint path redaction
+
+- Tightened the SCCP TRON live CLI public JSON allowlist so
+  `constant_endpoint`, `transaction_info_endpoint`, `transaction_endpoint`, and
+  `block_endpoint` stay internal runtime routing fields instead of published
+  summary fields.
+- Strengthened the adversarial CLI regression with secret-looking endpoint path
+  values and pinned explicit endpoint-omission assertions in the TRON inbound
+  release inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_tron_live_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k "cli_omits_runtime_endpoint_and_unknown_summary_fields or cli_redacts_top_level_exception_details"`
+    (`2` passed, `184` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "tron_inbound_adversarial"`
+    (`4` passed, `1091` deselected)
+
+## 2026-06-22 Torii contract fixture checked key fixtures
+
+- Hardened `multisig_contract_call_tests` and
+  `contract_payload_normalization_tests` in
+  `crates/iroha_torii/src/routing.rs` so multisig contract-call account,
+  fee-sponsor, payload sender, and payload authority fixtures derive
+  deterministic Ed25519 keys through `KeyPair::try_from_seed` instead of
+  unchecked random keypairs.
+- Added small module-local account-id helpers that delegate to the checked
+  routing fixture helper, keeping fixture seed labels local to each test module.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii multisig_contract_call_tests --lib --features app_api -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii contract_payload_normalization_tests --lib --features app_api -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs status.md`
+
+## 2026-06-22 SCCP source-proof mismatch proof-request gate
+
+- Added adversarial SCCP proof-request coverage for EVM, TRON, and TON showing
+  canonical source-proof bytes copied from another same-lane bundle are rejected
+  before local prover callbacks or wrapped proof-result submission.
+- Pinned the new canonical-but-mismatched source-proof assertions in the
+  proof-request bundle-gate release inventory.
+- Validation passed:
+  - `cargo fmt --package iroha_sccp`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-standalone-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp groth16_proof_requests_require_non_sora_source_proof_bytes -- --nocapture`
+    (`2` passed, `267` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-standalone-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_proof_request_hash_uses_canonical_sccp_bundle_preimage -- --nocapture`
+    (`1` passed, `268` filtered out)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_retired_network_surface_test.py -q`
+    (`8` passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 BFV AIR row-canonicality residual hardening
+
+- Hardened the BFV full-bootstrap arithmetic AIR composition evaluator so each
+  supplied row coordinate is validated as a canonical Goldilocks field element
+  before the evaluator returns the first nonzero coordinate residual.
+- Added regression coverage proving an early row mismatch cannot mask a later
+  noncanonical coordinate in the same row, while preserving the first-residual
+  no-cancellation behavior for coordinated same-row drift.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-canonicality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+
+## 2026-06-22 BFV release-audit runtime policy pinning
+
+- Extended the Soracloud full-bootstrap runtime release-audit regression so a
+  policy with an audit package but missing package digest, missing reviewer id,
+  missing reviewer public key, or drifted reviewer id/key fails before runtime
+  execution can use the governed full-bootstrap artifacts.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-cross-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit --lib -- --nocapture`
+    (`1` passed, `5439` filtered out)
+
+## 2026-06-22 SCCP audited source-proof recovery target gate
+
+- Extended the audited Solana and TON source-adapter deployment regressions so
+  exact deployment-bound source proof bytes fail both facade verification and
+  raw source-proof recovery when paired with a source-adapter deployment whose
+  target is not SORA.
+- Pinned the new Solana/TON non-SORA deployment-target recovery assertions in
+  the source-material role-validation release inventory.
+- Validation passed:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-standalone-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_deployment_requires_audited_full_light_client_engines -- --nocapture`
+    (`2` passed, `267` filtered out)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "source_material_role_validation"`
+    (`3` passed, `1092` deselected)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 BFV execution wrapper statement-retarget regression
+
+- Added zk-stark Core coverage proving a structurally valid BFV-native
+  full-bootstrap execution AIR envelope verifies for its source statement but
+  is rejected when republished under a different wrapper statement hash before
+  the dedicated verifier fallback.
+- The regression exercises the Soracloud wrapper/runtime boundary and asserts
+  the native BFV AIR domain tag still binds the governed statement hash.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-cross-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution_bfv_native_air_rejects_wrapper_statement_retarget --lib -- --nocapture`
+    (`1` passed, `5439` filtered out)
+
+## 2026-06-22 Torii selector and multisig guard checked key fixtures
+
+- Hardened `zk_roots_selector_tests` and `multisig_guard_tests` in
+  `crates/iroha_torii/src/routing.rs` so selector-state authority and
+  multisig admission signer fixtures derive deterministic Ed25519 keys through
+  `KeyPair::try_from_seed` instead of unchecked random keypairs.
+- Reused the checked routing fixture helper from the earlier routing slice and
+  removed now-unused direct `KeyPair` imports from the affected modules.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii zk_roots_selector_tests --lib --features app_api -- --nocapture`
+    (`52` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii multisig_guard_tests --lib --features app_api -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs status.md`
+
+## 2026-06-22 SCCP source-adapter descriptor template replay coverage
+
+- Extended the Rust standalone source-adapter deployment replay regression
+  across ETH, BSC, Solana, TON, and TRON so descriptors that replay template
+  source-bridge emitter address/code-hash fields or ETH/TRON source-bridge
+  config sentinels fail standalone shape, material/deployment matching, and
+  readiness checks.
+- Pinned the newly covered emitter/config role labels in the source-material
+  template-rejection release inventory.
+- Validation passed:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-standalone-replay CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp standalone_source_adapter_deployments_reject_template_role_hash_replay -- --nocapture`
+    (`1` passed, `268` filtered out)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "source_material_template_rejection"`
+    (`3` passed, `1092` deselected)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 BFV native AIR cross-statement replay regression
+
+- Extended the shared `zk_stark` BFV full-bootstrap native AIR regression
+  coverage with two independently valid execution prover-material packages for
+  different slot-bound statements, then proved each generated native envelope is
+  rejected against the other valid statement package.
+- Kept the existing slot-zero BFV STARK fixture API stable by adding only a
+  test-local slot-parametrized helper, so production APIs and feature gates stay
+  unchanged.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-cross-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark bfv_full_bootstrap_air_rejects_valid_cross_statement_material_replay --lib -- --nocapture`
+    (`1` passed, `5438` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/zk_stark.rs status.md roadmap.md`
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 SCCP Solana and TON live public JSON root allowlists
+
+- Hardened the SCCP Solana and TON live helpers so CLI public JSON summaries
+  are rebuilt from explicit allowlists and no longer echo unknown copied
+  summary roots, sensitive root names, or malformed non-string root keys.
+- Added adversarial CLI coverage for hostile copied summary roots and
+  non-string keys, then pinned the helper allowlists and regressions in the
+  release public scalar-text source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_solana_live_evidence.py pytests/scripts/sccp_solana_live_evidence_test.py scripts/sccp_ton_live_evidence.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py -q -k "cli_omits_unknown_summary_fields or cli_redacts_top_level_exception_details"`
+    (`4` passed, `51` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "release_public_scalar_text_schema"`
+    (`4` passed, `1091` deselected)
+  - `git diff --check -- scripts/sccp_solana_live_evidence.py pytests/scripts/sccp_solana_live_evidence_test.py scripts/sccp_ton_live_evidence.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_solana_live_evidence.py pytests/scripts/sccp_solana_live_evidence_test.py scripts/sccp_ton_live_evidence.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 Torii SCCP backend checked key fixtures
+
+- Hardened the SCCP message backend tests in
+  `crates/iroha_torii/src/routing.rs` so TRON artifact signer, TRON Groth16
+  missing-proof signer, and bridge-message DTO authority fixtures derive
+  deterministic Ed25519 keys through `KeyPair::try_from_seed` instead of
+  unchecked random keypairs.
+- Added Ed25519 checked-derivation coverage alongside the existing BLS SCCP
+  finality fixture coverage in the same module.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_message_backend_tests --lib --features app_api -- --nocapture`
+    (`61` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs status.md`
+
+## 2026-06-22 SCCP launch-scope network support note
+
+- Reconfirmed the SCCP launch-scope support boundary in the bridge-proof docs,
+  engineering backlog, and roadmap: active support remains Ethereum, BSC,
+  Solana, TON, and TRON, and SCCP will not support
+  Sub&#115;trate/Pol&#107;adot networks for now.
+- Added explicit guidance that future compatibility research for that retired
+  family stays outside SCCP launch readiness until governance re-opens support.
+- Validation passed:
+  - `python3 -m pytest pytests/scripts/sccp_retired_network_surface_test.py -q`
+  - `git diff --check -- docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now|future compatibility research for that retired family" docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 Soracloud full-bootstrap runtime release-audit policy gate
+
+- Extended `FheExecutionPolicyV1` with optional full-bootstrap release-audit
+  package, caller-pinned package digest, trusted reviewer id, and trusted
+  reviewer public key fields. Shared policy validation now rejects partial
+  release-audit context, validates the package against the trusted reviewer
+  id/key, and only allows it with the full-bootstrap material statement
+  binding.
+- Hardened production `RunSoracloudFheJob` full-bootstrap execution so
+  `FullBootstrapV1` artifact-backed jobs must carry the policy-pinned
+  release-audit package before exact or bounded output/bound helpers run. The
+  runtime now dispatches audited jobs through the crypto release-audit-gated
+  artifact execution helpers instead of the unaudited artifact helpers.
+- Added the same Torii signed-request preflight, so full-bootstrap job requests
+  fail as bad requests when the policy omits or drifts from the trusted
+  release-audit package/reviewer/digest binding.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model --package iroha_core --package iroha_torii`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-audit-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate --lib -- --nocapture`
+    (`12` passed, `1553` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-audit-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit --lib -- --nocapture`
+    (`1` passed, `5438` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-audit-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --lib validate_fhe_job_run_proof_attachments -- --nocapture`
+    (`0` matched tests; compile passed, `2583` filtered out)
+
+## 2026-06-22 SCCP TRON live public JSON endpoint redaction
+
+- Hardened the SCCP TRON live helper so CLI public JSON summaries are rebuilt
+  from an explicit allowlist and no longer echo runtime `tron_node_url`,
+  runtime API-key roots, unknown copied summary roots, or malformed non-string
+  root keys. Fixed endpoint path labels remain public so solid-node route
+  selection stays auditable without exposing provider URLs.
+- Added adversarial CLI coverage for tokenized TRON API URLs, runtime API keys,
+  unknown root fields, sensitive field names, and non-string summary keys, then
+  pinned the helper allowlist and regression in the TRON inbound adversarial
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_tron_live_evidence_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k "cli_omits_runtime_endpoint_and_unknown_summary_fields or cli_redacts_top_level_exception_details"`
+    (`2` passed, `184` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "tron_inbound_adversarial"`
+    (`4` passed, `1091` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "evm_live_destination_production"`
+    (`5` passed, `1090` deselected)
+
+## 2026-06-22 SCCP EVM destination-live public JSON endpoint redaction
+
+- Hardened the SCCP EVM-family destination-live helper so public JSON summaries
+  are rebuilt from an explicit allowlist and no longer echo runtime `rpc_url`,
+  unknown copied summary roots, private roots, or malformed non-string root
+  keys. This matches the source-live public-output boundary and keeps tokenized
+  provider endpoints runtime-only.
+- Added adversarial CLI coverage for tokenized RPC URLs, unknown root fields,
+  sensitive field names, and non-string summary keys, then pinned the helper
+  allowlist and regression in the Ethereum EVM destination-live production
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py -q -k "cli_omits_runtime_endpoint_and_unknown_summary_fields or cli_redacts_top_level_exception_details"`
+    (`2` passed, `34` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "evm_live_destination_production"`
+    (`5` passed, `1090` deselected)
+
+## 2026-06-22 SCCP EVM source-live public JSON endpoint redaction
+
+- Hardened the SCCP EVM-family source-live helper so public JSON summaries are
+  rebuilt from an explicit allowlist and no longer echo runtime `rpc_url`,
+  private `_source_args`, unknown copied summary roots, or malformed non-string
+  root keys. This keeps tokenized provider endpoints runtime-only while
+  preserving internal collection/TOML state.
+- Added adversarial CLI coverage for tokenized RPC URLs, unknown root fields,
+  sensitive field names, and non-string summary keys, then pinned the helper
+  allowlist and regression in the Ethereum EVM source-live production
+  inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k "cli_omits_runtime_endpoint_and_unknown_summary_fields or cli_redacts_top_level_exception_details"`
+    (`2` passed, `32` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "evm_source_live_production"`
+    (`5` passed, `1090` deselected)
+
+## 2026-06-22 Core execution prover shared BFV verifier gate
+
+- Tightened the Soracloud full-bootstrap execution release-prover handoff so the
+  generated native BFV STARK/FRI envelope must also satisfy the shared
+  `zk_stark` BFV full-bootstrap verifier against the same typed prover input
+  material before Core wraps it as a proof attachment.
+- Extended the native-verifier-key preflight regression to decode the generated
+  OpenVerify wrapper and assert the emitted native envelope passes the shared BFV
+  verifier, preventing Core-local and shared BFV native-AIR contracts from
+  drifting apart.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-audited-prover-order CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_accepts_native_verifier_key_preflight --lib -- --nocapture`
+    (`1` passed, `5437` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-22 SCCP release-readiness public report root schema
+
+- Added an explicit public root-field allowlist to the SCCP release-readiness
+  CLI report output. Unknown top-level fields now become sanitized blockers and
+  are stripped before JSON or Markdown rendering, including sensitive-looking
+  and non-string field names.
+- Added adversarial CLI coverage proving copied unknown report values do not
+  leak and mixed string/non-string report keys do not crash sorted JSON output.
+- Pinned the sanitizer allowlist and regression in the SCCP public JSON-root
+  schema source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "cli_rejects_unknown_report_fields_without_leaking or cli_suppresses_malformed_report or cli_exit_compares_production_ready_exactly"`
+    (`4` passed, `387` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "release_public_json_root_schema"`
+    (`4` passed, `1091` deselected)
+
+## 2026-06-22 Torii routing checked key fixtures
+
+- Hardened early routing fixtures in `crates/iroha_torii/src/routing.rs` so
+  dummy accepted transactions, telemetry test peers, and signed-query
+  verification tests derive deterministic Ed25519 keys through
+  `KeyPair::try_from_seed` instead of unchecked random keypairs.
+- Added a routing fixture guard proving invalid all-zero Ed25519 seed material
+  remains rejected by the checked derivation path.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii checked_routing_fixture_keypair --lib --features app_api -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii signed_query_verification_tests --lib --features app_api -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii checked_routing_fixture_keypair --lib --features "app_api telemetry" -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --features "app_api telemetry" --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs status.md`
+
+## 2026-06-22 SCCP all-lanes public summary root schema
+
+- Added an explicit public root-field allowlist to the SCCP all-lanes evidence
+  CLI summary output. Unknown top-level fields now become sanitized blockers
+  and are stripped before JSON rendering, including sensitive-looking and
+  non-string field names.
+- Added adversarial CLI coverage proving copied unknown summary values do not
+  leak and mixed string/non-string summary keys do not crash sorted JSON output.
+- Pinned the sanitizer allowlist and regression in the SCCP release-bundle
+  source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "cli_rejects_unknown_summary_fields_without_leaking or cli_suppresses_malformed_summary or cli_exit_compares_production_ready_exactly"`
+    (`4` passed, `173` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_release_checklist_exact_boolean"`
+    (`4` passed, `1090` deselected)
+
+## 2026-06-22 Material native AIR opening-index retarget gate
+
+- Extended the Soracloud full-bootstrap material native-AIR replay regression so
+  a proof with an otherwise generated material envelope but retargeted opening
+  index is rejected with `FRI query/opening index mismatch` before verifier
+  acceptance.
+- Fixed the internal release-audit runtime context test compile path by deriving
+  `Debug` for the test-observed context and cloning the stale-digest error
+  before the second assertion.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-audited-prover-order CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_material_native_air_builder_replays_context_before_wrap --lib -- --nocapture`
+    (`1` passed, `5437` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-audited-prover-order CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit --lib -- --nocapture`
+    (`1` passed, `5437` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+
+## 2026-06-22 SCCP Solana deployment-bound source-state evidence drift
+
+- Extended the SCCP source-chain proof adversarial tests so deployment-bound
+  Solana verifier evidence rejects a shape-valid, non-template
+  `source_state_verifier_hash` drift after the OpenVerify wrapper is rebuilt.
+  This keeps source-state evidence pinned to the audited source-adapter
+  deployment descriptor, not just to common verifier-evidence shape.
+- Tightened the material-only replay matrix to only exercise optional
+  deployment-bound source-role fields when the proof evidence actually carries
+  those fields, preserving the existing placeholder-material boundary.
+- Validation passed:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-evidence CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_chain_proof_material_requires_plan_specific_adapter_proofs --lib -- --nocapture`
+    (`1` passed, `268` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-evidence CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `268` filtered out)
+
+## 2026-06-22 Core BFV release-audit prover preflight ordering
+
+- Extended the zk-stark Soracloud full-bootstrap material and execution
+  release-audit-gated prover regressions so stale caller-pinned package digests
+  are rejected before verifier-key retarget preflight, and before execution
+  output-mismatch preflight.
+- Validation run:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-audited-prover-order CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark audited_prover_rejects_untrusted_or_stale_package --lib -- --nocapture`
+    (`2` passed, `5435` filtered out)
+  - `cargo fmt --package iroha_core -- --check` (failed on existing
+    `crates/iroha_core/src/smartcontracts/isi/soracloud.rs` formatting drift
+    outside the new assertion blocks)
+
+## 2026-06-22 Soracloud release-audited execution prover output gate
+
+- Tightened the Core release-audited full-bootstrap execution prover so it now
+  recomputes the exact audited artifact output and public bound through the
+  crypto release-audit-gated helpers before emitting native execution proofs.
+  Caller-supplied output ciphertext or bound drift fails before proof
+  construction.
+- Validation passed:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-audited-execution CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_output_or_bound_drift --lib -- --nocapture`
+    (`1` passed, `5436` filtered out)
+
+## 2026-06-22 Torii transaction-handler checked key fixtures
+
+- Hardened the Torii transaction ingress handler tests in
+  `crates/iroha_torii/src/lib.rs` so single-transaction, entrypoint, batch,
+  rate-limit, queue-pressure, and Nexus fee-admission fixtures derive
+  deterministic Ed25519 keys through `KeyPair::try_from_seed` instead of
+  unchecked random keypairs.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii handler_post_transaction --lib --features app_api -- --nocapture`
+    (`16` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs status.md`
+
+## 2026-06-22 STARK AIR opening helper path-index gate
+
+- Tightened the shared STARK AIR opening commitment replay helper so it now
+  rejects malformed Merkle path depths and path-index retargets before trace or
+  composition root replay.
+- Extended the explicit AIR regression with a same-root opening-index retarget
+  case, covering the standalone helper used by Soracloud native-AIR preflight.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-stark-opening-helper CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark explicit_composition_air_envelope_binds_caller_rows_to_fri_queries --lib -- --nocapture`
+    (`1` passed, `5435` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-stark-opening-helper CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows --lib -- --nocapture`
+    (`1` passed, `5435` filtered out)
+
+## 2026-06-22 BFV release-audited artifact execution gate
+
+- Added crypto-layer release-audit-gated exact and bounded full-bootstrap
+  artifact execution plus bound helpers. The wrappers validate the governed
+  release-audit package against concrete artifacts, the caller-trusted reviewer
+  id/key, and the caller-pinned package digest before deriving outputs or public
+  bounds.
+- Extended the execution regression so stale package digests and trusted-reviewer
+  drift are rejected before missing Galois-key, malformed ciphertext, or
+  malformed input-bound preflight in both exact and bounded execution/bound
+  helpers.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-audited-execution CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-audited-execution-order CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-22 SCCP release-bundle verifier CLI summary diagnostics
+
+- Hardened the standalone strict release-bundle verifier CLI so malformed
+  internal summary roots, non-boolean `verified`, hostile verifier error text,
+  malformed artifact rows, and noncanonical `manifest_sha256` values are
+  converted into sanitized not-verified public payloads before JSON/text output
+  or exit-code handling.
+- Pinned the CLI summary sanitizer and adversarial JSON/text regressions in the
+  public JSON-root schema inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "verifier_cli_suppresses_malformed_summary or verifier_cli_exit_compares_verified_exactly or verifier_cli_rejects_malformed_summary_public_fields or release_public_json_root_schema_inventory"`
+    (`6` passed, `698` deselected)
+  - `git diff --check -- scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-22 SCCP crate launch-scope note
+
+- Added the SCCP launch-scope boundary to the `iroha_sccp` crate docs:
+  current launch support remains Ethereum, BSC, Solana, TON, and TRON, and
+  SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+- Validation passed:
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs status.md`
+  - `rg -n "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now|Current SCCP launch support is limited" crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+
+## 2026-06-21 Torii runtime-handler checked key fixtures
+
+- Hardened shared runtime-handler fixtures in `crates/iroha_torii/src/lib.rs`
+  so private-ingress route helpers, test app-state topology peers, DA receipt
+  signers, Torii proxy bridge signers, and block-signature guard keys derive
+  deterministic Ed25519, Secp256k1, or BLS fixture keys through
+  `KeyPair::try_from_seed` instead of unchecked random keypairs.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii checked_torii_test --lib --features app_api -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii torii_partition_routes_by_visibility --lib --features app_api -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii account_read_for_routes --lib --features app_api -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs status.md`
+
+## 2026-06-22 SCCP release-bundle strict verifier summary diagnostics
+
+- Hardened release-bundle self-verification so malformed strict-verifier summary
+  roots, non-boolean `verified`, hostile verifier error text, and noncanonical
+  `manifest_sha256` values fail with category-only builder errors before the
+  bundle is reported as verified.
+- Pinned the summary-shape guard and adversarial malformed-summary regression in
+  the public JSON-root schema inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "generated_bundle_self_verifier or release_public_json_root_schema_inventory"`
+    (`4` passed, `696` deselected)
+
+## 2026-06-22 SCCP release-readiness CLI public report diagnostics
+
+- Hardened the SCCP release-readiness CLI output boundary so malformed report
+  roots, non-boolean `production_ready`, and malformed or hostile top-level
+  blocker containers are converted into sanitized not-ready payloads before
+  JSON/Markdown output or exit-code handling.
+- Pinned the public report sanitizer and adversarial CLI regressions in the
+  public blocker-list schema inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "cli_suppresses_malformed_report or cli_exit_compares_production_ready_exactly or release_public_blocker_list_schema_gate_inventory"`
+    (`4` passed, `386` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "release_public_blocker_list_schema_inventory"`
+    (`2` passed, `697` deselected)
+
+## 2026-06-21 SCCP native EVM artifact metadata diagnostics
+
+- Hardened SCCP native EVM prover artifact consumers so malformed artifact
+  metadata from the local artifact helper is rejected before byte/hash indexing.
+- Mirrored the guard in readiness generation and strict release-bundle
+  verification, with adversarial tests for non-object metadata, unsafe metadata
+  paths, boolean byte counts, and noncanonical SHA-256 text.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "malformed_native_evm_artifact_metadata or native_sccp_no_wasm_readiness_gate_inventory"`
+    (`2` passed, `385` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "malformed_native_evm_artifact_metadata or native_no_wasm_readiness_inventory or release_native_prover_bundle_schema_inventory"`
+    (`4` passed, `695` deselected)
+
+## 2026-06-21 BFV native-payload sample/template schema markers
+
+- Extended the BFV full-bootstrap release-audit evidence regression so direct
+  and whitespace-prefixed `sample`, `template`, and `example` native payload
+  SHA-256 sentinels fail through release-audit evidence validation.
+- Updated the Soracloud material and execution full-bootstrap public-input
+  schemas to advertise those native-payload sentinel gates explicitly.
+- Pinned the refreshed schema hashes:
+  - material proof:
+    `4ccf7ab1b5e74fab13cafd265aa56f854427f89250c8920f3ec0cf67ce6f5861`
+  - execution proof:
+    `d2179784de2c6d2b395dfb217ee1fe9e90259c48355a6c5e27f5d366ef431a4f`
+- Validation passed:
+  - `cargo fmt --package iroha_crypto --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_ --lib -- --nocapture`
+    (`2` passed, `1561` filtered out)
+
+## 2026-06-21 BFV input-admission bound schema contract
+
+- Updated the Soracloud FHE input-admission public-input schema to advertise
+  exact-residual and bounded-noise bound modes plus the capacity checks already
+  enforced by `SoracloudFheInputAdmissionProofV1::validate`.
+- Pinned the refreshed input-admission schema hash
+  `1cf3dd56010dc765bd671004b1c9262499666ac1c1313573fceb59bae26d6caf`.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_input_admission_schema_advertises_backend --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-payload-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_proof_validate_rejects_over_capacity_bounds --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+
+## 2026-06-21 SCCP all-lanes public summary fail-closed output
+
+- Hardened the SCCP all-lanes CLI output boundary so malformed summary roots,
+  non-boolean `production_ready`, and malformed public blocker containers are
+  converted into sanitized not-ready JSON before output or exit-code handling.
+- Pinned the public summary sanitizer and adversarial CLI regressions in the
+  all-lanes release-checklist exact-boolean inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "all_lanes_cli_exit_compares_production_ready_exactly or all_lanes_cli_suppresses_malformed_summary"`
+    (`3` passed, `173` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_release_checklist_exact_boolean_gate_inventory"`
+    (`1` passed, `385` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "all_lanes_release_checklist_exact_boolean_inventory"`
+    (`2` passed, `696` deselected)
+
+## 2026-06-21 SCCP phase transcript artifact-row diagnostics
+
+- Hardened SCCP readiness phase-transcript checks so malformed phase evidence
+  artifact rows fail closed with category-only blockers before transcript paths
+  are opened.
+- Mirrored the same malformed-artifact classification in the strict release
+  bundle verifier and pinned both generator and verifier regressions in the
+  phase-transcript source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "malformed_phase_artifact_rows or release_corridor_phase_transcript_gate_inventory"`
+    (`2` passed, `384` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "phase_transcript_rejects_malformed_artifact_rows or release_corridor_phase_transcript_inventory"`
+    (`3` passed, `695` deselected)
+
+## 2026-06-21 SCCP release-checklist root fail-closed diagnostics
+
+- Hardened SCCP readiness report construction so malformed active-launch
+  release-checklist roots and non-boolean checklist `ready` values make
+  `production_ready` false with explicit canonical blockers instead of
+  tracebacking or producing blocker-free not-ready reports.
+- Pinned the fail-closed checklist helper, blocker strings, and adversarial
+  scalar-root regression in the active-launch checklist schema inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "checklist_ready_exactly or malformed_checklist_root or active_launch_checklist_schema_gate_inventory"`
+    (`3` passed, `382` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "active_launch_checklist_schema_inventory or readiness_boolean_type_drift"`
+    (`3` passed, `694` deselected)
+
+## 2026-06-21 SCCP readiness Markdown top-level status diagnostics
+
+- Hardened the SCCP release-readiness Markdown renderer so missing,
+  truthy-string, or scalar copied `production_ready` roots render
+  `Status: NOT READY` instead of raising or leaking raw copied operator text.
+- Pinned the new fail-closed helper and adversarial regression in the readiness
+  Markdown source-inventory gate.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "malformed_top_level_status or readiness_markdown_invariants_gate_inventory"`
+    (`2` passed, `382` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_invariants_inventory"`
+    (`2` passed, `695` deselected)
+
+## 2026-06-21 Torii transaction-batch checked key fixtures
+
+- Hardened the transaction ingress decode and Ed25519 precheck tests in
+  `crates/iroha_torii/src/lib.rs` to derive deterministic Ed25519 and
+  Secp256k1 fixture keys through `KeyPair::try_from_seed` instead of unchecked
+  random keypairs.
+- Added a transaction-batch fixture guard proving invalid all-zero Ed25519 and
+  Secp256k1 seed material remains rejected.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii transaction_batch --lib --features app_api -- --nocapture`
+    (`12` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs status.md`
+
+## 2026-06-21 SCCP manifest readiness-root diagnostics
+
+- Hardened SCCP release manifest generation so scalar copied
+  `release_checklist` and `corridor` roots no longer crash nested readiness
+  extraction, while malformed top-level blocker payloads are replaced with a
+  generic `invalid blockers` marker instead of raw copied operator text.
+- Preserved the existing no-truthy-coercion contract for malformed scalar
+  readiness values that appear in structurally valid report roots, so the
+  strict verifier still rejects them as non-boolean manifest fields.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "manifest_preserves_malformed_readiness_values or manifest_suppresses_malformed_readiness_roots or release_manifest_readiness_flags_inventory or manifest_readiness_claim_drift or readiness_boolean_type_drift"`
+    (`6` passed, `691` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "release_manifest_readiness_flags_gate_inventory"`
+    (`1` passed, `382` deselected)
+
+## 2026-06-21 SCCP release-notes artifact-row diagnostics
+
+- Hardened the SCCP public release-notes attachment renderer and the strict
+  verifier's independent expected renderer so artifact table rows render
+  through bounded path/byte-count/SHA-256 cells instead of direct copied
+  artifact indexing.
+- Malformed artifact roots, non-object artifact rows, unsafe copied paths,
+  non-integer byte counts, and noncanonical hashes now render invalid markers
+  without leaking raw copied operator text, while the attachment artifact stays
+  excluded from its own public artifact table.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "release_notes_reject_malformed_artifact_rows or release_notes_attachment_invariants_inventory or release_notes_renderer_is_independent or release_notes_invariants_require_artifact_rows or release_notes_redacts_sensitive_artifact_rows or release_notes_mark_malformed_blocker_containers or release_note_status_compares_ready_exactly"`
+    (`8` passed, `688` deselected)
+
+## 2026-06-21 BFV AIR residual cancellation hardening
+
+- Tightened the first-release BFV full-bootstrap AIR residual evaluator so a
+  row fails on its first nonzero coordinate residual instead of summing all
+  coordinate residuals into a cancellable scalar.
+- Added a coordinated two-column trace-drift regression proving a drift pair
+  that would cancel under the previous linear fold still produces a nonzero
+  composition value.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-air-residual CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+
+## 2026-06-21 BFV release-audit audit-body schema markers
+
+- Aligned the Soracloud material and execution full-bootstrap public-input
+  schemas so release-audit packages explicitly advertise delayed
+  sample/template/example audit-body rejection alongside delayed placeholder
+  body rejection.
+- Pinned the then-current schema hashes, superseded by the later native-payload
+  sample/template schema marker entry:
+  - material proof:
+    `08ecef153a7f2b48c6165952c4b856bb806b818f43111a19cdf2a0dc4fead2cf`
+  - execution proof:
+    `9b7d41a66b17d40d832a5890a7274d28bc89a4ab5d5e2d62e9e9e8800964462f`
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-markers CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-markers CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-markers CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-21 SCCP readiness Markdown collection-root diagnostics
+
+- Hardened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so malformed cryptographic-evidence,
+  user-prover surface, top-level evidence, and `evidence.lanes` roots render
+  bounded placeholder rows instead of indexing through copied scalar payloads.
+- Scalar or otherwise malformed section roots now render the existing safe
+  crypto placeholder row, user-prover object-shape blocker row, or lane
+  object-shape blocker row without leaking raw copied operator text.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_collection_roots or markdown_rejects_malformed_input_and_corridor_rows or readiness_markdown_invariants_gate_inventory"`
+    (`3` passed, `380` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_collection_roots or readiness_markdown_rejects_malformed_input_and_corridor_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_evidence_input_row or markdown_invariants_require_corridor_phase_status or markdown_invariants_require_corridor_artifact_row or readiness_markdown_renderer_matches_report"`
+    (`8` passed, `687` deselected)
+
+## 2026-06-21 SCCP readiness Markdown evidence/corridor row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so copied Evidence Inputs and Production
+  Corridor rows render through bounded path/bytes/hash/phase/status cells
+  instead of direct artifact and phase interpolation.
+- Malformed input-artifact roots, scalar artifact rows, unsafe copied paths,
+  noncanonical SHA-256 text, non-object corridor roots, malformed phase keys,
+  and invalid phase statuses now render as invalid markers or empty artifact
+  cells without leaking raw copied operator text.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_input_and_corridor_rows or readiness_markdown_invariants_gate_inventory"`
+    (`2` passed, `380` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_input_and_corridor_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_evidence_input_row or markdown_invariants_require_corridor_phase_status or markdown_invariants_require_corridor_artifact_row or readiness_markdown_renderer_matches_report"`
+    (`7` passed, `687` deselected)
+
+## 2026-06-21 Torii routed-read checked key fixtures
+
+- Hardened the routed-read alias and visibility tests in
+  `crates/iroha_torii/src/lib.rs` to derive deterministic Ed25519 fixture
+  keys through `KeyPair::try_from_seed` instead of unchecked random keypairs.
+- Added a routed-read account fixture guard proving stable same-seed output and
+  distinct accounts for distinct non-zero seeds.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii torii_routed_read_tests --lib --features app_api -- --nocapture`
+    (`73` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-identifier-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs`
+
+## 2026-06-21 BFV release-audit sample/template schema contract
+
+- Extended the Soracloud full-bootstrap material and execution public-input
+  schemas so release-audit packages explicitly advertise delayed
+  sample/template/example audit artifact body rejection alongside the existing
+  delayed placeholder body gate.
+- Refreshed the then-current schema hashes, superseded by the later
+  native-payload sample/template schema marker entry:
+  - material proof:
+    `08ecef153a7f2b48c6165952c4b856bb806b818f43111a19cdf2a0dc4fead2cf`
+  - execution proof:
+    `9b7d41a66b17d40d832a5890a7274d28bc89a4ab5d5e2d62e9e9e8800964462f`
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+
+## 2026-06-21 Sumeragi delivered-pending complete handoff envelope
+
+- Added `RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` to
+  compose the delivered-pending spec-step obligations into one complete handoff
+  envelope covering stutter closure, finality/certificate installation,
+  stable-artifact non-final handoff, action-source exclusivity, counter,
+  phase/gate, timer, view/evidence, finality, and RBC-surface obligations.
+- Wired the aggregate through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, and `9873` TLC mutation
+    modes wired consistently)
+  - With Homebrew OpenJDK 21 on `JAVA_HOME`/`PATH`,
+    `target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-delivered-pending-complete-handoff-envelope typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`).
+  - A focused TLC run over `Sumeragi` with the fast constants,
+    `CHECK_DEADLOCK FALSE`, and only
+    `RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` as the
+    temporal property passed: no errors, `7799` states generated, `2338`
+    distinct states found, `0` states left on queue, depth `24`, and `05h
+    20min` runtime.
+
+## 2026-06-21 SCCP readiness Markdown release-checklist row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so copied release-checklist rows are rendered
+  through bounded id/status/blocker cells instead of direct item indexing.
+- Non-object checklist roots, non-object item rows, malformed item ids, and
+  hostile blocker containers now render as object-shape blockers or invalid
+  markers without leaking raw copied operator text.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_checklist_rows or markdown_compares_row_ready_exactly or readiness_markdown_invariants_gate_inventory"`
+    (`3` passed, `378` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_checklist_rows or readiness_markdown_compares_rows_exactly or readiness_markdown_invariants_inventory or markdown_invariants_require_checklist_status or markdown_invariants_require_checklist_blocker_row or readiness_markdown_renderer_matches_report"`
+    (`7` passed, `686` deselected)
+
+## 2026-06-21 SCCP readiness Markdown source-inventory row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so copied source-inventory rows are rendered
+  through bounded gate/status/blocker cells instead of direct gate-key sorting
+  and payload `.get()` calls.
+- Non-object source-inventory roots, malformed gate names, scalar gate payloads,
+  invalid validation statuses, and hostile blocker containers now render as
+  generic object-shape blockers or invalid markers without leaking raw copied
+  operator text.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_source_inventory_rows or readiness_markdown_invariants_gate_inventory"`
+    (`2` passed, `378` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_source_inventory_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_source_inventory_rows or markdown_invariants_require_source_inventory_blocker_row"`
+    (`5` passed, `687` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_source_inventory_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_source_inventory_rows or markdown_invariants_require_source_inventory_blocker_row or readiness_markdown_renderer_matches_report"`
+    (`6` passed, `686` deselected)
+
+## 2026-06-21 SCCP readiness Markdown native-prover row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so copied native EVM prover bundle rows are
+  rendered through bounded cells instead of direct artifact/hash/SDK/status
+  field interpolation.
+- Non-object native bundles now render as blocked placeholder rows, and
+  malformed artifact paths, SHA-256 text, `0x` 32-byte hashes, SDK artifact
+  rows, validation status, and blocker lists are suppressed before Markdown
+  publication.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_native_prover_bundle or markdown_rejects_malformed_user_prover_rows or markdown_rejects_malformed_crypto_rows or markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_gate_inventory"`
+    (`5` passed, `374` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_native_prover_bundle or readiness_markdown_rejects_malformed_user_prover_rows or readiness_markdown_rejects_malformed_crypto_rows or readiness_markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_native_prover_status or markdown_invariants_require_native_prover_artifact_row or markdown_invariants_require_native_prover_support_artifact_row or markdown_invariants_require_native_prover_blocker_row"`
+    (`10` passed, `681` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_renderer_matches_report or readiness_markdown_rejects_malformed_native_prover_bundle"`
+    (`2` passed, `689` deselected)
+
+## 2026-06-21 Soracloud HF and agent checked Ed25519 fixtures
+
+- Replaced the remaining direct `KeyPair::random()` fixtures in Soracloud HF
+  generated service/apartment provenance tests and agent autonomy runtime/audit
+  tests with deterministic checked Ed25519 fixture keys.
+- Preserved signer mismatch coverage by deriving distinct deterministic signer
+  and provenance keys through `KeyPair::try_from_seed`.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `cargo test -j 1 -p iroha_torii ensure_hf_generated --lib --features app_api -- --nocapture`
+    (`9` passed, `2570` filtered out)
+  - `cargo test -j 1 -p iroha_torii agent_autonomy --lib --features app_api -- --nocapture`
+    (`5` passed, `2574` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 BFV release-audit sample/template body markers
+
+- Extended the byte-bearing BFV full-bootstrap release-audit report/archive
+  body placeholder scanner so delayed `sample`, `template`, and `example`
+  markers fail package validation, matching the existing digest-only sentinel
+  family.
+- Pinned the material and execution audited prover wrappers so those copied
+  audit-body markers fail before native proof generation.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-crypto CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_artifact_digest_fails_fast_on_oversized_inputs --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_audited_prover_rejects_untrusted_or_stale_package --lib -- --nocapture`
+    (`1` passed, `5435` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_untrusted_or_stale_package --lib -- --nocapture`
+    (`1` passed, `5435` filtered out)
+  - `cargo fmt --package iroha_crypto --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-21 BFV release-audit reviewer public-key schema contract
+
+- Extended the Soracloud full-bootstrap material and execution public-input
+  schemas so release-audit signoff, manifest, and package sections explicitly
+  advertise empty/all-zero reviewer public-key payload rejection alongside the
+  Ed25519 trusted-reviewer contract.
+- Refreshed the pinned schema hashes:
+  - material proof:
+    `14be8e9577a0c059a02f8bec5d2787bfeffe4e4f1db5cca3d3ed6e362c8b28e3`
+  - execution proof:
+    `30dd3f14b3eb74d16658d3da2e882ea6a03de2bfd6e905f3548b672299e34c5f`
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+
+## 2026-06-21 SCCP readiness Markdown user-prover row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so copied user-prover submission-surface rows
+  are rendered through canonical lane/backend/helper/submission/phase cells
+  instead of direct field indexing.
+- Non-object rows now render as blocked invalid-placeholder rows, and
+  noncanonical or sensitive public values in user-prover surface fields are
+  suppressed before Markdown publication.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_user_prover_rows or markdown_rejects_malformed_crypto_rows or markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_gate_inventory"`
+    (`4` passed, `374` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_user_prover_rows or readiness_markdown_rejects_malformed_crypto_rows or readiness_markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_user_prover_status or markdown_invariants_require_user_prover_blocker_row or markdown_invariants_require_user_prover_helper_phase_row"`
+    (`8` passed, `682` deselected)
+
+## 2026-06-21 SCCP readiness Markdown cryptographic row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so copied cryptographic-evidence rows are
+  rendered through bounded cell helpers instead of direct field indexing.
+  Non-object rows now render as safe placeholder cells, malformed scalar text is
+  suppressed, and malformed source-adapter gate audit keys render as invalid
+  markers without leaking raw copied operator text.
+- Added direct adversarial renderer coverage in both the readiness report and
+  release bundle verifier suites, and pinned the helper/test markers in the
+  readiness Markdown invariants source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_crypto_rows or markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_gate_inventory"`
+    (`3` passed, `374` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_crypto_rows or readiness_markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_inventory or markdown_invariants_require_crypto_live_evm_row or markdown_invariants_require_crypto_core_hash_row or markdown_invariants_require_crypto_route_canary_row"`
+    (`7` passed, `682` deselected)
+
+## 2026-06-21 BFV material release-audit schema contract
+
+- Expanded the BFV full-bootstrap material public-input schema so material
+  proofs advertise the release-audit evidence, signoff, record, manifest,
+  proof-profile, native-payload digest sentinel, artifact-binding, and
+  trusted-reviewer subcontracts enforced before native proof generation.
+- Refreshed the pinned material proof public-input schema hash to
+  `14be8e9577a0c059a02f8bec5d2787bfeffe4e4f1db5cca3d3ed6e362c8b28e3`
+  while leaving the execution and bootstrap-key hashes on their existing
+  audited values.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-21 Soracloud FHE preflight checked Ed25519 fixtures
+
+- Replaced the FHE job-run proof preflight tests' direct `KeyPair::random()`
+  signer fixtures with deterministic checked Ed25519 fixture keys.
+- Kept the proof-attachment preflight behavior and negative assertions
+  unchanged while deriving request signers through `KeyPair::try_from_seed`.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight --lib --features app_api -- --nocapture`
+    (`32` passed, `2547` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 BFV release-audit trusted reviewer public-key preflight
+
+- Pinned the BFV full-bootstrap release-audit trusted-reviewer public-key
+  preflight across signoff, record, manifest, package, governed-artifact, and
+  caller-pinned package-digest validators so inert all-zero Ed25519 public-key
+  payloads fail before stale signed objects or artifact/package validation can
+  mask malformed caller trust configuration.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit --lib -- --nocapture`
+    (`4` passed, `765` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+
+## 2026-06-21 Soracloud uploaded-model checked Ed25519 fixtures
+
+- Replaced direct `KeyPair::random()` fixtures in the private uploaded-model
+  execution/decryption-record test and uploaded-model register signature
+  negative tests with deterministic checked Ed25519 fixture keys.
+- Preserved distinct signer identities for the register signer-mismatch case
+  while deriving all test keys through `KeyPair::try_from_seed`.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `cargo test -j 1 -p iroha_torii private_uploaded_model_execute_binds_committed_decryption_request --lib --features app_api -- --nocapture`
+    (`1` passed, `2578` filtered out)
+  - `cargo test -j 1 -p iroha_torii uploaded_model_register_signature --lib --features app_api -- --nocapture`
+    (`4` passed, `2575` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 BFV release-audit pinned digest alias preflight
+
+- Tightened the BFV full-bootstrap release-audit governed-artifact gate so
+  caller-pinned package digests that alias the package record or manifest digest
+  fail before stale package validation or digest comparison can mask the
+  trust-anchor error.
+- Added stale-package regressions to the generated-artifact release-audit
+  coverage proving caller-pinned record/manifest digest aliases still surface
+  the dedicated record/manifest alias diagnostics.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-alias CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit --lib -- --nocapture`
+    (`4` passed, `765` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+
+## 2026-06-21 SCCP readiness Markdown lane row diagnostics
+
+- Tightened the release-readiness Markdown renderer and the strict bundle
+  verifier's independent renderer so non-object copied all-lanes lane rows no
+  longer raise while rendering Lane Readiness. They now render as blocked rows
+  with all record flags set to `no` and a bounded `lane summary must be an
+  object` blocker, without leaking raw copied operator text.
+- Added direct adversarial renderer coverage in both the readiness report and
+  release bundle verifier suites, and pinned the helper/test markers in the
+  readiness Markdown invariants source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_gate_inventory"`
+    (`2` passed, `374` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "readiness_markdown_rejects_malformed_lane_rows or readiness_markdown_invariants_inventory"`
+    (`3` passed, `685` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k "markdown_compares_row_ready_exactly or markdown_rejects_malformed_lane_rows"`
+    (`2` passed, `374` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "markdown_invariants_require_lane_status or markdown_invariants_require_lane_blocker_row or readiness_markdown_rejects_malformed_lane_rows"`
+    (`3` passed, `685` deselected)
+
+## 2026-06-21 Soracloud authoritative-read checked Ed25519 fixtures
+
+- Replaced direct `KeyPair::random()` fixtures in Soracloud authoritative
+  ciphertext-query, health-compliance, and model-weight status read tests with
+  deterministic checked Ed25519 fixture keys.
+- Kept the read-response assertions unchanged while making audit-event signers
+  and query request signers reproducible through `KeyPair::try_from_seed`.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `cargo test -j 1 -p iroha_torii authoritative_ciphertext_query_reads_world_state --lib --features app_api -- --nocapture`
+    (`1` passed, `2578` filtered out)
+  - `cargo test -j 1 -p iroha_torii authoritative_health_compliance_report_reads_world_state --lib --features app_api -- --nocapture`
+    (`1` passed, `2578` filtered out)
+  - `cargo test -j 1 -p iroha_torii authoritative_model_weight_status_reads_world_state --lib --features app_api -- --nocapture`
+    (`1` passed, `2578` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 SCCP all-lanes checklist lane row diagnostics
+
+- Tightened the all-lanes release checklist so copied lane rows must be objects
+  before any lane metadata or route-canary fields are read. Non-object rows now
+  produce index-only checklist blockers across records, governed deployment,
+  route allowlist, live route canary, and unresolved blockers instead of
+  exceptions or leaked copied operator text.
+- Added direct adversarial coverage for string and numeric malformed lane rows,
+  and pinned the guard in the all-lanes release-checklist source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_lane_rows or malformed_lane_metadata"`
+    (`2` passed, `172` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_release_checklist_exact_boolean"`
+    (`4` passed, `1058` deselected)
+
+## 2026-06-21 SCCP all-lanes checklist lane metadata diagnostics
+
+- Tightened the all-lanes release checklist so copied lane identity is validated
+  before route-canary source checks: missing/non-integer domains, unsupported
+  domains, padded/non-string chains, and domain/chain mismatches now produce
+  checklist blockers instead of exceptions or misleading source diagnostics.
+- Added direct adversarial coverage for missing, string, unsupported, padded,
+  and mismatched lane metadata, and pinned the guard in the all-lanes
+  release-checklist source inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_lane_metadata"`
+    (`1` passed, `172` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_release_checklist_exact_boolean"`
+    (`4` passed, `1058` deselected)
+
+## 2026-06-21 SCCP TRON route-canary owner/signature boolean diagnostics
+
+- Tightened the all-lanes release checklist so copied TRON
+  `raw_data_owner_matches_transaction` and `signature_recovers_to_owner`
+  values are exact booleans when present; non-boolean values now produce
+  schema blockers and boolean `false` values remain proof-binding blockers.
+- Added direct TRON all-lanes adversarial coverage for string, numeric, and
+  false owner/signature binding flags, and pinned the markers in the
+  all-lanes route-canary scalar inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_route_canary_scalars or malformed_tron_route_canary_boolean_scalars"`
+    (`2` passed, `170` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_route_canary_scalar_gate"`
+    (`2` passed, `1060` deselected)
+
+## 2026-06-21 SCCP route-canary message-proof-used boolean diagnostics
+
+- Tightened all-lanes and active-launch release-checklist route-canary
+  validation so copied non-boolean `message_proof_used` values produce explicit
+  boolean-schema blockers, while `false` or missing values produce a
+  message-proof-used readiness blocker.
+- Added all-lanes string/numeric/false adversarial coverage, active readiness
+  exactness cases, a strict bundle recomputation regression, and source
+  inventory markers for the new boolean and semantic diagnostics.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_route_canary_scalars"`
+    (`1` passed, `170` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "route_canary_message_proof_used_exactly or route_canary_receipt_finalized_exactly or malformed_active_route_canary_metadata"`
+    (`3` passed, `1059` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_route_canary_scalar_gate or active_launch_checklist_schema"`
+    (`6` passed, `1056` deselected)
+
+## 2026-06-21 SCCP route-canary receipt-finalized boolean diagnostics
+
+- Tightened all-lanes and active-launch release-checklist route-canary
+  validation so copied non-boolean `receipt_block_finalized` values produce
+  explicit boolean-schema blockers before the finalized-receipt blocker is
+  emitted.
+- Added all-lanes string/numeric/false adversarial coverage and updated active
+  readiness/bundle exactness checks plus source-inventory markers so the
+  diagnostic remains pinned in both readiness and strict release-bundle gates.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_route_canary_scalars"`
+    (`1` passed, `170` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "route_canary_receipt_finalized_exactly or malformed_active_route_canary_metadata"`
+    (`2` passed, `1059` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_route_canary_scalar_gate"`
+    (`2` passed, `1059` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "active_launch_checklist_schema"`
+    (`4` passed, `1057` deselected)
+
+## 2026-06-21 SCCP route-canary evidence-bound boolean diagnostics
+
+- Tightened all-lanes and active-launch release-checklist route-canary
+  validation so copied non-boolean `evidence_bound` values produce explicit
+  boolean-schema blockers before the existing not-bound blocker is emitted.
+- Added direct all-lanes adversarial coverage for string and numeric
+  `evidence_bound` values, updated active readiness/bundle exactness tests, and
+  pinned the new diagnostic in the all-lanes route-canary scalar and active
+  checklist source inventories.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "malformed_route_canary_scalars"`
+    (`1` passed, `170` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k "route_canary_evidence_bound_exactly or malformed_active_route_canary_metadata"`
+    (`2` passed, `1059` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_route_canary_scalar_gate"`
+    (`2` passed, `1059` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "active_launch_checklist_schema"`
+    (`4` passed, `1057` deselected)
+
+## 2026-06-21 Soracloud mutation-signer checked Ed25519 fixtures
+
+- Added a Soracloud test helper that derives Ed25519 fixture keypairs through
+  `KeyPair::try_from_seed` and rejects weak all-zero seed material.
+- Replaced the mutation-signer provenance tests' direct `KeyPair::random()`
+  fixtures with deterministic checked fixture keys.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `cargo test -j 1 -p iroha_torii require_soracloud_mutation_signer --lib --features app_api -- --nocapture`
+    (`3` passed, `2576` filtered out)
+  - `cargo test -j 1 -p iroha_torii checked_test_keypair_uses_fallible_seed_derivation --lib --features app_api -- --nocapture`
+    (`1` passed, `2578` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 SCCP all-lanes checklist template-hash rejection
+
+- Tightened all-lanes release-checklist source-adapter gate validation so copied
+  Solana/TON gate summaries reject built-in source-material template hashes in
+  both `gate_hash` and `audit_hashes` before governed-deployment readiness can
+  pass.
+- Added adversarial checklist coverage that replays every Solana and TON
+  source-material template hash through the copied gate hash and through each
+  component audit hash, and pinned the guard in both the source-material
+  template-rejection and all-lanes checklist release inventories.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "source_gate_template_replays or source_gate_hash_role_replay or requires_source_gate_hash_and_audits"`
+    (`3` passed, `168` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_template_rejection"`
+    (`3` passed, `1058` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "all_lanes_release_checklist_exact_boolean"`
+    (`4` passed, `1057` deselected)
+
+## 2026-06-21 SCCP public source-gate template-hash rejection
+
+- Tightened release-bundle public cryptographic-evidence and embedded
+  all-lanes source-adapter gate validation so Solana/TON
+  `source_adapter_gate_hash` values cannot replay built-in source-material
+  template hashes, even when the gate audit map otherwise has a valid shape.
+- Added adversarial coverage for renderer-side and strict-verifier copied
+  public rows, and extended the SCCP source-material template-rejection release
+  inventory so the gate-hash guard is pinned separately from the older
+  audit-hash template guard.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "source_adapter_gate_template_hash_replays or source_adapter_gate_template_audit_replays"`
+    (`2` passed, `684` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_template_rejection"`
+    (`3` passed, `1058` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k "copied_crypto_source_adapter_gate_hash_role_replay or copied_crypto_source_adapter_gate_drift_before_render"`
+    (`2` passed, `684` deselected)
+
+## 2026-06-21 SCCP/BFV review fixups
+
+- Reconfirmed the deployment-bound BSC SCCP replay test against the stricter
+  evidence-shape gate: shape-invalid rebuilt verifier evidence now expects the
+  verifier-commitment helper to return `None`, while deployment matching remains
+  responsible for rejecting shape-valid deployment drift.
+- Corrected BFV release-audit schema claims so digest-only signoff, record, and
+  manifest validation no longer advertises arbitrary delayed nested-header
+  rejection. Byte-bearing audit package/body validation still rejects delayed
+  nested report/archive headers anywhere in the artifact body.
+- Refreshed the Soracloud full-bootstrap schema hashes:
+  material `3247f110658af438edee3729a334c2b62b71e613573bd3f6a73cc83c3a49a07b`,
+  execution `3af10acb40060d54c7897fdc94beee3e1a8fc2962697eecc37ee6759facff137`.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto --package iroha_data_model --package iroha_sccp`
+  - `cargo test -p iroha_crypto full_bootstrap_release_audit --lib -- --nocapture`
+    (`4` passed, `765` filtered out)
+  - `cargo test -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -p iroha_sccp bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter -- --nocapture`
+    (`1` passed, `268` filtered out)
+
+## 2026-06-21 SCCP all-lanes deployment template-hash rejection
+
+- Tightened all-lanes governed source-adapter deployment evidence validation so
+  deployment records reject built-in source-role template hashes directly,
+  including same-value material/deployment replays that would otherwise pass
+  deployment-to-material field equality.
+- Added adversarial all-lanes coverage across ETH, BSC, Solana, TON, and TRON
+  source-role template hashes, and pinned the deployment-side guard in the
+  SCCP source-material template-rejection release inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "source_adapter_deployment_template_hashes or source_material_template_hashes_for_all_lanes or source_adapter_audit_hash_template_replays"`
+    (`3` passed, `167` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_template_rejection"`
+    (`3` passed, `1057` deselected)
+
+## 2026-06-21 BFV refresh transcript all-zero seed preflight
+
+- Mirrored the crypto refresh-transcript seed policy in Soracloud public
+  transcript metadata validation: rotation and bootstrap transcript seeds now
+  reject all-zero byte strings before refresh-key recomputation or unrelated
+  bundle-shape checks can mask malformed inventory.
+- Pinned the same rejection at Core runtime policy admission so all-zero
+  transcript seeds fail through the public refresh-transcript verification path.
+- Updated the bootstrap-key zero-refresh public-input schema to advertise
+  `rejects_all_zero_transcript_seeds` and pinned the refreshed bootstrap-key
+  schema hash
+  `27b7ef19754cccb93f3c9eadf50d0628932b2fed661d4ce73d6d1bee9fec692b`.
+- Preserved field-level transcript validation diagnostics through the audited
+  full-bootstrap release-audit wrapper fallback path, and pinned all-zero
+  rotation transcript seed rejection before material or execution native proof
+  generation.
+- Validation passed:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_validate_rejects_all_zero_seeds --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_validate --lib -- --nocapture`
+    (`7` passed, `1556` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1562` filtered out)
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` passed, `5254` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_audited_prover_rejects_malformed_evaluation_key_context --lib -- --nocapture`
+    (`1` passed, `5435` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_malformed_evaluation_key_context --lib -- --nocapture`
+    (`1` passed, `5435` filtered out)
+
+## 2026-06-21 BFV release-audit package digest schema contract
+
+- Extended the Soracloud material and execution full-bootstrap public-input
+  schemas so release-audit packages explicitly advertise placeholder
+  record/manifest digest rejection and caller-pinned record/manifest digest
+  alias rejection.
+- Tightened the Core audited material and execution prover tests so the callable
+  release-audit wrappers prove caller-pinned record/manifest digest aliases
+  surface the crypto boundary's specific rejection before native proof
+  generation.
+- Pinned the refreshed schema hashes:
+  - material proof:
+    `3247f110658af438edee3729a334c2b62b71e613573bd3f6a73cc83c3a49a07b`
+  - execution proof:
+    `3af10acb40060d54c7897fdc94beee3e1a8fc2962697eecc37ee6759facff137`
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap --lib -- --nocapture`
+    (`2` passed, `1560` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_audited_prover_rejects_untrusted_or_stale_package --lib -- --nocapture`
+    (`1` passed, `5434` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_untrusted_or_stale_package --lib -- --nocapture`
+    (`1` passed, `5434` filtered out)
+
+## 2026-06-21 Torii hot-path benchmark checked key fixtures
+
+- Replaced the remaining direct `KeyPair::random()` and
+  `KeyPair::random_with_algorithm(...)` hot-path benchmark fixtures with
+  deterministic checked derivation through `KeyPair::try_from_seed`.
+- Added a BLS benchmark helper for the committed-block leader fixture while
+  keeping existing Ed25519 label-derived benchmark identities deterministic.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/benches/torii_hot_paths.rs`
+  - `cargo clippy -j 1 -p iroha_torii --benches --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 SCCP all-lanes deployment source-role diagnostics
+
+- Tightened all-lanes governed source-adapter deployment evidence validation so
+  deployment records independently report missing or foreign lane-specific
+  source-state verifier and source bridge emitter roles, even when the paired
+  source material is malformed in the same way.
+- Added adversarial all-lanes coverage for BSC deployment evidence with a
+  missing source bridge emitter address, Solana deployment evidence missing
+  source-state verifier material, and ETH deployment evidence carrying
+  foreign source-state verifier fields.
+- Pinned the deployment-side source-role helper and negative test in the SCCP
+  source-material role-validation release inventory.
+- Validation passed:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k "deployment_source_role_shape"`
+    (`1` passed, `168` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_role_validation"`
+    (`3` passed, `1057` deselected)
+
+## 2026-06-21 Torii DA receipt checked Ed25519 fixtures
+
+- Replaced the remaining direct `KeyPair::random()` DA receipt-log fixtures
+  with deterministic checked Ed25519 seed derivation in
+  `crates/iroha_torii/src/da/tests.rs`.
+- Added a guard proving the DA fixture helper uses fallible derivation and
+  rejects weak all-zero Ed25519 seed material.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/da/tests.rs`
+  - `cargo test -j 1 -p iroha_torii da_receipt --lib --features app_api -- --nocapture`
+    (`34` passed, `2544` filtered out)
+  - `cargo test -j 1 -p iroha_torii checked_fixture_ed25519_keypair --lib --features app_api -- --nocapture`
+    (`2` passed, `2576` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 SCCP deployment-bound source-role evidence shape gate
+
+- Tightened SCCP source-verifier evidence common-shape validation so evidence
+  that advertises source-adapter deployment context must also carry the
+  lane-required source-state verifier or source bridge emitter role shape before
+  the public adapter verifier commitment helper can return a verifier key.
+- Added rebuilt-wrapper adversarial coverage for deployment hash pairs without
+  deployment-bound source roles, missing BSC source bridge emitters, zero BSC
+  emitter code hashes, and Solana malformed deployment evidence whose
+  source-state or foreign-emitter shape now fails at the lower helper gate.
+- Updated the SCCP source-material role-validation release inventory and
+  roadmap/backlog notes for the stricter deployment-context invariant.
+- Validation passed:
+  - `cargo fmt --package iroha_sccp`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k "source_material_role_validation"`
+    (`3` passed, `1057` deselected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-role-shape cargo test -j 1 -p iroha_sccp source_chain_proof_material_requires_plan_specific_adapter_proofs -- --nocapture`
+    (`1` passed, `268` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-role-shape cargo test -j 1 -p iroha_sccp solana_source_verifier_material_requires_deployed_mainnet_profile_hashes -- --nocapture`
+    (`1` passed, `268` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-role-shape cargo test -j 1 -p iroha_sccp bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter -- --nocapture`
+    (`1` passed, `268` filtered out)
+
+## 2026-06-21 BFV execution native-AIR schema replay contract
+
+- Extended the Soracloud full-bootstrap execution public-input schema with a
+  `native_air_envelope` contract block that advertises native-AIR Merkle path
+  shape/root validation, FRI query-chain validation, and first-layer AIR-to-FRI
+  value binding.
+- Pinned the refreshed execution schema hash
+  `3af10acb40060d54c7897fdc94beee3e1a8fc2962697eecc37ee6759facff137`, keeping
+  release artifacts and audit evidence aligned with the Core verifier's
+  generated-envelope replay gates while the audited arithmetic proof-producing
+  backend remains the outstanding production item.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows --lib -- --nocapture`
+    (`1` passed, `5434` filtered out)
+
+## 2026-06-21 BFV release-audit reviewer private-key and package digest preflights
+
+- Hardened BFV full-bootstrap release-audit signing, record construction, and
+  package construction so reviewer private keys are exported through the checked
+  payload path, required to be Ed25519, rejected when empty or all-zero, and
+  re-parsed before public-key derivation or signing.
+- Added regressions proving all-zero Ed25519 reviewer private-key payloads fail
+  before public-key derivation, evidence derivation, or audit-byte validation.
+- Release-audit package validation and digesting now also reject known
+  placeholder record/manifest digest sentinels before canonical digest
+  recomputation or package encoding.
+- The governed-artifacts/trusted-reviewer/caller-pinned digest gate now rejects
+  caller-pinned package digests that alias the package record or manifest digest
+  before computing the outer package digest.
+- Validation passed:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
+    (`1` passed, `768` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit --lib -- --nocapture`
+    (`4` passed, `765` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1561` filtered out)
+
+## 2026-06-21 Torii runtime projection checked Ed25519 fixtures
+
+- Replaced runtime query-projection account fixtures with deterministic
+  Ed25519 accounts derived through `KeyPair::try_from_seed`, including the
+  32-account incomplete-shard fixture set.
+- Added a guard test that verifies the projection fixture helper emits Ed25519
+  keys, rejects weak all-zero Ed25519 fixture seeds, and produces distinct
+  accounts for distinct seeds.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/runtime.rs`
+  - `git diff --check -- crates/iroha_torii/src/runtime.rs`
+  - `cargo test -j 1 -p iroha_torii query_projection --lib --features app_api -- --nocapture`
+    (`16` passed, `2561` filtered out)
+  - `cargo test -j 1 -p iroha_torii checked_projection_ed25519_keypair --lib --features app_api -- --nocapture`
+    (`1` passed, `2576` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --features app_api --no-deps -- -D warnings`
+
+## 2026-06-21 BFV execution native-AIR verifier replay coverage
+
+- Added Core execution release-native AIR active-verifier and `zk-preverify`
+  poisoned-cache regressions for truncated sampled row Merkle paths, stale
+  row-path siblings, and first-layer FRI decommitment drift.
+- This pins the same authenticated opening replay at proof acceptance that the
+  execution native-AIR builder already replays before proof wrapping.
+- Validation passed:
+  - `cargo fmt --package iroha_core --package iroha_crypto --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-execution-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_opening_commitment_drift --lib -- --nocapture`
+    (`1` passed, `5434` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-execution-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark,zk-preverify soracloud_fhe_full_bootstrap_execution_preverify_does_not_bypass_release_native_air_opening_commitment_drift --lib -- --nocapture`
+    (`1` passed, `5462` filtered out)
+
+## 2026-06-22 Telemetry Test Snapshot Sync
+
+- Updated the telemetry unit tests that assert actor-maintained peer, block,
+  and transaction counters to read through `metrics_fresh()` instead of the
+  lazy `metrics()` snapshot. This preserves production lazy metrics behavior
+  while making the tests wait for the telemetry actor's sync barrier.
+- Validation passed:
+  - `cargo test -p iroha_core --features telemetry telemetry::tests::set_online_peers -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry telemetry::tests::commit_blocks -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry telemetry::tests::tx_counters_ignore_time_trigger_failures -- --nocapture`
+  - `cargo fmt --all`
+
 ## 2026-06-22 Kagemusha Current-Note Amount Trailing-Field Coverage
 
 - Added non-C# recursive-spend current-note amount vectors that append a
@@ -4361,14 +8024,17 @@ Last updated: 2026-06-22
   lanes: unpaired source-adapter deployment hashes, unpaired deployment receipt
   hashes, zero adapter-proof hashes, and zero adapter-transcript hashes all fail
   before the public adapter verifier commitment helper returns a verifier key.
+- The common evidence-shape gate now also rejects source-domain profile drift
+  before wrapper verification: source-chain label, proof-plan, finality-model,
+  and adapter-circuit mismatches fail even after OpenVerify is rebuilt.
 - Added malformed outer source-proof envelope coverage for the same helper:
   retargeted adapter transcripts and rebuilt OpenVerify wrappers cannot recover
   verifier commitments for outer version drift, zero finality height,
   source-event digest drift, or empty inclusion branches.
 - Added material-only catalog-drift coverage for the same rebuilt-wrapper path:
-  shape-valid source-chain label drift, trust-anchor hash drift, consensus-id
-  drift, and message-inclusion hash drift all fail before a verifier commitment
-  is returned.
+  shape-valid trust-anchor hash drift, consensus-id drift, message-inclusion
+  hash drift, and finality-policy id drift all fail before a verifier
+  commitment is returned.
 - Pinned the new Rust markers in the SCCP source-material role-validation
   release inventory.
 - Validation passed:
@@ -4552,9 +8218,10 @@ Last updated: 2026-06-22
 - Tightened BFV full-bootstrap release-audit artifact validation so audit
   report and evidence-archive bodies reject canonical audit artifact headers
   anywhere in the body, not only at the first non-whitespace byte.
-- Added signed-digest sentinel coverage for delayed nested audit headers and
-  updated Soracloud full-bootstrap public-input schemas to advertise the
-  delayed nested-header digest/body gates.
+- Kept digest-only sentinel coverage limited to exact nested-header and
+  whitespace-prefixed nested-header preimages, and updated Soracloud
+  full-bootstrap public-input schemas to advertise delayed nested-header
+  rejection only for byte-bearing audit artifact bodies.
 - Validation passed:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-release-reviewer CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit --lib -- --nocapture`
     (`4` passed, `765` filtered out)
@@ -6474,7 +10141,7 @@ Last updated: 2026-06-22
 - The Soracloud full-bootstrap execution public-input schema now advertises
   those release-audit proof-profile replay and AIR evaluation flags and pins the refreshed
   execution schema hash
-  `422ea75f1019d890a2c623cf1ae6b43380c9cdbabc7c53810728377ac4232453`.
+  `3af10acb40060d54c7897fdc94beee3e1a8fc2962697eecc37ee6759facff137`.
 - Validation passed:
   - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
     (`1` passed, `768` filtered out)
@@ -63656,11 +67323,11 @@ Last updated: 2026-06-22
   rejects the circuit-id mismatch.
 - Validation:
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
-    (`1` passed, `5424` filtered out)
+    (`1` passed, `5440` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
-    (`1` passed, `5424` filtered out)
+    (`1` passed, `5440` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
-    (`1` passed, `5424` filtered out)
+    (`1` passed, `5440` filtered out)
   - `cargo fmt --package iroha_core -- --check`
   - `git diff --check`
   - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
@@ -98134,8 +101801,8 @@ Last updated: 2026-06-22
   exact residual or bounded-noise metadata reject bounds above the registered
   RAM-LFE BFV capacity at the data-model layer.
 - Reused the BFV capacity preflight shared with FHE input-admission proof
-  validation, while preserving legacy rows where a bound without an explicit
-  mode means exact residual metadata.
+  validation. The legacy bound-without-mode fallback is superseded by the
+  2026-06-22 explicit bound-mode requirement.
 - Validation:
   - `cargo fmt -p iroha_data_model`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-state-bound CARGO_INCREMENTAL=0 cargo test -p iroha_data_model service_state_entry_validate_rejects_over_capacity_fhe_bounds --lib -- --nocapture`

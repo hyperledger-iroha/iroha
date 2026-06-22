@@ -436,15 +436,18 @@ fn apply_luminance_jitter(base: u8, jitter: u8, index: usize, attempt: u16, seed
         return base;
     }
     let span = u32::from(jitter) * 2 + 1;
-    let seed32 = (seed as u32) ^ ((seed >> 32) as u32);
-    let mixed = (index as u32)
+    let seed_bytes = seed.to_le_bytes();
+    let seed32 = u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]])
+        ^ u32::from_le_bytes([seed_bytes[4], seed_bytes[5], seed_bytes[6], seed_bytes[7]]);
+    let index32 = u32::try_from(index).unwrap_or(u32::MAX);
+    let mixed = index32
         .wrapping_mul(1_103_515_245)
         .wrapping_add(u32::from(attempt).wrapping_mul(12_345))
         .wrapping_add(seed32.rotate_left(u32::from(attempt % 31)))
         .rotate_left(u32::from(attempt % 17));
     let offset = i16::try_from(mixed % span).unwrap_or(i16::MAX) - i16::from(jitter);
     let value = i16::from(base) + offset;
-    value.clamp(0, 255) as u8
+    u8::try_from(value.clamp(0, i16::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
 fn resolve_grid_size(
@@ -818,5 +821,13 @@ mod tests {
         let decoded = PetalStreamDecoder::decode_samples(&samples_a, PetalStreamOptions::default())
             .expect("decode samples");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn luminance_jitter_folds_high_seed_bits_without_truncating() {
+        let low_seed = apply_luminance_jitter(128, 24, 7, 5, 1);
+        let high_seed = apply_luminance_jitter(128, 24, 7, 5, 2_u64 << 32);
+
+        assert_ne!(low_seed, high_seed);
     }
 }

@@ -3266,7 +3266,7 @@ def test_builds_solana_full_light_client_audit_role_proof_requests() -> None:
                 ["0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3"],
                 ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
                 ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-                ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+                ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
                 ["0xb1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"],
                 ["0x0300000000000000000000000000000000000000000000000000000000000000"],
                 ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -3296,7 +3296,7 @@ def test_builds_solana_full_light_client_audit_role_proof_requests() -> None:
                 ["0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0"],
                 ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
                 ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-                ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+                ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
                 ["0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"],
                 ["0x0300000000000000000000000000000000000000000000000000000000000000"],
                 ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -3323,7 +3323,7 @@ def test_builds_solana_full_light_client_audit_role_proof_requests() -> None:
                 ["0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8"],
                 ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
                 ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-                ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+                ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
                 ["0xd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"],
                 ["0x0300000000000000000000000000000000000000000000000000000000000000"],
                 ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -8526,7 +8526,16 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
     )
     assert (
         sccp_solana_full_light_client_gate_hash(audited_solana_deployment)
-        == "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9"
+        == "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02"
+    )
+    assert (
+        sccp_solana_full_light_client_gate_hash(
+            {
+                **audited_solana_deployment,
+                "deployment_receipt_hash": "0x" + "ab" * 32,
+            }
+        )
+        != sccp_solana_full_light_client_gate_hash(audited_solana_deployment)
     )
     with pytest.raises(ValueError, match="audited Solana -> SORA deployment"):
         sccp_solana_full_light_client_gate_hash(
@@ -8611,7 +8620,16 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
     )
     assert (
         sccp_ton_full_light_client_gate_hash(audited_ton_deployment)
-        == "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596"
+        == "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48"
+    )
+    assert (
+        sccp_ton_full_light_client_gate_hash(
+            {
+                **audited_ton_deployment,
+                "deployment_receipt_hash": "0x" + "ab" * 32,
+            }
+        )
+        != sccp_ton_full_light_client_gate_hash(audited_ton_deployment)
     )
     with pytest.raises(ValueError, match="audited TON -> SORA deployment"):
         sccp_ton_full_light_client_gate_hash(sample_source_record_input(SCCP_DOMAIN_TON))

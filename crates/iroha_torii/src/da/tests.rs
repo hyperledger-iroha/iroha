@@ -96,8 +96,24 @@ fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
 }
 
+fn checked_fixture_ed25519_keypair(seed: u8) -> KeyPair {
+    checked_fixture_keypair(vec![seed; 32], Algorithm::Ed25519)
+}
+
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("test fixture random key generation should succeed")
+}
+
+#[test]
+fn checked_fixture_ed25519_keypair_uses_fallible_seed_derivation() {
+    assert_eq!(
+        checked_fixture_ed25519_keypair(0x50).algorithm(),
+        Algorithm::Ed25519
+    );
+    assert!(
+        KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+    );
 }
 
 #[test]
@@ -4956,7 +4972,7 @@ fn persist_da_receipt_writes_and_is_idempotent() {
 #[test]
 fn persist_da_receipt_rejects_fingerprint_storage_ticket_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x60);
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAA);
     let wrong_fingerprint = test_fingerprint(0xCC);
 
@@ -4985,7 +5001,7 @@ fn persist_da_receipt_rejects_spool_dir_symlink() {
     fs::create_dir(&target).expect("create target directory");
     let spool = temp_dir.path().join("receipt-write-link");
     symlink(&target, &spool).expect("create receipt spool symlink");
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x61);
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAA);
     let fingerprint = receipt_fingerprint(&receipt);
 
@@ -5281,7 +5297,7 @@ fn da_receipt_log_open_rejects_spool_dir_symlink() {
     let spool = temp_dir.path().join("receipt-log-link");
     symlink(&target, &spool).expect("create receipt log symlink");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x62);
 
     let err = match DaReceiptLog::open(
         spool.clone(),
@@ -5432,7 +5448,7 @@ fn da_receipt_log_recovery_rejects_filename_fingerprint_mismatch_in_canonical_pa
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 29);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x63);
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION,
@@ -5481,7 +5497,7 @@ fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 19);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x64);
     let log = DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5524,7 +5540,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 20);
     let cursor_store =
         Arc::new(ReplayCursorStore::empty(cursor_dir.path().to_path_buf()).expect("cursor store"));
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x65);
     let log = DaReceiptLog::open(
         receipt_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5577,7 +5593,7 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     let receipt_dir = tempdir().expect("receipt dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 21);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x66);
     let log = DaReceiptLog::open(
         receipt_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5668,7 +5684,7 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
     let receipt_dir = tempdir().expect("receipt dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x67);
     let log = DaReceiptLog::open(
         receipt_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5868,7 +5884,7 @@ fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open(
     )
     .expect("PDP commitment");
     let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode PDP commitment");
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x68);
     let receipt = build_receipt(
         &signer,
         &request,
@@ -6029,7 +6045,7 @@ fn da_receipt_log_reloads_from_disk() {
 fn da_receipt_log_rejects_sequence_gap_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 18);
-    let signer = KeyPair::random();
+    let signer = checked_fixture_ed25519_keypair(0x69);
 
     for (sequence, seed) in [(1, 0x94), (3, 0x95)] {
         let receipt = test_receipt(

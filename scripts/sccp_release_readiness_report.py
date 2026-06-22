@@ -24,6 +24,26 @@ ACTIVE_LAUNCH_DOMAIN = 1
 ACTIVE_LAUNCH_CHAIN = "eth"
 ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
 ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
+ALL_LANES_CHAIN_BY_DOMAIN = {
+    1: "eth",
+    2: "bsc",
+    3: "sol",
+    4: "ton",
+    5: "tron",
+}
+READINESS_REPORT_PUBLIC_FIELDS = (
+    "production_ready",
+    "evidence",
+    "release_checklist",
+    "corridor",
+    "blockers",
+    "inputs",
+    "input_artifacts",
+    "native_evm_prover_bundle",
+    "source_inventory",
+    "cryptographic_evidence",
+    "user_prover_submission_surfaces",
+)
 ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
     "bsc": "`eth_chainId == 0x38` (56)",
@@ -2422,6 +2442,25 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "required_phases": USER_PROVER_CHAIN_PHASES,
     },
 )
+USER_PROVER_REQUIRED_LANE_BACKENDS = {
+    surface["lanes"]: surface["proof_backend"]
+    for surface in USER_PROVER_SUBMISSION_SURFACES
+}
+USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE = {
+    surface["lanes"]: surface["on_chain_submission"]
+    for surface in USER_PROVER_SUBMISSION_SURFACES
+}
+USER_PROVER_REQUIRED_PHASES_BY_LANE = {
+    surface["lanes"]: tuple(surface["required_phases"])
+    for surface in USER_PROVER_SUBMISSION_SURFACES
+}
+USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
+    surface["lanes"]: {
+        sdk: tuple(symbols)
+        for sdk, symbols in surface["sdk_helper_symbols_by_sdk"].items()
+    }
+    for surface in USER_PROVER_SUBMISSION_SURFACES
+}
 
 
 def _load_all_lanes_module() -> Any:
@@ -2629,6 +2668,44 @@ def _is_nonzero_hex32(value: Any) -> bool:
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
 
+def _is_canonical_sha256_text(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(symbol in "0123456789abcdef" for symbol in value)
+    )
+
+
+def _native_evm_prover_artifact_metadata_blockers(
+    artifact: Any,
+    label: str,
+) -> list[str]:
+    prefix = f"native EVM Groth16 prover bundle {label}"
+    if not isinstance(artifact, dict):
+        return [f"{prefix} artifact metadata must be an object"]
+
+    blockers: list[str] = []
+    artifact_path = artifact.get("path")
+    if (
+        not isinstance(artifact_path, str)
+        or not artifact_path
+        or artifact_path.strip() != artifact_path
+        or _path_control_character(artifact_path) is not None
+        or _path_markdown_unsafe_character(artifact_path) is not None
+        or _path_percent_encoded_traversal(artifact_path) is not None
+    ):
+        blockers.append(f"{prefix} artifact path metadata is invalid")
+
+    artifact_bytes = artifact.get("bytes")
+    if type(artifact_bytes) is not int or artifact_bytes < 0:
+        blockers.append(f"{prefix} artifact bytes metadata is invalid")
+
+    if not _is_canonical_sha256_text(artifact.get("sha256")):
+        blockers.append(f"{prefix} artifact sha256 metadata is invalid")
+
+    return blockers
+
+
 def _is_hex32(value: Any) -> bool:
     if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
         return False
@@ -2742,6 +2819,14 @@ def _native_evm_prover_payload_artifact(
         return None, blockers
     except ValueError:
         blockers.append(f"{prefix} artifact path metadata is invalid")
+        return None, blockers
+
+    metadata_blockers = _native_evm_prover_artifact_metadata_blockers(
+        artifact,
+        label,
+    )
+    if metadata_blockers:
+        blockers.extend(metadata_blockers)
         return None, blockers
 
     if artifact["bytes"] == 0:
@@ -3032,6 +3117,14 @@ def _native_evm_prover_parity_fixture_status(
         blockers.append(f"{prefix} artifact path metadata is invalid")
         return None, blockers
 
+    metadata_blockers = _native_evm_prover_artifact_metadata_blockers(
+        artifact,
+        label,
+    )
+    if metadata_blockers:
+        blockers.extend(metadata_blockers)
+        return None, blockers
+
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
     elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES:
@@ -3195,6 +3288,14 @@ def _native_evm_prover_self_test_status(
         return None, blockers
     except ValueError:
         blockers.append(f"{prefix} artifact path metadata is invalid")
+        return None, blockers
+
+    metadata_blockers = _native_evm_prover_artifact_metadata_blockers(
+        artifact,
+        label,
+    )
+    if metadata_blockers:
+        blockers.extend(metadata_blockers)
         return None, blockers
 
     if artifact["bytes"] == 0:
@@ -4502,8 +4603,27 @@ def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | 
     return None
 
 
-def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
-    path = Path(str(artifact["path"]))
+def _phase_transcript_artifact_path(artifact: Any) -> tuple[Path | None, list[str]]:
+    if not isinstance(artifact, dict):
+        return None, ["evidence artifact cannot be checked: malformed artifact row"]
+    artifact_path = artifact.get("path")
+    if not isinstance(artifact_path, str) or not artifact_path:
+        return None, ["evidence artifact cannot be checked: missing artifact path"]
+    if (
+        artifact_path.strip() != artifact_path
+        or _path_control_character(artifact_path) is not None
+        or _path_markdown_unsafe_character(artifact_path) is not None
+        or _path_percent_encoded_traversal(artifact_path) is not None
+    ):
+        return None, ["evidence artifact cannot be checked: unsafe artifact path"]
+    return Path(artifact_path), []
+
+
+def _phase_transcript_errors(phase: str, artifact: Any) -> list[str]:
+    path, artifact_path_errors = _phase_transcript_artifact_path(artifact)
+    if artifact_path_errors:
+        return artifact_path_errors
+    assert path is not None
     try:
         transcript = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -4903,6 +5023,22 @@ def _active_launch_route_canary_metadata_blockers(
         blockers.append(
             f"{lane_label}: route canary receipt block number must be a positive integer"
         )
+    if (
+        "message_proof_used" in canary
+        and type(canary.get("message_proof_used")) is not bool
+    ):
+        blockers.append(
+            f"{lane_label}: route canary message_proof_used must be boolean"
+        )
+    if canary.get("message_proof_used") is not True:
+        blockers.append(f"{lane_label}: route canary message proof must be used")
+    if (
+        "receipt_block_finalized" in canary
+        and type(canary.get("receipt_block_finalized")) is not bool
+    ):
+        blockers.append(
+            f"{lane_label}: route canary receipt_block_finalized must be boolean"
+        )
     if canary.get("receipt_block_finalized") is not True:
         blockers.append(f"{lane_label}: route canary receipt block must be finalized")
     return blockers
@@ -5166,6 +5302,13 @@ def _active_launch_release_checklist(
     canary_blockers.extend(
         _active_launch_route_canary_metadata_blockers(lane_label, canary)
     )
+    if (
+        "evidence_bound" in canary
+        and type(canary.get("evidence_bound")) is not bool
+    ):
+        canary_blockers.append(
+            f"{lane_label}: route canary evidence_bound must be boolean"
+        )
     if canary.get("evidence_bound") is not True:
         canary_blockers.append(f"{lane_label}: route canary evidence is not bound")
 
@@ -5248,6 +5391,23 @@ def _submission_surfaces(phase_status: dict[str, str]) -> list[dict[str, Any]]:
         surface["validation_blockers"] = blockers
         surfaces.append(surface)
     return surfaces
+
+
+def _release_checklist_ready_value(release_checklist: Any) -> bool:
+    """Return exact release-checklist readiness without truthy coercion."""
+    return (
+        isinstance(release_checklist, dict)
+        and release_checklist.get("ready") is True
+    )
+
+
+def _release_checklist_root_blockers(release_checklist: Any) -> list[str]:
+    """Return schema blockers for malformed release-checklist roots."""
+    if not isinstance(release_checklist, dict):
+        return ["release checklist must be an object"]
+    if type(release_checklist.get("ready")) is not bool:
+        return ["release checklist ready must be boolean"]
+    return []
 
 
 def _build_report(
@@ -6051,6 +6211,9 @@ def _build_report(
         },
     }
     release_checklist = _active_launch_release_checklist(evidence, native_prover_bundle)
+    release_checklist_root_blockers = _release_checklist_root_blockers(
+        release_checklist
+    )
     failed_phases = [
         phase for phase, status in phase_status.items() if status != "passed"
     ]
@@ -6072,7 +6235,8 @@ def _build_report(
         and not invalid_phase_evidence
     )
     production_ready = (
-        release_checklist["ready"] is True
+        _release_checklist_ready_value(release_checklist)
+        and not release_checklist_root_blockers
         and corridor_ready
         and not launch_scope_constant_gate_blockers
         and not ethereum_launch_policy_selector_gate_blockers
@@ -6147,6 +6311,7 @@ def _build_report(
         and not tron_deploy_operator_boolean_gate_blockers
     )
     blockers = _active_launch_blockers(evidence)
+    blockers.extend(release_checklist_root_blockers)
     blockers.extend(
         _native_evm_validation_blockers(
             native_prover_bundle.get("validation_blockers"),
@@ -6269,7 +6434,9 @@ def _build_report(
     }
 
 
-def _record_flags(records: dict[str, bool]) -> str:
+def _record_flags(records: Any) -> str:
+    if not isinstance(records, dict):
+        records = {}
     labels = {
         "source_verifier_material": "source",
         "source_adapter_deployment": "deploy",
@@ -6279,6 +6446,32 @@ def _record_flags(records: dict[str, bool]) -> str:
     return ", ".join(
         f"{label}={'yes' if records.get(field) is True else 'no'}"
         for field, label in labels.items()
+    )
+
+
+def _lane_readiness_markdown_cells(
+    lane: Any,
+) -> tuple[str, str, str, str, Any]:
+    if not isinstance(lane, dict):
+        return "-", "-", "blocked", _record_flags({}), [
+            "lane summary must be an object"
+        ]
+
+    domain = lane.get("domain")
+    chain = lane.get("chain")
+    domain_cell = str(domain) if type(domain) is int else "-"
+    chain_cell = (
+        f"`{chain}`"
+        if type(domain) is int and chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        else "-"
+    )
+    lane_status = "ready" if lane.get("production_ready") is True else "blocked"
+    return (
+        domain_cell,
+        chain_cell,
+        lane_status,
+        _record_flags(lane.get("records")),
+        lane.get("blockers"),
     )
 
 
@@ -6366,19 +6559,34 @@ def _cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _hash_cell(value: Any) -> str:
-    if isinstance(value, str) and value:
+    if _is_nonzero_hex32(value):
         return f"`{value}`"
     return "-"
+
+
+def _markdown_text_cell(value: Any) -> str:
+    if (
+        isinstance(value, str)
+        and _public_blocker_text_issue(value) is None
+        and not any(character.isspace() for character in value)
+    ):
+        return f"`{value}`"
+    return "`-`"
 
 
 def _audit_hashes_cell(value: Any) -> str:
     if not isinstance(value, dict) or not value:
         return "-"
-    return "<br>".join(
-        f"`{key}`: `{audit_hash}`"
-        for key, audit_hash in sorted(value.items())
-        if isinstance(key, str) and isinstance(audit_hash, str)
-    ) or "-"
+    rows: list[str] = []
+    for key, audit_hash in sorted(value.items(), key=lambda item: str(item[0])):
+        if (
+            not isinstance(key, str)
+            or _public_blocker_text_issue(key) is not None
+            or not _is_nonzero_hex32(audit_hash)
+        ):
+            return "`<invalid source_adapter_gate_audit_hashes>`"
+        rows.append(f"`{key}`: `{audit_hash}`")
+    return "<br>".join(rows) if rows else "-"
 
 
 def _integer_cell(value: Any) -> str:
@@ -6391,6 +6599,55 @@ def _boolean_cell(value: Any) -> str:
     if type(value) is bool:
         return "`true`" if value else "`false`"
     return "-"
+
+
+def _cryptographic_evidence_markdown_row_cells(row: Any) -> list[str]:
+    if not isinstance(row, dict):
+        row = {}
+    domain = row.get("domain")
+    chain = row.get("chain")
+    domain_cell = str(domain) if type(domain) is int else "-"
+    chain_cell = (
+        f"`{chain}`"
+        if type(domain) is int and chain == ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+        else "-"
+    )
+    canary_source = row.get("route_canary_evidence_source")
+    safe_canary_source = (
+        canary_source
+        if isinstance(canary_source, str)
+        and _public_blocker_text_issue(canary_source) is None
+        else "-"
+    )
+    if row.get("route_canary_evidence_bound") is not True:
+        safe_canary_source = f"{safe_canary_source} (unbound)"
+    source_gate = _hash_cell(row.get("source_adapter_gate_hash"))
+    if row.get("source_adapter_gate_required") is False and source_gate == "-":
+        source_gate = "not required"
+    return [
+        domain_cell,
+        chain_cell,
+        _markdown_text_cell(row.get("evm_source_rpc_chain_id")),
+        _markdown_text_cell(row.get("evm_source_block_tag")),
+        _markdown_text_cell(row.get("evm_destination_rpc_chain_id")),
+        _markdown_text_cell(row.get("evm_destination_block_tag")),
+        _hash_cell(row.get("source_verifier_material_hash")),
+        _hash_cell(row.get("source_adapter_engine_deployment_hash")),
+        _hash_cell(row.get("destination_binding_hash")),
+        source_gate,
+        _audit_hashes_cell(row.get("source_adapter_gate_audit_hashes")),
+        _hash_cell(row.get("route_allowlist_hash")),
+        _hash_cell(row.get("route_canary_evidence_hash")),
+        f"`{safe_canary_source}`",
+        _hash_cell(row.get("route_canary_transaction_hash")),
+        _integer_cell(row.get("route_canary_receipt_block_number")),
+        _hash_cell(row.get("route_canary_receipt_block_hash")),
+        _boolean_cell(row.get("route_canary_receipt_block_finalized")),
+        _hash_cell(row.get("route_canary_block_receipts_root")),
+        _hash_cell(row.get("route_canary_message_id")),
+        _integer_cell(row.get("route_canary_block_number")),
+        _integer_cell(row.get("route_canary_block_timestamp")),
+    ]
 
 
 def _helper_symbol_is_markdown_safe(symbol: Any) -> bool:
@@ -6413,15 +6670,27 @@ def _helper_symbol_is_markdown_safe(symbol: Any) -> bool:
     return symbol[0].isalpha() and all(character in allowed for character in symbol)
 
 
-def _sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
+def _sdk_helper_sets_cell(surface: Any) -> str:
+    if not isinstance(surface, dict):
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
+    lanes = surface.get("lanes")
+    expected_helper_sets = (
+        USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    if expected_helper_sets is None:
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
     helper_sets = surface.get("sdk_helper_symbols_by_sdk")
     if not isinstance(helper_sets, dict):
         return "`<invalid sdk_helper_symbols_by_sdk>`"
+    if set(helper_sets) != set(expected_helper_sets):
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
     rows: list[str] = []
-    for sdk in (*USER_PROVER_SDK_PHASES, EVM_NATIVE_DOTNET_PHASE):
+    for sdk, expected_helpers in expected_helper_sets.items():
         helpers = helper_sets.get(sdk)
-        if not isinstance(helpers, list):
-            continue
+        if not isinstance(helpers, list) or tuple(helpers) != expected_helpers:
+            return "`<invalid sdk_helper_symbols_by_sdk>`"
         if any(not _helper_symbol_is_markdown_safe(helper) for helper in helpers):
             return "`<invalid sdk_helper_symbols_by_sdk>`"
         helper_text = ", ".join(f"`{helper}`" for helper in helpers)
@@ -6461,6 +6730,126 @@ def _user_prover_validation_blockers_cell(value: Any) -> str:
     return "<br>".join(value)
 
 
+def _user_prover_surface_code_cell(
+    value: Any,
+    *,
+    field_label: str,
+    expected: str | None,
+) -> str:
+    if (
+        isinstance(value, str)
+        and expected is not None
+        and value == expected
+        and _public_blocker_text_issue(value) is None
+        and not any(character.isspace() for character in value)
+    ):
+        return f"`{value}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _user_prover_surface_text_cell(
+    value: Any,
+    *,
+    field_label: str,
+    expected: str | None,
+) -> str:
+    if (
+        isinstance(value, str)
+        and expected is not None
+        and value == expected
+        and _public_blocker_text_issue(value) is None
+    ):
+        return value
+    return f"`<invalid {field_label}>`"
+
+
+def _user_prover_surface_required_phases_cell(surface: dict[str, Any]) -> str:
+    lanes = surface.get("lanes")
+    expected_phases = (
+        USER_PROVER_REQUIRED_PHASES_BY_LANE.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    required_phases = surface.get("required_phases")
+    if (
+        expected_phases is not None
+        and isinstance(required_phases, list)
+        and tuple(required_phases) == expected_phases
+        and all(
+            isinstance(phase, str)
+            and _public_blocker_text_issue(phase) is None
+            and not any(character.isspace() for character in phase)
+            for phase in required_phases
+        )
+    ):
+        return ", ".join(f"`{phase}`" for phase in required_phases)
+    return "`<invalid required_phases>`"
+
+
+def _user_prover_surface_validation_cell(surface: dict[str, Any]) -> str:
+    validation_status = surface.get("validation_status")
+    validation = validation_status if validation_status in {"passed", "blocked"} else "blocked"
+    validation_issues: list[str] = []
+    if validation_status not in {"passed", "blocked"}:
+        validation_issues.append("`<invalid validation_status>`")
+    validation_blockers = surface.get("validation_blockers")
+    if not isinstance(validation_blockers, list) or validation_blockers:
+        validation_issues.append(
+            _user_prover_validation_blockers_cell(validation_blockers)
+        )
+    if validation_issues:
+        validation += ": " + "<br>".join(validation_issues)
+    return validation
+
+
+def _user_prover_surface_markdown_row_cells(surface: Any) -> list[str]:
+    if not isinstance(surface, dict):
+        return [
+            "`<invalid lanes>`",
+            "`<invalid proof_backend>`",
+            "`<invalid sdk_helper_symbols_by_sdk>`",
+            "`<invalid on_chain_submission>`",
+            "`<invalid required_phases>`",
+            "blocked: submission surface must be an object",
+        ]
+    lanes = surface.get("lanes")
+    expected_backend = (
+        USER_PROVER_REQUIRED_LANE_BACKENDS.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    expected_submission = (
+        USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE.get(lanes)
+        if isinstance(lanes, str)
+        else None
+    )
+    return [
+        _user_prover_surface_code_cell(
+            lanes,
+            field_label="lanes",
+            expected=(
+                lanes
+                if isinstance(lanes, str)
+                and lanes in USER_PROVER_REQUIRED_LANE_BACKENDS
+                else None
+            ),
+        ),
+        _user_prover_surface_code_cell(
+            surface.get("proof_backend"),
+            field_label="proof_backend",
+            expected=expected_backend,
+        ),
+        _sdk_helper_sets_cell(surface),
+        _user_prover_surface_text_cell(
+            surface.get("on_chain_submission"),
+            field_label="on_chain_submission",
+            expected=expected_submission,
+        ),
+        _user_prover_surface_required_phases_cell(surface),
+        _user_prover_surface_validation_cell(surface),
+    ]
+
+
 def _native_evm_validation_blockers_cell(value: Any) -> str:
     field_label = "validation_blockers"
     if not isinstance(value, list):
@@ -6480,6 +6869,469 @@ def _native_evm_validation_blockers_cell(value: Any) -> str:
     return "<br>".join(value)
 
 
+def _native_evm_markdown_path_is_safe(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value.strip() == value
+        and value.isascii()
+        and _path_control_character(value) is None
+        and _path_markdown_unsafe_character(value) is None
+        and _path_percent_encoded_traversal(value) is None
+        and not any(
+            marker in value.lower()
+            for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS
+        )
+    )
+
+
+def _native_evm_markdown_text_is_safe(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and _public_blocker_text_issue(value) is None
+        and not any(character.isspace() for character in value)
+    )
+
+
+def _native_evm_artifact_path_cell(
+    artifact: Any,
+    *,
+    field_label: str,
+) -> str:
+    if not isinstance(artifact, dict):
+        return "-"
+    artifact_path = artifact.get("path")
+    if _native_evm_markdown_path_is_safe(artifact_path):
+        return f"`{artifact_path}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _native_evm_artifact_hash_cell(
+    artifact: Any,
+    *,
+    field_label: str,
+) -> str:
+    if not isinstance(artifact, dict):
+        return "-"
+    artifact_hash = artifact.get("sha256")
+    if _is_canonical_sha256_text(artifact_hash):
+        return f"`{artifact_hash}`"
+    return f"`<invalid {field_label}.sha256>`"
+
+
+def _native_evm_hex32_cell(value: Any, *, field_label: str) -> str:
+    if value is None:
+        return "-"
+    if _is_nonzero_hex32(value):
+        return f"`{value}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _native_evm_support_artifact_cell(
+    artifact: Any,
+    *,
+    field_label: str,
+) -> str:
+    if not isinstance(artifact, dict):
+        return "-"
+    artifact_path = artifact.get("path")
+    artifact_hash = artifact.get("sha256")
+    if (
+        _native_evm_markdown_path_is_safe(artifact_path)
+        and _is_canonical_sha256_text(artifact_hash)
+    ):
+        return f"`{artifact_path}`<br>`{artifact_hash}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _native_evm_sdk_artifacts_cell(value: Any) -> str:
+    if not isinstance(value, list) or not value:
+        return "-"
+    by_sdk: dict[str, dict[str, Any]] = {}
+    for row in value:
+        if not isinstance(row, dict):
+            return "`<invalid sdk_artifacts>`"
+        sdk = row.get("sdk")
+        if (
+            not isinstance(sdk, str)
+            or sdk in by_sdk
+            or sdk not in NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS
+        ):
+            return "`<invalid sdk_artifacts>`"
+        by_sdk[sdk] = row
+    if set(by_sdk) != set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        return "`<invalid sdk_artifacts>`"
+    rows: list[str] = []
+    for sdk in sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        row = by_sdk[sdk]
+        implementation = row.get("implementation")
+        expected_implementation = NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS[sdk]
+        implementation_hash = row.get("implementation_hash")
+        if (
+            implementation != expected_implementation
+            or not _native_evm_markdown_text_is_safe(sdk)
+            or not _native_evm_markdown_text_is_safe(implementation)
+            or not _is_nonzero_hex32(implementation_hash)
+        ):
+            return "`<invalid sdk_artifacts>`"
+        rows.append(f"`{sdk}`: `{implementation}` `{implementation_hash}`")
+    return "<br>".join(rows)
+
+
+def _native_evm_bundle_status_cell(native_bundle: dict[str, Any]) -> str:
+    status = native_bundle.get("validation_status")
+    return status if status in {"passed", "blocked"} else "blocked"
+
+
+def _native_evm_bundle_blockers_cell(native_bundle: dict[str, Any]) -> str:
+    blockers = _native_evm_validation_blockers_cell(
+        native_bundle.get("validation_blockers")
+    )
+    if native_bundle.get("validation_status") in {"passed", "blocked"}:
+        return blockers
+    invalid_status = "`<invalid validation_status>`"
+    if blockers == "-":
+        return invalid_status
+    return invalid_status + "<br>" + blockers
+
+
+def _native_evm_bundle_markdown_row_cells(native_bundle: Any) -> list[str]:
+    if not isinstance(native_bundle, dict):
+        return [
+            "no",
+            "blocked",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "native EVM prover bundle must be an object",
+        ]
+    artifact = native_bundle.get("artifact")
+    return [
+        "yes" if native_bundle.get("required") is True else "no",
+        _native_evm_bundle_status_cell(native_bundle),
+        _native_evm_artifact_path_cell(artifact, field_label="artifact"),
+        _native_evm_artifact_hash_cell(artifact, field_label="artifact"),
+        _native_evm_hex32_cell(
+            native_bundle.get("proof_artifact_hash"),
+            field_label="proof_artifact_hash",
+        ),
+        _native_evm_hex32_cell(
+            native_bundle.get("proving_key_hash"),
+            field_label="proving_key_hash",
+        ),
+        _native_evm_hex32_cell(
+            native_bundle.get("verifier_key_hash"),
+            field_label="verifier_key_hash",
+        ),
+        _native_evm_hex32_cell(
+            native_bundle.get("destination_binding_hash"),
+            field_label="destination_binding_hash",
+        ),
+        _native_evm_support_artifact_cell(
+            native_bundle.get("cross_sdk_fixture_parity_artifact"),
+            field_label="cross_sdk_fixture_parity_artifact",
+        ),
+        _native_evm_support_artifact_cell(
+            native_bundle.get("native_prover_self_test_artifact"),
+            field_label="native_prover_self_test_artifact",
+        ),
+        _native_evm_sdk_artifacts_cell(native_bundle.get("sdk_artifacts")),
+        _native_evm_bundle_blockers_cell(native_bundle),
+    ]
+
+
+def _source_inventory_gate_is_markdown_safe(gate: Any) -> bool:
+    if not isinstance(gate, str) or not gate:
+        return False
+    if _path_control_character(gate) is not None:
+        return False
+    if not gate.isascii() or gate.strip() != gate:
+        return False
+    if any(character.isspace() for character in gate):
+        return False
+    if _path_markdown_unsafe_character(gate) is not None:
+        return False
+    if any(marker in gate.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return False
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789_")
+    return (
+        all(character in allowed for character in gate)
+        and not gate.startswith("_")
+        and not gate.endswith("_")
+    )
+
+
+def _source_inventory_gate_cell(gate: Any) -> str:
+    if _source_inventory_gate_is_markdown_safe(gate):
+        return f"`{gate}`"
+    return "`<invalid gate>`"
+
+
+def _source_inventory_status_cell(inventory: Any) -> str:
+    if isinstance(inventory, dict) and inventory.get("validation_status") in {
+        "passed",
+        "blocked",
+    }:
+        return inventory["validation_status"]
+    return "blocked"
+
+
+def _source_inventory_blockers_cell(inventory: Any) -> str:
+    if not isinstance(inventory, dict):
+        return "source inventory gate must be an object"
+    blockers = _markdown_string_list_cell(
+        inventory.get("validation_blockers"),
+        field_label="validation_blockers",
+    )
+    if inventory.get("validation_status") in {"passed", "blocked"}:
+        return blockers
+    if blockers == "-":
+        return "`<invalid validation_status>`"
+    return "`<invalid validation_status>`<br>" + blockers
+
+
+def _source_inventory_markdown_rows(source_inventory: Any) -> list[list[str]]:
+    if not isinstance(source_inventory, dict):
+        return [
+            [
+                "`<invalid gate>`",
+                "blocked",
+                "source inventory must be an object",
+            ]
+        ]
+    rows: list[list[str]] = []
+    for gate, inventory in sorted(source_inventory.items(), key=lambda item: str(item[0])):
+        rows.append(
+            [
+                _source_inventory_gate_cell(gate),
+                _source_inventory_status_cell(inventory),
+                _source_inventory_blockers_cell(inventory),
+            ]
+        )
+    return rows
+
+
+def _release_checklist_item_id_cell(item: Any) -> str:
+    if isinstance(item, dict) and _source_inventory_gate_is_markdown_safe(
+        item.get("id")
+    ):
+        return f"`{item['id']}`"
+    return "`<invalid id>`"
+
+
+def _release_checklist_item_status_cell(item: Any) -> str:
+    return "ready" if isinstance(item, dict) and item.get("ready") is True else "blocked"
+
+
+def _release_checklist_item_blockers_cell(
+    item: Any,
+    *,
+    max_blockers_per_lane: int,
+) -> str:
+    if not isinstance(item, dict):
+        return "release checklist item must be an object"
+    item_blockers = item.get("blockers")
+    blockers = (
+        item_blockers[:max_blockers_per_lane]
+        if isinstance(item_blockers, list)
+        else item_blockers
+    )
+    blocker_text = _markdown_string_list_cell(blockers, field_label="blockers")
+    if (
+        isinstance(item_blockers, list)
+        and len(item_blockers) > max_blockers_per_lane
+    ):
+        remaining = len(item_blockers) - max_blockers_per_lane
+        blocker_text += f"<br>... {remaining} more"
+    return blocker_text
+
+
+def _release_checklist_markdown_rows(
+    release_checklist: Any,
+    *,
+    max_blockers_per_lane: int,
+) -> list[list[str]]:
+    if not isinstance(release_checklist, dict):
+        return [["`<invalid id>`", "blocked", "release checklist must be an object"]]
+    items = release_checklist.get("items")
+    if not isinstance(items, list):
+        return [
+            [
+                "`<invalid id>`",
+                "blocked",
+                "release checklist items must be a list",
+            ]
+        ]
+    return [
+        [
+            _release_checklist_item_id_cell(item),
+            _release_checklist_item_status_cell(item),
+            _release_checklist_item_blockers_cell(
+                item,
+                max_blockers_per_lane=max_blockers_per_lane,
+            ),
+        ]
+        for item in items
+    ]
+
+
+def _cryptographic_evidence_markdown_rows(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return [_cryptographic_evidence_markdown_row_cells(value)]
+    return [_cryptographic_evidence_markdown_row_cells(row) for row in value]
+
+
+def _user_prover_surface_markdown_rows(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return [_user_prover_surface_markdown_row_cells(value)]
+    return [_user_prover_surface_markdown_row_cells(surface) for surface in value]
+
+
+def _markdown_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
+    if not isinstance(artifact, dict):
+        return f"`<invalid {field_label}>`"
+    artifact_path = artifact.get("path")
+    if _native_evm_markdown_path_is_safe(artifact_path):
+        return f"`{artifact_path}`"
+    return f"`<invalid {field_label}>`"
+
+
+def _markdown_artifact_bytes_cell(artifact: Any) -> str:
+    if isinstance(artifact, dict) and type(artifact.get("bytes")) is int:
+        artifact_bytes = artifact["bytes"]
+        if artifact_bytes > 0:
+            return str(artifact_bytes)
+    return "`<invalid bytes>`"
+
+
+def _markdown_artifact_hash_cell(artifact: Any, *, field_label: str) -> str:
+    invalid_label = (
+        field_label if field_label == "sha256" else f"{field_label}.sha256"
+    )
+    if not isinstance(artifact, dict):
+        return f"`<invalid {invalid_label}>`"
+    artifact_hash = artifact.get("sha256")
+    if _is_canonical_sha256_text(artifact_hash):
+        return f"`{artifact_hash}`"
+    return f"`<invalid {invalid_label}>`"
+
+
+def _input_artifact_markdown_rows(input_artifacts: Any) -> list[list[str]]:
+    if not isinstance(input_artifacts, list):
+        return [
+            [
+                "`<invalid path>`",
+                "`<invalid bytes>`",
+                "`<invalid sha256>`",
+            ]
+        ]
+    return [
+        [
+            _markdown_artifact_path_cell(artifact, field_label="path"),
+            _markdown_artifact_bytes_cell(artifact),
+            _markdown_artifact_hash_cell(artifact, field_label="sha256"),
+        ]
+        for artifact in input_artifacts
+    ]
+
+
+def _corridor_phase_key_blocker(label: str, phase: Any) -> str | None:
+    if not isinstance(phase, str) or not phase:
+        return f"{label} contains malformed phase"
+    if _path_control_character(phase) is not None:
+        return f"{label} contains phase with control character"
+    if not phase.isascii():
+        return f"{label} contains phase with non-ASCII character"
+    if phase.strip() != phase:
+        return f"{label} contains phase with surrounding whitespace"
+    if any(character.isspace() for character in phase):
+        return f"{label} contains phase with whitespace"
+    if _path_markdown_unsafe_character(phase) is not None:
+        return f"{label} contains phase with Markdown-unsafe character"
+    if any(marker in phase.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} contains phase with sensitive name"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in phase)
+        or phase.startswith("-")
+        or phase.endswith("-")
+    ):
+        return f"{label} contains malformed phase"
+    return None
+
+
+def _corridor_phase_cell(phase: Any) -> str:
+    if _corridor_phase_key_blocker("readiness report corridor phases", phase) is None:
+        return f"`{phase}`"
+    return "`<invalid phase>`"
+
+
+def _corridor_phase_status_cell(phase_status: Any) -> str:
+    return (
+        phase_status
+        if phase_status in {"passed", "failed", "skipped", "missing"}
+        else "`<invalid status>`"
+    )
+
+
+def _corridor_artifact_path_cell(artifact: Any) -> str:
+    if artifact is None:
+        return "-"
+    return _markdown_artifact_path_cell(
+        artifact,
+        field_label="evidence_artifact",
+    )
+
+
+def _corridor_artifact_hash_cell(artifact: Any) -> str:
+    if artifact is None:
+        return "-"
+    return _markdown_artifact_hash_cell(
+        artifact,
+        field_label="evidence_artifact",
+    )
+
+
+def _corridor_markdown_rows(corridor: Any) -> list[list[str]]:
+    if not isinstance(corridor, dict):
+        return [
+            [
+                "`<invalid phase>`",
+                "`<invalid status>`",
+                "-",
+                "-",
+            ]
+        ]
+    phases = corridor.get("phases")
+    if not isinstance(phases, dict):
+        return [
+            [
+                "`<invalid phase>`",
+                "`<invalid status>`",
+                "-",
+                "-",
+            ]
+        ]
+    evidence_artifacts = corridor.get("evidence_artifacts")
+    if not isinstance(evidence_artifacts, dict):
+        evidence_artifacts = {}
+    return [
+        [
+            _corridor_phase_cell(phase),
+            _corridor_phase_status_cell(phase_status),
+            _corridor_artifact_path_cell(evidence_artifacts.get(phase)),
+            _corridor_artifact_hash_cell(evidence_artifacts.get(phase)),
+        ]
+        for phase, phase_status in phases.items()
+    ]
+
+
 def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
     if not isinstance(value, list):
         return [f"- `<invalid {field_label}>`"]
@@ -6492,8 +7344,58 @@ def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
     return [f"- {item}" for item in value]
 
 
-def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> str:
-    status = "READY" if report["production_ready"] is True else "NOT READY"
+def _lane_readiness_markdown_rows(
+    evidence: Any,
+    *,
+    max_blockers_per_lane: int,
+) -> list[list[str]]:
+    lanes = evidence.get("lanes") if isinstance(evidence, dict) else None
+    if not isinstance(lanes, list):
+        lanes = [None]
+    rows: list[list[str]] = []
+    for lane in lanes:
+        (
+            domain_cell,
+            chain_cell,
+            lane_status,
+            records_cell,
+            lane_blockers,
+        ) = _lane_readiness_markdown_cells(lane)
+        blockers = (
+            lane_blockers[:max_blockers_per_lane]
+            if isinstance(lane_blockers, list)
+            else lane_blockers
+        )
+        blocker_text = _markdown_string_list_cell(blockers, field_label="blockers")
+        if (
+            isinstance(lane_blockers, list)
+            and len(lane_blockers) > max_blockers_per_lane
+        ):
+            remaining = len(lane_blockers) - max_blockers_per_lane
+            blocker_text += f"<br>... {remaining} more"
+        rows.append(
+            [
+                domain_cell,
+                chain_cell,
+                lane_status,
+                records_cell,
+                blocker_text,
+            ]
+        )
+    return rows
+
+
+def _readiness_status_markdown_label(report: Any) -> str:
+    """Return a fail-closed public readiness status label."""
+    if not isinstance(report, dict):
+        return "NOT READY"
+    return "READY" if report.get("production_ready") is True else "NOT READY"
+
+
+def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
+    status = _readiness_status_markdown_label(report)
+    if not isinstance(report, dict):
+        report = {}
     lines = [
         "# SCCP Release Readiness Report",
         "",
@@ -6504,44 +7406,22 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
     ]
     lines.append("| Path | Bytes | SHA-256 |")
     lines.append("| --- | ---: | --- |")
-    for artifact in report["input_artifacts"]:
-        lines.append(
-            "| `{path}` | {bytes} | `{sha256}` |".format(
-                path=artifact["path"],
-                bytes=artifact["bytes"],
-                sha256=artifact["sha256"],
-            )
-        )
+    for row in _input_artifact_markdown_rows(report.get("input_artifacts")):
+        lines.append("| " + " | ".join(row) + " |")
     lines.extend(["", "## Production Corridor", ""])
     lines.append("| Phase | Status | Evidence Artifact | Evidence SHA-256 |")
     lines.append("| --- | --- | --- | --- |")
-    for phase, phase_status in report["corridor"]["phases"].items():
-        artifact = report["corridor"]["evidence_artifacts"].get(phase)
-        artifact_path = f"`{artifact['path']}`" if artifact else "-"
-        artifact_hash = f"`{artifact['sha256']}`" if artifact else "-"
-        lines.append(
-            f"| `{phase}` | {phase_status} | {artifact_path} | {artifact_hash} |"
-        )
+    for row in _corridor_markdown_rows(report.get("corridor")):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Release Checklist", ""])
     lines.append("| Gate | Status | Blockers |")
     lines.append("| --- | --- | --- |")
-    for item in report["release_checklist"]["items"]:
-        item_status = "ready" if item["ready"] is True else "blocked"
-        item_blockers = item.get("blockers")
-        blockers = (
-            item_blockers[:max_blockers_per_lane]
-            if isinstance(item_blockers, list)
-            else item_blockers
-        )
-        blocker_text = _markdown_string_list_cell(blockers, field_label="blockers")
-        if (
-            isinstance(item_blockers, list)
-            and len(item_blockers) > max_blockers_per_lane
-        ):
-            remaining = len(item_blockers) - max_blockers_per_lane
-            blocker_text += f"<br>... {remaining} more"
-        lines.append(f"| `{item['id']}` | {item_status} | {blocker_text} |")
+    for row in _release_checklist_markdown_rows(
+        report.get("release_checklist"),
+        max_blockers_per_lane=max_blockers_per_lane,
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Cryptographic Evidence", ""])
     lines.append(
@@ -6557,56 +7437,13 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
     lines.append(
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
-    for row in report["cryptographic_evidence"]:
-        canary_source = row["route_canary_evidence_source"] or "-"
-        if row["route_canary_evidence_bound"] is not True:
-            canary_source = f"{canary_source} (unbound)"
-        source_gate = _hash_cell(row["source_adapter_gate_hash"])
-        if row["source_adapter_gate_required"] is False and source_gate == "-":
-            source_gate = "not required"
+    for row in _cryptographic_evidence_markdown_rows(
+        report.get("cryptographic_evidence")
+    ):
         lines.append(
-            "| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
-            "`{evm_source_tag}` | `{evm_dest_rpc_chain_id}` | "
-            "`{evm_dest_tag}` | "
-            "{source} | {deploy} | {dest} | "
-            "{source_gate} | {source_gate_audits} | {route} | {canary} | "
-            "`{canary_source}` | {canary_tx} | {canary_receipt_block} | "
-            "{canary_receipt_hash} | {canary_receipt_finalized} | "
-            "{canary_receipts_root} | "
-            "{canary_message_id} | {canary_block} | {canary_timestamp} |".format(
-                domain=row["domain"],
-                chain=row["chain"],
-                evm_source_rpc_chain_id=row["evm_source_rpc_chain_id"] or "-",
-                evm_source_tag=row["evm_source_block_tag"] or "-",
-                evm_dest_rpc_chain_id=row["evm_destination_rpc_chain_id"] or "-",
-                evm_dest_tag=row["evm_destination_block_tag"] or "-",
-                source=_hash_cell(row["source_verifier_material_hash"]),
-                deploy=_hash_cell(row["source_adapter_engine_deployment_hash"]),
-                dest=_hash_cell(row["destination_binding_hash"]),
-                source_gate=source_gate,
-                source_gate_audits=_audit_hashes_cell(
-                    row["source_adapter_gate_audit_hashes"]
-                ),
-                route=_hash_cell(row["route_allowlist_hash"]),
-                canary=_hash_cell(row["route_canary_evidence_hash"]),
-                canary_source=canary_source,
-                canary_tx=_hash_cell(row["route_canary_transaction_hash"]),
-                canary_receipt_block=_integer_cell(
-                    row["route_canary_receipt_block_number"]
-                ),
-                canary_receipt_hash=_hash_cell(
-                    row["route_canary_receipt_block_hash"]
-                ),
-                canary_receipt_finalized=_boolean_cell(
-                    row["route_canary_receipt_block_finalized"]
-                ),
-                canary_receipts_root=_hash_cell(
-                    row["route_canary_block_receipts_root"]
-                ),
-                canary_message_id=_hash_cell(row["route_canary_message_id"]),
-                canary_block=_integer_cell(row["route_canary_block_number"]),
-                canary_timestamp=_integer_cell(row["route_canary_block_timestamp"]),
-            )
+            "| "
+            + " | ".join(row)
+            + " |"
         )
 
     lines.extend(["", "## User Prover Submission Surfaces", ""])
@@ -6615,27 +7452,10 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         "Required Phases | Validation |"
     )
     lines.append("| --- | --- | --- | --- | --- | --- |")
-    for surface in report["user_prover_submission_surfaces"]:
-        required_phases = ", ".join(
-            f"`{phase}`" for phase in surface["required_phases"]
-        )
-        validation = surface["validation_status"]
-        validation_blockers = surface.get("validation_blockers")
-        if not isinstance(validation_blockers, list) or validation_blockers:
-            validation += ": " + _user_prover_validation_blockers_cell(
-                validation_blockers
-            )
-        lines.append(
-            "| `{lanes}` | `{proof_backend}` | {sdk_helpers} | {submission} | "
-            "{required_phases} | {validation} |".format(
-                lanes=surface["lanes"],
-                proof_backend=surface["proof_backend"],
-                sdk_helpers=_sdk_helper_sets_cell(surface),
-                submission=surface["on_chain_submission"],
-                required_phases=required_phases,
-                validation=validation,
-            )
-        )
+    for row in _user_prover_surface_markdown_rows(
+        report.get("user_prover_submission_surfaces")
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Native Prover Bundle", ""])
     lines.append(
@@ -6644,124 +7464,30 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         "SDK Artifacts | Blockers |"
     )
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-    native_bundle = report["native_evm_prover_bundle"]
-    native_artifact = native_bundle.get("artifact")
-    artifact_path = "-"
-    artifact_hash = "-"
-    if isinstance(native_artifact, dict):
-        artifact_path = f"`{native_artifact.get('path', '-')}`"
-        artifact_hash = f"`{native_artifact.get('sha256', '-')}`"
-    sdk_artifacts = native_bundle.get("sdk_artifacts")
-    if isinstance(sdk_artifacts, list) and sdk_artifacts:
-        sdk_cell = "<br>".join(
-            "`{sdk}`: `{implementation}` {implementation_hash}".format(
-                sdk=row.get("sdk", "-"),
-                implementation=row.get("implementation", "-"),
-                implementation_hash=(
-                    f"`{row.get('implementation_hash')}`"
-                    if row.get("implementation_hash")
-                    else "-"
-                ),
-            )
-            for row in sdk_artifacts
-            if isinstance(row, dict)
-        )
-    else:
-        sdk_cell = "-"
-    native_blocker_text = _native_evm_validation_blockers_cell(
-        native_bundle.get("validation_blockers")
-    )
-    parity_artifact = native_bundle.get("cross_sdk_fixture_parity_artifact")
-    parity_cell = (
-        f"`{parity_artifact.get('path')}`<br>`{parity_artifact.get('sha256')}`"
-        if isinstance(parity_artifact, dict)
-        else "-"
-    )
-    self_test_artifact = native_bundle.get("native_prover_self_test_artifact")
-    self_test_cell = (
-        f"`{self_test_artifact.get('path')}`<br>`{self_test_artifact.get('sha256')}`"
-        if isinstance(self_test_artifact, dict)
-        else "-"
-    )
     lines.append(
-        "| {required} | {status} | {artifact} | {artifact_hash} | "
-        "{proof_artifact} | {proving_key} | {verifier_key} | {binding} | "
-        "{parity_fixture} | {self_test} | {sdk_artifacts} | {blockers} |".format(
-            required="yes" if native_bundle.get("required") is True else "no",
-            status=native_bundle.get("validation_status", "blocked"),
-            artifact=artifact_path,
-            artifact_hash=artifact_hash,
-            proof_artifact=(
-                f"`{native_bundle.get('proof_artifact_hash')}`"
-                if native_bundle.get("proof_artifact_hash")
-                else "-"
-            ),
-            proving_key=(
-                f"`{native_bundle.get('proving_key_hash')}`"
-                if native_bundle.get("proving_key_hash")
-                else "-"
-            ),
-            verifier_key=(
-                f"`{native_bundle.get('verifier_key_hash')}`"
-                if native_bundle.get("verifier_key_hash")
-                else "-"
-            ),
-            binding=(
-                f"`{native_bundle.get('destination_binding_hash')}`"
-                if native_bundle.get("destination_binding_hash")
-                else "-"
-            ),
-            parity_fixture=parity_cell,
-            self_test=self_test_cell,
-            sdk_artifacts=sdk_cell,
-            blockers=native_blocker_text,
+        "| "
+        + " | ".join(
+            _native_evm_bundle_markdown_row_cells(
+                report.get("native_evm_prover_bundle")
+            )
         )
+        + " |"
     )
 
     lines.extend(["", "## Source Inventory", ""])
     lines.append("| Gate | Status | Blockers |")
     lines.append("| --- | --- | --- |")
-    for gate in sorted(report["source_inventory"]):
-        inventory = report["source_inventory"][gate]
-        blocker_text = _markdown_string_list_cell(
-            inventory.get("validation_blockers"),
-            field_label="validation_blockers",
-        )
-        lines.append(
-            "| `{gate}` | {status} | {blockers} |".format(
-                gate=gate,
-                status=inventory.get("validation_status", "blocked"),
-                blockers=blocker_text,
-            )
-        )
+    for row in _source_inventory_markdown_rows(report.get("source_inventory")):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Lane Readiness", ""])
     lines.append("| Domain | Chain | Status | Records | Blockers |")
     lines.append("| --- | --- | --- | --- | --- |")
-    for lane in report["evidence"]["lanes"]:
-        lane_status = "ready" if lane["production_ready"] is True else "blocked"
-        lane_blockers = lane.get("blockers")
-        blockers = (
-            lane_blockers[:max_blockers_per_lane]
-            if isinstance(lane_blockers, list)
-            else lane_blockers
-        )
-        blocker_text = _markdown_string_list_cell(blockers, field_label="blockers")
-        if (
-            isinstance(lane_blockers, list)
-            and len(lane_blockers) > max_blockers_per_lane
-        ):
-            remaining = len(lane_blockers) - max_blockers_per_lane
-            blocker_text += f"<br>... {remaining} more"
-        lines.append(
-            "| {domain} | `{chain}` | {status} | {records} | {blockers} |".format(
-                domain=lane["domain"],
-                chain=lane["chain"],
-                status=lane_status,
-                records=_record_flags(lane["records"]),
-                blockers=blocker_text,
-            )
-        )
+    for row in _lane_readiness_markdown_rows(
+        report.get("evidence"),
+        max_blockers_per_lane=max_blockers_per_lane,
+    ):
+        lines.append("| " + " | ".join(row) + " |")
 
     lines.extend(["", "## Blocking Items", ""])
     lines.extend(
@@ -6797,14 +7523,14 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
-            "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
+            "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
-            "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
+            "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, malformed readiness-root suppression, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
             "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
-            "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, evidence-input path/bytes/hash visibility, production-corridor phase/status visibility, production-corridor artifact/hash visibility, checklist gate/status visibility, checklist blocker-cell visibility, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, lane-readiness status visibility, lane-readiness blocker-cell visibility, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, release-note artifact-row suppression, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, top-level readiness status fail-closed rendering, evidence-input path/bytes/hash visibility, evidence-input row suppression, production-corridor phase/status visibility, production-corridor artifact/hash visibility, production-corridor row suppression, checklist gate/status visibility, checklist blocker-cell visibility, release-checklist row suppression, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, cryptographic-evidence root suppression, lane-readiness status visibility, lane-readiness blocker-cell visibility, lane-readiness root suppression, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, user-prover root suppression, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, source-inventory row suppression, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, native-prover row suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP transparent OpenVerify summary source inventory must pin schema/verifier-key manifest binding, canonical six-column public-input decoding, and malformed-column adversarial coverage before proof metadata can be published.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
@@ -6975,6 +7701,109 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _canonical_public_report_blockers(
+    value: Any,
+) -> tuple[list[str], list[str]]:
+    if not isinstance(value, list):
+        return [], [
+            "readiness report blockers must be a list of non-empty canonical strings"
+        ]
+    blockers: list[str] = []
+    errors: list[str] = []
+    for index, blocker in enumerate(value):
+        issue = _public_blocker_text_issue(blocker)
+        if issue is None:
+            blockers.append(blocker)
+        elif issue == "non-empty canonical string":
+            errors.append(f"readiness report blockers[{index}] must be a {issue}")
+        else:
+            errors.append(f"readiness report blockers[{index}] contains {issue}")
+    return blockers, errors
+
+
+def _readiness_report_unknown_field_blocker(field: Any) -> str:
+    return _native_evm_prover_field_name_blocker(
+        "readiness report",
+        field,
+        "unknown top-level",
+    )
+
+
+def _public_report_payload(report: Any) -> dict[str, Any]:
+    """Return a fail-closed public readiness report payload."""
+
+    if not isinstance(report, dict):
+        return {
+            "production_ready": False,
+            "blockers": ["readiness report must be an object"],
+        }
+
+    blockers: list[str] = []
+    public_report_fields = set(READINESS_REPORT_PUBLIC_FIELDS)
+    for field in sorted(
+        (field for field in report if field not in public_report_fields),
+        key=str,
+    ):
+        blockers.append(_readiness_report_unknown_field_blocker(field))
+
+    if "blockers" not in report:
+        blockers.append("readiness report blockers missing")
+    else:
+        public_blockers, blocker_errors = _canonical_public_report_blockers(
+            report.get("blockers"),
+        )
+        blockers.extend(public_blockers)
+        blockers.extend(blocker_errors)
+
+    production_ready = report.get("production_ready")
+    if type(production_ready) is not bool:
+        blockers.append("readiness report production_ready must be boolean")
+
+    root_errors: dict[str, str] = {}
+    object_root_messages = {
+        "evidence": "readiness report evidence must be an object",
+        "release_checklist": "readiness report release_checklist must be an object",
+        "corridor": "readiness report corridor must be an object",
+        "source_inventory": "readiness report source_inventory must be an object",
+    }
+    for field, message in object_root_messages.items():
+        if field in report and not isinstance(report.get(field), dict):
+            root_errors[field] = message
+    list_root_messages = {
+        "inputs": "readiness report inputs must be a list of objects",
+        "input_artifacts": "readiness report input_artifacts must be a list of objects",
+        "cryptographic_evidence": (
+            "readiness report cryptographic_evidence must be a list of objects"
+        ),
+        "user_prover_submission_surfaces": (
+            "readiness report user_prover_submission_surfaces must be a list of objects"
+        ),
+    }
+    for field, message in list_root_messages.items():
+        value = report.get(field)
+        if field in report and (
+            not isinstance(value, list) or not all(isinstance(item, dict) for item in value)
+        ):
+            root_errors[field] = message
+    native_bundle = report.get("native_evm_prover_bundle")
+    if "native_evm_prover_bundle" in report and (
+        native_bundle is not None and not isinstance(native_bundle, dict)
+    ):
+        root_errors["native_evm_prover_bundle"] = (
+            "readiness report native_evm_prover_bundle must be an object"
+        )
+    blockers.extend(root_errors.values())
+
+    public_report = {
+        field: report[field]
+        for field in READINESS_REPORT_PUBLIC_FIELDS
+        if field in report and field not in root_errors
+    }
+    public_report["production_ready"] = production_ready is True and not blockers
+    public_report["blockers"] = blockers
+    return public_report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -7003,6 +7832,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         parser.exit(2, f"{parser.prog}: error: {detail}\n")
 
+    report = _public_report_payload(report)
     if args.format == "json":
         output = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:

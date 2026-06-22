@@ -252,6 +252,14 @@ const TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR: Duration = Duration::from_millis(5
 const RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
 /// Keep full DELIVER rebroadcasts much slower than READY/chunk repair traffic.
 const RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 8;
+/// Waiting for commit QC after local delivery is a finality-recovery path; full
+/// DELIVER repair should not keep competing with commit votes at the normal cadence.
+const RBC_DELIVER_COMMIT_QC_RECOVERY_COOLDOWN_MULTIPLIER: u32 = 4;
+/// Certificate-only repair should be faster than a full view timeout but slower
+/// than local payload/body rescue, otherwise slow commits trigger fetch storms.
+const COMMIT_QC_ONLY_RETRY_QUORUM_DIVISOR: u32 = 8;
+const COMMIT_QC_ONLY_RETRY_FLOOR: Duration = Duration::from_secs(2);
+const COMMIT_QC_ONLY_RETRY_CEILING: Duration = Duration::from_secs(10);
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
 /// Bound native AMX vote sessions retained while proposer collection is in progress.
@@ -27489,6 +27497,32 @@ impl Actor {
         true
     }
 
+    fn rescue_delivered_rbc_ready_only(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        missing_ready_peers: &[PeerId],
+        ready_count: usize,
+        required: usize,
+        now: Instant,
+    ) -> bool {
+        if missing_ready_peers.is_empty() {
+            return false;
+        }
+        let payload_cooldown = self.targeted_payload_rescue_cooldown();
+        let base_ready_cooldown = self.rebroadcast_cooldown();
+        let ready_cooldown = if required != 0
+            && ready_count < required
+            && self.missing_commit_qc_request_pending_for_round(key.0, key.1, key.2)
+        {
+            base_ready_cooldown.max(payload_cooldown)
+        } else {
+            base_ready_cooldown
+        };
+        self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
+            && self.send_targeted_rbc_ready_set_to_peers(key, session, missing_ready_peers, now)
+    }
+
     fn rebroadcast_rbc_payload_for_missing_init(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -28203,19 +28237,49 @@ impl Actor {
                     );
                     progress = true;
                 }
+                let delivered_ready_quorum_met = ready_count >= required;
+                let delivered_pending_waiting_for_commit_qc = self
+                    .pending
+                    .pending_blocks
+                    .get(&key.0)
+                    .is_some_and(|pending| {
+                        !pending.aborted
+                            && pending.height == key.1
+                            && pending.view == key.2
+                            && !pending.commit_qc_observed()
+                    });
+                let deliver_rebroadcast_cooldown = if delivered_pending_waiting_for_commit_qc
+                    || self.missing_commit_qc_request_pending_for_round(key.0, key.1, key.2)
+                {
+                    self.rbc_deliver_commit_qc_recovery_cooldown()
+                } else {
+                    deliver_cooldown
+                };
                 if hot_repair_allowed
-                    && self.rescue_rbc_missing_ready_peers(
-                        key,
-                        &session,
-                        missing_ready_peers.as_slice(),
-                        ready_count,
-                        now,
-                    )
+                    && if delivered_ready_quorum_met {
+                        self.rescue_rbc_missing_ready_peers(
+                            key,
+                            &session,
+                            missing_ready_peers.as_slice(),
+                            ready_count,
+                            now,
+                        )
+                    } else {
+                        self.rescue_delivered_rbc_ready_only(
+                            key,
+                            &session,
+                            missing_ready_peers.as_slice(),
+                            ready_count,
+                            required,
+                            now,
+                        )
+                    }
                 {
                     progress = true;
                 }
                 if hot_repair_allowed
-                    && self.rbc_deliver_rebroadcast_due(&key, now, deliver_cooldown)
+                    && delivered_ready_quorum_met
+                    && self.rbc_deliver_rebroadcast_due(&key, now, deliver_rebroadcast_cooldown)
                     && let Some(deliver) = self.build_rbc_deliver(key, &session)
                 {
                     let ready_senders: Vec<_> = session
@@ -29033,6 +29097,14 @@ impl Actor {
         self.effective_timing.get().rbc_deliver_rebroadcast_cooldown
     }
 
+    fn rbc_deliver_commit_qc_recovery_cooldown(&self) -> Duration {
+        let base = self.rbc_deliver_rebroadcast_cooldown();
+        self.commit_quorum_timeout().max(saturating_mul_duration(
+            base,
+            RBC_DELIVER_COMMIT_QC_RECOVERY_COOLDOWN_MULTIPLIER,
+        ))
+    }
+
     fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
         let deferred_qc_ttl = self
             .config
@@ -29141,6 +29213,16 @@ impl Actor {
     fn recovery_missing_qc_reacquire_window(&self) -> Duration {
         self.deterministic_recovery_profile()
             .missing_qc_reacquire_window
+    }
+
+    fn local_payload_commit_qc_recovery_retry_window(&self) -> Duration {
+        let quorum_slice = self.commit_quorum_timeout() / COMMIT_QC_ONLY_RETRY_QUORUM_DIVISOR;
+        let quorum_floor = quorum_slice
+            .max(COMMIT_QC_ONLY_RETRY_FLOOR)
+            .min(COMMIT_QC_ONLY_RETRY_CEILING);
+        self.recovery_missing_qc_reacquire_window()
+            .max(self.targeted_payload_rescue_cooldown())
+            .max(quorum_floor)
     }
 
     fn lock_lag_range_pull_cooldown_floor(&self) -> Duration {

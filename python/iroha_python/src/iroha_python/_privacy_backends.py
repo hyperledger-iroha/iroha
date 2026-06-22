@@ -200,7 +200,16 @@ def _is_trusted_setup_backend_label(value: str) -> bool:
     )
 
 
-_DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS = ("debug", "mock", "fixture", "dev")
+_DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS = (
+    "debug",
+    "mock",
+    "fixture",
+    "dev",
+    "todo",
+    "draft",
+    "pending",
+    "replace",
+)
 _DEVELOPER_ONLY_EXACT_BACKEND_TOKENS = {
     "test",
     "dummy",
@@ -208,7 +217,18 @@ _DEVELOPER_ONLY_EXACT_BACKEND_TOKENS = {
     "stub",
     "sample",
     "placeholder",
+    "todo",
+    "draft",
 }
+_DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS = (
+    "notforproduction",
+    "notproduction",
+    "notproductionready",
+    "notready",
+    "replacebeforeproduction",
+    "replacebeforemainnet",
+    "draftonly",
+)
 
 _STARK_FRI_PRODUCTION_BACKEND_LABELS = {
     "stark/fri",
@@ -231,7 +251,12 @@ def _is_developer_only_compact_backend_run(run: str) -> bool:
 
 
 def _is_developer_only_backend_label(value: str) -> bool:
-    tokens = re.findall(r"[a-z0-9]+", value.strip().lower())
+    label = value.strip().lower()
+    compact = _compact_privacy_backend_label(label)
+    if any(fragment in compact for fragment in _DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS):
+        return True
+
+    tokens = re.findall(r"[a-z0-9]+", label)
     letter_run = []
     for token in tokens:
         if _is_developer_only_direct_backend_token(token):

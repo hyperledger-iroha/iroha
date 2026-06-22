@@ -13364,7 +13364,7 @@ mod tests {
         .collect();
 
         sut.online_peers_tx.send(peers.clone()).unwrap();
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
 
         assert_eq!(metrics.connected_peers.get(), 2);
         assert_eq!(
@@ -13388,7 +13388,7 @@ mod tests {
             remaining.remove(&to_remove);
         }
         sut.online_peers_tx.send(remaining.clone()).unwrap();
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.connected_peers.get(), remaining.len() as u64);
         assert_eq!(
             metrics
@@ -13407,7 +13407,7 @@ mod tests {
 
         // Finally, drop all peers to observe another disconnect increment.
         sut.online_peers_tx.send(HashSet::new()).unwrap();
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.connected_peers.get(), 0);
         assert_eq!(
             metrics
@@ -13479,7 +13479,7 @@ mod tests {
         let block = sut.commit_block(block);
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.block_height.get(), 1);
         assert_eq!(metrics.block_height_non_empty.get(), 1);
         assert_eq!(metrics.last_commit_time_ms.get(), 0); // zero for genesis
@@ -13498,7 +13498,7 @@ mod tests {
         let block = sut.commit_block(block);
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
         assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
@@ -13531,7 +13531,7 @@ mod tests {
 
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.block_height.get(), 3);
         assert_eq!(metrics.block_height_non_empty.get(), 3);
         assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
@@ -13570,7 +13570,7 @@ mod tests {
         sut.report_commit_block(&register_block.as_ref().header())
             .await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         let base_accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let base_rejected = metrics.txs.with_label_values(&["rejected"]).get();
         let base_total = metrics.txs.with_label_values(&["total"]).get();
@@ -13587,7 +13587,7 @@ mod tests {
         assert!(errors.next().is_none(), "only time trigger should fail");
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         let accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let rejected = metrics.txs.with_label_values(&["rejected"]).get();
         let total = metrics.txs.with_label_values(&["total"]).get();

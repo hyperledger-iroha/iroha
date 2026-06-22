@@ -543,6 +543,20 @@ def solana_full_light_client_gate_hash(args: argparse.Namespace) -> bytes | None
     _push_vec(payload, SOLANA_MAINNET_GENESIS_HASH.encode("utf-8"))
     payload.extend(solana_source_verifier_material_record_hash(args))
     payload.extend(solana_source_adapter_engine_deployment_record_hash(args))
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.adapter_verifier_vk_hash,
+            label="adapter_verifier_vk_hash",
+            byte_length=32,
+        )
+    )
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.deployment_receipt_hash,
+            label="deployment_receipt_hash",
+            byte_length=32,
+        )
+    )
     for field, engine_id in _light_client_evidence_fields():
         _push_vec(payload, engine_id.encode("utf-8"))
         payload.extend(hashes[field])
