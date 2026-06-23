@@ -234,6 +234,45 @@ public sealed class KagemushaRecursiveSpendBundleSummary
     public KagemushaRecursiveSpendableNoteSummary CurrentNote { get; }
 }
 
+public sealed class KagemushaRecursiveSpendVerifyResult
+{
+    internal KagemushaRecursiveSpendVerifyResult(
+        bool valid,
+        uint hopCount,
+        uint encodedBytes,
+        string reason,
+        bool chainAdmissible,
+        string chainAdmissionReason,
+        bool witnesslessRedeemSupported,
+        bool lineageWitnessRequired)
+    {
+        Valid = valid;
+        HopCount = hopCount;
+        EncodedBytes = encodedBytes;
+        Reason = reason;
+        ChainAdmissible = chainAdmissible;
+        ChainAdmissionReason = chainAdmissionReason;
+        WitnesslessRedeemSupported = witnesslessRedeemSupported;
+        LineageWitnessRequired = lineageWitnessRequired;
+    }
+
+    public bool Valid { get; }
+
+    public uint HopCount { get; }
+
+    public uint EncodedBytes { get; }
+
+    public string Reason { get; }
+
+    public bool ChainAdmissible { get; }
+
+    public string ChainAdmissionReason { get; }
+
+    public bool WitnesslessRedeemSupported { get; }
+
+    public bool LineageWitnessRequired { get; }
+}
+
 public enum KagemushaOfflineSpendMode
 {
     RecursiveSpendV1 = 0,
@@ -271,6 +310,10 @@ public static class KagemushaRecursiveSpendNative
         "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
     public const string RecursiveAggregationProofPublicInputsWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
+    public const string RecursiveSpendVerifyResultWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
+    public const string RecursiveSpendLineageWitnessWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
     public const string RecursiveSpendAccumulatorDomain =
         "iroha:kagemusha:v1:recursive-spend-accumulator";
 
@@ -1077,6 +1120,27 @@ public static class KagemushaRecursiveSpendNative
         return !CanRedeemWitnessless(circuitId, hopCount);
     }
 
+    public static void ValidateVerifyLineagePreflight(
+        string? proofCircuitId,
+        bool hasLineageVerifierRecord)
+    {
+        if (IsLineageProofCircuitId(proofCircuitId))
+        {
+            if (!hasLineageVerifierRecord)
+            {
+                throw new ArgumentException(
+                    "lineageVerifierRecord is required for reserved-lineage bundles",
+                    nameof(hasLineageVerifierRecord));
+            }
+        }
+        else if (hasLineageVerifierRecord)
+        {
+            throw new ArgumentException(
+                "lineageVerifierRecord is only valid for reserved-lineage bundles",
+                nameof(hasLineageVerifierRecord));
+        }
+    }
+
     public static void ValidateRedeemLineagePreflight(
         string? proofCircuitId,
         uint hopCount,
@@ -1137,6 +1201,22 @@ public static class KagemushaRecursiveSpendNative
                     "publicAmount must not exceed current note amount",
                     nameof(publicAmount));
             }
+        }
+    }
+
+    public static void ValidateRedeemChangeOutputBytes(ReadOnlySpan<byte> changeOutput)
+    {
+        if (changeOutput.Length != 32)
+        {
+            throw new ArgumentException(
+                "changeOutput must be exactly 32 bytes",
+                nameof(changeOutput));
+        }
+        if (IsZeroBytes(changeOutput))
+        {
+            throw new ArgumentException(
+                "changeOutput must be non-zero",
+                nameof(changeOutput));
         }
     }
 
@@ -1218,6 +1298,123 @@ public static class KagemushaRecursiveSpendNative
     {
         return previousProofCircuitId == RecursiveAggregationProofCircuitIdV1
             || IsLineageProofCircuitId(previousProofCircuitId);
+    }
+
+    public static KagemushaRecursiveSpendVerifyResult DecodeVerifyResult(byte[] verifyResultArchive)
+    {
+        var (payload, flags) = KagemushaNoritoArchivePayload(
+            verifyResultArchive,
+            RecursiveSpendVerifyResultWireName,
+            "verifyResult",
+            nameof(verifyResultArchive));
+        if (flags != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException("verifyResult must use compact Norito layout", nameof(verifyResultArchive));
+        }
+
+        var offset = 0;
+        var valid = ReadBundleBoolPayload(
+            ReadBundleField(payload, ref offset, flags, "verifyResult.valid"),
+            "verifyResult.valid");
+        var hopCount = ReadBundleU32Payload(
+            ReadBundleField(payload, ref offset, flags, "verifyResult.hopCount"),
+            "verifyResult.hopCount");
+        var encodedBytes = ReadBundleU32Payload(
+            ReadBundleField(payload, ref offset, flags, "verifyResult.encodedBytes"),
+            "verifyResult.encodedBytes");
+        var reason = DecodeBundleString(
+            ReadBundleField(payload, ref offset, flags, "verifyResult.reason"),
+            flags,
+            "verifyResult.reason");
+        var chainAdmissible = ReadBundleBoolPayload(
+            ReadBundleField(payload, ref offset, flags, "verifyResult.chainAdmissible"),
+            "verifyResult.chainAdmissible");
+        var chainAdmissionReason = DecodeBundleString(
+            ReadBundleField(payload, ref offset, flags, "verifyResult.chainAdmissionReason"),
+            flags,
+            "verifyResult.chainAdmissionReason");
+
+        var witnesslessRedeemSupported = false;
+        var lineageWitnessRequired = false;
+        if (offset < payload.Length)
+        {
+            witnesslessRedeemSupported = ReadBundleBoolPayload(
+                ReadBundleField(payload, ref offset, flags, "verifyResult.witnesslessRedeemSupported"),
+                "verifyResult.witnesslessRedeemSupported");
+        }
+        if (offset < payload.Length)
+        {
+            lineageWitnessRequired = ReadBundleBoolPayload(
+                ReadBundleField(payload, ref offset, flags, "verifyResult.lineageWitnessRequired"),
+                "verifyResult.lineageWitnessRequired");
+        }
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("verifyResult", "verifyResult has trailing bytes");
+        }
+
+        return new KagemushaRecursiveSpendVerifyResult(
+            valid,
+            hopCount,
+            encodedBytes,
+            reason,
+            chainAdmissible,
+            chainAdmissionReason,
+            witnesslessRedeemSupported,
+            lineageWitnessRequired);
+    }
+
+    public static bool LineageWitnessHasReservedPreviousProof(byte[] lineageWitnessArchive)
+    {
+        var (payload, flags) = KagemushaNoritoArchivePayload(
+            lineageWitnessArchive,
+            RecursiveSpendLineageWitnessWireName,
+            "lineageWitness",
+            nameof(lineageWitnessArchive));
+        if (flags != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException(
+                "lineageWitness must use compact Norito layout",
+                nameof(lineageWitnessArchive));
+        }
+
+        var offset = SkipBundleFields(payload, 0, flags, 3, "lineageWitness");
+        var previousProofsPayload = ReadBundleField(
+            payload,
+            ref offset,
+            flags,
+            "lineageWitness.previousRecursiveProofs");
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("lineageWitness", "lineageWitness has trailing bytes");
+        }
+        if (previousProofsPayload.Length < 8)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
+        }
+        var count = BinaryPrimitives.ReadUInt64LittleEndian(previousProofsPayload.AsSpan(0, 8));
+        if (count > int.MaxValue)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
+        }
+
+        var proofOffset = 8;
+        var hasReserved = false;
+        for (var index = 0; index < (int)count; index++)
+        {
+            var proofPayload = ReadBundleField(
+                previousProofsPayload,
+                ref proofOffset,
+                flags,
+                $"lineageWitness.previousRecursiveProofs[{index}]");
+            var circuitId = ReadLineagePreviousRecursiveProofCircuitId(proofPayload, flags);
+            hasReserved = hasReserved || IsLineageProofCircuitId(circuitId);
+        }
+        if (proofOffset != previousProofsPayload.Length)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
+        }
+        return hasReserved;
     }
 
     public static KagemushaRecursiveSpendBundleSummary DecodeBundleSummary(byte[] bundleArchive)
@@ -1355,20 +1552,13 @@ public static class KagemushaRecursiveSpendNative
 
     private static string ReadBundleChainIdPayload(byte[] payload, byte flags)
     {
-        try
+        var offset = 0;
+        var field = ReadBundleField(payload, ref offset, flags, "chainId");
+        if (offset != payload.Length)
         {
-            return DecodeBundleString(payload, flags, "chainId");
+            throw BundleDecodeError("bundle", "chainId has trailing bytes");
         }
-        catch (ArgumentException)
-        {
-            var offset = 0;
-            var field = ReadBundleField(payload, ref offset, flags, "chainId");
-            if (offset != payload.Length)
-            {
-                throw BundleDecodeError("bundle", "chainId has trailing bytes");
-            }
-            return DecodeBundleString(field, flags, "chainId");
-        }
+        return DecodeBundleString(field, flags, "chainId");
     }
 
     private static string ReadBundleRecursiveProofCircuitId(byte[] payload, byte flags)
@@ -1454,7 +1644,7 @@ public static class KagemushaRecursiveSpendNative
         return name;
     }
 
-    private static bool IsZeroBytes(byte[] bytes)
+    private static bool IsZeroBytes(ReadOnlySpan<byte> bytes)
     {
         foreach (var value in bytes)
         {
@@ -1486,6 +1676,60 @@ public static class KagemushaRecursiveSpendNative
             throw BundleDecodeError("bundle.proof_bytes", "bundle.proof_bytes empty");
         }
         return backend;
+    }
+
+    private static string ReadLineagePreviousRecursiveProofCircuitId(byte[] payload, byte flags)
+    {
+        var offset = 0;
+        var verifierPayload = ReadBundleField(
+            payload,
+            ref offset,
+            flags,
+            "lineageWitness.previousRecursiveProofs.verifierKeyId");
+        offset = SkipBundleFields(
+            payload,
+            offset,
+            flags,
+            3,
+            "lineageWitness.previousRecursiveProofs");
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
+        }
+
+        var verifierOffset = 0;
+        var backend = DecodeBundleString(
+            ReadBundleField(
+                verifierPayload,
+                ref verifierOffset,
+                flags,
+                "lineageWitness.previousRecursiveProofs.verifierKeyId.backend"),
+            flags,
+            "lineageWitness.previousRecursiveProofs.verifierKeyId.backend");
+        var name = DecodeBundleString(
+            ReadBundleField(
+                verifierPayload,
+                ref verifierOffset,
+                flags,
+                "lineageWitness.previousRecursiveProofs.verifierKeyId.name"),
+            flags,
+            "lineageWitness.previousRecursiveProofs.verifierKeyId.name");
+        if (verifierOffset != verifierPayload.Length)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs.verifierKeyId");
+        }
+
+        RequireBundlePortableId(backend, "lineageWitness.previousRecursiveProofs.verifierKeyId.backend");
+        if (backend != RecursiveAggregationProofBackend)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs.verifierKeyId.backend");
+        }
+        RequireBundlePortableId(name, "lineageWitness.previousRecursiveProofs.verifierKeyId.name");
+        if (!IsSupportedPreviousProofCircuitId(name))
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs.verifierKeyId.name");
+        }
+        return name;
     }
 
     private static KagemushaRecursiveSpendableNoteSummary ReadBundleSpendableNotePayload(
@@ -1642,6 +1886,15 @@ public static class KagemushaRecursiveSpendNative
             throw BundleDecodeError(field);
         }
         return BinaryPrimitives.ReadUInt32LittleEndian(payload);
+    }
+
+    private static bool ReadBundleBoolPayload(byte[] payload, string field)
+    {
+        if (payload.Length != 1 || payload[0] > 1)
+        {
+            throw BundleDecodeError(field);
+        }
+        return payload[0] == 1;
     }
 
     private static string DecodeBundleString(byte[] payload, byte flags, string field)
@@ -1912,6 +2165,15 @@ public static class KagemushaRecursiveSpendNative
             NativeVerify));
     }
 
+    public static KagemushaRecursiveSpendVerifyArchive Verify(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        bool hasLineageVerifierRecord)
+    {
+        ValidateVerifyLineagePreflight(proofCircuitId, hasLineageVerifierRecord);
+        return Verify(requestArchive);
+    }
+
     public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(ReadOnlySpan<byte> requestArchive)
     {
         return new KagemushaRecursiveSpendRedeemInstructionArchive(Call(
@@ -1930,6 +2192,20 @@ public static class KagemushaRecursiveSpendNative
             publicAmount,
             currentNoteAmount,
             hasChangeOutput);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? publicAmount,
+        string? currentNoteAmount,
+        ReadOnlySpan<byte> changeOutput)
+    {
+        ValidateRedeemChangeOutputPreflight(
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput: true);
+        ValidateRedeemChangeOutputBytes(changeOutput);
         return Redeem(requestArchive);
     }
 
@@ -1967,6 +2243,29 @@ public static class KagemushaRecursiveSpendNative
             publicAmount,
             currentNoteAmount,
             hasChangeOutput);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        string? publicAmount,
+        string? currentNoteAmount,
+        ReadOnlySpan<byte> changeOutput)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord);
+        ValidateRedeemChangeOutputPreflight(
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput: true);
+        ValidateRedeemChangeOutputBytes(changeOutput);
         return Redeem(requestArchive);
     }
 

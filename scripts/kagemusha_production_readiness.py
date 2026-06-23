@@ -1139,11 +1139,12 @@ def _load_release_json_data(
         return None, text, [blocker(invalid_code, f"{label} is not valid JSON: {exc}")]
     except DuplicateJsonKeyError as exc:
         return None, text, [blocker(invalid_code, _duplicate_json_key_message(label, exc))]
-    except NonFiniteJsonConstantError as exc:
+    except NonFiniteJsonConstantError:
         return None, text, [
             blocker(
                 invalid_code,
-                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+                f"{label} is not strict JSON: non-finite constant "
+                f"{EVIDENCE_NONFINITE_NUMBER_REDACTION} is not allowed",
             )
         ]
     if not isinstance(data, dict):
@@ -1379,11 +1380,12 @@ def _load_json_artifact(
         return None, [blocker(invalid_code, f"{label} is not valid JSON: {exc}")]
     except DuplicateJsonKeyError as exc:
         return None, [blocker(invalid_code, _duplicate_json_key_message(label, exc))]
-    except NonFiniteJsonConstantError as exc:
+    except NonFiniteJsonConstantError:
         return None, [
             blocker(
                 invalid_code,
-                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+                f"{label} is not strict JSON: non-finite constant "
+                f"{EVIDENCE_NONFINITE_NUMBER_REDACTION} is not allowed",
             )
         ]
     if not isinstance(data, dict):
@@ -5053,12 +5055,21 @@ def _android_report_valid_d2d_transcript_bindings(
         return False
     primary_path = kagemusha.get("d2d_payment_transcript_path")
     primary_digest = kagemusha.get("d2d_payment_transcript_sha256")
+    seen_paths: set[str] = set()
+    seen_digests: set[str] = set()
     for transport in declared_transports:
         binding = _android_report_valid_d2d_transcript_binding(
             transcripts.get(transport)
         )
         if binding is None:
             return False
+        path, digest = binding
+        if path in seen_paths:
+            return False
+        if digest in seen_digests:
+            return False
+        seen_paths.add(path)
+        seen_digests.add(digest)
         if transport == primary_transport and binding != (primary_path, primary_digest):
             return False
     return True

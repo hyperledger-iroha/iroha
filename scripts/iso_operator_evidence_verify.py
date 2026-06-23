@@ -650,45 +650,51 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise EvidenceError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise EvidenceError(f"{path} does not exist") from error
+        raise EvidenceError(f"{label} does not exist") from error
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
-        raise EvidenceError(f"{path} must not be a symlink")
+        raise EvidenceError(f"{label} must not be a symlink")
     if not stat.S_ISREG(mode):
-        raise EvidenceError(f"{path} must be a regular file")
+        raise EvidenceError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise EvidenceError(f"{path} exceeds {max_bytes} byte JSON limit")
+        raise EvidenceError(f"{label} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise EvidenceError(f"{path} must be a regular file")
+            raise EvidenceError(f"{label} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise EvidenceError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise EvidenceError(f"{label} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise EvidenceError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise EvidenceError(f"{label} exceeds {max_bytes} byte JSON limit")
         return raw
     except FileNotFoundError as error:
-        raise EvidenceError(f"{path} does not exist") from error
+        raise EvidenceError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise EvidenceError(f"{path} must not be a symlink") from error
-        raise EvidenceError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise EvidenceError(f"{label} must not be a symlink") from error
+        raise EvidenceError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -1064,7 +1070,11 @@ def _write_text_output(path: Path, text: str) -> None:
         os.close(parent_fd)
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -1076,15 +1086,21 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise EvidenceError(f"{current} must not be a symlink")
+            label = display_label or str(current)
+            raise EvidenceError(f"{label} must not be a symlink")
 
 
-def _load_json(path: Path) -> Any:
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
     try:
-        raw = _read_regular_file(path, max_bytes=MAX_SUMMARY_JSON_BYTES)
+        raw = _read_regular_file(
+            path,
+            max_bytes=MAX_SUMMARY_JSON_BYTES,
+            display_label=label,
+        )
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise EvidenceError(f"{path} is not UTF-8 JSON") from error
+        raise EvidenceError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -1092,7 +1108,7 @@ def _load_json(path: Path) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise EvidenceError(f"{path} is not valid JSON: {error}") from error
+        raise EvidenceError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -1190,7 +1206,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise EvidenceError(f"JSON contains non-finite numeric constant {value}")
+    raise EvidenceError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -1907,7 +1923,7 @@ def _require_der_kind(value: bytes, label: str, kind: str) -> None:
         if not _looks_like_ocsp_response(value, label):
             raise EvidenceError(f"{label} must look like an OCSPResponse")
         return
-    raise EvidenceError(f"{label} has unsupported DER kind {kind}")
+    raise EvidenceError(f"{label} has unsupported DER kind")
 
 
 def _looks_like_algorithm_identifier(element: DerElement, label: str) -> bool:
@@ -3199,7 +3215,7 @@ def _receipt_summary_endpoint_evidence_kinds(
 
 
 def _check_stage_receipt_kind_binding(
-    path: Path,
+    path: str,
     stage_results: list[dict[str, Any]],
     receipt_summary: dict[str, Any] | None,
 ) -> None:
@@ -3223,7 +3239,7 @@ def _check_stage_receipt_kind_binding(
 
 
 def _check_verify_receipt_dir_scope(
-    path: Path,
+    path: str,
     stage_results: list[dict[str, Any]],
     *,
     branch_label: str,
@@ -3259,7 +3275,7 @@ def _check_verify_receipt_dir_scope(
 
 
 def _check_verify_receipt_dir_coverage(
-    path: Path,
+    path: str,
     stage_results: list[dict[str, Any]],
     *,
     branch_label: str,
@@ -3287,7 +3303,7 @@ def _check_verify_receipt_dir_coverage(
 
 
 def _check_stage_receipt_dirs_unique(
-    path: Path,
+    path: str,
     stage_results: list[dict[str, Any]],
     *,
     branch_label: str,
@@ -3332,7 +3348,7 @@ def _receipt_summary_has_legacy_colr007(
 
 
 def _check_rail_receipt_policy_binding(
-    path: Path,
+    path: str,
     stage_results: list[dict[str, Any]],
     receipt_summary: dict[str, Any] | None,
 ) -> None:
@@ -3374,70 +3390,76 @@ def _check_rail_receipt_policy_binding(
         )
 
 
-def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def verify_canary_summary(
+    path: Path,
+    args: argparse.Namespace,
+    *,
+    display_label: str | None = None,
+) -> dict[str, Any]:
     """Verify one archived canary summary and return compact evidence metadata."""
 
+    label = display_label or "canary summary"
     if _receipt_path_is_repository_fixture(str(path)):
         raise EvidenceError(
-            f"{path} must not point to checked-in ISO fixture artifacts"
+            f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    summary = _require_object(_load_json(path), str(path))
-    digest = _require_summary_digest(summary, str(path))
-    _reject_unknown_keys(summary, CANARY_SUMMARY_KEYS, str(path))
-    _check_no_secret_material(summary)
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, CANARY_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
     version = summary.get("version")
     if (
         isinstance(version, bool)
         or not isinstance(version, int)
         or version != CANARY_SUMMARY_VERSION
     ):
-        raise EvidenceError(f"{path}.version must be {CANARY_SUMMARY_VERSION}")
+        raise EvidenceError(f"{label}.version must be {CANARY_SUMMARY_VERSION}")
 
-    provider = _required_context_string(summary, "provider", str(path))
-    environment = _required_context_string(summary, "environment", str(path))
+    provider = _required_context_string(summary, "provider", label)
+    environment = _required_context_string(summary, "environment", label)
     config_path = _validate_config_path(
-        _required_string(summary, "config_path", str(path)),
-        f"{path}.config_path",
+        _required_string(summary, "config_path", label),
+        f"{label}.config_path",
     )
-    started_at_raw, started_at = _required_timestamp(summary, "started_at", str(path))
-    finished_at_raw, finished_at = _required_timestamp(summary, "finished_at", str(path))
+    started_at_raw, started_at = _required_timestamp(summary, "started_at", label)
+    finished_at_raw, finished_at = _required_timestamp(summary, "finished_at", label)
     if finished_at < started_at:
-        raise EvidenceError(f"{path}.finished_at must not be before started_at")
+        raise EvidenceError(f"{label}.finished_at must not be before started_at")
     _reject_stale_timestamp(
         finished_at,
         max_age_days=args.max_canary_age_days,
-        label=f"{path}.finished_at",
+        label=f"{label}.finished_at",
     )
     if args.provider is not None and provider != args.provider:
-        raise EvidenceError(f"{path}.provider does not match expected provider")
+        raise EvidenceError(f"{label}.provider does not match expected provider")
     if args.environment is not None and environment != args.environment:
-        raise EvidenceError(f"{path}.environment does not match expected environment")
+        raise EvidenceError(f"{label}.environment does not match expected environment")
 
-    ok = _required_bool(summary, "ok", str(path))
+    ok = _required_bool(summary, "ok", label)
     if not ok:
-        raise EvidenceError(f"{path} is not an ok canary summary")
-    plan_only = _required_bool(summary, "plan_only", str(path))
+        raise EvidenceError(f"{label} is not an ok canary summary")
+    plan_only = _required_bool(summary, "plan_only", label)
     if plan_only and not args.allow_plan_only:
-        raise EvidenceError(f"{path} is plan-only evidence")
-    policy = _require_object(summary.get("policy"), f"{path}.policy")
-    _reject_unknown_keys(policy, CANARY_POLICY_KEYS, f"{path}.policy")
+        raise EvidenceError(f"{label} is plan-only evidence")
+    policy = _require_object(summary.get("policy"), f"{label}.policy")
+    _reject_unknown_keys(policy, CANARY_POLICY_KEYS, f"{label}.policy")
     require_explicit_policy = _required_bool(
         policy,
         "require_explicit_policy",
-        f"{path}.policy",
+        f"{label}.policy",
     )
     if not require_explicit_policy:
-        raise EvidenceError(f"{path} was not produced with --require-explicit-policy")
+        raise EvidenceError(f"{label} was not produced with --require-explicit-policy")
 
     stage_results: list[dict[str, Any]] = []
     if plan_only:
         if "stages" in summary:
-            raise EvidenceError(f"{path}.stages must be omitted for plan-only evidence")
-        stages = _require_list(summary.get("planned_stages"), f"{path}.planned_stages")
+            raise EvidenceError(f"{label}.stages must be omitted for plan-only evidence")
+        stages = _require_list(summary.get("planned_stages"), f"{label}.planned_stages")
         planned_stage_results = [
             _planned_stage_summary(
-                _require_object(stage, f"{path}.planned_stages[{offset}]"),
-                f"{path}.planned_stages[{offset}]",
+                _require_object(stage, f"{label}.planned_stages[{offset}]"),
+                f"{label}.planned_stages[{offset}]",
                 args,
             )
             for offset, stage in enumerate(stages)
@@ -3445,12 +3467,12 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
         stage_names = [stage["name"] for stage in planned_stage_results]
     else:
         if "planned_stages" in summary:
-            raise EvidenceError(f"{path}.planned_stages must be omitted for executed evidence")
-        stages = _require_list(summary.get("stages"), f"{path}.stages")
+            raise EvidenceError(f"{label}.planned_stages must be omitted for executed evidence")
+        stages = _require_list(summary.get("stages"), f"{label}.stages")
         stage_results = [
             _stage_summary(
-                _require_object(stage, f"{path}.stages[{offset}]"),
-                f"{path}.stages[{offset}]",
+                _require_object(stage, f"{label}.stages[{offset}]"),
+                f"{label}.stages[{offset}]",
                 args,
                 canary_started_at=started_at,
                 canary_finished_at=finished_at,
@@ -3460,41 +3482,41 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
         stage_names = [stage["name"] for stage in stage_results]
 
     if len(stage_names) != len(set(stage_names)):
-        raise EvidenceError(f"{path} contains duplicate canary stages")
-    _check_canary_stage_sequence(stage_names, str(path))
+        raise EvidenceError(f"{label} contains duplicate canary stages")
+    _check_canary_stage_sequence(stage_names, label)
     previous_finished_at: dt.datetime | None = None
     for offset, stage in enumerate(stage_results):
         if previous_finished_at is not None and stage["_started_at"] < previous_finished_at:
             raise EvidenceError(
-                f"{path}.stages[{offset}].started_at must not be before previous stage finished_at"
+                f"{label}.stages[{offset}].started_at must not be before previous stage finished_at"
             )
         previous_finished_at = stage["_finished_at"]
     stage_name_set = set(stage_names)
     if args.allow_partial_canary:
         if "verify" not in stage_name_set:
-            raise EvidenceError(f"{path} is missing verify stage")
+            raise EvidenceError(f"{label} is missing verify stage")
         if not ({"rail", "notary"} & stage_name_set):
-            raise EvidenceError(f"{path} must include rail or notary stage")
+            raise EvidenceError(f"{label} must include rail or notary stage")
     else:
         missing = sorted(REQUIRED_CANARY_STAGES - stage_name_set)
         if missing:
             raise EvidenceError(
-                f"{path} is missing required canary stages: {', '.join(missing)}"
+                f"{label} is missing required canary stages: {', '.join(missing)}"
             )
     stage_branch_label = "planned_stages" if plan_only else "stages"
     stage_results_for_receipts = planned_stage_results if plan_only else stage_results
     _check_stage_receipt_dirs_unique(
-        path,
+        label,
         stage_results_for_receipts,
         branch_label=stage_branch_label,
     )
     _check_verify_receipt_dir_coverage(
-        path,
+        label,
         stage_results_for_receipts,
         branch_label=stage_branch_label,
     )
     _check_verify_receipt_dir_scope(
-        path,
+        label,
         stage_results_for_receipts,
         branch_label=stage_branch_label,
     )
@@ -3517,12 +3539,12 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
     )
     if missing_endpoint_evidence_kinds:
         raise EvidenceError(
-            f"{path}.receipt_summary is missing endpoint_requires_insecure_http "
+            f"{label}.receipt_summary is missing endpoint_requires_insecure_http "
             "evidence for insecure command receipt kinds: "
             + ", ".join(missing_endpoint_evidence_kinds)
         )
-    _check_stage_receipt_kind_binding(path, stage_results, receipt_summary)
-    _check_rail_receipt_policy_binding(path, stage_results, receipt_summary)
+    _check_stage_receipt_kind_binding(label, stage_results, receipt_summary)
+    _check_rail_receipt_policy_binding(label, stage_results, receipt_summary)
     policy_stage_results = planned_stage_results if plan_only else stage_results
 
     return {
@@ -4325,89 +4347,95 @@ def _reject_trust_digest_role_reuse(
             )
 
 
-def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def verify_trust_summary(
+    path: Path,
+    args: argparse.Namespace,
+    *,
+    display_label: str | None = None,
+) -> dict[str, Any]:
     """Verify one archived trust-bundle summary and return compact metadata."""
 
+    label = display_label or "trust summary"
     if _receipt_path_is_repository_fixture(str(path)):
         raise EvidenceError(
-            f"{path} must not point to checked-in ISO fixture artifacts"
+            f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    summary = _require_object(_load_json(path), str(path))
-    digest = _require_summary_digest(summary, str(path))
-    _reject_unknown_keys(summary, TRUST_SUMMARY_KEYS, str(path))
-    _check_no_secret_material(summary)
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, TRUST_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
     version = summary.get("version")
     if (
         isinstance(version, bool)
         or not isinstance(version, int)
         or version != TRUST_SUMMARY_VERSION
     ):
-        raise EvidenceError(f"{path}.version must be {TRUST_SUMMARY_VERSION}")
-    verified_at_raw, verified_at = _required_timestamp(summary, "verified_at", str(path))
+        raise EvidenceError(f"{label}.version must be {TRUST_SUMMARY_VERSION}")
+    verified_at_raw, verified_at = _required_timestamp(summary, "verified_at", label)
     _reject_stale_timestamp(
         verified_at,
         max_age_days=args.max_trust_age_days,
-        label=f"{path}.verified_at",
+        label=f"{label}.verified_at",
     )
 
-    allow_synthetic_der = _required_bool(summary, "allow_synthetic_der", str(path))
-    allow_record_only = _required_bool(summary, "allow_record_only", str(path))
-    allow_insecure_source_url = _required_bool(summary, "allow_insecure_source_url", str(path))
-    profile_json_emitted = _required_bool(summary, "profile_json_emitted", str(path))
-    profile_json_emittable = _required_bool(summary, "profile_json_emittable", str(path))
+    allow_synthetic_der = _required_bool(summary, "allow_synthetic_der", label)
+    allow_record_only = _required_bool(summary, "allow_record_only", label)
+    allow_insecure_source_url = _required_bool(summary, "allow_insecure_source_url", label)
+    profile_json_emitted = _required_bool(summary, "profile_json_emitted", label)
+    profile_json_emittable = _required_bool(summary, "profile_json_emittable", label)
     if "max_source_age_days" not in summary:
-        raise EvidenceError(f"{path}.max_source_age_days must be recorded")
+        raise EvidenceError(f"{label}.max_source_age_days must be recorded")
     if summary["max_source_age_days"] is None:
         max_source_age_days = None
     else:
         max_source_age_days = _required_positive_int_field(
             summary,
             "max_source_age_days",
-            str(path),
+            label,
         )
     if profile_json_emitted:
         profile_json_sha256 = _required_nonzero_sha256(
             summary,
             "profile_json_sha256",
-            str(path),
+            label,
         )
     else:
         if "profile_json_sha256" not in summary:
-            raise EvidenceError(f"{path}.profile_json_sha256 must be null when profile JSON was not emitted")
+            raise EvidenceError(f"{label}.profile_json_sha256 must be null when profile JSON was not emitted")
         if summary["profile_json_sha256"] is not None:
-            raise EvidenceError(f"{path}.profile_json_sha256 must be null when profile JSON was not emitted")
+            raise EvidenceError(f"{label}.profile_json_sha256 must be null when profile JSON was not emitted")
         profile_json_sha256 = None
     if allow_synthetic_der and not args.allow_synthetic_trust:
-        raise EvidenceError(f"{path} was verified with --allow-synthetic-der")
+        raise EvidenceError(f"{label} was verified with --allow-synthetic-der")
     if allow_record_only and not args.allow_record_only_trust:
-        raise EvidenceError(f"{path} was verified with --allow-record-only")
+        raise EvidenceError(f"{label} was verified with --allow-record-only")
     if allow_insecure_source_url and not args.allow_insecure_http:
-        raise EvidenceError(f"{path} was verified with --allow-insecure-source-url")
+        raise EvidenceError(f"{label} was verified with --allow-insecure-source-url")
     if profile_json_emittable:
         if max_source_age_days is None:
-            raise EvidenceError(f"{path}.max_source_age_days must be a positive integer")
+            raise EvidenceError(f"{label}.max_source_age_days must be a positive integer")
         if max_source_age_days > args.max_trust_source_age_days:
             raise EvidenceError(
-                f"{path}.max_source_age_days is weaker than "
+                f"{label}.max_source_age_days is weaker than "
                 "--max-trust-source-age-days"
             )
     if not profile_json_emitted and not args.allow_profile_json_not_emitted:
-        raise EvidenceError(f"{path} did not emit profile JSON")
+        raise EvidenceError(f"{label} did not emit profile JSON")
 
     verified_bundles = summary.get("verified_bundles")
     if isinstance(verified_bundles, bool) or not isinstance(verified_bundles, int) or verified_bundles <= 0:
-        raise EvidenceError(f"{path}.verified_bundles must be a positive integer")
-    bundles = _require_list(summary.get("bundles"), f"{path}.bundles")
+        raise EvidenceError(f"{label}.verified_bundles must be a positive integer")
+    bundles = _require_list(summary.get("bundles"), f"{label}.bundles")
     if len(bundles) != verified_bundles:
-        raise EvidenceError(f"{path}.bundles length does not match verified_bundles")
+        raise EvidenceError(f"{label}.bundles length does not match verified_bundles")
     bundle_objects = [
-        _require_object(bundle, f"{path}.bundles[{offset}]")
+        _require_object(bundle, f"{label}.bundles[{offset}]")
         for offset, bundle in enumerate(bundles)
     ]
     bundle_summaries = [
         _check_trust_bundle(
             bundle,
-            f"{path}.bundles[{offset}]",
+            f"{label}.bundles[{offset}]",
             args,
         )
         for offset, bundle in enumerate(bundle_objects)
@@ -4417,7 +4445,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         for bundle in bundle_summaries
     ) and not allow_record_only:
         raise EvidenceError(
-            f"{path}.allow_record_only must be true when a bundle records "
+            f"{label}.allow_record_only must be true when a bundle records "
             "a non-production embedded_signature_policy"
         )
     if any(
@@ -4425,7 +4453,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         for bundle in bundle_summaries
     ) and not allow_insecure_source_url:
         raise EvidenceError(
-            f"{path}.allow_insecure_source_url must be true when a bundle records "
+            f"{label}.allow_insecure_source_url must be true when a bundle records "
             "an http:// or local/private source URL"
         )
     profile_json_non_emittable_allowed = (
@@ -4438,7 +4466,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         )
     )
     if not profile_json_emittable and not profile_json_non_emittable_allowed:
-        raise EvidenceError(f"{path} cannot emit production profile JSON")
+        raise EvidenceError(f"{label} cannot emit production profile JSON")
     computed_profile_json_emittable = _computed_profile_json_emittable(
         allow_synthetic_der=allow_synthetic_der,
         allow_record_only=allow_record_only,
@@ -4448,15 +4476,15 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     )
     if profile_json_emittable != computed_profile_json_emittable:
         raise EvidenceError(
-            f"{path}.profile_json_emittable does not match trust source policy"
+            f"{label}.profile_json_emittable does not match trust source policy"
         )
     if profile_json_emitted and not profile_json_emittable:
         raise EvidenceError(
-            f"{path}.profile_json_emitted cannot be true when profile_json_emittable is false"
+            f"{label}.profile_json_emitted cannot be true when profile_json_emittable is false"
         )
     if profile_json_emitted and not computed_profile_json_emittable:
         raise EvidenceError(
-            f"{path}.profile_json_emitted cannot be true when trust source policy is not emittable"
+            f"{label}.profile_json_emitted cannot be true when trust source policy is not emittable"
         )
     if profile_json_emitted:
         profile_config = [bundle["profile_overrides"] for bundle in bundle_objects]
@@ -4464,24 +4492,24 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         expected_profile_sha256 = sha256_hex(expected_profile_text.encode("utf-8"))
         if profile_json_sha256 != expected_profile_sha256:
             raise EvidenceError(
-                f"{path}.profile_json_sha256 does not match archived profile_overrides"
+                f"{label}.profile_json_sha256 does not match archived profile_overrides"
             )
-    _reject_trust_digest_role_reuse(profile_json_sha256, bundle_summaries, str(path))
+    _reject_trust_digest_role_reuse(profile_json_sha256, bundle_summaries, label)
     seen_profile_ids: dict[str, int] = {}
     seen_bundle_digests: dict[str, int] = {}
     for offset, bundle in enumerate(bundle_summaries):
         profile_id = bundle["profile_id"]
         if profile_id in seen_profile_ids:
             raise EvidenceError(
-                f"{path}.bundles[{offset}].profile_id duplicates "
-                f"{path}.bundles[{seen_profile_ids[profile_id]}].profile_id"
+                f"{label}.bundles[{offset}].profile_id duplicates "
+                f"{label}.bundles[{seen_profile_ids[profile_id]}].profile_id"
             )
         seen_profile_ids[profile_id] = offset
         bundle_sha256 = bundle["bundle_sha256"]
         if bundle_sha256 in seen_bundle_digests:
             raise EvidenceError(
-                f"{path}.bundles[{offset}].bundle_sha256 duplicates "
-                f"{path}.bundles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256"
+                f"{label}.bundles[{offset}].bundle_sha256 duplicates "
+                f"{label}.bundles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256"
             )
         seen_bundle_digests[bundle_sha256] = offset
     if allow_record_only and not any(
@@ -4489,7 +4517,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         for bundle in bundle_summaries
     ):
         raise EvidenceError(
-            f"{path}.allow_record_only requires at least one non-production "
+            f"{label}.allow_record_only requires at least one non-production "
             "embedded_signature_policy"
         )
     if allow_insecure_source_url and not any(
@@ -4497,7 +4525,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         for bundle in bundle_summaries
     ):
         raise EvidenceError(
-            f"{path}.allow_insecure_source_url requires at least one http:// "
+            f"{label}.allow_insecure_source_url requires at least one http:// "
             "or local/private source URL"
         )
     return {
@@ -4899,8 +4927,22 @@ def run(args: argparse.Namespace) -> int:
     _reject_duplicate_paths([path.resolve() for path in canary_paths], "--canary-summary")
     _reject_duplicate_paths([path.resolve() for path in trust_paths], "--trust-summary")
 
-    canaries = [verify_canary_summary(path, args) for path in canary_paths]
-    trusts = [verify_trust_summary(path, args) for path in trust_paths]
+    canaries = [
+        verify_canary_summary(
+            path,
+            args,
+            display_label=f"canary_summaries[{offset}]",
+        )
+        for offset, path in enumerate(canary_paths)
+    ]
+    trusts = [
+        verify_trust_summary(
+            path,
+            args,
+            display_label=f"trust_summaries[{offset}]",
+        )
+        for offset, path in enumerate(trust_paths)
+    ]
     if args.allow_plan_only and not any(canary["plan_only"] for canary in canaries):
         raise EvidenceError(
             "--allow-plan-only requires at least one canary summary with plan_only=true"

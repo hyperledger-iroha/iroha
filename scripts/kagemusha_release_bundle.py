@@ -801,11 +801,12 @@ def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str
                 readiness._duplicate_json_key_message(label, exc),  # type: ignore[attr-defined]
             )
         ]
-    except readiness.NonFiniteJsonConstantError as exc:  # type: ignore[attr-defined]
+    except readiness.NonFiniteJsonConstantError:  # type: ignore[attr-defined]
         return None, [
             _blocker(
                 f"{code_prefix}_invalid_json",
-                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+                f"{label} is not strict JSON: non-finite constant "
+                f"{readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} is not allowed",
             )
         ]
     if not isinstance(payload, dict):
@@ -1955,6 +1956,37 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                             )
                 d2d_transcripts = kagemusha.get("d2d_payment_transcripts")
                 d2d_transcript_paths: dict[str, str] = {}
+                d2d_transcript_digests: dict[str, str] = {}
+                primary_d2d_path = kagemusha.get("d2d_payment_transcript_path")
+                primary_d2d_digest = kagemusha.get("d2d_payment_transcript_sha256")
+                if (
+                    isinstance(d2d_transport, str)
+                    and d2d_transport in device_lab.D2D_PAYMENT_TRANSPORTS
+                ):
+                    if isinstance(primary_d2d_path, str):
+                        primary_path_errors: list[str] = []
+                        primary_safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                            primary_d2d_path,
+                            primary_path_errors,
+                            "Android readiness summary Kagemusha slot primary D2D transcript path",
+                        )
+                        if (
+                            primary_safe_relative is not None
+                            and device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                primary_safe_relative,
+                                "handoff",
+                            )
+                        ):
+                            d2d_transcript_paths[
+                                primary_safe_relative
+                            ] = d2d_transport
+                    if (
+                        isinstance(primary_d2d_digest, str)
+                        and device_lab.SHA256_HEX_RE.fullmatch(primary_d2d_digest)
+                        is not None
+                        and primary_d2d_digest != "0" * 64
+                    ):
+                        d2d_transcript_digests[primary_d2d_digest] = d2d_transport
                 if d2d_transcripts is not None:
                     if not isinstance(d2d_transcripts, dict) or not d2d_transcripts:
                         blockers.append(
@@ -2039,6 +2071,39 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                     _blocker(
                                         "kagemusha_release_summary_android_slots_d2d_transcripts",
                                         "Android readiness summary Kagemusha slot D2D transcript sha256 must be non-zero lowercase sha256 hex",
+                                        slot=display_slot,
+                                        field=transport,
+                                    )
+                                )
+                            else:
+                                previous_transport = d2d_transcript_digests.get(
+                                    digest
+                                )
+                                if (
+                                    previous_transport is not None
+                                    and previous_transport != transport
+                                ):
+                                    blockers.append(
+                                        _blocker(
+                                            "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                            "Android readiness summary Kagemusha slot D2D transcript bindings must not reuse sha256 digests across transports",
+                                            slot=display_slot,
+                                            field=transport,
+                                        )
+                                    )
+                                else:
+                                    d2d_transcript_digests[digest] = transport
+                            if (
+                                transport == d2d_transport
+                                and (
+                                    binding["path"] != primary_d2d_path
+                                    or digest != primary_d2d_digest
+                                )
+                            ):
+                                blockers.append(
+                                    _blocker(
+                                        "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                        "Android readiness summary Kagemusha slot primary D2D transcript binding must match the primary path and digest",
                                         slot=display_slot,
                                         field=transport,
                                     )

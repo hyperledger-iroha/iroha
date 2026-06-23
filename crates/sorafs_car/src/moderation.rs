@@ -175,7 +175,7 @@ pub fn verify_token_for_context(
     if &proof.body.manifest_id != manifest_id {
         return Err(ModerationTokenError::ContextMismatch("manifest id"));
     }
-    if chunk_digest.is_some() && proof.body.chunk_digest.as_ref() != chunk_digest {
+    if proof.body.chunk_digest.as_ref() != chunk_digest {
         return Err(ModerationTokenError::ContextMismatch("chunk digest"));
     }
     if proof.body.denylist_version != denylist_version.trim() {
@@ -296,3 +296,91 @@ impl std::fmt::Display for ModerationTokenError {
 }
 
 impl std::error::Error for ModerationTokenError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MANIFEST_HEX: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+    const CHUNK_HEX: &str = "0202020202020202020202020202020202020202020202020202020202020202";
+
+    fn key() -> ModerationTokenKey {
+        ModerationTokenKey::from_bytes([9u8; 32])
+    }
+
+    fn manifest_id() -> [u8; 32] {
+        [1u8; 32]
+    }
+
+    fn chunk_digest() -> [u8; 32] {
+        [2u8; 32]
+    }
+
+    #[test]
+    fn manifest_level_token_verifies_without_chunk_digest() {
+        let token = encode_token(&key(), MANIFEST_HEX, None, "dl-v1", "cache-v1")
+            .expect("encode manifest-level token");
+
+        let proof =
+            verify_token_for_context(&token, &key(), &manifest_id(), None, "dl-v1", "cache-v1")
+                .expect("verify manifest-level token");
+
+        assert_eq!(proof.body.chunk_digest, None);
+    }
+
+    #[test]
+    fn chunk_bound_token_requires_matching_chunk_digest() {
+        let token = encode_token(&key(), MANIFEST_HEX, Some(CHUNK_HEX), "dl-v1", "cache-v1")
+            .expect("encode chunk-bound token");
+        let expected_chunk = chunk_digest();
+
+        let proof = verify_token_for_context(
+            &token,
+            &key(),
+            &manifest_id(),
+            Some(&expected_chunk),
+            "dl-v1",
+            "cache-v1",
+        )
+        .expect("verify chunk-bound token");
+
+        assert_eq!(proof.body.chunk_digest, Some(expected_chunk));
+    }
+
+    #[test]
+    fn chunk_bound_token_does_not_satisfy_manifest_level_context() {
+        let token = encode_token(&key(), MANIFEST_HEX, Some(CHUNK_HEX), "dl-v1", "cache-v1")
+            .expect("encode chunk-bound token");
+
+        let err =
+            verify_token_for_context(&token, &key(), &manifest_id(), None, "dl-v1", "cache-v1")
+                .expect_err("chunk-bound token must not verify as manifest-level evidence");
+
+        assert!(matches!(
+            err,
+            ModerationTokenError::ContextMismatch("chunk digest")
+        ));
+    }
+
+    #[test]
+    fn manifest_level_token_does_not_satisfy_chunk_context() {
+        let token = encode_token(&key(), MANIFEST_HEX, None, "dl-v1", "cache-v1")
+            .expect("encode manifest-level token");
+        let expected_chunk = chunk_digest();
+
+        let err = verify_token_for_context(
+            &token,
+            &key(),
+            &manifest_id(),
+            Some(&expected_chunk),
+            "dl-v1",
+            "cache-v1",
+        )
+        .expect_err("manifest-level token must not verify as chunk evidence");
+
+        assert!(matches!(
+            err,
+            ModerationTokenError::ContextMismatch("chunk digest")
+        ));
+    }
+}

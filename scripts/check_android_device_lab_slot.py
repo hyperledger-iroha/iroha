@@ -74,6 +74,7 @@ SUMMARY_NON_STRING_KEY_NORMALIZED_FIELD = "summary_non_string_key_normalized"
 SUMMARY_NON_STRING_KEY_REDACTION = "<non-string-summary-key>"
 SUMMARY_NONFINITE_NUMBER_NORMALIZED_FIELD = "summary_nonfinite_number_normalized"
 SUMMARY_NONFINITE_NUMBER_REDACTION = "<non-finite-summary-number>"
+JSON_NONFINITE_CONSTANT_REDACTION = "<non-finite-json-constant>"
 SUMMARY_UNSUPPORTED_VALUE_NORMALIZED_FIELD = "summary_unsupported_value_normalized"
 SUMMARY_UNSUPPORTED_VALUE_REDACTION = "<unsupported-summary-value>"
 SUMMARY_KAGEMUSHA_SHAPE_NORMALIZED_FIELD = "summary_kagemusha_shape_normalized"
@@ -1224,10 +1225,19 @@ def _summary_release_d2d_transcript_bindings_are_exact(
         return False
     primary_path = kagemusha.get("d2d_payment_transcript_path")
     primary_digest = kagemusha.get("d2d_payment_transcript_sha256")
+    seen_paths: set[str] = set()
+    seen_digests: set[str] = set()
     for transport in declared_transports:
         binding = _summary_release_d2d_transcript_binding(transcripts.get(transport))
         if binding is None:
             return False
+        path, digest = binding
+        if path in seen_paths:
+            return False
+        if digest in seen_digests:
+            return False
+        seen_paths.add(path)
+        seen_digests.add(digest)
         if transport == primary_transport and binding != (primary_path, primary_digest):
             return False
     return True
@@ -2331,8 +2341,10 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
             f"{label} contains duplicate JSON object key {_display_path(exc.key)}"
         )
         return None
-    except NonFiniteJsonConstantError as exc:
-        errors.append(f"{label} contains non-finite constant {exc.constant}")
+    except NonFiniteJsonConstantError:
+        errors.append(
+            f"{label} contains non-finite constant {JSON_NONFINITE_CONSTANT_REDACTION}"
+        )
         return None
     if not isinstance(data, dict):
         errors.append(f"{label} must be a JSON object")
@@ -3324,6 +3336,11 @@ def validate_d2d_payment_transcripts_binding(
         errors.append(f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} must be a non-empty object")
         return transcripts
     seen_paths: dict[str, str] = {}
+    seen_digests: dict[str, str] = {}
+    if primary_relative is not None and primary_transport is not None:
+        seen_paths[primary_relative] = primary_transport
+    if primary_digest is not None and primary_transport is not None:
+        seen_digests[primary_digest] = primary_transport
     for raw_transport, entry in sorted(value.items()):
         if not isinstance(raw_transport, str) or raw_transport not in D2D_PAYMENT_TRANSPORTS:
             errors.append(
@@ -3348,6 +3365,17 @@ def validate_d2d_payment_transcripts_binding(
             )
             continue
         seen_paths[validated["path"]] = transport
+        previous_digest_transport = seen_digests.get(validated["sha256"])
+        if (
+            previous_digest_transport is not None
+            and previous_digest_transport != transport
+        ):
+            errors.append(
+                f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} must not reuse "
+                "sha256 digests for multiple transports"
+            )
+            continue
+        seen_digests[validated["sha256"]] = transport
         transcripts[transport] = validated
     if (
         primary_transport is not None
@@ -4198,6 +4226,12 @@ def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> No
             errors.append(
                 "telemetry/status.ndjson line "
                 f"{line_no} contains duplicate JSON object key {_display_path(exc.key)}"
+            )
+            continue
+        except NonFiniteJsonConstantError:
+            errors.append(
+                f"telemetry/status.ndjson line {line_no} contains non-finite constant "
+                f"{JSON_NONFINITE_CONSTANT_REDACTION}"
             )
             continue
         if not isinstance(status_entry, dict):

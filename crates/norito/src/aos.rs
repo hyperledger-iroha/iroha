@@ -310,15 +310,17 @@ pub fn decode_rows_u64_optstr_bool(body: &[u8]) -> Result<Vec<(u64, Option<Strin
         idb.copy_from_slice(take_bytes(body, &mut off, 8)?);
         let id = u64::from_le_bytes(idb);
         let tag = take_byte(body, &mut off)?;
-        let opt = if tag == 0 {
-            None
-        } else {
-            let slen = read_len_prefix(body, &mut off)?;
-            let bytes = take_bytes(body, &mut off, slen)?;
-            let s = std::str::from_utf8(bytes)
-                .map_err(|_| Error::InvalidUtf8)?
-                .to_string();
-            Some(s)
+        let opt = match tag {
+            0 => None,
+            1 => {
+                let slen = read_len_prefix(body, &mut off)?;
+                let bytes = take_bytes(body, &mut off, slen)?;
+                let s = std::str::from_utf8(bytes)
+                    .map_err(|_| Error::InvalidUtf8)?
+                    .to_string();
+                Some(s)
+            }
+            _ => return Err(Error::invalid_tag("decoding AoS option discriminant", tag)),
         };
         let flag = take_byte(body, &mut off)? != 0;
         out.push((id, opt, flag));
@@ -354,12 +356,14 @@ pub fn decode_rows_u64_optu32_bool(body: &[u8]) -> Result<Vec<(u64, Option<u32>,
         idb.copy_from_slice(take_bytes(body, &mut off, 8)?);
         let id = u64::from_le_bytes(idb);
         let tag = take_byte(body, &mut off)?;
-        let opt = if tag == 0 {
-            None
-        } else {
-            let mut vb = [0u8; 4];
-            vb.copy_from_slice(take_bytes(body, &mut off, 4)?);
-            Some(u32::from_le_bytes(vb))
+        let opt = match tag {
+            0 => None,
+            1 => {
+                let mut vb = [0u8; 4];
+                vb.copy_from_slice(take_bytes(body, &mut off, 4)?);
+                Some(u32::from_le_bytes(vb))
+            }
+            _ => return Err(Error::invalid_tag("decoding AoS option discriminant", tag)),
         };
         let flag = take_byte(body, &mut off)? != 0;
         out.push((id, opt, flag));
@@ -512,6 +516,40 @@ mod tests {
         let bytes = encode_rows_u64_optu32_bool(&rows);
         let decoded = decode_rows_u64_optu32_bool(&bytes).expect("decode");
         assert_eq!(decoded, vec![(10, Some(7), true), (11, None, false)]);
+    }
+
+    #[test]
+    fn aos_opt_str_rejects_noncanonical_option_tag() {
+        let mut bytes = encode_rows_u64_optstr_bool(&[(1, Some("x"), true)]);
+        let tag_offset = core::len_prefix_len(1) + 1 + 8;
+        bytes[tag_offset] = 2;
+
+        let err = decode_rows_u64_optstr_bool(&bytes).expect_err("invalid option tag");
+
+        assert!(matches!(
+            err,
+            Error::InvalidTag {
+                context: "decoding AoS option discriminant",
+                tag: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn aos_opt_u32_rejects_noncanonical_option_tag() {
+        let mut bytes = encode_rows_u64_optu32_bool(&[(1, Some(7), true)]);
+        let tag_offset = core::len_prefix_len(1) + 1 + 8;
+        bytes[tag_offset] = 2;
+
+        let err = decode_rows_u64_optu32_bool(&bytes).expect_err("invalid option tag");
+
+        assert!(matches!(
+            err,
+            Error::InvalidTag {
+                context: "decoding AoS option discriminant",
+                tag: 2
+            }
+        ));
     }
 
     #[test]

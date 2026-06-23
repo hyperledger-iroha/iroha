@@ -625,6 +625,35 @@ public sealed class TransactionBuilderTests
             overAmount.Message,
             StringComparison.Ordinal);
         Assert.Empty(builder.Instructions);
+
+        var shortChangeOutput = new byte[31];
+        Array.Fill(shortChangeOutput, (byte)0x01);
+        var invalidShortChangeOutput = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                changeOutput: shortChangeOutput));
+        Assert.Equal("changeOutput", invalidShortChangeOutput.ParamName);
+        Assert.Contains(
+            "changeOutput must be exactly 32 bytes",
+            invalidShortChangeOutput.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+
+        var zeroChangeOutput = new byte[32];
+        var invalidZeroChangeOutput = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                changeOutput: zeroChangeOutput));
+        Assert.Equal("changeOutput", invalidZeroChangeOutput.ParamName);
+        Assert.Contains(
+            "changeOutput must be non-zero",
+            invalidZeroChangeOutput.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
     }
 
     [Theory]
@@ -761,6 +790,17 @@ public sealed class TransactionBuilderTests
         Assert.Equal("requestArchive", partialWithChange.ParamName);
         Assert.Empty(builder.Instructions);
 
+        var validChangeOutput = new byte[32];
+        Array.Fill(validChangeOutput, (byte)0x42);
+        var partialWithTypedChange = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                changeOutput: validChangeOutput));
+        Assert.Equal("requestArchive", partialWithTypedChange.ParamName);
+        Assert.Empty(builder.Instructions);
+
         var lineageOnly = Assert.Throws<ArgumentException>(() =>
             builder.KagemushaRecursiveRedeem(
                 malformedRequestArchive,
@@ -782,6 +822,19 @@ public sealed class TransactionBuilderTests
                 currentNoteAmount: "100",
                 hasChangeOutput: true));
         Assert.Equal("requestArchive", lineageAndAmount.ParamName);
+        Assert.Empty(builder.Instructions);
+
+        var lineageAmountAndTypedChange = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                changeOutput: validChangeOutput));
+        Assert.Equal("requestArchive", lineageAmountAndTypedChange.ParamName);
         Assert.Empty(builder.Instructions);
     }
 

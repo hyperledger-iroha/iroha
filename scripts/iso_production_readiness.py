@@ -633,45 +633,51 @@ def _check_no_secret_material(value: Any, label: str = "$") -> None:
         _reject_secret_string(value, label)
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise ReadinessError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise ReadinessError(f"{path} does not exist") from error
+        raise ReadinessError(f"{label} does not exist") from error
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
-        raise ReadinessError(f"{path} must not be a symlink")
+        raise ReadinessError(f"{label} must not be a symlink")
     if not stat.S_ISREG(mode):
-        raise ReadinessError(f"{path} must be a regular file")
+        raise ReadinessError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise ReadinessError(f"{path} exceeds {max_bytes} byte JSON limit")
+        raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise ReadinessError(f"{path} must be a regular file")
+            raise ReadinessError(f"{label} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise ReadinessError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise ReadinessError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
         return raw
     except FileNotFoundError as error:
-        raise ReadinessError(f"{path} does not exist") from error
+        raise ReadinessError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise ReadinessError(f"{path} must not be a symlink") from error
-        raise ReadinessError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        raise ReadinessError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -1016,7 +1022,11 @@ def _write_text_output(path: Path, text: str) -> None:
         os.close(parent_fd)
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -1028,15 +1038,21 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise ReadinessError(f"{current} must not be a symlink")
+            label = display_label or str(current)
+            raise ReadinessError(f"{label} must not be a symlink")
 
 
-def _load_json(path: Path) -> Any:
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
     try:
-        raw = _read_regular_file(path, max_bytes=MAX_SUMMARY_JSON_BYTES)
+        raw = _read_regular_file(
+            path,
+            max_bytes=MAX_SUMMARY_JSON_BYTES,
+            display_label=label,
+        )
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ReadinessError(f"{path} is not UTF-8 JSON") from error
+        raise ReadinessError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -1044,7 +1060,7 @@ def _load_json(path: Path) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise ReadinessError(f"{path} is not valid JSON: {error}") from error
+        raise ReadinessError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -1059,7 +1075,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise ReadinessError(f"JSON contains non-finite numeric constant {value}")
+    raise ReadinessError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -2900,7 +2916,7 @@ def _verify_xsd_summary_entries(
         _blocker(
             blockers,
             "xsd.blocked_source_already_checked_in",
-            f"XSD summary records blocked candidate for checked-in schema {message_def_id}",
+            "XSD summary records blocked candidate for a checked-in schema",
             path,
         )
     _block_duplicate_strings(
@@ -3188,7 +3204,7 @@ def _profile_version_key(entry: dict[str, Any], label: str) -> tuple[str, str, s
     message_def_id = _require_message_def_id(entry, "message_def_id", label)
     if not message_def_id.startswith(message_type + "."):
         raise ReadinessError(
-            f"{label}.message_def_id must match message_type {message_type!r}"
+            f"{label}.message_def_id must match message_type"
         )
     return profile_id, message_type, direction, message_def_id
 
@@ -3310,7 +3326,7 @@ def _verify_xsd_profile_catalog_entries(
             _blocker(
                 blockers,
                 "xsd.profile_catalog_skipped_family_mismatch",
-                f"{label}.version must equal message_type {key[1]!r}",
+                f"{label}.version must equal message_type",
                 path,
             )
         if key in seen_skipped:
@@ -3823,13 +3839,15 @@ def verify_xsd_summary(
     max_age_days: int,
     blockers: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify one XSD preflight summary and append production blockers."""
 
-    summary = _require_object(_load_json(path), str(path))
-    digest = _require_summary_digest(summary, str(path))
-    _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, str(path))
-    _check_no_secret_material(summary)
+    label = display_label or "xsd summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
     version = summary.get("version")
     if (
         isinstance(version, bool)
@@ -4001,10 +4019,7 @@ def verify_xsd_summary(
             _blocker(
                 blockers,
                 "xsd.blocked_source_without_gap",
-                (
-                    "XSD summary records blocked candidate "
-                    f"{message_def_id} without a current missing schema/profile gap"
-                ),
+                "XSD summary records blocked candidate without a current missing schema/profile gap",
                 path,
             )
 
@@ -4595,7 +4610,7 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.source_missing",
-            f"trust profile {profile_id!r} has no source provenance",
+            "trust profile has no source provenance",
             path,
         )
         source_summary = None
@@ -4656,7 +4671,7 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.no_signature_or_x509_pins",
-            f"trust profile {profile_id!r} has no public-key or X.509 pins",
+            "trust profile has no public-key or X.509 pins",
             path,
         )
     if args.environment is not None and environment != args.environment:
@@ -4670,42 +4685,42 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.policy_unsupported",
-            f"trust profile {profile_id!r} uses unsupported embedded signature policy",
+            "trust profile uses unsupported embedded signature policy",
             path,
         )
     elif policy != REQUIRE_VERIFIED:
         _blocker(
             blockers,
             "trust.policy_not_require_verified",
-            f"trust profile {profile_id!r} does not require verified signatures",
+            "trust profile does not require verified signatures",
             path,
         )
     if not crl_required:
         _blocker(
             blockers,
             "trust.crl_revocation_not_required",
-            f"trust profile {profile_id!r} does not require CRL revocation checking",
+            "trust profile does not require CRL revocation checking",
             path,
         )
     elif x509_crl_count <= 0:
         _blocker(
             blockers,
             "trust.no_crl_revocation_material",
-            f"trust profile {profile_id!r} requires CRL revocation checking but has no CRLs",
+            "trust profile requires CRL revocation checking but has no CRLs",
             path,
         )
     if not ocsp_required:
         _blocker(
             blockers,
             "trust.ocsp_revocation_not_required",
-            f"trust profile {profile_id!r} does not require OCSP revocation checking",
+            "trust profile does not require OCSP revocation checking",
             path,
         )
     elif x509_ocsp_response_count <= 0:
         _blocker(
             blockers,
             "trust.no_ocsp_revocation_material",
-            f"trust profile {profile_id!r} requires OCSP revocation checking but has no OCSP responses",
+            "trust profile requires OCSP revocation checking but has no OCSP responses",
             path,
         )
     result = {
@@ -5501,13 +5516,15 @@ def verify_evidence_summary(
     *,
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify one aggregate operator-evidence summary and append blockers."""
 
-    summary = _require_object(_load_json(path), str(path))
-    digest = _require_summary_digest(summary, str(path))
-    _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, str(path))
-    _check_no_secret_material(summary)
+    label = display_label or "evidence summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -5890,12 +5907,18 @@ def run(args: argparse.Namespace) -> int:
             max_age_days=args.max_xsd_age_days,
             blockers=blockers,
             warnings=warnings,
+            display_label=f"xsd_summaries[{offset}]",
         )
-        for path in xsd_paths
+        for offset, path in enumerate(xsd_paths)
     ]
     evidence_summaries = [
-        verify_evidence_summary(path, args=args, blockers=blockers)
-        for path in evidence_paths
+        verify_evidence_summary(
+            path,
+            args=args,
+            blockers=blockers,
+            display_label=f"evidence_summaries[{offset}]",
+        )
+        for offset, path in enumerate(evidence_paths)
     ]
     if args.allow_reviewed_xsd_gaps and not warnings:
         raise ReadinessError(

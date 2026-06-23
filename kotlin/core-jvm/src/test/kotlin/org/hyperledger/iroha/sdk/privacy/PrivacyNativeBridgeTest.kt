@@ -297,6 +297,20 @@ class PrivacyNativeBridgeTest {
         assertTrue(PrivacyNativeBridge.isValidPrivacyNoritoArchive(unshieldRequest))
         assertTrue(PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldRequest, 0x52))
         assertTrue(PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(unshieldRequest))
+
+        val unshieldVerifyRequest =
+            PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(byteArrayOf(4, 5, 6))
+        assertTrue(PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldVerifyRequest, 0x52))
+        val unshieldVerifyOutput = PrivacyNativeBridge.call(
+            label = "verify proof",
+            requestArchive = unshieldVerifyRequest,
+            nativeCall = { request ->
+                assertTrue(request.contentEquals(unshieldVerifyRequest))
+                privacyNoritoFrameWithPayload(0x56)
+            },
+            bridgeAvailable = true,
+        )
+        assertTrue(unshieldVerifyOutput.contentEquals(privacyNoritoFrameWithPayload(0x56)))
     }
 
     @Test
@@ -311,7 +325,16 @@ class PrivacyNativeBridgeTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(
+                unshieldWitness,
+                "halo2-ipa-pasta:confidential_transfer_v2",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
             PrivacyConfidentialWitnessCodecs.buildConfidentialTransferVerifyRequestV1(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(ByteArray(0))
         }
         assertFailsWith<IllegalArgumentException> {
             PrivacyConfidentialWitnessCodecs.encodeTransferWitness(

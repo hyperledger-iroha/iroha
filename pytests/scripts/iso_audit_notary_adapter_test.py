@@ -2261,6 +2261,33 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertIn("must not be a symlink", stderr)
             self.assertFalse((target_dir / "nested").exists())
 
+    def test_export_dir_discovery_path_diagnostics_do_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            missing_dir = root / "missing-export"
+            export_file = root / "export-as-file"
+            export_file.write_text("not a directory\n", encoding="utf-8")
+            empty_dir = root / "empty-export"
+            empty_dir.mkdir()
+
+            cases = (
+                (missing_dir, ["--dry-run"], "does not exist"),
+                (export_file, ["--dry-run"], "must be a directory"),
+                (empty_dir, ["--all", "--dry-run"], "has no *.notary.json anchors"),
+            )
+            for path, extra_args, message in cases:
+                with self.subTest(path=path.name):
+                    rc, stdout, stderr = run_main(
+                        ["--export-dir", str(path), *extra_args]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("export_dir", stderr)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(str(path), stderr)
+                    self.assertNotIn(path.name, stderr)
+
     def test_symlinked_export_dir_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2285,7 +2312,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("export_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(export_dir), stderr)
+            self.assertNotIn(export_dir.name, stderr)
 
     def test_symlinked_export_dir_ancestor_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2311,7 +2341,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("export_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(export_dir), stderr)
+            self.assertNotIn(ancestor.name, stderr)
 
     def test_plain_http_endpoint_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -2606,7 +2639,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_anchor_json_surrogate_strings_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -2737,6 +2771,112 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("must not be a symlink", stderr)
+
+    def test_exported_audit_index_mismatch_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-exported-index-mismatch"
+            export_dir = root / hidden / "export"
+            export_dir.mkdir(parents=True)
+            index, _anchor, _digest_anchor = write_export(export_dir)
+            index["records"].append(sample_record("msg-2"))
+            index["record_count"] = 2
+            index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
+            index_file = export_dir / ADAPTER.INDEX_FILE
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("embedded audit index differs from exported audit index", stderr)
+            self.assertNotIn(str(index_file), stderr)
+            self.assertNotIn(hidden, stderr)
+
+    def test_malformed_source_paths_do_not_echo_paths(self):
+        def malformed_anchor_json(root, hidden):
+            export_dir = root / hidden / "export"
+            export_dir.mkdir(parents=True)
+            write_export(export_dir)
+            source_path = export_dir / ADAPTER.LATEST_ANCHOR_FILE
+            source_path.write_text("{not-json\n", encoding="utf-8")
+            return export_dir, source_path, "is not valid JSON"
+
+        def malformed_exported_index_json(root, hidden):
+            export_dir = root / hidden / "export"
+            export_dir.mkdir(parents=True)
+            write_export(export_dir)
+            source_path = export_dir / ADAPTER.INDEX_FILE
+            source_path.write_text("{not-json\n", encoding="utf-8")
+            return export_dir, source_path, "is not valid JSON"
+
+        def missing_store_dir(root, hidden):
+            export_dir = root / "export"
+            store_dir = root / hidden / "store"
+            export_dir.mkdir()
+            index, _anchor, _digest_anchor = write_export(
+                export_dir,
+                store_dir=store_dir,
+                write_record_sources_flag=True,
+            )
+            record_path = store_dir / ADAPTER.RECORDS_DIR / index["records"][0]["filename"]
+            record_path.unlink()
+            (store_dir / ADAPTER.RECORDS_DIR).rmdir()
+            store_dir.rmdir()
+            return export_dir, store_dir, "store_dir does not exist"
+
+        def malformed_record_json(root, hidden):
+            export_dir = root / "export"
+            store_dir = root / hidden / "store"
+            export_dir.mkdir()
+            index, _anchor, _digest_anchor = write_export(
+                export_dir,
+                store_dir=store_dir,
+                write_record_sources_flag=True,
+            )
+            source_path = store_dir / ADAPTER.RECORDS_DIR / index["records"][0]["filename"]
+            source_path.write_text("{not-json\n", encoding="utf-8")
+            return export_dir, source_path, "is not valid JSON"
+
+        cases = (
+            ("malformed-anchor-json", malformed_anchor_json),
+            ("malformed-exported-index-json", malformed_exported_index_json),
+            ("missing-store-dir", missing_store_dir),
+            ("malformed-record-json", malformed_record_json),
+        )
+        for name, arrange in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                hidden = f"hidden-notary-source-{name}"
+                export_dir, source_path, expected = arrange(root, hidden)
+
+                with capture_server() as (endpoint, requests):
+                    rc, stdout, stderr = run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertEqual(requests, [])
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn(str(source_path), stderr)
 
     def test_tampered_anchor_digest_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_export:

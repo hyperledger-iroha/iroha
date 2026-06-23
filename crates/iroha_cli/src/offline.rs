@@ -10,9 +10,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::petal_stream::{
     PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS, PETAL_CAPTURE_RATIO_BPS_SCALE,
-    PetalStreamCaptureProfile, PetalStreamDecoder, PetalStreamEncoder, PetalStreamGrid,
-    PetalStreamOptions, PetalStreamSampleGrid, render_petal_capture_samples_with_seed,
-    score_petal_capture_profile_with_seed,
+    PETAL_STREAM_GRID_SIZES, PetalStreamCaptureProfile, PetalStreamDecoder, PetalStreamEncoder,
+    PetalStreamGrid, PetalStreamOptions, PetalStreamSampleGrid,
+    render_petal_capture_samples_with_seed, score_petal_capture_profile_with_seed,
 };
 use norito::derive::JsonSerialize;
 
@@ -38,7 +38,9 @@ const MAX_CAPTURE_NOISE_AMPLITUDE: u8 = 64;
 const MIN_CAPTURE_EXPOSURE_OFFSET: i16 = -255;
 const MAX_CAPTURE_EXPOSURE_OFFSET: i16 = 255;
 const DEFAULT_STYLE_NAME: &str = "sora-temple";
+const HIGH_CONTRAST_STYLE_NAME: &str = "sora-temple-high-contrast";
 const KATAKANA_STYLE_NAME: &str = "sora-temple-command";
+const KATAKANA_HIGH_CONTRAST_STYLE_NAME: &str = "sora-temple-command-high-contrast";
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
@@ -101,6 +103,9 @@ pub(crate) struct EncodeArgs {
     /// Visual channel.
     #[arg(long, value_enum, default_value_t = PetalEncodeChannelArg::BinaryGrid)]
     channel: PetalEncodeChannelArg,
+    /// Katakana layout preset. Defaults to balanced for katakana-base94.
+    #[arg(long = "katakana-preset", value_enum)]
+    katakana_preset: Option<PetalKatakanaPresetArg>,
     /// Square output dimension in pixels.
     #[arg(long, default_value_t = DEFAULT_ENCODE_DIMENSION)]
     dimension: u32,
@@ -203,6 +208,12 @@ pub(crate) struct ScoreStylesArgs {
     /// Published style set to score.
     #[arg(long = "style-set", value_enum, default_value_t = PetalStyleSetArg::SoraTempleDefault)]
     style_set: PetalStyleSetArg,
+    /// Visual channel to score.
+    #[arg(long, value_enum, default_value_t = PetalEncodeChannelArg::BinaryGrid)]
+    channel: PetalEncodeChannelArg,
+    /// Katakana layout preset. Defaults to balanced for katakana-base94.
+    #[arg(long = "katakana-preset", value_enum)]
+    katakana_preset: Option<PetalKatakanaPresetArg>,
     /// Deterministic capture profile to apply.
     #[arg(long, value_enum, default_value_t = PetalCaptureProfileArg::Default)]
     profile: PetalCaptureProfileArg,
@@ -381,6 +392,32 @@ impl std::fmt::Display for PetalEncodeChannelArg {
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PetalKatakanaPresetArg {
+    /// Balanced command-tile density for ordinary camera distances.
+    Balanced,
+    /// Larger cells for longer-distance camera capture.
+    DistanceSafe,
+}
+
+impl std::fmt::Display for PetalKatakanaPresetArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Balanced => f.write_str("balanced"),
+            Self::DistanceSafe => f.write_str("distance-safe"),
+        }
+    }
+}
+
+impl PetalKatakanaPresetArg {
+    fn min_grid_size(self) -> u16 {
+        match self {
+            Self::Balanced => 41,
+            Self::DistanceSafe => 33,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PetalStyleSetArg {
     /// Current production Petal style family.
     SoraTempleDefault,
@@ -428,11 +465,7 @@ impl EncodeArgs {
         self.validate()?;
         let payload = fs::read(&self.input)
             .wrap_err_with(|| format!("failed to read input payload {}", self.input.display()))?;
-        let options = PetalStreamOptions {
-            grid_size: self.grid_size,
-            border: self.border,
-            anchor_size: self.anchor_size,
-        };
+        let options = self.encode_options(&payload)?;
         let grid = PetalStreamEncoder::encode_grid(&payload, options)
             .map_err(|err| eyre!("failed to encode Petal grid: {err}"))?;
         if self.dimension < u32::from(grid.grid_size) {
@@ -468,6 +501,9 @@ impl EncodeArgs {
             format: self.format.to_string(),
             style: self.style.to_string(),
             channel: self.channel.to_string(),
+            katakana_preset: self
+                .effective_katakana_preset()
+                .map(|preset| preset.to_string()),
             fps: self.fps,
             animation_frames: self.animation_frames,
             dimension: self.dimension,
@@ -487,6 +523,11 @@ impl EncodeArgs {
     fn validate(&self) -> Result<()> {
         match self.channel {
             PetalEncodeChannelArg::BinaryGrid => {
+                if self.katakana_preset.is_some() {
+                    return Err(eyre!(
+                        "--katakana-preset requires --channel katakana-base94"
+                    ));
+                }
                 if self.style != PetalEncodeStyleArg::SoraTemple {
                     return Err(eyre!(
                         "--channel binary-grid requires --style {}",
@@ -526,6 +567,26 @@ impl EncodeArgs {
             ));
         }
         Ok(())
+    }
+
+    fn encode_options(&self, payload: &[u8]) -> Result<PetalStreamOptions> {
+        let options = PetalStreamOptions {
+            grid_size: self.grid_size,
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        let Some(preset) = self.effective_katakana_preset() else {
+            return Ok(options);
+        };
+        if self.grid_size != 0 {
+            return Ok(options);
+        }
+        resolve_katakana_preset_options(payload, options, preset)
+    }
+
+    fn effective_katakana_preset(&self) -> Option<PetalKatakanaPresetArg> {
+        (self.channel == PetalEncodeChannelArg::KatakanaBase94)
+            .then_some(self.katakana_preset.unwrap_or(PetalKatakanaPresetArg::Balanced))
     }
 }
 
@@ -859,19 +920,10 @@ impl ScoreStylesArgs {
     fn build_report(&self) -> Result<ScoreStylesReport> {
         let payload = fs::read(&self.input)
             .wrap_err_with(|| format!("failed to read input payload {}", self.input.display()))?;
-        if self.fps == 0 {
-            return Err(eyre!("--fps must be greater than 0"));
-        }
-        if self.min_success_ratio_bps > PETAL_CAPTURE_RATIO_BPS_SCALE {
-            return Err(eyre!("--min-success-ratio-bps exceeds 100%"));
-        }
+        self.validate()?;
 
         let base_profile = self.capture_profile();
-        let options = PetalStreamOptions {
-            grid_size: self.grid_size,
-            border: self.border,
-            anchor_size: self.anchor_size,
-        };
+        let options = self.score_options(&payload)?;
         let resolved_grid_size = PetalStreamEncoder::encode_grid(&payload, options)
             .map_err(|err| eyre!("failed to resolve Petal grid geometry: {err}"))?
             .grid_size;
@@ -881,7 +933,11 @@ impl ScoreStylesArgs {
             effective_payload_bytes_per_second.saturating_mul(8);
         let styles = self
             .style_set
-            .style_candidates(base_profile)
+            .style_candidates(
+                self.channel,
+                self.effective_katakana_preset(),
+                base_profile,
+            )
             .into_iter()
             .map(|candidate| {
                 score_style(
@@ -910,6 +966,10 @@ impl ScoreStylesArgs {
             input_path: self.input.display().to_string(),
             payload_bytes: payload.len() as u64,
             style_set: self.style_set.to_string(),
+            channel: self.channel.to_string(),
+            katakana_preset: self
+                .effective_katakana_preset()
+                .map(|preset| preset.to_string()),
             profile: self.profile.to_string(),
             seed: self.seed,
             fps: self.fps,
@@ -927,6 +987,41 @@ impl ScoreStylesArgs {
             recommended_overall_score_bps,
             gate_passed,
         })
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.channel == PetalEncodeChannelArg::BinaryGrid && self.katakana_preset.is_some() {
+            return Err(eyre!(
+                "--katakana-preset requires --channel katakana-base94"
+            ));
+        }
+        if self.fps == 0 {
+            return Err(eyre!("--fps must be greater than 0"));
+        }
+        if self.min_success_ratio_bps > PETAL_CAPTURE_RATIO_BPS_SCALE {
+            return Err(eyre!("--min-success-ratio-bps exceeds 100%"));
+        }
+        Ok(())
+    }
+
+    fn score_options(&self, payload: &[u8]) -> Result<PetalStreamOptions> {
+        let options = PetalStreamOptions {
+            grid_size: self.grid_size,
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        let Some(preset) = self.effective_katakana_preset() else {
+            return Ok(options);
+        };
+        if self.grid_size != 0 {
+            return Ok(options);
+        }
+        resolve_katakana_preset_options(payload, options, preset)
+    }
+
+    fn effective_katakana_preset(&self) -> Option<PetalKatakanaPresetArg> {
+        (self.channel == PetalEncodeChannelArg::KatakanaBase94)
+            .then_some(self.katakana_preset.unwrap_or(PetalKatakanaPresetArg::Balanced))
     }
 
     fn capture_profile(&self) -> PetalStreamCaptureProfile {
@@ -1064,20 +1159,54 @@ fn validate_capture_profile_for_cli(profile: PetalStreamCaptureProfile) -> Resul
     Ok(())
 }
 
+fn resolve_katakana_preset_options(
+    payload: &[u8],
+    options: PetalStreamOptions,
+    preset: PetalKatakanaPresetArg,
+) -> Result<PetalStreamOptions> {
+    let mut last_error = None;
+    for &candidate in PETAL_STREAM_GRID_SIZES {
+        if candidate < preset.min_grid_size() {
+            continue;
+        }
+        let candidate_options = PetalStreamOptions {
+            grid_size: candidate,
+            ..options
+        };
+        match PetalStreamEncoder::encode_grid(payload, candidate_options) {
+            Ok(_) => return Ok(candidate_options),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(eyre!(
+        "failed to resolve Katakana preset '{}' grid geometry: {}",
+        preset,
+        last_error
+            .map_or_else(|| "no candidate grid sizes".to_string(), |err| err.to_string())
+    ))
+}
+
 impl PetalStyleSetArg {
-    fn style_candidates(self, base_profile: PetalStreamCaptureProfile) -> Vec<PetalStyleCandidate> {
+    fn style_candidates(
+        self,
+        channel: PetalEncodeChannelArg,
+        katakana_preset: Option<PetalKatakanaPresetArg>,
+        base_profile: PetalStreamCaptureProfile,
+    ) -> Vec<PetalStyleCandidate> {
+        let base = PetalStyleCandidate {
+            name: base_style_name(channel),
+            channel,
+            katakana_preset,
+            capture_profile: base_profile,
+        };
         match self {
-            Self::SoraTempleDefault => vec![PetalStyleCandidate {
-                name: DEFAULT_STYLE_NAME,
-                capture_profile: base_profile,
-            }],
+            Self::SoraTempleDefault => vec![base],
             Self::SoraTempleExpanded => vec![
+                base,
                 PetalStyleCandidate {
-                    name: DEFAULT_STYLE_NAME,
-                    capture_profile: base_profile,
-                },
-                PetalStyleCandidate {
-                    name: "sora-temple-high-contrast",
+                    name: high_contrast_style_name(channel),
+                    channel,
+                    katakana_preset,
                     capture_profile: high_contrast_capture_profile(base_profile),
                 },
             ],
@@ -1088,7 +1217,23 @@ impl PetalStyleSetArg {
 #[derive(Clone, Copy, Debug)]
 struct PetalStyleCandidate {
     name: &'static str,
+    channel: PetalEncodeChannelArg,
+    katakana_preset: Option<PetalKatakanaPresetArg>,
     capture_profile: PetalStreamCaptureProfile,
+}
+
+fn base_style_name(channel: PetalEncodeChannelArg) -> &'static str {
+    match channel {
+        PetalEncodeChannelArg::BinaryGrid => DEFAULT_STYLE_NAME,
+        PetalEncodeChannelArg::KatakanaBase94 => KATAKANA_STYLE_NAME,
+    }
+}
+
+fn high_contrast_style_name(channel: PetalEncodeChannelArg) -> &'static str {
+    match channel {
+        PetalEncodeChannelArg::BinaryGrid => HIGH_CONTRAST_STYLE_NAME,
+        PetalEncodeChannelArg::KatakanaBase94 => KATAKANA_HIGH_CONTRAST_STYLE_NAME,
+    }
 }
 
 fn high_contrast_capture_profile(
@@ -1132,6 +1277,10 @@ fn score_style(
     let overall_score_bps = capture_success_ratio_bps.min(throughput_score_bps);
     Ok(StyleScoreReport {
         style: candidate.name.to_string(),
+        channel: candidate.channel.to_string(),
+        katakana_preset: candidate
+            .katakana_preset
+            .map(|preset| preset.to_string()),
         capture_profile: CaptureProfileReport::from(candidate.capture_profile),
         capture_attempts: score.attempts,
         capture_successes: score.successes,
@@ -2304,6 +2453,7 @@ struct EncodeReport {
     format: String,
     style: String,
     channel: String,
+    katakana_preset: Option<String>,
     fps: u16,
     animation_frames: u16,
     dimension: u32,
@@ -2425,6 +2575,8 @@ struct ScoreStylesReport {
     input_path: String,
     payload_bytes: u64,
     style_set: String,
+    channel: String,
+    katakana_preset: Option<String>,
     profile: String,
     seed: u64,
     fps: u16,
@@ -2476,6 +2628,8 @@ impl From<PetalStreamCaptureProfile> for CaptureProfileReport {
 #[derive(Clone, Debug, JsonSerialize)]
 struct StyleScoreReport {
     style: String,
+    channel: String,
+    katakana_preset: Option<String>,
     capture_profile: CaptureProfileReport,
     capture_attempts: u16,
     capture_successes: u16,
@@ -2566,6 +2720,8 @@ mod tests {
             input: input.to_path_buf(),
             output_report: None,
             style_set: PetalStyleSetArg::SoraTempleDefault,
+            channel: PetalEncodeChannelArg::BinaryGrid,
+            katakana_preset: None,
             profile: PetalCaptureProfileArg::Default,
             seed: 0,
             fps: DEFAULT_SCORE_STYLES_FPS,
@@ -2596,6 +2752,7 @@ mod tests {
             format: PetalEncodeFormatArg::Png,
             style: PetalEncodeStyleArg::SoraTemple,
             channel: PetalEncodeChannelArg::BinaryGrid,
+            katakana_preset: None,
             dimension: DEFAULT_ENCODE_DIMENSION,
             fps: DEFAULT_SCORE_STYLES_FPS,
             animation_frames: 1,
@@ -2756,6 +2913,61 @@ mod tests {
             manifest.get("style").and_then(Value::as_str),
             Some(KATAKANA_STYLE_NAME)
         );
+        assert_eq!(
+            manifest.get("katakana_preset").and_then(Value::as_str),
+            Some("balanced")
+        );
+        assert_eq!(manifest["grid"]["resolved_grid_size"], Value::from(41u64));
+    }
+
+    #[test]
+    fn encode_katakana_presets_select_expected_auto_grid_floor() {
+        let payload = b"sora-temple-capture-baseline";
+        let payload_file = write_payload(payload);
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = katakana_encode_args(payload_file.path(), tempdir.path());
+        args.katakana_preset = Some(PetalKatakanaPresetArg::DistanceSafe);
+
+        let report = args.encode().expect("encode distance safe katakana");
+
+        assert_eq!(report.katakana_preset.as_deref(), Some("distance-safe"));
+        assert_eq!(report.grid.requested_grid_size, 0);
+        assert_eq!(report.grid.resolved_grid_size, 33);
+        let frame_path = tempdir.path().join("png/frame_0000.png");
+        assert_eq!(decode_encoded_frame(&frame_path, report.grid), payload);
+    }
+
+    #[test]
+    fn encode_katakana_explicit_grid_overrides_preset_floor() {
+        let payload = b"sora-temple-capture-baseline";
+        let payload_file = write_payload(payload);
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let mut args = katakana_encode_args(payload_file.path(), tempdir.path());
+        args.katakana_preset = Some(PetalKatakanaPresetArg::Balanced);
+        args.grid_size = 37;
+
+        let report = args.encode().expect("encode explicit katakana grid");
+
+        assert_eq!(report.katakana_preset.as_deref(), Some("balanced"));
+        assert_eq!(report.grid.requested_grid_size, 37);
+        assert_eq!(report.grid.resolved_grid_size, 37);
+    }
+
+    #[test]
+    fn encode_katakana_balanced_preset_grows_for_larger_payloads() {
+        let payload = vec![0xa5; 180];
+        let payload_file = write_payload(&payload);
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let args = katakana_encode_args(payload_file.path(), tempdir.path());
+
+        let report = args.encode().expect("encode larger katakana payload");
+
+        assert_eq!(report.katakana_preset.as_deref(), Some("balanced"));
+        assert!(report.grid.resolved_grid_size >= 41);
+        assert_eq!(
+            decode_encoded_frame(&tempdir.path().join("png/frame_0000.png"), report.grid),
+            payload
+        );
     }
 
     #[test]
@@ -2772,6 +2984,11 @@ mod tests {
         args.style = PetalEncodeStyleArg::SoraTempleCommand;
         let err = args.encode().expect_err("binary style rejected");
         assert!(err.to_string().contains("binary-grid"));
+
+        let mut args = encode_args(payload.path(), tempdir.path());
+        args.katakana_preset = Some(PetalKatakanaPresetArg::DistanceSafe);
+        let err = args.encode().expect_err("binary preset rejected");
+        assert!(err.to_string().contains("katakana-preset"));
     }
 
     #[cfg(not(feature = "offline-visual-codecs"))]
@@ -3672,11 +3889,13 @@ mod tests {
         let report = args.build_report().expect("score report");
 
         assert_eq!(report.style_set, "sora-temple-expanded");
+        assert_eq!(report.channel, "binary-grid");
+        assert_eq!(report.katakana_preset, None);
         assert_eq!(report.styles.len(), 2);
         assert_eq!(report.recommended_style, DEFAULT_STYLE_NAME);
         assert!(report.gate_passed);
         let default_style = style_score(&report, DEFAULT_STYLE_NAME);
-        let high_contrast = style_score(&report, "sora-temple-high-contrast");
+        let high_contrast = style_score(&report, HIGH_CONTRAST_STYLE_NAME);
         assert_eq!(
             default_style.capture_success_ratio_bps,
             PETAL_CAPTURE_RATIO_BPS_SCALE
@@ -3685,6 +3904,8 @@ mod tests {
             high_contrast.capture_success_ratio_bps,
             PETAL_CAPTURE_RATIO_BPS_SCALE
         );
+        assert_eq!(default_style.channel, "binary-grid");
+        assert_eq!(default_style.katakana_preset, None);
         assert!(default_style.gate_passed);
         assert!(high_contrast.gate_passed);
         assert!(high_contrast.capture_profile.dark_luma < default_style.capture_profile.dark_luma);
@@ -3705,10 +3926,10 @@ mod tests {
 
         let report = args.build_report().expect("score report");
 
-        assert_eq!(report.recommended_style, "sora-temple-high-contrast");
+        assert_eq!(report.recommended_style, HIGH_CONTRAST_STYLE_NAME);
         assert!(report.gate_passed);
         let default_style = style_score(&report, DEFAULT_STYLE_NAME);
-        let high_contrast = style_score(&report, "sora-temple-high-contrast");
+        let high_contrast = style_score(&report, HIGH_CONTRAST_STYLE_NAME);
         assert_eq!(default_style.capture_successes, 0);
         assert!(!default_style.capture_gate_passed);
         assert!(!default_style.gate_passed);
@@ -3738,6 +3959,101 @@ mod tests {
         assert_eq!(style.capture_successes, 0);
         assert!(!style.capture_gate_passed);
         assert!(!report.gate_passed);
+    }
+
+    #[test]
+    fn score_styles_katakana_default_uses_balanced_preset_floor() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+
+        let report = args.build_report().expect("score katakana report");
+
+        assert_eq!(report.channel, "katakana-base94");
+        assert_eq!(report.katakana_preset.as_deref(), Some("balanced"));
+        assert_eq!(report.grid.requested_grid_size, 0);
+        assert_eq!(report.grid.resolved_grid_size, 41);
+        assert_eq!(report.recommended_style, KATAKANA_STYLE_NAME);
+        assert!(report.gate_passed);
+        assert_eq!(report.styles.len(), 1);
+        let style = style_score(&report, KATAKANA_STYLE_NAME);
+        assert_eq!(style.channel, "katakana-base94");
+        assert_eq!(style.katakana_preset.as_deref(), Some("balanced"));
+        assert_eq!(style.capture_attempts, 12);
+        assert_eq!(style.capture_successes, 12);
+        assert_eq!(style.capture_success_ratio_bps, PETAL_CAPTURE_RATIO_BPS_SCALE);
+    }
+
+    #[test]
+    fn score_styles_katakana_distance_safe_uses_preset_floor() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+        args.katakana_preset = Some(PetalKatakanaPresetArg::DistanceSafe);
+
+        let report = args.build_report().expect("score distance-safe katakana");
+
+        assert_eq!(report.katakana_preset.as_deref(), Some("distance-safe"));
+        assert_eq!(report.grid.requested_grid_size, 0);
+        assert_eq!(report.grid.resolved_grid_size, 33);
+        assert_eq!(
+            style_score(&report, KATAKANA_STYLE_NAME)
+                .katakana_preset
+                .as_deref(),
+            Some("distance-safe")
+        );
+    }
+
+    #[test]
+    fn score_styles_katakana_explicit_grid_overrides_preset_floor() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+        args.katakana_preset = Some(PetalKatakanaPresetArg::Balanced);
+        args.grid_size = 37;
+
+        let report = args.build_report().expect("score explicit katakana grid");
+
+        assert_eq!(report.katakana_preset.as_deref(), Some("balanced"));
+        assert_eq!(report.grid.requested_grid_size, 37);
+        assert_eq!(report.grid.resolved_grid_size, 37);
+        assert_eq!(report.recommended_style, KATAKANA_STYLE_NAME);
+    }
+
+    #[test]
+    fn score_styles_katakana_expanded_recommends_high_contrast_under_low_contrast_profile() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.channel = PetalEncodeChannelArg::KatakanaBase94;
+        args.style_set = PetalStyleSetArg::SoraTempleExpanded;
+        args.dark_luma = Some(128);
+        args.light_luma = Some(129);
+        args.luminance_jitter = Some(0);
+        args.attempts = Some(4);
+
+        let report = args.build_report().expect("score katakana expanded");
+
+        assert_eq!(report.recommended_style, KATAKANA_HIGH_CONTRAST_STYLE_NAME);
+        assert!(report.gate_passed);
+        let default_style = style_score(&report, KATAKANA_STYLE_NAME);
+        let high_contrast = style_score(&report, KATAKANA_HIGH_CONTRAST_STYLE_NAME);
+        assert_eq!(default_style.capture_successes, 0);
+        assert!(!default_style.gate_passed);
+        assert_eq!(high_contrast.channel, "katakana-base94");
+        assert_eq!(high_contrast.katakana_preset.as_deref(), Some("balanced"));
+        assert_eq!(high_contrast.capture_successes, 4);
+        assert!(high_contrast.gate_passed);
+    }
+
+    #[test]
+    fn score_styles_rejects_binary_katakana_preset() {
+        let payload = write_payload(b"sora-temple-capture-baseline");
+        let mut args = score_args(payload.path());
+        args.katakana_preset = Some(PetalKatakanaPresetArg::DistanceSafe);
+
+        let err = args.build_report().expect_err("binary preset rejected");
+
+        assert!(err.to_string().contains("katakana-preset"));
     }
 
     #[test]

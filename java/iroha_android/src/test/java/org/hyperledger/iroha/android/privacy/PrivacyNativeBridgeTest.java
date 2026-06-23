@@ -339,11 +339,28 @@ public final class PrivacyNativeBridgeTest {
             true);
     assert Arrays.equals(verifyOutput, privacyNoritoFrameWithPayload(0x56));
 
+    final PrivacyConfidentialWitness.WitnessV1 unshieldWitness = sampleUnshieldWitness();
     final byte[] unshieldRequest =
-        PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(sampleUnshieldWitness());
+        PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(unshieldWitness);
     assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(unshieldRequest);
     assert PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldRequest, 0x52);
     assert PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(unshieldRequest);
+    assert "5".equals(unshieldWitness.publicAmount());
+    assert unshieldWitness.unshieldChange().size() == 1;
+
+    final byte[] unshieldVerifyRequest =
+        PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[] {4, 5, 6});
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldVerifyRequest, 0x52);
+    final byte[] unshieldVerifyOutput =
+        PrivacyNativeBridge.call(
+            "verify proof",
+            unshieldVerifyRequest,
+            request -> {
+              assert Arrays.equals(request, unshieldVerifyRequest);
+              return privacyNoritoFrameWithPayload(0x56);
+            },
+            true);
+    assert Arrays.equals(unshieldVerifyOutput, privacyNoritoFrameWithPayload(0x56));
   }
 
   private static void typedConfidentialWitnessBuildersRejectAmbiguousShapes() {
@@ -355,7 +372,13 @@ public final class PrivacyNativeBridgeTest {
             PrivacyConfidentialWitness.buildConfidentialTransferProofRequestV1(
                 transferWitness, "halo2-ipa-pasta:confidential_unshield_v3"));
     assertThrows(
+        () ->
+            PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(
+                unshieldWitness, "halo2-ipa-pasta:confidential_transfer_v2"));
+    assertThrows(
         () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[0]));
+    assertThrows(
+        () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[0]));
     assertThrows(
         () ->
             PrivacyConfidentialWitness.encodeTransferWitness(

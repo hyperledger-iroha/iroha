@@ -18418,6 +18418,46 @@ mod test {
     }
 
     #[test]
+    fn nexus_status_exports_optional_rule_dataspace() {
+        let policy = iroha_config::parameters::actual::LaneRoutingPolicy {
+            default_lane: iroha_data_model::LaneId::new(2),
+            default_dataspace: iroha_data_model::DataSpaceId::new(10),
+            rules: vec![
+                iroha_config::parameters::actual::LaneRoutingRule {
+                    lane: iroha_data_model::LaneId::new(3),
+                    dataspace: Some(iroha_data_model::DataSpaceId::new(11)),
+                    matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                        account: Some("alice".to_owned()),
+                        instruction: Some("Register".to_owned()),
+                        description: Some("explicit dataspace".to_owned()),
+                    },
+                },
+                iroha_config::parameters::actual::LaneRoutingRule {
+                    lane: iroha_data_model::LaneId::new(4),
+                    dataspace: None,
+                    matcher: iroha_config::parameters::actual::LaneRoutingMatcher::default(),
+                },
+            ],
+        };
+
+        let status = NexusStatus::from_routing_policy(&policy);
+
+        assert_eq!(status.routing_policy.default_lane, 2);
+        assert_eq!(status.routing_policy.default_dataspace, 10);
+        assert_eq!(status.routing_policy.rules[0].lane, 3);
+        assert_eq!(status.routing_policy.rules[0].dataspace_id, Some(11));
+        assert_eq!(
+            status.routing_policy.rules[0]
+                .matcher
+                .description
+                .as_deref(),
+            Some("explicit dataspace")
+        );
+        assert_eq!(status.routing_policy.rules[1].lane, 4);
+        assert_eq!(status.routing_policy.rules[1].dataspace_id, None);
+    }
+
+    #[test]
     fn pacemaker_metrics_are_exported() {
         let metrics = Metrics::default();
         let dump = metrics.try_to_string().expect("metrics text");

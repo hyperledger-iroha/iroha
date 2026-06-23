@@ -819,8 +819,23 @@ require_kagami_bin() {
   return 1
 }
 
+pid_matches_localnet_peer() {
+  local pid="$1"
+  local config_path="$2"
+  local command_line
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 1
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$command_line" ]] || return 1
+  printf '%s' "$command_line" | grep -F -- "--config $config_path" >/dev/null \
+    || printf '%s' "$command_line" | grep -F -- "--config=$config_path" >/dev/null
+}
+
 stop_localnet() {
   local run_dir="$1"
+  local run_dir_abs
+  run_dir_abs="$(cd "$run_dir" 2>/dev/null && pwd || printf '%s' "$run_dir")"
   if [[ -f "$run_dir/stop.sh" ]]; then
     (cd "$run_dir" && ./stop.sh) || true
   fi
@@ -829,6 +844,21 @@ stop_localnet() {
     pid="$(cat "$pidfile" 2>/dev/null || true)"
     if [[ -z "$pid" ]]; then
       rm -f "$pidfile"
+      continue
+    fi
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      echo "[localnet] removing malformed pidfile $pidfile (pid=$pid)" >&2
+      rm -f "$pidfile"
+      continue
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$pidfile"
+      continue
+    fi
+    peer_name="$(basename "$pidfile" .pid)"
+    config_path="$run_dir_abs/${peer_name}.toml"
+    if ! pid_matches_localnet_peer "$pid" "$config_path"; then
+      echo "[localnet] leaving $pidfile in place: live pid $pid does not match $config_path" >&2
       continue
     fi
     for _ in {1..40}; do

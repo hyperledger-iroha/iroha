@@ -278,45 +278,51 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise TrustBundleError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise TrustBundleError(f"{path} does not exist") from error
+        raise TrustBundleError(f"{label} does not exist") from error
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
-        raise TrustBundleError(f"{path} must not be a symlink")
+        raise TrustBundleError(f"{label} must not be a symlink")
     if not stat.S_ISREG(mode):
-        raise TrustBundleError(f"{path} must be a regular file")
+        raise TrustBundleError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise TrustBundleError(f"{path} exceeds {max_bytes} byte JSON limit")
+        raise TrustBundleError(f"{label} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise TrustBundleError(f"{path} must be a regular file")
+            raise TrustBundleError(f"{label} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise TrustBundleError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise TrustBundleError(f"{label} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise TrustBundleError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise TrustBundleError(f"{label} exceeds {max_bytes} byte JSON limit")
         return raw
     except FileNotFoundError as error:
-        raise TrustBundleError(f"{path} does not exist") from error
+        raise TrustBundleError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise TrustBundleError(f"{path} must not be a symlink") from error
-        raise TrustBundleError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise TrustBundleError(f"{label} must not be a symlink") from error
+        raise TrustBundleError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -604,7 +610,11 @@ def _write_text_output(path: Path, text: str) -> None:
         os.close(parent_fd)
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -616,15 +626,21 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise TrustBundleError(f"{current} must not be a symlink")
+            label = display_label or str(current)
+            raise TrustBundleError(f"{label} must not be a symlink")
 
 
-def _load_json(path: Path) -> Any:
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
     try:
-        raw = _read_regular_file(path, max_bytes=MAX_BUNDLE_JSON_BYTES)
+        raw = _read_regular_file(
+            path,
+            max_bytes=MAX_BUNDLE_JSON_BYTES,
+            display_label=label,
+        )
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise TrustBundleError(f"{path} is not UTF-8 JSON") from error
+        raise TrustBundleError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -632,7 +648,7 @@ def _load_json(path: Path) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise TrustBundleError(f"{path} is not valid JSON: {error}") from error
+        raise TrustBundleError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -649,7 +665,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise TrustBundleError(f"JSON contains non-finite numeric constant {value}")
+    raise TrustBundleError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -1130,7 +1146,7 @@ def _der_matches_kind(der: bytes, label: str, kind: str) -> bool:
     elif kind == DER_KIND_OCSP:
         return _looks_like_ocsp_response(der, label)
     else:  # pragma: no cover - internal caller bug.
-        raise TrustBundleError(f"{label} has unsupported DER kind {kind}")
+        raise TrustBundleError(f"{label} has unsupported DER kind")
 
 
 def _raise_der_kind_error(label: str, kind: str) -> None:
@@ -1140,7 +1156,7 @@ def _raise_der_kind_error(label: str, kind: str) -> None:
         raise TrustBundleError(f"{label} must look like an X.509 CRL")
     if kind == DER_KIND_OCSP:
         raise TrustBundleError(f"{label} must look like an OCSPResponse")
-    raise TrustBundleError(f"{label} has unsupported DER kind {kind}")
+    raise TrustBundleError(f"{label} has unsupported DER kind")
 
 
 def _looks_like_algorithm_identifier(element: DerElement, label: str) -> bool:
@@ -1750,68 +1766,70 @@ def verify_bundle(
     allow_record_only: bool,
     allow_insecure_source_url: bool,
     allow_synthetic_der: bool,
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify one trust bundle and return a normalized summary."""
 
-    bundle = _require_object(_load_json(path), str(path))
-    _reject_unknown_keys(bundle, TOP_LEVEL_KEYS, str(path))
-    _check_no_secret_material(bundle)
+    label = display_label or "trust bundle"
+    bundle = _require_object(_load_json(path, display_label=label), label)
+    _reject_unknown_keys(bundle, TOP_LEVEL_KEYS, label)
+    _check_no_secret_material(bundle, label)
     bundle_version = bundle.get("version")
     if (
         isinstance(bundle_version, bool)
         or not isinstance(bundle_version, int)
         or bundle_version != BUNDLE_VERSION
     ):
-        raise TrustBundleError(f"{path}.version must be {BUNDLE_VERSION}")
+        raise TrustBundleError(f"{label}.version must be {BUNDLE_VERSION}")
 
-    profile_id = _required_profile_id(bundle, "profile_id", str(path))
-    rail = _required_rail(bundle, "rail", str(path))
-    environment = _required_context_string(bundle, "environment", str(path))
+    profile_id = _required_profile_id(bundle, "profile_id", label)
+    rail = _required_rail(bundle, "rail", label)
+    environment = _required_context_string(bundle, "environment", label)
     if "embedded_signature_policy" not in bundle:
-        raise TrustBundleError(f"{path}.embedded_signature_policy must be recorded")
-    policy = _required_string(bundle, "embedded_signature_policy", str(path))
-    _reject_overlong_trust_policy(policy, f"{path}.embedded_signature_policy")
-    _reject_non_ascii_context(policy, f"{path}.embedded_signature_policy")
-    _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
+        raise TrustBundleError(f"{label}.embedded_signature_policy must be recorded")
+    policy = _required_string(bundle, "embedded_signature_policy", label)
+    _reject_overlong_trust_policy(policy, f"{label}.embedded_signature_policy")
+    _reject_non_ascii_context(policy, f"{label}.embedded_signature_policy")
+    _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
     if not isinstance(policy, str) or policy not in POLICIES:
-        raise TrustBundleError(f"{path}.embedded_signature_policy is unsupported")
+        raise TrustBundleError(f"{label}.embedded_signature_policy is unsupported")
     if policy != REQUIRE_VERIFIED and not allow_record_only:
         raise TrustBundleError(
-            f"{path}.embedded_signature_policy must be {REQUIRE_VERIFIED!r} for production bundles"
+            f"{label}.embedded_signature_policy must be {REQUIRE_VERIFIED!r} for production bundles"
         )
 
-    raw_public_pins = _sha256_list(bundle, "signature_public_key_sha256_pins", str(path))
-    legacy_public_pins = _sha256_list(bundle, "trusted_public_key_sha256", str(path))
-    anchor_pin_values = _sha256_list(bundle, "x509_trust_anchor_sha256_pins", str(path))
-    legacy_anchor_pin_values = _sha256_list(bundle, "trusted_certificate_sha256", str(path))
-    revoked_pin_values = _sha256_list(bundle, "revoked_certificate_sha256", str(path))
-    policy_oids = _oid_list(bundle, "x509_required_certificate_policy_oids", str(path))
+    raw_public_pins = _sha256_list(bundle, "signature_public_key_sha256_pins", label)
+    legacy_public_pins = _sha256_list(bundle, "trusted_public_key_sha256", label)
+    anchor_pin_values = _sha256_list(bundle, "x509_trust_anchor_sha256_pins", label)
+    legacy_anchor_pin_values = _sha256_list(bundle, "trusted_certificate_sha256", label)
+    revoked_pin_values = _sha256_list(bundle, "revoked_certificate_sha256", label)
+    policy_oids = _oid_list(bundle, "x509_required_certificate_policy_oids", label)
 
     trust_anchors, trust_anchor_der_values, trust_anchor_uses_synthetic_der = _der_objects(
         bundle,
         "x509_trust_anchors",
-        str(path),
+        label,
         kind=DER_KIND_CERTIFICATE,
         allow_synthetic_der=allow_synthetic_der,
     )
     revoked_certificates, _revoked_der_values, revoked_uses_synthetic_der = _der_objects(
         bundle,
         "revoked_certificates",
-        str(path),
+        label,
         kind=DER_KIND_CERTIFICATE,
         allow_synthetic_der=allow_synthetic_der,
     )
     crls, crl_values, crl_uses_synthetic_der = _der_objects(
         bundle,
         "x509_crls",
-        str(path),
+        label,
         kind=DER_KIND_CRL,
         allow_synthetic_der=allow_synthetic_der,
     )
     ocsp_responses, ocsp_values, ocsp_uses_synthetic_der = _der_objects(
         bundle,
         "x509_ocsp_responses",
-        str(path),
+        label,
         kind=DER_KIND_OCSP,
         allow_synthetic_der=allow_synthetic_der,
     )
@@ -1819,39 +1837,39 @@ def verify_bundle(
     x509_trust_anchor_sha256_pins = _merge_unique(
         anchor_pin_values,
         [entry["sha256"] for entry in trust_anchors],
-        f"{path}.x509_trust_anchor_sha256_pins",
+        f"{label}.x509_trust_anchor_sha256_pins",
     )
     trusted_certificate_sha256 = _merge_unique(
         legacy_anchor_pin_values,
         [],
-        f"{path}.trusted_certificate_sha256",
+        f"{label}.trusted_certificate_sha256",
     )
     revoked_certificate_sha256 = _merge_unique(
         revoked_pin_values,
         [entry["sha256"] for entry in revoked_certificates],
-        f"{path}.revoked_certificate_sha256",
+        f"{label}.revoked_certificate_sha256",
     )
     _reject_overlap(
         raw_public_pins,
         legacy_public_pins,
-        f"{path}.signature_public_key_sha256_pins/trusted_public_key_sha256",
+        f"{label}.signature_public_key_sha256_pins/trusted_public_key_sha256",
     )
     _reject_overlap(
         x509_trust_anchor_sha256_pins,
         trusted_certificate_sha256,
-        f"{path}.x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
+        f"{label}.x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
     )
     _reject_overlap(
         x509_trust_anchor_sha256_pins + trusted_certificate_sha256,
         revoked_certificate_sha256,
-        f"{path}.trusted/revoked certificate pins",
+        f"{label}.trusted/revoked certificate pins",
     )
     _reject_overlap(
         raw_public_pins + legacy_public_pins,
         x509_trust_anchor_sha256_pins
         + trusted_certificate_sha256
         + revoked_certificate_sha256,
-        f"{path}.public-key/certificate SHA-256 pins",
+        f"{label}.public-key/certificate SHA-256 pins",
     )
     _reject_overlap(
         raw_public_pins
@@ -1861,24 +1879,24 @@ def verify_bundle(
         + revoked_certificate_sha256,
         [entry["sha256"] for entry in crls]
         + [entry["sha256"] for entry in ocsp_responses],
-        f"{path}.trust pin/revocation DER SHA-256 roles",
+        f"{label}.trust pin/revocation DER SHA-256 roles",
     )
 
-    crl_required = _required_bool(bundle, "x509_require_crl_revocation_check", str(path))
-    ocsp_required = _required_bool(bundle, "x509_require_ocsp_revocation_check", str(path))
+    crl_required = _required_bool(bundle, "x509_require_crl_revocation_check", label)
+    ocsp_required = _required_bool(bundle, "x509_require_ocsp_revocation_check", label)
     if crl_required and not crl_values:
-        raise TrustBundleError(f"{path} requires CRL revocation checking but has no x509_crls")
+        raise TrustBundleError(f"{label} requires CRL revocation checking but has no x509_crls")
     if ocsp_required and not ocsp_values:
-        raise TrustBundleError(f"{path} requires OCSP revocation checking but has no x509_ocsp_responses")
+        raise TrustBundleError(f"{label} requires OCSP revocation checking but has no x509_ocsp_responses")
     if policy == REQUIRE_VERIFIED and not (
         raw_public_pins
         or legacy_public_pins
         or x509_trust_anchor_sha256_pins
         or trusted_certificate_sha256
     ):
-        raise TrustBundleError(f"{path} has require-verified policy but no trust pins")
+        raise TrustBundleError(f"{label} has require-verified policy but no trust pins")
 
-    source = _source(bundle, str(path), allow_insecure_source_url)
+    source = _source(bundle, label, allow_insecure_source_url)
     profile_overrides = {
         "id": profile_id,
         "rail": rail,
@@ -1967,15 +1985,17 @@ def run(args: argparse.Namespace) -> int:
     ):
         raise TrustBundleError("--summary-out and --emit-profile-json must be different paths")
     _reject_duplicate_paths([path.resolve() for path in bundle_paths], "--bundle")
-    summaries = [
-        verify_bundle(
-            path,
-            allow_record_only=args.allow_record_only,
-            allow_insecure_source_url=args.allow_insecure_source_url,
-            allow_synthetic_der=args.allow_synthetic_der,
+    summaries = []
+    for offset, path in enumerate(bundle_paths):
+        summaries.append(
+            verify_bundle(
+                path,
+                allow_record_only=args.allow_record_only,
+                allow_insecure_source_url=args.allow_insecure_source_url,
+                allow_synthetic_der=args.allow_synthetic_der,
+                display_label=f"bundle[{offset}]",
+            )
         )
-        for path in bundle_paths
-    ]
     _reject_profile_emission_blockers(args, summaries)
     _reject_unused_local_overrides(args, summaries)
     _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")

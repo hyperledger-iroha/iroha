@@ -350,7 +350,9 @@ non-empty, rejects all-zero Reserved-lineage artifacts and obvious plain-text or
 all-zero placeholder compact key artifacts before digest-only acceptance, and
 the compact-key helper rejects secret-looking, control-character, missing,
 symlinked, hardlinked, non-regular, or unreadable `--generator-log` paths
-before reading any release artifacts, and
+and rejects symlinked `--artifact-dir` values and symlinked generator-log
+ancestor directories before resolving the generator-log parent or reading any
+release artifacts, and
 classifies artifact/log missing-vs-unreadable state from the lstat-backed
 local-file validators rather than `Path.is_file()`,
 and treats the checked-in ABI-6 manifest plus ABI-7 fail-closed and
@@ -405,7 +407,8 @@ even when their digest matches the evidence JSON. The evidence JSON and its nest
 `artifacts`, and `tests` objects are closed schemas, so extra release claims are
 rejected instead of ignored, with control-character or secret-looking unexpected
 field names redacted in blocker details; duplicate JSON object keys are also invalid, so
-non-standard `NaN`/`Infinity` JSON constants are rejected before schema checks, and
+non-standard `NaN`/`Infinity` JSON constants are rejected before schema checks
+and redacted in evidence/readiness blockers, and
 auditors never have to interpret last-key-wins evidence packets. Proof-evidence
 JSON is parsed from the same opened regular file after path-identity
 revalidation and capped at 16 MiB before parsing, so post-preflight swaps or
@@ -536,8 +539,10 @@ get-state` to report exact `device`, pulls the raw slot, derives the attestation
 challenge SHA-256 from `attestation/challenge.hex`, renders the verifier report,
 reports bounded redacted ADB stdout/stderr when that serial-scoped preflight
 fails or reports a non-`device` state, runs a bounded redacted `adb devices -l`
-diagnostic after serial-scoped ADB failures, caps long non-`device` state strings,
-caps failed preflight command displays, assembles signed evidence with
+diagnostic after serial-scoped ADB failures that reports only attached-device
+row/state counts, redacts the configured ADB serial from command and
+stdout/stderr diagnostics, caps long non-`device` state strings, caps failed
+preflight command displays, assembles signed evidence with
 `nearby_offline`, `nfc_hce`, and `qr` D2D transcript bindings, and validates
 the resulting slot. The wrapper requires an
 explicit `--physical-device-attestation` assertion and does not manage or stop
@@ -591,7 +596,11 @@ allowlist, telemetry app-package binding, and queue empty-after-handoff check
 before raw artifacts can be promoted into a signed slot. When the slot assembler reads attached device identity
 through ADB `getprop`, each response must be exactly one LF-terminated value
 and the value itself must not require trimming before it can be bound into
-signed slot metadata. The on-device lab exporter also fails closed if
+signed slot metadata. Non-zero ADB `getprop` exits are normalized to property
+and exit-code diagnostics instead of copying the raw subprocess command list,
+and ADB launch failures report only that the property query could not be
+executed, so configured ADB serials cannot leak through Python exception text. The
+on-device lab exporter also fails closed if
 `Build.MODEL` and `Build.DEVICE` do not both identify the same standard
 Kagemusha matrix family through exact Pixel model/codename matches or the
 standard Samsung S23/S24 model-prefix and codename pairs, preventing unsupported
@@ -608,8 +617,12 @@ and requires telemetry to repeat the same identity values.
 The shared Android device-lab
 JSON loader rejects duplicate keys and non-standard `NaN`/`Infinity` constants
 before slot metadata, attestation, signed evidence, D2D handoff, or
-wallet-integrity schema validation, and caps those JSON inputs at 16 MiB from
-the opened file metadata and streamed byte count. The shared control-character
+wallet-integrity schema validation, redacts the literal non-finite token from
+diagnostics, and caps those JSON inputs at 16 MiB from the opened file metadata
+and streamed byte count. The raw-puller and scanner status NDJSON parsers plus
+the Android capture wrapper apply the same non-finite redaction before telemetry
+or raw helper output can feed signed-slot assembly.
+The shared control-character
 predicate also treats Unicode format controls such as bidirectional overrides as
 unsafe control material, so deceptive path or evidence labels are rejected or
 redacted through the same gates as ASCII escape bytes. Scanner and signing-helper direct calls also route top-level slot
@@ -924,7 +937,11 @@ python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
 # markers including joined localnetqa/localnetpreprod/localnettest/localnetuat
 # labels, and free of contradictory mainnet/localnet labels such as
 # mainnetlocalnet or localnetmainnet; the four peer ids must be sorted. The
-# helper rejects secret-looking, control-character, backslash, and parent-segment
+# lifecycle hashes may use `sha256:`, `urn:sha256:`, or `hash://sha256/`
+# prefixes, are normalized to the lowercase 64-hex digest in readiness
+# summaries, and reject uppercase, single-character placeholder, duplicate, or
+# suffix-bearing variants.
+# The helper rejects secret-looking, control-character, backslash, and parent-segment
 # --acceptance-report paths before artifact-directory metadata is read. The
 # helper also preflights the canonical --out path, including symlinked
 # ancestors, before reading localnet acceptance input metadata. It wraps those
@@ -1033,10 +1050,13 @@ entry-field names. When the staged subprocess
 terminates with a signal-style negative status, the runner returns a
 conventional nonzero wrapper status while preserving the exact subprocess code
 in the staged marker and report. Spawn-failure coverage exercises the real
-`subprocess.Popen(...)` boundary for both the Reserved-lineage proof runner and
-the ABI-7 compact-key runner, so partially written temporary child logs are
-removed and the caller receives the same conventional staged-runner error even
-when process launch fails before a child can report an exit status.
+`subprocess.Popen(...)` boundary for the Reserved-lineage key-artifact runner,
+Reserved-lineage proof runner, and ABI-7 compact-key runner, so partially
+written temporary child logs are removed and the caller receives the same
+conventional staged-runner error even when process launch fails before a child
+can report an exit status. Those launch failures report only the fixed
+`process launch failed` reason instead of echoing raw process-spawn exception
+text.
 The ABI-7 compact-key staged runner applies the same detached-run contract for
 the key-generation command: it runs the canonical
 `iroha app zk kagemusha recursive-compact-key-artifacts` command from the
@@ -1165,6 +1185,10 @@ bridge ABI, generator provenance object, lineage accumulator domain object,
 operation inventory array with named operation objects, archive fixture
 reference object path/schema, and every archive entry's unique name,
 named-object shape, decoded byte length, and SHA-256 digest to match the
+checked-in bundle. The staged Reserved-lineage and ABI-7 compact runners and
+finalizers apply the same non-finite constant redaction to their execution and
+run-report JSON loaders before resume or publish validation can report a
+corrupted staged report.
 committed fixture pair. Both files are closed-schema JSON: unexpected manifest,
 manifest-generator, manifest-domain, manifest-operation, archive-reference,
 archive-fixture, or per-archive fields block readiness before the release bundle
@@ -1457,11 +1481,12 @@ declared offline D2D payment transport (`nearby_offline`, `nfc_hce`, and `qr`)
 before a production release bundle can be marked ready. The readiness rollup
 only credits a multi-transport slot when `d2d_payment_transports` is a sorted
 unique list that exactly matches a `d2d_payment_transcripts` object, every
-entry has a canonical non-zero path/digest binding, and the primary transport
-entry matches
-`d2d_payment_transcript_path` plus `d2d_payment_transcript_sha256`; the direct
-scanner summary applies the same exact-map rule before reporting transport
-coverage, and the scanner summary plus release-bundle summary, manifest-shape
+entry has a canonical non-zero path/digest binding, paths and digests are
+distinct across transports, and the primary transport
+entry matches `d2d_payment_transcript_path` plus
+`d2d_payment_transcript_sha256`; the direct scanner summary applies the same
+exact-map rule before reporting transport coverage, and the scanner summary
+plus release-bundle summary, manifest-shape
 checks, and copied slot-artifact verifier mirror the same sorted/unique list
 and artifact-root requirements before cutting Android D2D artifacts into a
 production bundle: release-bundle slot artifact paths must stay under
@@ -1655,7 +1680,8 @@ The raw puller also redacts control-character or secret-looking unexpected
 top-level install-source names before reporting raw slot install failures.
 Standalone raw-puller ADB stderr, launch-error, and timeout details are also
 bounded and redacted before reporting latest-slot or tar-pull failures,
-including non-UTF-8 latest-slot and tar stderr.
+including non-UTF-8 latest-slot and tar stderr, and the configured ADB serial is
+redacted from ordinary attached-device failure text before it reaches stderr.
 It now rejects control-character output-root, summary-output, raw-slot, and
 raw artifact path strings, plus parent-segment and backslash-bearing
 output-root, summary-output, and raw-slot aliases, before ADB access, metadata
@@ -2769,23 +2795,31 @@ Java Android expose the same names, JavaScript/Node and Python use the native
 snake/camel-case bridge names, and C# exposes
 `LineageWitnessFromInitResult`/`LineageWitnessAppendResult` DTO wrappers.
 C# also exposes `ValidateRedeemLineagePreflight(...)`,
-`ValidateRedeemChangeOutputPreflight(...)`, and metadata-bound `Redeem(...)`
+`ValidateVerifyLineagePreflight(...)`, `ValidateRedeemChangeOutputPreflight(...)`,
+`ValidateRedeemChangeOutputBytes(...)`, and metadata-bound `Redeem(...)`
 overloads so callers that already decoded the bundle circuit id, hop count,
-public amount, current note amount, and change-output presence reject missing
-semantic lineage witnesses, missing Reserved-lineage verifier records,
-partial-without-change, over-amount, and full-with-change cases before P/Invoke
-dispatch. C# amount metadata uses canonical positive unsigned decimal u128 text,
-so padding, sign characters, decimal points, zero, and overflow values fail
-before native request parsing.
+public amount, current note amount, change-output presence, and change-output
+bytes reject missing semantic lineage witnesses, missing Reserved-lineage
+verifier records, partial-without-change, over-amount, full-with-change,
+short change commitments, and all-zero change commitments before P/Invoke
+dispatch. Metadata-bound C# `Verify(...)` overloads expose the same final
+bundle/lineage-record selection rule as the typed SDK request constructors:
+Reserved-lineage final bundles require a lineage verifier record, while
+semantic final bundles reject a dangling record before P/Invoke dispatch. The
+transaction builder exposes matching metadata-bound
+`KagemushaRecursiveRedeem(...)` overloads before builder mutation. C# amount
+metadata uses canonical positive unsigned decimal u128 text, so padding, sign
+characters, decimal points, zero, and overflow values fail before native request
+parsing.
 Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python also expose typed
 ABI-6 recursive-spend request codecs for init, append, verify, and redeem, plus
 verify-result and bundle summary decoders. Those codecs validate nested Norito
 archives, canonical nonzero note amounts, nonnegative block heights, previous
 lineage-record gaps, and append-output transition compatibility before native
-dispatch. Non-C# typed verify request encoders additionally enforce final
-bundle/lineage-record selection before native calls: missing records are
-invalid for Reserved-lineage bundles, and extra records are invalid for
-semantic bundles. Non-C# typed redeem request encoders also decode the
+dispatch. Typed verify request encoders and C# metadata-bound verify preflight
+additionally enforce final bundle/lineage-record selection before native calls:
+missing records are invalid for Reserved-lineage bundles, and extra records are
+invalid for semantic bundles. Non-C# typed redeem request encoders also decode the
 lineage-witness previous-proof summary for semantic final bundles, requiring a
 lineage verifier record for witnesses with prior Reserved-lineage proofs and
 rejecting dangling records for init-only or absent lineage witnesses; full
@@ -2824,9 +2858,18 @@ adversarial current-note fixture mutations that reject all-zero note
 commitments, all-zero spend nullifiers, note/nullifier aliasing, and zero
 amounts before native dispatch. The SDKs and JavaScript package-dist coverage
 also reject short/long fixed-array encodings for the nested note commitment and
-spend nullifier fields before summary metadata is trusted; the C# mirrors are
-part of the managed decoder parity guard and still need Windows host
-certification alongside the rest of the C# lane.
+spend nullifier fields before summary metadata is trusted. The same bundle
+summary decoders reject raw accumulator `chain_id` string payloads,
+proof-box-only backend drift, and extra fields appended to the top-level
+bundle, accumulator summary, nested current note, current-note amount,
+recursive proof, verifier-key id, and proof box before summary metadata is
+trusted; the C# mirrors are part of the managed decoder parity guard and still
+need Windows host certification alongside the rest of the C# lane.
+The same managed decoder guard now also covers ABI-7 verify-result archives and
+lineage-witness summaries, rejecting surplus fields on verify results, top-level
+lineage witnesses, previous-recursive-proof sequences, individual previous
+proofs, and nested previous-proof verifier-key ids before wallet preflight can
+trust those summaries.
 Python, Swift, JavaScript/Node, Kotlin/JVM, Java Android, and C# also fail
 closed when proof-producing native calls return no archive or a zero-length
 archive, so missing native proof material cannot be coerced into a successful SDK

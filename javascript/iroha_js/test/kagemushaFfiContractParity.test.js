@@ -1899,6 +1899,7 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       '_norito_archive_bytes_named(instruction_archive, "instruction_archive")',
       'getattr(Instruction, "kagemusha_instruction_archive", None)',
       'getattr(Instruction, "kagemusha_recursive_redeem", None)',
+      "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
       "build_signed_transaction",
       "instructions=(instruction,)",
     ],
@@ -2143,6 +2144,29 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       'packageJson.exports["./crypto"].types, "./index.d.ts"',
       "package declarations keep accumulator digests native-owned",
       "recursive accumulator digests must remain native-owned",
+      "lineageDigestV1",
+      "aggregationTranscriptDigestV1",
+      "fixedWindowTableScheduleDigestV1",
+      "fixedWindowSharedTableManifestDigestV1",
+      "fixedWindowTableBaseDigestV1",
+      "verifierWitnessBatchDigestV1",
+      "recursiveProofChainDigestV1",
+      "proofChainDigestV1",
+      "transitionProfileBindingDigestV1",
+      "appendOpeningPreflightDigestV1",
+      "appendBoundaryDigestV1",
+      "recursiveVerifierScalarProjectionDigestV1",
+      "previousAccumulatorDigestV1",
+      "resultingAccumulatorDigestV1",
+      "accumulatorDigestV1",
+      "ProofChainState",
+      "AppendAccumulatorState",
+      "recursiveAccumulatorV1",
+      "AccumulatorStateBytes",
+      "inputTerminalAccumulator",
+      "staleWalletRecursiveProofChain",
+      "nativeAppendAccumulatorState",
+      "publicProofChainBytes",
     ],
     "JavaScript package recursive compact declaration tests",
   );
@@ -11549,6 +11573,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-lineage-witness-append-availability-probe",
     "--negative-control-android-lineage-witness-availability-probe",
     "--negative-control-android-lineage-witness-append-availability-probe",
+    "--negative-control-jvm-sdk-direct-javac-harness-script",
+    "--negative-control-jvm-android-hop-evidence-shape",
     "--negative-control-jvm-note-amount-vectors",
     "--negative-control-jvm-redeem-public-amount-vectors",
     "--negative-control-jvm-pallas-builder-input-guards",
@@ -11574,6 +11600,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-accumulator-chain-id-shape",
     "--negative-control-sdk-bundle-summary-trailing-field-vectors",
     "--negative-control-sdk-verify-result-trailing-field-vectors",
+    "--negative-control-sdk-verify-lineage-record-preflight",
     "--negative-control-sdk-lineage-witness-trailing-field-vectors",
     "--negative-control-sdk-current-note-amount-trailing-field-vectors",
     "--negative-control-sdk-bundle-proof-circuit-vectors",
@@ -11614,8 +11641,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-package-dist-recursive-compact-declarations",
     "--negative-control-js-package-dist-accumulator-digest-declarations",
     "--negative-control-js-package-dist-accumulator-digest-denylist",
+    "--negative-control-js-package-dist-accumulator-digest-self-check-exactness",
     "--negative-control-js-package-dist-terminal-accumulator-digest-denylist",
     "--negative-control-js-package-dist-accumulator-material-denylist",
+    "--negative-control-js-package-dist-accumulator-material-self-check-exactness",
+    "--negative-control-js-package-dist-prefixed-accumulator-material-denylist",
+    "--negative-control-js-package-dist-suffixed-accumulator-material-denylist",
     "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist",
     "--negative-control-js-package-dist-suffixed-accumulator-digest-denylist",
     "--negative-control-js-package-dist-declaration-sweep",
@@ -11744,6 +11775,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-mobile-zk-merkle-provider-adversarial-coverage",
     "--negative-control-mobile-zk-torii-parser-shape-coverage",
     "--negative-control-mobile-confidential-note-coverage",
+    "--negative-control-mobile-confidential-witness-codecs",
     "--negative-control-mobile-offline-readiness-coverage",
     "--negative-control-kotlin-offline-cash-settlement-coverage",
     "--negative-control-android-offline-transfer-persistence-coverage",
@@ -11761,6 +11793,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-offline-note-v2-decoder-placeholder",
     "--negative-control-swift-offline-note-v2-instruction-decoder",
     "--negative-control-jvm-sdk-android-harness-script",
+    "--negative-control-jvm-sdk-direct-javac-harness-script",
     "--negative-control-jvm-sdk-test-order-workflow",
     "--negative-control-jvm-sdk-needs-workflow",
     "--negative-control-swift-sdk-job-workflow",
@@ -11905,6 +11938,241 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha workflow must run SDK parity ${mode}`,
     );
   }
+  const jvmOfflineNoteV2DecoderPlaceholderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":'),
+    guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":'),
+  );
+  assert.match(
+    jvmOfflineNoteV2DecoderPlaceholderBranch,
+    /Kotlin Offline Note V2 decoder placeholder removal[\s\S]*?Android Java Offline Note V2 decoder placeholder removal[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JVM Offline Note V2 decoder placeholder negative control must require both SDK placeholder drift labels",
+  );
+  assert.match(
+    jvmOfflineNoteV2DecoderPlaceholderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM Offline Note V2 decoder placeholder negative control must print diagnostics for every mutated surface",
+  );
+  const jvmOfflineNoteV2InstructionWrapperBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":'),
+    guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-instruction-decoder":'),
+  );
+  assert.match(
+    jvmOfflineNoteV2InstructionWrapperBranch,
+    /Kotlin Offline Note V2 instruction wrapper surface[\s\S]*?Android Java Offline Note V2 instruction wrapper surface[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JVM Offline Note V2 instruction wrapper negative control must require both SDK wrapper drift labels",
+  );
+  assert.match(
+    jvmOfflineNoteV2InstructionWrapperBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM Offline Note V2 instruction wrapper negative control must print diagnostics for every mutated surface",
+  );
+  const jvmOfflineNoteV2InstructionDecoderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-instruction-decoder":'),
+    guard.indexOf('if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names":'),
+  );
+  assert.match(
+    jvmOfflineNoteV2InstructionDecoderBranch,
+    /Kotlin Offline Note V2 instruction decoder surface[\s\S]*?Android Java Offline Note V2 instruction decoder surface[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JVM Offline Note V2 instruction decoder negative control must require both SDK decoder drift labels",
+  );
+  assert.match(
+    jvmOfflineNoteV2InstructionDecoderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM Offline Note V2 instruction decoder negative control must print diagnostics for every mutated surface",
+  );
+  const offlineNoteV2CanonicalInstructionWireNamesBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names":'),
+    guard.indexOf('if mode == "--negative-control-swift-offline-note-v2-decoder-placeholder":'),
+  );
+  assert.match(
+    offlineNoteV2CanonicalInstructionWireNamesBranch,
+    /Swift Offline Note V2 canonical instruction wire names[\s\S]*?Kotlin Offline Note V2 instruction wrapper canonical instruction wire names[\s\S]*?Android Java Offline Note V2 instruction wrapper canonical instruction wire names[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Offline Note V2 canonical instruction wire-name negative control must require every SDK wire-name drift label",
+  );
+  assert.match(
+    offlineNoteV2CanonicalInstructionWireNamesBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Offline Note V2 canonical instruction wire-name negative control must print diagnostics for every mutated surface",
+  );
+  const swiftOfflineNoteV2DecoderPlaceholderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-offline-note-v2-decoder-placeholder":'),
+    guard.indexOf('if mode == "--negative-control-swift-offline-note-v2-instruction-decoder":'),
+  );
+  assert.match(
+    swiftOfflineNoteV2DecoderPlaceholderBranch,
+    /label\s*=\s*"Swift Offline Note V2 decoder placeholder removal"[\s\S]*?for detected_message in first_lines_for_labels\(message, \(label,\)\):[\s\S]*?print\(detected_message\)/u,
+    "Swift Offline Note V2 decoder placeholder negative control must use the shared diagnostic fan-out helper",
+  );
+  const swiftOfflineNoteV2InstructionDecoderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-offline-note-v2-instruction-decoder":'),
+    guard.indexOf('if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":'),
+  );
+  assert.match(
+    swiftOfflineNoteV2InstructionDecoderBranch,
+    /Swift Offline Note V2 issue instruction decoder API[\s\S]*?Swift Offline Note V2 redeem instruction decoder API[\s\S]*?Swift Offline Note V2 audit instruction decoder API[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift Offline Note V2 instruction decoder negative control must require every decoder API drift label",
+  );
+  assert.match(
+    swiftOfflineNoteV2InstructionDecoderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift Offline Note V2 instruction decoder negative control must print diagnostics for every mutated surface",
+  );
+  const sdkNegativeControlsWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-negative-controls-workflow":'),
+    guard.indexOf('if mode == "--negative-control-sdk-negative-controls-comment-workflow":'),
+  );
+  assert.match(
+    sdkNegativeControlsWorkflowBranch,
+    /expected\s*=\s*\([\s\S]*?Kagemusha payload workflow must run the SDK parity[\s\S]*?JavaScript browser helper negative control[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "SDK negative-control workflow branch must require the missing browser-helper command label",
+  );
+  const sdkNegativeControlsCommentWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-negative-controls-comment-workflow":'),
+    guard.indexOf('if mode == "--negative-control-sdk-main-guard-workflow":'),
+  );
+  assert.match(
+    sdkNegativeControlsCommentWorkflowBranch,
+    /expected\s*=\s*\([\s\S]*?Kagemusha payload workflow must run the SDK parity[\s\S]*?JavaScript browser helper negative control[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "commented SDK negative-control workflow branch must require the missing browser-helper command label",
+  );
+  const sdkMainGuardWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-main-guard-workflow":'),
+    guard.indexOf('if mode == "--negative-control-bytecode-workflow":'),
+  );
+  assert.match(
+    sdkMainGuardWorkflowBranch,
+    /expected\s*=\s*"Kagemusha payload workflow must run the main SDK parity guard"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "SDK main-guard workflow branch must require the missing main-guard label",
+  );
+  const bytecodeWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-bytecode-workflow":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-job-workflow":'),
+  );
+  assert.match(
+    bytecodeWorkflowBranch,
+    /expected\s*=\s*"Kagemusha payload workflow must reject tracked Python bytecode artifacts"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "tracked bytecode workflow branch must require the missing bytecode-rejection label",
+  );
+  const nativeBridgeJobWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-job-workflow":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-runner-workflow":'),
+  );
+  assert.match(
+    nativeBridgeJobWorkflowBranch,
+    /expected\s*=\s*"Kagemusha payload workflow must define the native bridge test job"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "native bridge job workflow branch must require the missing job label",
+  );
+  const nativeBridgeRunnerWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-runner-workflow":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-cache-workflow":'),
+  );
+  assert.match(
+    nativeBridgeRunnerWorkflowBranch,
+    /expected\s*=\s*"Kagemusha payload workflow must run native bridge tests on Ubuntu"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "native bridge runner workflow branch must require the Ubuntu runner label",
+  );
+  const nativeBridgeCacheWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-cache-workflow":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-test-workflow":'),
+  );
+  assert.match(
+    nativeBridgeCacheWorkflowBranch,
+    /expected\s*=\s*"Kagemusha payload workflow must cache Rust artifacts for native bridge tests"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "native bridge cache workflow branch must require the Rust cache label",
+  );
+  const sdkNegativeControlsOrderWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-negative-controls-order-workflow":'),
+    guard.indexOf('if mode == "--negative-control-js-browser-helper":'),
+  );
+  assert.match(
+    sdkNegativeControlsOrderWorkflowBranch,
+    /expected\s*=\s*\([\s\S]*?Kagemusha payload workflow must run the SDK parity[\s\S]*?JavaScript browser helper negative control before the main SDK parity guard[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "SDK negative-control ordering branch must require the before-main-guard label",
+  );
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-proof-base64-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-kind-exactness-guard":',
+      marker: "Swift identifier receipt attestation kind and proof base64 validation missing Data(base64Encoded: proofB64) == nil",
+      label: "identifier receipt proof-base64 guard branch must require the Swift proof-base64 label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-kind-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt kind exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-signature-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt proof-base64 exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-signature-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt signature exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt policy-id exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt policy-summary exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt program-id exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":',
+      end: 'if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt account-id exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":',
+      end: 'if mode == "--negative-control-native-bridge-identifier-receipt-exactness":',
+      marker: "Swift identifier receipt attestation kind and proof base64 validation missing accountId = rawAccountId",
+      label: "Swift identifier receipt account-id branch must require the Swift account-id label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-hash-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt hash exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":',
+      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+      label: "identifier receipt timestamp exactness branch must require the Python Torii exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":',
+      end: 'if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":',
+      marker: 'Android Java identifier receipt parser timestamp u64 validation missing asUnsignedLong(root.get("executed_at_ms"), context + ".executed_at_ms")',
+      label: "identifier receipt timestamp u64 branch must require the Android timestamp label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(marker)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
   const swiftIdentifierAccountIdExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":'),
     guard.indexOf('if mode == "--negative-control-identifier-receipt-hash-exactness-guard":'),
@@ -12044,6 +12312,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmCompactProjectionBlockHeightVectorBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, \(_needle, label\) in replacements\.items\(\)\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android compact projection blockHeight vector negative control must print diagnostics for both SDK labels",
+  );
+  assert.match(
+    jvmCompactProjectionBlockHeightVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM\/Android compact projection blockHeight vector drift was not detected"\s*\)/u,
     "JVM/Android compact projection blockHeight vector negative control must only pass after detecting injected drift",
   );
@@ -12076,6 +12349,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmAndroidCompactProjectionNativeOutputBranch,
     /missing\s*=\s*\[label for _target, _replacements, label in cases if label not in message\][\s\S]*?JVM\/Android compact projection native output guard drift was not detected for/u,
     "JVM/Android compact projection native-output negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmAndroidCompactProjectionNativeOutputBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, _replacements, label in cases\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android compact projection native-output negative control must print diagnostics for both SDK labels",
   );
   assert.match(
     jvmAndroidCompactProjectionNativeOutputBranch,
@@ -12116,6 +12394,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmAndroidCompactProjectionAvailabilitySplitBranch,
     /missing\s*=\s*\[label for _target, _old, _new, label in cases if label not in message\][\s\S]*?JVM\/Android compact projection availability drift was not detected for/u,
     "JVM/Android compact projection availability negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmAndroidCompactProjectionAvailabilitySplitBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, _old, _new, label in cases\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android compact projection availability negative control must print diagnostics for both SDK labels",
   );
   assert.match(
     jvmAndroidCompactProjectionAvailabilitySplitBranch,
@@ -12259,7 +12542,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const ramLfeProgramPolicyExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-ram-lfe-program-policy-exactness":'),
-    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+    guard.indexOf('if mode == "--negative-control-identifier-policy-proof-verifier-exactness":'),
   );
   assert.match(
     ramLfeProgramPolicyExactnessBranch,
@@ -12312,7 +12595,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const identifierPolicyMetadataBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-identifier-policy-metadata-exactness":'),
-    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+    guard.indexOf('if mode == "--negative-control-account-alias-resolution-exactness":'),
   );
   assert.match(
     identifierPolicyMetadataBranch,
@@ -12351,7 +12634,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const accountAliasResolutionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-account-alias-resolution-exactness":'),
-    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+    guard.indexOf('if mode == "--negative-control-multisig-resolved-account-exactness":'),
   );
   assert.match(
     accountAliasResolutionBranch,
@@ -12412,6 +12695,50 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /multisig resolved account exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: multisig resolved account exactness drift was not detected"\)/u,
     "multisig resolved account negative control must only pass after detecting drift",
   );
+  for (const [branch, label] of [
+    [
+      jvmClaimIdentifierAccountExactnessBranch,
+      "JVM ClaimIdentifier account exactness negative control must print diagnostics for every mutated JVM label",
+    ],
+    [
+      jvmIdentifierClaimRecordExactnessBranch,
+      "JVM identifier claim-record exactness negative control must print diagnostics for every mutated JVM label",
+    ],
+    [
+      jsSwiftIdentifierClaimRecordExactnessBranch,
+      "JS/Swift identifier claim-record exactness negative control must print diagnostics for every mutated JS/Swift label",
+    ],
+    [
+      ramLfeResponseExactnessBranch,
+      "RAM-LFE response exactness negative control must print diagnostics for every mutated SDK label",
+    ],
+    [
+      ramLfeProgramPolicyExactnessBranch,
+      "RAM-LFE program-policy exactness negative control must print diagnostics for every mutated SDK label",
+    ],
+    [
+      identifierPolicyProofVerifierBranch,
+      "identifier policy proof-verifier exactness negative control must print diagnostics for every mutated SDK label",
+    ],
+    [
+      identifierPolicyMetadataBranch,
+      "identifier policy metadata exactness negative control must print diagnostics for every mutated SDK label",
+    ],
+    [
+      accountAliasResolutionBranch,
+      "account alias resolution exactness negative control must print diagnostics for every mutated SDK label",
+    ],
+    [
+      multisigResolvedAccountBranch,
+      "multisig resolved account exactness negative control must print diagnostics for every mutated SDK label",
+    ],
+  ]) {
+    assert.match(
+      branch,
+      /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+      label,
+    );
+  }
   assert.match(
     guard,
     /KagemushaDeviceLabArtifactExportTest\.java[\s\S]*?attached device is not in the standard Kagemusha production matrix[\s\S]*?Android device-lab exporter must fail closed after the standard device matrix/u,
@@ -12483,6 +12810,40 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /Android slot assembler exact family matching[\s\S]*?Android device-lab assembler identity field drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
     "Android device-lab assembler identity negative control must only pass after detecting field drift",
   );
+  const nativeBridgeZeroEnvelopePallasGuardBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+    guard.indexOf('if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":'),
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /zero-envelope Pallas archive[\s\S]*?one-envelope Pallas archive[\s\S]*?zero-envelope nested Pallas archives[\s\S]*?one-envelope nested Pallas archives/u,
+    "native bridge zero-envelope Pallas negative control must mutate both guarded nested-Pallas markers",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /if updated == original or "zero-envelope nested Pallas archives" in updated:/u,
+    "native bridge zero-envelope Pallas negative control must remove all nested-Pallas marker occurrences",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Rust C recursive spend nested Pallas guard missing zero-envelope Pallas archive[\s\S]*?Rust C recursive spend nested Pallas guard missing zero-envelope nested Pallas archives[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native bridge zero-envelope Pallas negative control must require both exact missing markers",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "native bridge zero-envelope Pallas negative control must print both exact diagnostics",
+  );
+  assert.match(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge zero-envelope Pallas guard drift was not detected"\s*\)/u,
+    "native bridge zero-envelope Pallas negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nativeBridgeZeroEnvelopePallasGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "native bridge zero-envelope Pallas negative control must not unconditionally pass after run_checks",
+  );
   const bridgeZk1I10pParserExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":'),
     guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
@@ -12499,7 +12860,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     bridgeZk1I10pParserExactnessBranch,
-    /Rust native bridge ZK1 I10P parser exactness tests[\s\S]*?native bridge ZK1 I10P parser exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"\s*\)/u,
+    /expected_labels\s*=\s*\([\s\S]*?Rust native bridge ZK1 I10P parser exactness tests missing zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads[\s\S]*?Rust native bridge ZK1 I10P parser exactness tests missing I10P payloads with trailing bytes must not be partially decoded[\s\S]*?Rust native bridge ZK1 I10P parser exactness tests missing zk1_read_instance_columns\(&payload\)\.is_none\(\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native bridge ZK1 I10P parser negative control must require every exact mutated parser marker",
+  );
+  assert.match(
+    bridgeZk1I10pParserExactnessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "native bridge ZK1 I10P parser negative control must print every exact parser diagnostic",
+  );
+  assert.match(
+    bridgeZk1I10pParserExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"\s*\)/u,
     "native bridge ZK1 I10P parser negative control must only pass after detecting parser drift",
   );
   assert.doesNotMatch(
@@ -12511,8 +12882,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   const expectedPrivacyWorkflowPaths = [
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "javascript/iroha_js/src/crypto.js",
@@ -12581,6 +12954,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "preferred-mode fallback negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    preferredModeFallbackBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*raise\s+SystemExit\(0\)[\s\S]*raise\s+SystemExit\("negative control failed: cross-SDK preferred-mode fallback drift was not detected"\)/u,
     "preferred-mode fallback negative control must only pass after detecting injected drift",
   );
@@ -12614,6 +12992,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /JS_HOST_APPEND_BOUNDARY_TEST_COMMAND[\s\S]*?--skip kagemusha_recursive_spend_lineage_append_boundary[\s\S]*?JS host append-boundary duplicate-output test/u,
     "native bridge workflow negative control must mutate the JS host append-boundary duplicate-output test command",
   );
+  assert.match(
+    nativeBridgeTestWorkflowBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "native bridge workflow negative control must print diagnostics for every mutated workflow label",
+  );
   const nativeBridgeWindowedRecordOrderWorkflowBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-bridge-windowed-record-order-workflow":'),
     guard.indexOf('if mode == "--negative-control-native-bridge-needs-workflow":'),
@@ -12622,6 +13005,946 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     nativeBridgeWindowedRecordOrderWorkflowBranch,
     /windowed_line \+ heavyweight_line[\s\S]*?heavyweight_line \+ windowed_line[\s\S]*?windowed-record bridge test before the heavyweight recursive compact adversarial test/u,
     "native bridge workflow ordering negative control must swap the windowed-record and heavyweight recursive compact commands",
+  );
+  const nativeBridgeNeedsWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-needs-workflow":'),
+    guard.indexOf('if mode == "--negative-control-python-sdk-job-workflow":'),
+  );
+  assert.match(
+    nativeBridgeNeedsWorkflowBranch,
+    /expected\s*=\s*"Kagemusha payload benchmark job must wait for the native bridge test job"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
+    "native bridge dependency workflow branch must require the benchmark dependency label",
+  );
+  for (const { start, end, expected, label } of [
+    {
+      start: 'if mode == "--negative-control-python-sdk-job-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-runner-workflow":',
+      expected: "Kagemusha payload workflow must define the Python SDK test job",
+      label: "Python SDK job workflow branch must require the missing job label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-runner-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-setup-workflow":',
+      expected: "Kagemusha payload workflow must run Python SDK tests on Ubuntu",
+      label: "Python SDK runner workflow branch must require the Ubuntu runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-setup-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-version-workflow":',
+      expected: "Kagemusha payload workflow must set up Python for Python SDK tests",
+      label: "Python SDK setup workflow branch must require the setup label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-version-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-setup-order-workflow":',
+      expected: "Kagemusha payload workflow must pin Python 3.11 for Python SDK tests",
+      label: "Python SDK version workflow branch must require the Python 3.11 label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-setup-order-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-rust-cache-workflow":',
+      expected: "Kagemusha payload workflow must set up Python before running Python SDK tests",
+      label: "Python SDK setup-order workflow branch must require the setup-before-test label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-rust-cache-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-timeout-workflow":',
+      expected: "Kagemusha payload workflow must cache Rust artifacts for Python native builds",
+      label: "Python SDK Rust cache workflow branch must require the Rust cache label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-timeout-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-version-script":',
+      expected: "Kagemusha payload workflow must allow 45 minutes for Python native builds",
+      label: "Python SDK timeout workflow branch must require the timeout label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-test-workflow":',
+      end: 'if mode == "--negative-control-python-host-test-workflow":',
+      expected: "Kagemusha payload workflow must run the Python recursive spend SDK tests",
+      label: "Python SDK test workflow branch must require the package-test label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-host-test-workflow":',
+      end: 'if mode == "--negative-control-python-sdk-needs-workflow":',
+      expected: "Kagemusha payload workflow must run the Python PyO3 append-boundary host test",
+      label: "Python host workflow branch must require the PyO3 host-test label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-needs-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-job-workflow":',
+      expected: "Kagemusha payload benchmark job must wait for the Python SDK test job",
+      label: "Python SDK dependency workflow branch must require the benchmark dependency label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `expected\\s*=\\s*"${escapeRegExp(expected)}"[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, expected, label } of [
+    {
+      start: 'if mode == "--negative-control-python-sdk-version-script":',
+      end: 'if mode == "--negative-control-python-sdk-override-script":',
+      expected: "Kagemusha Python SDK script must print the initial and rebuilt venv Python versions",
+      label: "Python SDK version script branch must require the venv-version label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-override-script":',
+      end: 'if mode == "--negative-control-python-sdk-resolver-script":',
+      expected: "Kagemusha Python SDK script must keep the documented Python override variable",
+      label: "Python SDK override script branch must require the override variable label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-resolver-script":',
+      end: 'if mode == "--negative-control-python-sdk-major-script":',
+      expected: "Kagemusha Python SDK script must resolve Python 3.11 before falling back to python3",
+      label: "Python SDK resolver script branch must require the Python 3.11 resolver label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-major-script":',
+      end: 'if mode == "--negative-control-python-sdk-venv-rebuild-script":',
+      expected: "Kagemusha Python SDK script must reject non-Python-3.11 runtimes",
+      label: "Python SDK major script branch must require the Python 3.11 rejection label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-venv-rebuild-script":',
+      end: 'if mode == "--negative-control-python-sdk-native-build-script":',
+      expected: "Kagemusha Python SDK script must remove stale venvs before rebuilding",
+      label: "Python SDK venv rebuild script branch must require the stale-venv removal label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-native-build-script":',
+      end: 'if mode == "--negative-control-python-sdk-venv-activation-script":',
+      expected: "Kagemusha Python SDK script must build the native extension with the selected Python",
+      label: "Python SDK native build script branch must require the maturin build label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-venv-activation-script":',
+      end: 'if mode == "--negative-control-python-sdk-bytecode-script":',
+      expected: "Kagemusha Python SDK script must activate the selected venv before maturin",
+      label: "Python SDK venv activation script branch must require the venv activation label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-bytecode-script":',
+      end: 'if mode == "--negative-control-python-sdk-test-filter-script":',
+      expected: "Kagemusha Python SDK script must not write bytecode cache files during tests",
+      label: "Python SDK bytecode script branch must require the no-bytecode label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-test-filter-script":',
+      end: 'if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":',
+      expected: "Kagemusha Python SDK script must run tests/offline_cash_test.py",
+      label: "Python SDK test filter script branch must require the offline cash test label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":',
+      end: 'if mode == "--negative-control-abi7-sdk-manifest-coverage":',
+      expected: "Kagemusha Python SDK script must run the ABI-7 archive fixture native guard",
+      label: "Python SDK ABI-7 fixture guard branch must require the native guard label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `expected\\s*=\\s*"${escapeRegExp(expected)}"[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-python-connect-runner-coverage":',
+      end: 'if mode == "--negative-control-python-connect-test-exactness":',
+      marker: "Kagemusha Python SDK script must run tests/testconnect_codec.py",
+      label: "Python Connect runner branch must require the Connect test path label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-connect-test-exactness":',
+      end: 'if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":',
+      marker: "SID/preview bootstrap exactness",
+      label: "Python Connect exactness branch must require the Connect exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":',
+      end: 'if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script":',
+      marker: "Kagemusha Python SDK script must run the Torii canonical request auth exactness regression",
+      label: "Python canonical request filter branch must require the canonical auth label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script":',
+      end: 'if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":',
+      marker: "Kagemusha Python SDK script must run the identifier receipt exactness and adversarial vector regression",
+      label: "Python identifier receipt filter branch must require the receipt exactness label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":',
+      end: 'if mode == "--negative-control-python-block-height-vectors":',
+      marker: "Kagemusha Python SDK script must run the multisig resolved account exactness regression",
+      label: "Python multisig filter branch must require the multisig response label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-event-filter-test-filter-script":',
+      end: 'if mode == "--negative-control-python-sdk-workflow-inventory":',
+      marker: "Kagemusha Python SDK script must run Torii event-filter verifier/proof exactness regressions",
+      label: "Python event-filter branch must require the event-filter regression label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-lineage-frozen-copy":',
+      end: 'if mode == "--negative-control-python-sdk-test-workflow":',
+      marker: "Python native output Norito guard tests missing proving_key[:] =",
+      label: "Python lineage frozen-copy branch must require the proving-key copy label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(marker)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, expected, label } of [
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-job-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-runner-workflow":',
+      expected: "Kagemusha payload workflow must define the JVM SDK test job",
+      label: "JVM SDK job workflow branch must require the missing job label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-runner-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-java-setup-workflow":',
+      expected: "Kagemusha payload workflow must run JVM SDK tests on Ubuntu",
+      label: "JVM SDK runner workflow branch must require the Ubuntu runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-java-setup-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-java-distribution-workflow":',
+      expected: "Kagemusha payload workflow must set up Java for JVM SDK tests",
+      label: "JVM SDK Java setup workflow branch must require the setup label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-java-distribution-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-java-version-workflow":',
+      expected: "Kagemusha payload workflow must use Temurin Java for JVM SDK tests",
+      label: "JVM SDK Java distribution workflow branch must require the Temurin label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-java-version-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-test-workflow":',
+      expected: "Kagemusha payload workflow must pin Java 21 for JVM SDK tests",
+      label: "JVM SDK Java version workflow branch must require the Java 21 label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-test-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-test-filter-script":',
+      expected: "Kagemusha payload workflow must run the JVM recursive spend SDK tests",
+      label: "JVM SDK test workflow branch must require the test command label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-test-order-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-needs-workflow":',
+      expected: "Kagemusha payload workflow must run the JVM recursive spend SDK tests",
+      label: "JVM SDK test-order workflow branch must require the test command label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-needs-workflow":',
+      end: 'if mode == "--negative-control-swift-sdk-job-workflow":',
+      expected: "Kagemusha payload benchmark job must wait for the JVM SDK test job",
+      label: "JVM SDK dependency workflow branch must require the benchmark dependency label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `expected\\s*=\\s*"${escapeRegExp(expected)}"[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-test-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":',
+      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
+      label: "JVM SDK test filter branch must require the offline cash test label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":',
+      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest",
+      label: "JVM SDK canonical request filter branch must require the canonical signer label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":',
+      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
+      label: "JVM SDK signing/verifier filter branch must require the verifier-key instruction label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":',
+      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
+      label: "JVM SDK Torii event-stream filter branch must require the event-stream label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-workflow-inventory":',
+      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+      label: "JVM SDK identifier receipt filter branch must require the claim-identifier label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-jdk21-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-java-home-override-script":',
+      marker: "Kagemusha JVM SDK script must print the selected Java version",
+      label: "JVM SDK JDK 21 script branch must require the Java version evidence label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-java-home-override-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-java-home-reject-script":',
+      marker: "Kagemusha JVM SDK script must keep the documented Java home override variable",
+      label: "JVM SDK Java-home override branch must require the override variable label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-java-home-reject-script":',
+      end: 'if mode == "--negative-control-jvm-recursive-compact-verifier-availability":',
+      marker: "Kagemusha JVM SDK script must reject inherited non-JDK-21 JAVA_HOME values",
+      label: "JVM SDK Java-home rejection branch must require the inherited JAVA_HOME label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-android-harness-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-direct-javac-harness-script":',
+      marker: "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains",
+      label: "JVM SDK Android harness branch must require the focused harness label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-direct-javac-harness-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-test-order-workflow":',
+      marker: "Kagemusha JVM SDK script must directly compile and run the Android recursive spend harness with javac",
+      label: "JVM SDK direct javac harness branch must require the javac harness label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(marker)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-jvm-recursive-compact-verifier-availability":',
+      end: 'if mode == "--negative-control-jvm-recursive-compact-shape-classifier":',
+      marker: "Kotlin recursive compact wrapper missing check(nativeVerifierAvailable)",
+      label: "JVM recursive compact verifier availability branch must require the native verifier marker",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(marker)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  const jvmRecursiveCompactShapeClassifierBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-recursive-compact-shape-classifier":'),
+    guard.indexOf('if mode == "--negative-control-mobile-recursive-spend-native-output-headers":'),
+  );
+  assert.match(
+    jvmRecursiveCompactShapeClassifierBranch,
+    /Kotlin recursive compact verifier tests missing[\s\S]*?public instance column 0 must contain exactly one row; found 2[\s\S]*?Kotlin recursive compact verifier tests missing[\s\S]*?envelope verifier-key hash mismatch[\s\S]*?Android Java recursive compact verifier tests missing[\s\S]*?public instance column 0 must contain exactly one row; found 2[\s\S]*?Android Java recursive compact verifier tests missing[\s\S]*?envelope verifier-key hash mismatch/u,
+    "JVM recursive compact shape classifier branch must require Kotlin and Android classifier labels",
+  );
+  assert.match(
+    jvmRecursiveCompactShapeClassifierBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JVM recursive compact shape classifier branch must require every classifier label",
+  );
+  assert.match(
+    jvmRecursiveCompactShapeClassifierBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM recursive compact shape classifier branch must print diagnostics for every classifier label",
+  );
+  for (const { start, end, expected, label } of [
+    {
+      start: 'if mode == "--negative-control-swift-sdk-job-workflow":',
+      end: 'if mode == "--negative-control-swift-sdk-runner-workflow":',
+      expected: "Kagemusha payload workflow must define the Swift SDK parse job",
+      label: "Swift SDK job workflow branch must require the missing job label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-runner-workflow":',
+      end: 'if mode == "--negative-control-swift-sdk-parse-workflow":',
+      expected: "Kagemusha payload workflow must run the Swift SDK parse job on macOS",
+      label: "Swift SDK runner workflow branch must require the macOS runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-parse-workflow":',
+      end: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
+      expected: "Kagemusha payload workflow must run the Swift recursive spend SDK parse check",
+      label: "Swift SDK parse workflow branch must require the parse command label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-needs-workflow":',
+      end: 'if mode == "--negative-control-csharp-sdk-job-workflow":',
+      expected: "Kagemusha payload benchmark job must wait for the Swift SDK parse job",
+      label: "Swift SDK dependency workflow branch must require the benchmark dependency label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `expected\\s*=\\s*"${escapeRegExp(expected)}"[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
+      end: 'if mode == "--negative-control-swift-connect-parse-surface-script":',
+      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
+      label: "Swift SDK parse-surface branch must require the instruction encoder parse label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-connect-parse-surface-script":',
+      end: 'if mode == "--negative-control-swift-sdk-privacy-parse-script":',
+      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
+      label: "Swift Connect parse branch must require the ConnectClient parse label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-privacy-parse-script":',
+      end: 'if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":',
+      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+      label: "Swift privacy parse branch must require the PrivacyNativeBridge parse label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":',
+      end: 'if mode == "--negative-control-swift-sdk-workflow-inventory":',
+      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+      label: "Swift Torii verifier parse branch must require the ToriiClient parse label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-uc4-skip":',
+      end: 'if mode == "--negative-control-swift-lineage-data-copy":',
+      marker: "Swift UC4 payment-token diagnostic test missing throw XCTSkip",
+      label: "Swift UC4 skip branch must require the XCTSkip marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-data-copy":',
+      end: 'if mode == "--negative-control-swift-recursive-compact-verifier-bool":',
+      marker: "Swift lineage key artifact Data copy tests missing var exposedProvingKeyArchive = initArtifacts.lineageProvingKeyArchive",
+      label: "Swift lineage Data copy branch must require the proving-key copy marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-recursive-compact-verifier-bool":',
+      end: 'if mode == "--negative-control-swift-recursive-compact-verifier-availability":',
+      marker: "Swift recursive compact bridge verifier probe missing normalizeKagemushaRecursiveCompactVerifierOutput",
+      label: "Swift recursive compact verifier bool branch must require the normalizer marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-recursive-compact-verifier-availability":',
+      end: 'if mode == "--negative-control-swift-kagemusha-native-output-cap":',
+      marker: "Swift recursive compact wrapper missing bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
+      label: "Swift recursive compact verifier availability branch must require the verifier availability marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-kagemusha-native-output-cap":',
+      end: 'if mode == "--negative-control-swift-native-output-headers":',
+      marker: "Swift recursive compact verifier tests missing testNativeBridgeRejectsOversizedKagemushaOutputBeforeCopying",
+      label: "Swift native output cap branch must require the oversized output test marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":',
+      end: 'if mode == "--negative-control-swift-note-amount-vectors":',
+      marker: "Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem(",
+      label: "Swift instruction transaction builder branch must require the redeem builder marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":',
+      end: 'if mode == "--negative-control-swift-nfc-receive-success-preservation":',
+      marker: "Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests missing testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification",
+      label: "Swift identifier receipt decode branch must require the padded account-id test marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-version-script":',
+      end: 'if mode == "--negative-control-swift-sdk-override-script":',
+      marker: "Kagemusha Swift SDK script must print the selected swiftc version",
+      label: "Swift SDK version script branch must require the swiftc version label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-override-script":',
+      end: 'if mode == "--negative-control-swift-sdk-needs-workflow":',
+      marker: "Kagemusha Swift SDK script must keep the documented swiftc override variable",
+      label: "Swift SDK override script branch must require the swiftc override label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(marker)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, expected, label } of [
+    {
+      start: 'if mode == "--negative-control-js-sdk-job-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-runner-workflow":',
+      expected: "Kagemusha payload workflow must define the JavaScript SDK test job",
+      label: "JavaScript SDK job workflow branch must require the missing job label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-runner-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-node-setup-workflow":',
+      expected: "Kagemusha payload workflow must run JavaScript SDK tests on Ubuntu",
+      label: "JavaScript SDK runner workflow branch must require the Ubuntu runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-setup-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-node-version-workflow":',
+      expected: "Kagemusha payload workflow must set up Node for JavaScript SDK tests",
+      label: "JavaScript SDK Node setup workflow branch must require the setup label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-version-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-node-version-script":',
+      expected: "Kagemusha payload workflow must pin Node 20 for JavaScript SDK tests",
+      label: "JavaScript SDK Node version workflow branch must require the Node 20 label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-cache-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-node-setup-order-workflow":',
+      expected: "Kagemusha payload workflow must cache JavaScript SDK dependencies by package-lock",
+      label: "JavaScript SDK cache workflow branch must require the package-lock cache label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-setup-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-install-workflow":',
+      expected: "Kagemusha payload workflow must set up Node before installing JavaScript SDK dependencies",
+      label: "JavaScript SDK Node setup-order workflow branch must require the setup-before-install label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-install-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-native-build-workflow":',
+      expected: "Kagemusha payload workflow must install JavaScript SDK dependencies",
+      label: "JavaScript SDK install workflow branch must require the install label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-native-build-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-test-workflow":',
+      expected: "Kagemusha payload workflow must build the JavaScript SDK native host",
+      label: "JavaScript SDK native-build workflow branch must require the native-build label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-test-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-transaction-builder-filter-script":',
+      expected: "Kagemusha payload workflow must run the JavaScript recursive spend SDK tests",
+      label: "JavaScript SDK test workflow branch must require the test command label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-install-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-test-order-workflow":',
+      expected: "Kagemusha payload workflow must install JavaScript SDK dependencies before running JavaScript tests",
+      label: "JavaScript SDK install-order workflow branch must require the install-before-test label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-test-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-native-build-order-workflow":',
+      expected: "Kagemusha payload workflow must run the JavaScript recursive spend SDK tests",
+      label: "JavaScript SDK test-order workflow branch must require the test command label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-native-build-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-needs-workflow":',
+      expected: "Kagemusha payload workflow must build the JavaScript SDK native host before running JavaScript tests",
+      label: "JavaScript SDK native-build-order workflow branch must require the build-before-test label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-needs-workflow":',
+      end: 'if mode == "--negative-control-sdk-parity-meta-test-workflow":',
+      expected: "Kagemusha payload benchmark job must wait for the JavaScript SDK test job",
+      label: "JavaScript SDK dependency workflow branch must require the benchmark dependency label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `expected\\s*=\\s*"${escapeRegExp(expected)}"[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, path, label } of [
+    {
+      start: 'if mode == "--negative-control-workflow":',
+      end: 'if mode == "--negative-control-native-manifest-workflow":',
+      path: "javascript/iroha_js/src/crypto.js",
+      label: "top-level workflow inventory branch must require the missing JavaScript source path",
+    },
+    {
+      start: 'if mode == "--negative-control-native-manifest-workflow":',
+      end: 'if mode == "--negative-control-sdk-negative-controls-workflow":',
+      path: "crates/connect_norito_bridge/Cargo.toml",
+      label: "native manifest workflow inventory branch must require the missing Cargo manifest path",
+    },
+    {
+      start: 'if mode == "--negative-control-python-sdk-workflow-inventory":',
+      end: 'if mode == "--negative-control-python-lineage-frozen-copy":',
+      path: "python/iroha_python/tests/offline_cash_test.py",
+      label: "Python workflow inventory branch must require the missing Python test path",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-workflow-inventory":',
+      end: 'if mode == "--negative-control-jvm-sdk-android-workflow-inventory":',
+      path: "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
+      label: "JVM workflow inventory branch must require the missing Kotlin test path",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-android-workflow-inventory":',
+      end: 'if mode == "--negative-control-jvm-sdk-jdk21-script":',
+      path: "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
+      label: "Android workflow inventory branch must require the missing Java test path",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-workflow-inventory":',
+      end: 'if mode == "--negative-control-swift-sdk-source-workflow-inventory":',
+      path: "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+      label: "Swift workflow inventory branch must require the missing Swift test path",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-source-workflow-inventory":',
+      end: 'if mode == "--negative-control-swift-sdk-uc4-skip":',
+      path: "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+      label: "Swift source workflow inventory branch must require the missing Swift source path",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-workflow-inventory":',
+      end: 'if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":',
+      path: "javascript/iroha_js/test/offlineCashLifecycle.test.js",
+      label: "JavaScript workflow inventory branch must require the missing JavaScript test path",
+    },
+    {
+      start: 'if mode == "--negative-control-sdk-parity-meta-test-workflow":',
+      end: 'if mode == "--negative-control-sdk-negative-controls-order-workflow":',
+      path: "JS_PARITY_TEST_PATH",
+      label: "SDK parity meta-test workflow inventory branch must require the missing meta-test path",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(path)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-swift-nfc-receive-success-preservation":',
+      end: 'if mode == "--negative-control-swift-nfc-receipt-ack-single-success":',
+      marker: "Swift NFC receive/send success runtime wiring missing hasSuccessState: didPublishReceiveSuccess || didComplete",
+      label: "Swift NFC receive-success branch must require the receive-success marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-nfc-receipt-ack-single-success":',
+      end: 'if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":',
+      marker: "Swift NFC receive/send success runtime wiring missing let shouldNotifyReceiptAckReady = markReceiptAckReady()",
+      label: "Swift NFC receipt-ACK branch must require the ACK-ready marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":',
+      end: 'if mode == "--negative-control-swift-nfc-emulation-progress-after-success":',
+      marker: "Swift NFC receive/send success runtime wiring missing shouldPublishReceiveSuccessOnAckRead(",
+      label: "Swift NFC ACK-read branch must require the ACK-read marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-nfc-emulation-progress-after-success":',
+      end: 'if mode == "--negative-control-swift-nfc-send-terminal-success-policy":',
+      marker: "Swift NFC receive emulation progress suppression after success missing pattern",
+      label: "Swift NFC emulation-progress branch must require the progress-suppression marker",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-nfc-send-terminal-success-policy":',
+      end: 'if mode == "--negative-control-swift-sdk-version-script":',
+      marker: "Swift NFC send progress terminal-success gate missing pattern",
+      label: "Swift NFC send terminal-success branch must require the terminal-success marker",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-version-script":',
+      end: 'if mode == "--negative-control-js-sdk-node-override-script":',
+      marker: "Kagemusha JavaScript SDK script must emit the selected Node version",
+      label: "JavaScript SDK Node version script branch must require the Node version label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-override-script":',
+      end: 'if mode == "--negative-control-js-sdk-node-resolver-script":',
+      marker: "Kagemusha JavaScript SDK script must keep the documented Node override variable",
+      label: "JavaScript SDK Node override branch must require the override label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-resolver-script":',
+      end: 'if mode == "--negative-control-js-sdk-node-major-script":',
+      marker: "Kagemusha JavaScript SDK script must resolve Node 20 before falling back to node",
+      label: "JavaScript SDK Node resolver branch must require the resolver label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-node-major-script":',
+      end: 'if mode == "--negative-control-js-sdk-node-cache-workflow":',
+      marker: "Kagemusha JavaScript SDK script must reject non-Node-20 runtimes",
+      label: "JavaScript SDK Node major branch must require the Node 20 rejection label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-transaction-builder-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-privacy-native-filter-script":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK transaction-builder filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-privacy-native-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-offline-cash-filter-script":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK privacy-native filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-offline-cash-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-canonical-request-filter-script":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK offline-cash filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-canonical-request-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-event-filter-filter-script":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK canonical-request filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-event-filter-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-verifier-key-filter-script":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK event-filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-verifier-key-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK verifier-key filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":',
+      end: 'if mode == "--negative-control-js-torii-runner-coverage":',
+      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
+      label: "JavaScript SDK identifier-receipt filter branch must require the full runner label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-browser-helper":',
+      end: 'if mode == "--negative-control-js-lineage-key-artifact-copy":',
+      marker: "javascript/iroha_js/dist/crypto.browser.js constants missing KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
+      label: "JavaScript browser helper branch must require the browser constant label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-lineage-key-artifact-copy":',
+      end: 'if mode == "--negative-control-js-lineage-key-package-binding":',
+      marker: "javascript/iroha_js/src/crypto.js portable lineage key artifact package missing get lineageVerifierKey()",
+      label: "JavaScript lineage key artifact copy branch must require the getter label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-js-append-lineage-key-boundary":',
+      marker: "javascript/iroha_js/src/crypto.js portable lineage key artifact package missing archivePayload.includes(verifierKeyCommitment)",
+      label: "JavaScript lineage key package binding branch must require the archive binding label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-append-lineage-key-boundary":',
+      end: 'if mode == "--negative-control-js-lineage-key-artifact-request-object":',
+      marker: "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing if (suppliedLineageKeyMaterial && !appendNeedsLineageKeyArtifacts) {",
+      label: "JavaScript append lineage key boundary branch must require the append boundary label",
+    },
+    {
+      start: 'if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":',
+      end: 'if mode == "--negative-control-js-note-amount-vectors":',
+      marker: "javascript/iroha_js/src/transaction.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction",
+      label: "JavaScript instruction transaction builder branch must require the builder label",
+    },
+    {
+      start: 'if mode == "--negative-control-python-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-csharp-lineage-key-package-binding":',
+      marker: "Python portable lineage key artifact package missing archive_payload.find(verifier_key_commitment)",
+      label: "Python lineage key package binding branch must require the archive binding label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-swift-compact-projection-hardening":',
+      marker: "Swift portable lineage key artifact package missing archivePayload.range(of: verifierKeyCommitment)",
+      label: "Swift lineage key package binding branch must require the archive binding label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-witness-availability-probe":',
+      end: 'if mode == "--negative-control-swift-lineage-witness-append-availability-probe":',
+      marker: "Swift native availability probe missing probeKagemushaLineageWitnessFromInitResultFunction(",
+      label: "Swift lineage witness availability branch must require the init probe label",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-witness-append-availability-probe":',
+      end: 'if mode == "--negative-control-jvm-lineage-key-package-binding":',
+      marker: "Swift native availability probe missing probeKagemushaLineageWitnessAppendResultFunction(",
+      label: "Swift lineage witness append availability branch must require the append probe label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-android-lineage-key-package-binding":',
+      marker: "Kotlin witnessless Reserved-lineage helper bounds missing archivePayload.indexOfSlice(verifierKeyCommitment) >= 0",
+      label: "Kotlin lineage key package binding branch must require the archive binding label",
+    },
+    {
+      start: 'if mode == "--negative-control-android-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-jvm-lineage-witness-availability-probe":',
+      marker: "Android witnessless Reserved-lineage helper bounds missing indexOfSlice(archivePayload, verifierKeyCommitment) < 0",
+      label: "Android lineage key package binding branch must require the archive binding label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-lineage-witness-availability-probe":',
+      end: 'if mode == "--negative-control-jvm-lineage-witness-append-availability-probe":',
+      marker: "Kotlin JVM SDK native availability probes missing nativeLineageWitnessFromInitResult(probe, probe)",
+      label: "Kotlin lineage witness availability branch must require the init probe label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-lineage-witness-append-availability-probe":',
+      end: 'if mode == "--negative-control-android-lineage-witness-availability-probe":',
+      marker: "Kotlin JVM SDK native availability probes missing nativeLineageWitnessAppendResult(probe, probe, probe)",
+      label: "Kotlin lineage witness append availability branch must require the append probe label",
+    },
+    {
+      start: 'if mode == "--negative-control-android-lineage-witness-availability-probe":',
+      end: 'if mode == "--negative-control-android-lineage-witness-append-availability-probe":',
+      marker: "Android Java SDK native availability probes missing nativeLineageWitnessFromInitResult(probe, probe)",
+      label: "Android lineage witness availability branch must require the init probe label",
+    },
+    {
+      start: 'if mode == "--negative-control-android-lineage-witness-append-availability-probe":',
+      end: 'if mode == "--negative-control-jvm-android-hop-evidence-shape":',
+      marker: "Android Java SDK native availability probes missing nativeLineageWitnessAppendResult(probe, probe, probe)",
+      label: "Android lineage witness append availability branch must require the append probe label",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-pallas-builder-input-guards":',
+      end: 'if mode == "--negative-control-non-csharp-pallas-builder-input-guards":',
+      marker: "Kotlin recursive spend input Norito guard tests missing previousBundleArchive must be a valid Norito archive",
+      label: "JVM Pallas builder input branch must require the previous-bundle label",
+    },
+    {
+      start: 'if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":',
+      end: 'if mode == "--negative-control-offline-doc-localnet-lifecycle-release-evidence":',
+      marker: "offline Kagemusha docs missing native-owned accumulator boundary:",
+      label: "offline Kagemusha accumulator doc branch must require the native-owned accumulator label",
+    },
+    {
+      start: 'if mode == "--negative-control-offline-doc-instruction-transaction-surface":',
+      end: 'if mode == "--negative-control-sdk-proof-chain-accumulator-input":',
+      marker: "offline Kagemusha docs missing all-SDK instruction transaction boundary:",
+      label: "offline Kagemusha instruction transaction doc branch must require the instruction boundary label",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `${escapeRegExp(marker)}[\\s\\S]*?(?:expected|expected_label) not in message[\\s\\S]*?rejected for the wrong reason`,
+        "u",
+      ),
+      label,
+    );
+  }
+  const pythonRecursiveCompactProbeArityExactLabelBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-probe-arity":'),
+    guard.indexOf('if mode == "--negative-control-js-recursive-compact-key-package-dispatch":'),
+  );
+  assert.match(
+    pythonRecursiveCompactProbeArityExactLabelBranch,
+    /Python recursive compact prover availability probe must pass record, Pallas, and key-artifact probe archives[\s\S]*?Python recursive compact verifier availability probes must pass compact-token and verifier-key probe archives/u,
+    "Python recursive compact probe arity branch must require prover and verifier probe labels",
+  );
+  assert.match(
+    pythonRecursiveCompactProbeArityExactLabelBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Python recursive compact probe arity branch must require every expected label",
+  );
+  assert.match(
+    pythonRecursiveCompactProbeArityExactLabelBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Python recursive compact probe arity branch must print diagnostics for prover and verifier labels",
+  );
+  const jsLineageReadonlyDeclarationsExactLabelBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-lineage-readonly-declarations":'),
+    guard.indexOf('if mode == "--negative-control-sdk-archive-input-copy":'),
+  );
+  assert.match(
+    jsLineageReadonlyDeclarationsExactLabelBranch,
+    /readonly lineageVerifierKey: Buffer;[\s\S]*?JavaScript TypeScript declarations missing readonly lineageVerifierKey: Buffer;[\s\S]*?readonly lineageProvingKeyArchive: Buffer;[\s\S]*?JavaScript TypeScript declarations missing readonly lineageProvingKeyArchive: Buffer;/u,
+    "JS lineage readonly declaration branch must mutate verifier and proving key readonly declarations",
+  );
+  assert.match(
+    jsLineageReadonlyDeclarationsExactLabelBranch,
+    /expected_labels\s*=\s*\[\][\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS lineage readonly declaration branch must require both readonly labels",
+  );
+  assert.match(
+    jsLineageReadonlyDeclarationsExactLabelBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS lineage readonly declaration branch must print diagnostics for both readonly labels",
+  );
+  const mobileHalo2VkHashBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-halo2-vk-hash":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-boundary":'),
+  );
+  assert.match(
+    mobileHalo2VkHashBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/Halo2OfflineNoteProver\.swift[\s\S]*?canonicalVKHash = Data\(hexString:[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/OfflineNoteHalo2Prover\.java[\s\S]*?Android Java Halo2 canonical VK hash missing hexBytes[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/OfflineNoteHalo2Prover\.java[\s\S]*?Kotlin Halo2 canonical VK hash missing hexBytes/u,
+    "mobile Halo2 VK hash branch must mutate Swift, Android Java, and Kotlin canonical hash surfaces",
+  );
+  assert.match(
+    mobileHalo2VkHashBranch,
+    /expected_labels\s*=\s*\[\][\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "mobile Halo2 VK hash branch must require every mobile SDK label",
+  );
+  assert.match(
+    mobileHalo2VkHashBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile Halo2 VK hash branch must print diagnostics for every mobile SDK label",
+  );
+  const jsSdkTestWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-sdk-test-workflow":'),
+    guard.indexOf('if mode == "--negative-control-js-sdk-transaction-builder-filter-script":'),
+  );
+  assert.match(
+    jsSdkTestWorkflowBranch,
+    /f"        run: \{JS_SDK_TEST_COMMAND\}"/u,
+    "JavaScript SDK test workflow negative control must mutate the workflow run command",
   );
 
   const browserHelperBranch = guard.slice(
@@ -12688,6 +14011,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsLineageKeyArtifactRequestObjectBranch,
     /source_target\s*=\s*"javascript\/iroha_js\/src\/crypto\.js"[\s\S]*?package_target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?function kagemushaNormalizeLineageKeyArtifactsForRequest\([\s\S]*?package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch[\s\S]*?package dist Kagemusha recursive spend typed requests skip lineage key artifact packages before native dispatch/u,
     "JS lineage key artifact request object negative control must mutate source and package-dist request coverage",
+  );
+  assert.match(
+    jsLineageKeyArtifactRequestObjectBranch,
+    /expected_labels\s*=\s*\([\s\S]*?javascript\/iroha_js\/src\/crypto\.js typed recursive spend request codecs missing function kagemushaNormalizeLineageKeyArtifactsForRequest\([\s\S]*?JavaScript package dist recursive spend lineage key artifact request coverage missing package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS lineage key artifact request object negative control must require source and package-dist diagnostics",
+  );
+  assert.match(
+    jsLineageKeyArtifactRequestObjectBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS lineage key artifact request object negative control must print both diagnostics",
   );
   assert.match(
     jsLineageKeyArtifactRequestObjectBranch,
@@ -12925,8 +14258,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftCompactProjectionHardeningBranch,
-    /Swift recursive compact verifier tests/u,
-    "Swift compact projection hardening negative control must require the Swift verifier test label",
+    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact verifier tests missing testProjectionRejectsEmptyBundleArchiveBeforeBridgeCall[\s\S]*?Swift recursive compact verifier tests missing testProjectionVerifierRejectsMalformedCompactTokenArchiveBeforeBridgeCall[\s\S]*?Swift recursive compact verifier tests missing testProjectionVerifierNativeRecursiveCompactUnavailableIsDistinctFromRejection/u,
+    "Swift compact projection hardening negative control must require every mutated Swift verifier marker",
+  );
+  assert.match(
+    swiftCompactProjectionHardeningBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift compact projection hardening negative control must print diagnostics for every mutated marker",
   );
   assert.match(
     swiftCompactProjectionHardeningBranch,
@@ -13101,7 +14439,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidLineageWitnessAppendAvailabilityProbeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-lineage-witness-append-availability-probe":'),
-    guard.indexOf('if mode == "--negative-control-jvm-note-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-jvm-android-hop-evidence-shape":'),
   );
   assert.match(
     androidLineageWitnessAppendAvailabilityProbeBranch,
@@ -13117,6 +14455,50 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidLineageWitnessAppendAvailabilityProbeBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Android Java lineage witness append availability negative control must not unconditionally pass after run_checks",
+  );
+  const jvmAndroidHopEvidenceShapeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-android-hop-evidence-shape":'),
+    guard.indexOf('if mode == "--negative-control-jvm-note-amount-vectors":'),
+  );
+  assert.match(
+    jvmAndroidHopEvidenceShapeBranch,
+    /KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?exactly 9 single-row[\s\S]*?shape may pass[\s\S]*?run_checks\(mutated\)/u,
+    "JVM/Android hop evidence shape negative control must mutate Kotlin and Android Java shape assertions",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Kotlin/JVM typed hop evidence shape and binding tests",
+      "Android Java typed hop evidence shape and binding tests",
+      "verified fold record bundle rejects adversarial hop continuity and public input shapes",
+      "typedEvidenceHelpersRejectAdversarialHopBindings",
+      "exactly 9 single-row",
+      "rootAfter must differ",
+      "rootBefore must equal previous hop rootAfter",
+      "chainId does not match",
+      "asset does not match",
+    ],
+    "SDK parity guard must pin JVM/Android hop evidence shape and binding tests",
+  );
+  assert.match(
+    jvmAndroidHopEvidenceShapeBranch,
+    /missing\s*=\s*\[[\s\S]*?for label in expected_labels[\s\S]*?label not in message[\s\S]*?JVM\/Android hop evidence shape drift was not detected for/u,
+    "JVM/Android hop evidence shape negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmAndroidHopEvidenceShapeBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android hop evidence shape negative control must print diagnostics for every mutated SDK label",
+  );
+  assert.match(
+    jvmAndroidHopEvidenceShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM\/Android hop evidence shape drift was not detected"\s*\)/u,
+    "JVM/Android hop evidence shape negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmAndroidHopEvidenceShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android hop evidence shape negative control must not unconditionally pass after run_checks",
   );
   const jvmNoteAmountVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-note-amount-vectors":'),
@@ -13154,6 +14536,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmNoteAmountVectorBranch,
     /missing\s*=\s*\[[\s\S]*?for _target, \(_needle, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?JVM\/Android note amount vector drift was not detected for/u,
     "JVM/Android note amount vector negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmNoteAmountVectorBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, \(_needle, label\) in replacements\.items\(\)\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android note amount vector negative control must print diagnostics for every mutated SDK label",
   );
   assert.match(
     jvmNoteAmountVectorBranch,
@@ -13201,6 +14588,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmRedeemPublicAmountVectorBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, \(_needle, label\) in replacements\.items\(\)\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android publicAmount vector negative control must print diagnostics for both SDK labels",
+  );
+  assert.match(
+    jvmRedeemPublicAmountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM\/Android publicAmount vector drift was not detected"\)/u,
     "JVM/Android publicAmount vector negative control must only pass after detecting injected drift",
   );
@@ -13227,6 +14619,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     nonCsharpPallasBuilderInputGuardBranch,
     /missing\s*=\s*\[[\s\S]*?for _target, \(_old, _new, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?non-C# Pallas builder input guard drift was not detected for/u,
     "non-C# Pallas builder input negative control must require every mutated SDK label to be reported",
+  );
+  assert.match(
+    nonCsharpPallasBuilderInputGuardBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, \(_old, _new, label\) in replacements\.items\(\)\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "non-C# Pallas builder input negative control must print diagnostics for every mutated SDK label",
   );
   assert.match(
     nonCsharpPallasBuilderInputGuardBranch,
@@ -13259,6 +14656,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     nonCsharpPallasBuilderNativeOutputGuardBranch,
+    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, \(_old, _new, label\) in replacements\.items\(\)\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
+    "non-C# Pallas builder native-output negative control must print diagnostics for every mutated SDK label",
+  );
+  assert.match(
+    nonCsharpPallasBuilderNativeOutputGuardBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: non-C# Pallas builder native output drift was not detected"\)/u,
     "non-C# Pallas builder native-output negative control must only pass after detecting injected drift",
   );
@@ -13287,6 +14689,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkArchiveInputCopyBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK archive input copy drift was not detected for/u,
+    "SDK archive input copy negative control must require every mutated SDK label to be reported",
+  );
+  assert.match(
+    sdkArchiveInputCopyBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK archive input copy negative control must print diagnostics for every mutated SDK label",
+  );
+  assert.match(
+    sdkArchiveInputCopyBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK archive input copy drift was not detected"\)/u,
     "SDK archive input copy negative control must only pass after detecting injected drift",
   );
@@ -13301,6 +14713,31 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkLineageProvingKeyCopyBranch,
+    /javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?exposedProvingKey\[0\] = 0;[\s\S]*?JavaScript package lineage key artifact tests[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?JavaScript source lineage key artifact copy tests[\s\S]*?javascript\/iroha_js\/test\/crypto\.browser\.test\.js[\s\S]*?JavaScript browser lineage key artifact tests/u,
+    "SDK lineage proving key artifact copy negative control must mutate JS package, source, and browser copy assertions",
+  );
+  assert.match(
+    sdkLineageProvingKeyCopyBranch,
+    /python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?lineage_proving_key_archive == init_proving_key_archive[\s\S]*?Python lineage key artifact copy tests[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendProverTests\.swift[\s\S]*?exposedProvingKeyArchive\[0\] = 0[\s\S]*?Swift lineage key artifact Data copy tests/u,
+    "SDK lineage proving key artifact copy negative control must mutate Python and Swift copy assertions",
+  );
+  assert.match(
+    sdkLineageProvingKeyCopyBranch,
+    /Android Java portable lineage key artifact tests[\s\S]*?Kotlin portable lineage key artifact tests[\s\S]*?C# portable lineage key artifact tests/u,
+    "SDK lineage proving key artifact copy negative control must keep JVM and existing C# coverage",
+  );
+  assert.match(
+    sdkLineageProvingKeyCopyBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK lineage proving key copy drift was not detected for/u,
+    "SDK lineage proving key artifact copy negative control must require every mutated SDK label to be reported",
+  );
+  assert.match(
+    sdkLineageProvingKeyCopyBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK lineage proving key artifact copy negative control must print diagnostics for every mutated SDK label",
+  );
+  assert.match(
+    sdkLineageProvingKeyCopyBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK lineage proving key artifact copy drift was not detected"\)/u,
     "SDK lineage proving key artifact copy negative control must only pass after detecting injected drift",
   );
@@ -13308,6 +14745,50 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkLineageProvingKeyCopyBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK lineage proving key artifact copy negative control must not unconditionally pass after run_checks",
+  );
+  const sdkHelperSurfaceBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-helper-surface":'),
+    guard.indexOf('if mode == "--negative-control-mobile-halo2-vk-hash":'),
+  );
+  assert.match(
+    sdkHelperSurfaceBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?javascript\/iroha_js\/src\/crypto\.js public API[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js public API[\s\S]*?javascript\/iroha_js\/src\/crypto\.browser\.js[\s\S]*?javascript\/iroha_js\/src\/crypto\.browser\.js public API[\s\S]*?javascript\/iroha_js\/dist\/crypto\.browser\.js[\s\S]*?javascript\/iroha_js\/dist\/crypto\.browser\.js public API[\s\S]*?javascript\/iroha_js\/src\/index\.js[\s\S]*?javascript\/iroha_js\/src\/index\.js re-exports[\s\S]*?javascript\/iroha_js\/dist\/index\.js[\s\S]*?javascript\/iroha_js\/dist\/index\.js re-exports[\s\S]*?javascript\/iroha_js\/index\.d\.ts[\s\S]*?JavaScript TypeScript declarations[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?JavaScript recursive spend append output helper tests[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?JavaScript package dist recursive spend append output helper tests/u,
+    "SDK helper-surface negative control must mutate JS implementation, re-export, declaration, and helper test surfaces",
+  );
+  assert.match(
+    sdkHelperSurfaceBranch,
+    /python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?Python package re-exports[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?Python SDK[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?Python recursive spend append output helper tests[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendProver\.swift[\s\S]*?Swift witnessless Reserved-lineage helper bounds/u,
+    "SDK helper-surface negative control must mutate Python SDK/export/test surfaces and Swift helper bounds",
+  );
+  assert.match(
+    sdkHelperSurfaceBranch,
+    /java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProver\.java[\s\S]*?Android witnessless Reserved-lineage helper bounds[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendProver\.kt[\s\S]*?Kotlin witnessless Reserved-lineage helper bounds/u,
+    "SDK helper-surface negative control must mutate Android and Kotlin helper bounds",
+  );
+  assert.doesNotMatch(
+    sdkHelperSurfaceBranch,
+    /csharp\//u,
+    "SDK helper-surface negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkHelperSurfaceBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK public helper surface drift was not detected for/u,
+    "SDK helper-surface negative control must require every mutated label to be reported",
+  );
+  assert.match(
+    sdkHelperSurfaceBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK helper-surface negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    sdkHelperSurfaceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK public helper surface drift was not detected"\)/u,
+    "SDK helper-surface negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkHelperSurfaceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK helper-surface negative control must not unconditionally pass after run_checks",
   );
   const sdkReadmeBoundaryBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-boundary":'),
@@ -13327,6 +14808,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeBoundaryBranch,
     /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing previous-proof opening archive boundary[\s\S]*?SDK README boundary drift was not detected for/u,
     "SDK README boundary negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmeBoundaryBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README boundary negative control must print diagnostics for every mutated README",
   );
   assert.match(
     sdkReadmeBoundaryBranch,
@@ -13359,6 +14845,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeRecursiveCompactUnavailableBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README recursive compact negative control must print diagnostics for every mutated README",
+  );
+  assert.match(
+    sdkReadmeRecursiveCompactUnavailableBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK README recursive compact unavailable drift was not detected"\)/u,
     "SDK README recursive compact negative control must only pass after detecting injected drift",
   );
@@ -13385,6 +14876,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeProofChainAccumulatorBranch,
     /missing\s*=\s*\[[\s\S]*?for target in targets[\s\S]*?missing previous-proof opening archive boundary[\s\S]*?SDK README proof-chain accumulator drift was not detected for/u,
     "SDK README proof-chain accumulator negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmeProofChainAccumulatorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README proof-chain accumulator negative control must print diagnostics for every mutated README",
   );
   assert.match(
     sdkReadmeProofChainAccumulatorBranch,
@@ -13419,6 +14915,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmePallasBuilderBranch,
     /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing Pallas open-envelope builder docs[\s\S]*?SDK README Pallas builder drift was not detected for/u,
     "SDK README Pallas builder negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmePallasBuilderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README Pallas builder negative control must print diagnostics for every mutated README",
   );
   assert.match(
     sdkReadmePallasBuilderBranch,
@@ -13460,7 +14961,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     offlineDocLocalnetLifecycleReleaseEvidenceBranch,
-    /offline Kagemusha docs missing localnet lifecycle release evidence[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected/u,
+    /expected_labels\s*=\s*\([\s\S]*?--localnet-lifecycle-evidence artifacts\/kagemusha\/kagemusha-localnet-lifecycle-evidence\.json[\s\S]*?production 4-peer run id, chain id, peer ids[\s\S]*?smoke\/replay\/restart\/state-recovery hashes[\s\S]*?eight shield-to-redeem lifecycle hashes/u,
+    "offline Kagemusha doc localnet evidence negative control must require every mutated evidence label",
+  );
+  assert.match(
+    offlineDocLocalnetLifecycleReleaseEvidenceBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "offline Kagemusha doc localnet evidence negative control must fail when any mutated evidence label is not reported",
+  );
+  assert.match(
+    offlineDocLocalnetLifecycleReleaseEvidenceBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "offline Kagemusha doc localnet evidence negative control must print diagnostics for every mutated evidence label",
+  );
+  assert.match(
+    offlineDocLocalnetLifecycleReleaseEvidenceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected/u,
     "offline Kagemusha doc localnet evidence negative control must only pass after detecting injected drift",
   );
   assert.doesNotMatch(
@@ -13486,6 +15002,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     offlineDocPallasBuilderBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "offline Kagemusha doc Pallas negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /expected_labels\s*=\s*\([\s\S]*?current-hop and previous-proof Pallas open-envelope archive builders[\s\S]*?record bundle or previous recursive bundle[\s\S]*?native-owned opaque Norito bytes/u,
+    "offline Kagemusha doc Pallas negative control must require every mutated doc boundary label",
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "offline Kagemusha doc Pallas negative control must fail when any mutated doc boundary is not reported",
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "offline Kagemusha doc Pallas negative control must print diagnostics for every mutated doc boundary",
   );
   assert.match(
     offlineDocPallasBuilderBranch,
@@ -13531,6 +15062,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "SDK proof-chain accumulator input negative control must exercise suffixed proof-chain digest aliases",
   );
   assert.match(
+    sdkProofChainAccumulatorInputBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/NativeBridge\.swift[\s\S]*?recursiveProofChainDigestBytes[\s\S]*?python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?recursive_proof_chain_digest_bytes[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?proofChainDigestBytes/u,
+    "SDK proof-chain accumulator input negative control must cover secondary Swift, Python root, and JS dist surfaces",
+  );
+  assert.match(
     guard,
     /r"\\b\[A-Za-z0-9_\]\*recursiveProofChainDigest",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*recursive_proof_chain_digest",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*proofChainDigest",/u,
     "SDK proof-chain accumulator digest scanner must remain suffix-aware",
@@ -13541,9 +15077,19 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "SDK proof-chain accumulator digest scanner must not reintroduce exact-name-only trailing word boundaries",
   );
   assert.match(
+    guard,
+    /def first_lines_for_labels\(message, labels\):[\s\S]*?seen = set\(\)[\s\S]*?if label in seen:[\s\S]*?continue[\s\S]*?seen\.add\(label\)/u,
+    "SDK parity diagnostic fan-out helper must de-duplicate repeated surface labels",
+  );
+  assert.match(
     sdkProofChainAccumulatorInputBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "SDK proof-chain accumulator input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkProofChainAccumulatorInputBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK proof-chain accumulator input negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkProofChainAccumulatorInputBranch,
@@ -13571,8 +15117,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorDigestInputBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/NativeBridge\.swift[\s\S]*?fixedWindowSharedTableManifestDigestBytes[\s\S]*?python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?verifier_witness_batch_digest_bytes[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?fixedWindowTableScheduleDigestBytes/u,
+    "SDK accumulator digest input negative control must cover secondary Swift, Python root, and JS dist surfaces",
+  );
+  assert.match(
+    sdkAccumulatorDigestInputBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "SDK accumulator digest input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorDigestInputBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator digest input negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkAccumulatorDigestInputBranch,
@@ -13590,13 +15146,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorMaterialInputBranch,
-    /StaleAccumulatorMaterialInputFixture[\s\S]*?terminalAccumulator[\s\S]*?walletRecursiveProofChainBytes[\s\S]*?lineageAccumulatorState[\s\S]*?recursiveAccumulatorStateBytes[\s\S]*?appendAccumulator[\s\S]*?recursiveProofChainBytes[\s\S]*?lineage_accumulator_state[\s\S]*?recursive_accumulator_state_bytes[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
+    /StaleAccumulatorMaterialInputFixture[\s\S]*?terminalAccumulator[\s\S]*?walletRecursiveProofChainBytes[\s\S]*?proofChainBytes[\s\S]*?accumulatorSnapshot[\s\S]*?recursiveAccumulatorV1[\s\S]*?RecursiveProofStateBytes[\s\S]*?lineageAccumulatorState[\s\S]*?recursiveAccumulatorStateBytes[\s\S]*?appendAccumulator[\s\S]*?recursiveProofChainBytes[\s\S]*?recursiveProofState[\s\S]*?lineage_accumulator_state[\s\S]*?recursive_accumulator_state_bytes[\s\S]*?proof_chain_bytes[\s\S]*?accumulator_snapshot[\s\S]*?recursive_proof_state[\s\S]*?append_accumulator_bytes[\s\S]*?lineage_proof_state[\s\S]*?javascript\/iroha_js\/index\.d\.ts[\s\S]*?StaleAccumulatorMaterialStateAliasFixture[\s\S]*?accumulatorSnapshot[\s\S]*?recursiveProofState[\s\S]*?lineageProofStateBytes/u,
     "SDK accumulator material input negative control must inject stale material parameters across SDKs and TypeScript declarations",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/NativeBridge\.swift[\s\S]*?WalletRecursiveProofChainBytes[\s\S]*?accumulatorState[\s\S]*?recursiveAccumulatorV1[\s\S]*?RecursiveProofStateBytes[\s\S]*?python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?accumulator_state[\s\S]*?append_accumulator_bytes[\s\S]*?lineage_proof_state[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?WalletRecursiveProofChainBytes[\s\S]*?appendAccumulator[\s\S]*?lineageProofState/u,
+    "SDK accumulator material input negative control must cover secondary Swift, Python root, and JS dist surfaces",
   );
   assert.match(
     sdkAccumulatorMaterialInputBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "SDK accumulator material input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator material input negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkAccumulatorMaterialInputBranch,
@@ -13623,6 +15189,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "SDK accumulator boundary digest input negative control must exercise suffixed boundary digest aliases",
   );
   assert.match(
+    sdkAccumulatorBoundaryDigestInputBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/NativeBridge\.swift[\s\S]*?appendBoundaryDigestV1[\s\S]*?transitionProfileBindingDigestBytes[\s\S]*?python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?append_boundary_digest_bytes[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?appendOpeningPreflightDigestBytes/u,
+    "SDK accumulator boundary digest input negative control must cover secondary Swift, Python root, and JS dist surfaces",
+  );
+  assert.match(
     guard,
     /r"\\b\[A-Za-z0-9_\]\*lineageDigest",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*transitionProfileBindingDigest\(\?!Domain\)",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*appendBoundaryDigest",/u,
     "SDK accumulator digest scanner must remain suffix-aware while preserving TransitionProfileBindingDigestDomain constants",
@@ -13636,6 +15207,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorBoundaryDigestInputBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "SDK accumulator boundary digest input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorBoundaryDigestInputBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator boundary digest input negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkAccumulatorBoundaryDigestInputBranch,
@@ -13678,6 +15254,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator field-length vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator field-length vector drift was not detected"\s*\)/u,
     "SDK accumulator field-length vector negative control must only pass after detecting injected drift",
   );
@@ -13717,6 +15298,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorHopCountVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator hop-count vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator hop-count vector drift was not detected"\s*\)/u,
     "SDK accumulator hop-count vector negative control must only pass after detecting injected drift",
   );
@@ -13731,18 +15317,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorChainIdShapeBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Self\.noritoString\("kagemusha-recursive-spend-abi-chain"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?testStringPayload\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?kagemushaNoritoString\([\s\S]*?"kagemusha-recursive-spend-abi-chain"[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNoritoString\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?kagemusha\._kagemusha_string\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithAccumulatorField/u,
-    "SDK accumulator chain-id shape negative control must mutate non-C# SDK test vectors and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Self\.noritoString\("kagemusha-recursive-spend-abi-chain"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?testStringPayload\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?kagemushaNoritoString\([\s\S]*?"kagemusha-recursive-spend-abi-chain"[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNoritoString\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?kagemusha\._kagemusha_string\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?KagemushaNoritoString\("prod-chain-id"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithAccumulatorField/u,
+    "SDK accumulator chain-id shape negative control must mutate every SDK test vector and package dist",
   );
   assert.match(
     sdkAccumulatorChainIdShapeBranch,
     /bundle\.accumulator\.chain_id[\s\S]*?JavaScript package dist recursive spend bundle accumulator chain-id shape coverage/u,
     "SDK accumulator chain-id shape negative control must keep chain-id labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkAccumulatorChainIdShapeBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK accumulator chain-id shape negative control must stay non-C# until the C# SDK work is done on Windows",
+    /C# recursive spend bundle chainId canonical-shape guard tests/u,
+    "SDK accumulator chain-id shape negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkAccumulatorChainIdShapeBranch,
@@ -13756,6 +15342,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorChainIdShapeBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator chain-id shape negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAccumulatorChainIdShapeBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator chain-id shape drift was not detected"\s*\)/u,
     "SDK accumulator chain-id shape negative control must only pass after detecting injected drift",
   );
@@ -13766,17 +15357,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkBundleSummaryTrailingFieldVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-verify-lineage-record-preflight":'),
   );
   assert.match(
     sdkBundleSummaryTrailingFieldVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_bundle_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_accumulator_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_current_note_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
-    "SDK bundle summary trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_bundle_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_accumulator_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?_recursive_spend_bundle_with_trailing_current_note_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingBundleField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingAccumulatorField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?recursiveSpendBundleWithTrailingCurrentNoteField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithTopLevelTrailingField\(initBundleArchive\)/u,
+    "SDK bundle summary trailing-field vector negative control must mutate every SDK test vector and package dist",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkBundleSummaryTrailingFieldVectorBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK bundle summary trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+    /C# recursive spend bundle trailing-field guard tests/u,
+    "SDK bundle summary trailing-field vector negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkBundleSummaryTrailingFieldVectorBranch,
@@ -13790,6 +15381,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleSummaryTrailingFieldVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle summary trailing-field vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkBundleSummaryTrailingFieldVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle summary trailing-field vector drift was not detected"\s*\)/u,
     "SDK bundle summary trailing-field vector negative control must only pass after detecting injected drift",
   );
@@ -13798,24 +15394,68 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK bundle summary trailing-field vector negative control must not unconditionally pass after run_checks",
   );
+  const sdkVerifyLineageRecordPreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-verify-lineage-record-preflight":'),
+    guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /"missing"[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?init_bundle[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?sharedRecursiveSpendArchive\(\\?"init_bundle\\?"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?missingVerifyLineageRecord\.message[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?VerifySpendRequest[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendLineageProofCircuitIdV1[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?sharedRecursiveSpendAbi6Archive\(\\?"init_bundle\\?"\)/u,
+    "SDK verify lineage-record preflight negative control must mutate every SDK missing-record vector and package dist",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /"dangling"[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?append_bundle[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?lineageVerifierRecord: verifierRecord[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?lineage_verifier_record=verifier_record[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?semanticVerifyLineageRecord\.message[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageVerifierRecord is only valid for reserved-lineage bundles[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveAggregationProofCircuitIdV1[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?previousLineageVerifierRecord/u,
+    "SDK verify lineage-record preflight negative control must mutate every SDK dangling-record vector and package dist",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /C# recursive spend verify lineage-record preflight tests/u,
+    "SDK verify lineage-record preflight negative control must include C# preflight guard tests",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /for vector_name, replacements in mutation_sets:[\s\S]*?mutated = dict\(texts\)[\s\S]*?run_checks\(mutated\)[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK verify lineage-record preflight negative control must validate missing and dangling snapshots independently",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK verify lineage-record \{vector_name\} preflight drift was not detected for/u,
+    "SDK verify lineage-record preflight negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{vector_name\}: \{detected_message\}"\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "SDK verify lineage-record preflight negative control must print diagnostics for every mutated surface in each detected vector",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: SDK verify lineage-record \{vector_name\} preflight drift was not detected"[\s\S]*?print\("negative control rejected SDK verify lineage-record preflight drift"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK verify lineage-record preflight negative control must only pass after detecting missing and dangling drift",
+  );
+  assert.doesNotMatch(
+    sdkVerifyLineageRecordPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK verify lineage-record preflight negative control must not unconditionally pass after run_checks",
+  );
   const sdkVerifyResultTrailingFieldVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
     guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
   );
   assert.match(
     sdkVerifyResultTrailingFieldVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi7, name: "verify_result"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI7, "verify_result"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI7, "verify_result"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi7Archive\("verify_result"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_verify_result_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_abi7_archive\("verify_result"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi7Archive\("verify_result"\)/u,
-    "SDK verify-result trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi7, name: "verify_result"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI7, "verify_result"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI7, "verify_result"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi7Archive\("verify_result"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_verify_result_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_abi7_archive\("verify_result"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendVerifyResultWithTrailingField[\s\S]*?SharedRecursiveSpendAbi7Archive\(\\"verify_result\\"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendVerifyResultWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi7Archive\("verify_result"\)/u,
+    "SDK verify-result trailing-field vector negative control must mutate SDK test vectors, C# managed tests, and package dist",
   );
   assert.match(
     sdkVerifyResultTrailingFieldVectorBranch,
     /verify-result trailing-field[\s\S]*?recursiveSpendVerifyResultWithTrailingField/u,
     "SDK verify-result trailing-field vector negative control must keep trailing-field labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkVerifyResultTrailingFieldVectorBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK verify-result trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?C# recursive spend verify-result trailing-field guard tests/u,
+    "SDK verify-result trailing-field vector negative control must keep C# managed guard coverage visible",
   );
   assert.match(
     sdkVerifyResultTrailingFieldVectorBranch,
@@ -13826,6 +15466,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkVerifyResultTrailingFieldVectorBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK verify-result trailing-field vector drift was not detected for/u,
     "SDK verify-result trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkVerifyResultTrailingFieldVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK verify-result trailing-field vector negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkVerifyResultTrailingFieldVectorBranch,
@@ -13843,18 +15488,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_lineage_witness_with_trailing_field\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result/u,
-    "SDK lineage-witness trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_lineage_witness_with_trailing_field\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?_recursive_spend_lineage_witness_with_trailing_previous_verifier_key_id_field\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendLineageWitnessWithTrailingField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField\(\)[\s\S]*?lineage_witness_append_result[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendLineageWitnessWithTrailingField[\s\S]*?RecursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField/u,
+    "SDK lineage-witness trailing-field vector negative control must mutate SDK test vectors, package dist, and C# managed tests",
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
     /lineage-witness trailing-field[\s\S]*?recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField/u,
     "SDK lineage-witness trailing-field vector negative control must keep trailing-field labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK lineage-witness trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?C# recursive spend lineage-witness trailing-field guard tests/u,
+    "SDK lineage-witness trailing-field vector negative control must keep C# managed guard coverage visible",
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
@@ -13865,6 +15510,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkLineageWitnessTrailingFieldVectorBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK lineage-witness trailing-field vector drift was not detected for/u,
     "SDK lineage-witness trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkLineageWitnessTrailingFieldVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK lineage-witness trailing-field vector negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
@@ -13884,18 +15534,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?numericPayloadWithTrailingField[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_numeric_payload_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
-    "SDK current-note amount trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?numericPayloadWithTrailingField[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_numeric_payload_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithCurrentNoteAmountTrailingField\(initBundleArchive\)/u,
+    "SDK current-note amount trailing-field vector negative control must mutate every SDK test vector and package dist",
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
     /current-note amount trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
     "SDK current-note amount trailing-field vector negative control must keep trailing-field labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK current-note amount trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+    /C# recursive spend bundle trailing-field guard tests/u,
+    "SDK current-note amount trailing-field vector negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
@@ -13906,6 +15556,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK current-note amount trailing-field vector drift was not detected for/u,
     "SDK current-note amount trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkCurrentNoteAmountTrailingFieldVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK current-note amount trailing-field vector negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
@@ -13948,6 +15603,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleProofCircuitVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle proof-circuit vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-circuit vector drift was not detected"\s*\)/u,
     "SDK bundle proof-circuit vector negative control must only pass after detecting injected drift",
   );
@@ -13987,6 +15647,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleProofBackendVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle proof-backend vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-backend vector drift was not detected"\s*\)/u,
     "SDK bundle proof-backend vector negative control must only pass after detecting injected drift",
   );
@@ -14001,18 +15666,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleProofBoxBackendVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithProofBoxBackend\(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\(KagemushaRecursiveSpendProver\.RECURSIVE_AGGREGATION_PROOF_BACKEND\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithProofBoxBackend\([\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?recursiveSpendBundleWithProofBoxBackend\([\s\S]*?KagemushaRecursiveSpendProver\.RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_proof_box_backend\([\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?_recursive_spend_bundle_with_proof_box_backend\([\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)/u,
-    "SDK bundle proof-box backend vector negative control must mutate non-C# SDK test vectors and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithProofBoxBackend\(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\(KagemushaRecursiveSpendProver\.RECURSIVE_AGGREGATION_PROOF_BACKEND\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithProofBoxBackend\([\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?recursiveSpendBundleWithProofBoxBackend\([\s\S]*?KagemushaRecursiveSpendProver\.RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_proof_box_backend\([\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?_recursive_spend_bundle_with_proof_box_backend\([\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?KagemushaNoritoString\("halo2\/kzg"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBoxBackend\("halo2\/ipa"\)/u,
+    "SDK bundle proof-box backend vector negative control must mutate every SDK test vector and package dist",
   );
   assert.match(
     sdkBundleProofBoxBackendVectorBranch,
     /proof-box backend[\s\S]*?halo2\/kzg/u,
     "SDK bundle proof-box backend vector negative control must keep proof-box backend labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkBundleProofBoxBackendVectorBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK bundle proof-box backend vector negative control must stay non-C# until the C# SDK work is done on Windows",
+    /C# recursive spend bundle proof-box backend guard tests/u,
+    "SDK bundle proof-box backend vector negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkBundleProofBoxBackendVectorBranch,
@@ -14023,6 +15688,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkBundleProofBoxBackendVectorBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-box backend vector drift was not detected for/u,
     "SDK bundle proof-box backend vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofBoxBackendVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle proof-box backend vector negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkBundleProofBoxBackendVectorBranch,
@@ -14045,7 +15715,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleProofTrailingFieldVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_verifier_key_id_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_trailing_verifier_key_id_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithTrailingVerifierKeyIdField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithVerifierKeyIdTrailingField\(initBundleArchive\)/u,
     "SDK bundle proof trailing-field vector negative control must mutate verifier-key-id trailing vectors",
   );
   assert.match(
@@ -14053,10 +15723,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /proof trailing-field[\s\S]*?recursiveSpendBundleWithTrailingRecursiveProofField/u,
     "SDK bundle proof trailing-field vector negative control must keep trailing-field labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkBundleProofTrailingFieldVectorBranch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK bundle proof trailing-field vector negative control must stay non-C# until the C# SDK work is done on Windows",
+    /C# recursive spend bundle trailing-field guard tests/u,
+    "SDK bundle proof trailing-field vector negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkBundleProofTrailingFieldVectorBranch,
@@ -14067,6 +15737,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkBundleProofTrailingFieldVectorBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof trailing-field vector drift was not detected for/u,
     "SDK bundle proof trailing-field vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofTrailingFieldVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle proof trailing-field vector negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkBundleProofTrailingFieldVectorBranch,
@@ -14106,6 +15781,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkBundleProofBytesVectorBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-bytes vector drift was not detected for/u,
     "SDK bundle proof-bytes vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle proof-bytes vector negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkBundleProofBytesVectorBranch,
@@ -14168,6 +15848,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleProofPublicInputVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle proof-public-input vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-public-input vector drift was not detected"\s*\)/u,
     "SDK bundle proof-public-input vector negative control must only pass after detecting injected drift",
   );
@@ -14212,6 +15897,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleCurrentNoteVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK bundle current-note vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle current-note vector drift was not detected"\s*\)/u,
     "SDK bundle current-note vector negative control must only pass after detecting injected drift",
   );
@@ -14246,6 +15936,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorDomainVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator domain vector negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAccumulatorDomainVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator domain vector drift was not detected"\s*\)/u,
     "SDK accumulator domain vector negative control must only pass after detecting injected drift",
   );
@@ -14260,28 +15955,38 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Data\(repeating: 0, count: 32\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/changeOutput must be non-zero\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?change_output must be non-zero[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?changeOutput must be non-zero[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?changeOutput must be non-zero[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/changeOutput must be non-zero\//u,
-    "SDK redeem change-output fixed32 negative control must mutate non-C# SDK zero change-output vectors and package dist",
-  );
-  assert.doesNotMatch(
-    sdkRedeemChangeOutputFixed32Branch,
-    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
-    "SDK redeem change-output fixed32 negative control must stay non-C# until the C# SDK work is done on Windows",
+    /"short"[\s\S]*?Data\(repeating: 1, count: 31\)[\s\S]*?\[Buffer\.alloc\(31, 1\), \/changeOutput must be 32 bytes\/\][\s\S]*?b"\\\\x01" \* 31[\s\S]*?ByteArray\(31\) \{ 1 \}[\s\S]*?repeat\(\(byte\) 0x01, 31\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?Enumerable\.Repeat\(\(byte\)0x01, 31\)\.ToArray\(\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\[Buffer\.alloc\(31, 1\), \/changeOutput must be 32 bytes\/\]/u,
+    "SDK redeem change-output fixed32 negative control must mutate every SDK short change-output vector and package dist",
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,
-    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
-    "SDK redeem change-output fixed32 negative control must validate the mutated text snapshot",
+    /"zero"[\s\S]*?Data\(repeating: 0, count: 32\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/changeOutput must be non-zero\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?change_output must be non-zero[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?changeOutput must be non-zero[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?changeOutput must be non-zero[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?changeOutput must be non-zero[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/changeOutput must be non-zero\//u,
+    "SDK redeem change-output fixed32 negative control must mutate every SDK zero change-output vector and package dist",
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,
-    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem change-output fixed32 vector drift was not detected for/u,
+    /C# recursive spend redeem change-output fixed32 tests/u,
+    "SDK redeem change-output fixed32 negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /for vector_name, replacements in mutation_sets:[\s\S]*?mutated = dict\(texts\)[\s\S]*?run_checks\(mutated\)[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK redeem change-output fixed32 negative control must validate short and zero snapshots independently",
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem change-output \{vector_name\} fixed32 vector drift was not detected for/u,
     "SDK redeem change-output fixed32 negative control must require every SDK drift to be reported",
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,
-    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK redeem change-output fixed32 vector drift was not detected"\s*\)/u,
-    "SDK redeem change-output fixed32 negative control must only pass after detecting injected drift",
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{vector_name\}: \{detected_message\}"\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "SDK redeem change-output fixed32 negative control must print diagnostics for every mutated surface in each detected vector",
+  );
+  assert.match(
+    sdkRedeemChangeOutputFixed32Branch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: SDK redeem change-output \{vector_name\} fixed32 vector drift was not detected"[\s\S]*?print\("negative control rejected SDK redeem change-output fixed32 vector drift"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK redeem change-output fixed32 negative control must only pass after detecting short and zero drift",
   );
   assert.doesNotMatch(
     sdkRedeemChangeOutputFixed32Branch,
@@ -14306,6 +16011,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkRedeemChangeOutputRelationshipBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem change-output relationship drift was not detected for/u,
     "SDK redeem change-output relationship negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK redeem change-output relationship negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkRedeemChangeOutputRelationshipBranch,
@@ -14348,6 +16058,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkRedeemLineagePreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK redeem lineage preflight negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK redeem lineage preflight drift was not detected"\s*\)/u,
     "SDK redeem lineage preflight negative control must only pass after detecting injected drift",
   );
@@ -14379,6 +16094,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkRedeemLineageWitnessShapeBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem lineage witness shape drift was not detected for/u,
     "SDK redeem lineage witness-shape negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkRedeemLineageWitnessShapeBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK redeem lineage witness-shape negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkRedeemLineageWitnessShapeBranch,
@@ -14418,6 +16138,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkInitLineageKeyAutoPreflightBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK init lineage key auto preflight drift was not detected for/u,
     "SDK init lineage-key auto-preflight negative control must require every JVM/Android drift to be reported",
+  );
+  assert.match(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK init lineage-key auto-preflight negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
@@ -14475,6 +16200,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAppendLineageKeyMaterialSelectionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK append lineage key-material selection negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append lineage key material selection drift was not detected"\s*\)/u,
     "SDK append lineage key-material selection negative control must only pass after detecting injected drift",
   );
@@ -14499,6 +16229,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAppendOutputSelectionPreflightBranch,
+    /final SpendBundleSummary previousSummary = decodeBundle\(this\.previousBundle\);[\s\S]*?lineageKeyArtifacts are only valid for lineage append output/u,
+    "SDK append output-selection preflight negative control must mutate the Android Java lower-level validation block",
+  );
+  assert.ok(
+    guard.includes(
+      'r"val previousSummary = KagemushaRecursiveSpendRequestCodecs\\.decodeBundle\\(previousBundleArchive\\)(?:(?!val suppliedLineageKeyMaterial =)[\\s\\S])*?KagemushaRecursiveSpendProver\\.canSelectAppendOutputCircuitId',
+    ),
+    "SDK append output-selection guard must pin the Kotlin lower-level append request validation block",
+  );
+  assert.ok(
+    guard.includes(
+      'r"final SpendBundleSummary previousSummary = decodeBundle\\(this\\.previousBundle\\);(?:(?!final boolean suppliedLineageKeyMaterial =)[\\s\\S])*?KagemushaRecursiveSpendProver\\.canSelectAppendOutputCircuitId',
+    ),
+    "SDK append output-selection guard must pin the Android Java lower-level append request validation block",
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
     /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?invalidField\("lineageKeyArtifacts"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageKeyArtifacts are only valid for lineage append output[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageKeyArtifacts are only valid for lineage append output/u,
     "SDK append output-selection preflight negative control must mutate mixed invalid-output regression markers",
   );
@@ -14511,6 +16258,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAppendOutputSelectionPreflightBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append output selection preflight drift was not detected for/u,
     "SDK append output-selection preflight negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK append output-selection preflight negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkAppendOutputSelectionPreflightBranch,
@@ -14550,6 +16302,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAppendPreviousProofOpeningSelectionBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append previous proof opening selection drift was not detected for/u,
     "SDK append previous-proof opening selection negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK append previous-proof opening selection negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkAppendPreviousProofOpeningSelectionBranch,
@@ -14597,6 +16354,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAppendPreviousLineageRecordPreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK append previous-lineage preflight negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append previous lineage record preflight drift was not detected"\s*\)/u,
     "SDK append previous-lineage preflight negative control must only pass after detecting injected drift",
   );
@@ -14631,6 +16393,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK append previous-lineage parse preflight negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append previous lineage record parse preflight drift was not detected"\s*\)/u,
     "SDK append previous-lineage parse preflight negative control must only pass after detecting injected drift",
   );
@@ -14653,6 +16420,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?previousLineageVerifierRecord != nil[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?previousLineageVerifierRecord is optional for lineage previous bundles[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?previousLineageVerifierRecord is optional for lineage previous bundles/u,
     "SDK append previous-lineage record selection negative control must mutate Swift, Kotlin, and Android Java constructor markers",
   );
+  assert.ok(
+    guard.includes(
+      'previousBundle: Self\\.sharedRecursiveSpendArchive\\(abi: \\.abi7, name: "append_bundle"\\)[\\s\\S]*?previousLineageVerifierRecord: Self\\.sampleVerifierRecord\\(\\)[\\s\\S]*?\\.invalidField\\("previousLineageVerifierRecord"\\)',
+    ),
+    "SDK append previous-lineage record selection guard must pin the Swift append-bundle test marker",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /currentNote: Self\.sampleNote\(seed: 0x43\)[\s\S]*?previousLineageVerifierRecordOptional/u,
+    "SDK append previous-lineage record selection negative control must mutate the Swift append-bundle test marker",
+  );
   assert.match(
     sdkAppendPreviousLineageRecordSelectionBranch,
     /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?danglingPreviousLineageRecordOptional[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?danglingPreviousLineageRecordOptional[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?previous_lineage_verifier_record is optional for lineage previous bundles[\s\S]*?previousLineageVerifierRecordOptional[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?previousLineageVerifierRecord is optional for lineage previous bundles/u,
@@ -14667,6 +16445,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAppendPreviousLineageRecordSelectionBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append previous lineage record selection drift was not detected for/u,
     "SDK append previous-lineage record selection negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK append previous-lineage record selection negative control must print diagnostics for every mutated surface",
   );
   assert.match(
     sdkAppendPreviousLineageRecordSelectionBranch,
@@ -14699,6 +16482,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeAvailabilitySurfaceBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README availability negative control must print diagnostics for every mutated README",
+  );
+  assert.match(
+    sdkReadmeAvailabilitySurfaceBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK README availability surface drift was not detected"\)/u,
     "SDK README availability negative control must only pass after detecting injected drift",
   );
@@ -14725,6 +16513,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeCompactProjectionVerifierBranch,
     /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing recursive compact ABI-7 boundary[\s\S]*?SDK README compact projection verifier drift was not detected for/u,
     "SDK README compact projection verifier negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmeCompactProjectionVerifierBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README compact projection verifier negative control must print diagnostics for every mutated README",
   );
   assert.match(
     sdkReadmeCompactProjectionVerifierBranch,
@@ -14757,6 +16550,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeStaleFutureLineageBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK README stale future-lineage negative control must print diagnostics for every mutated README",
+  );
+  assert.match(
+    sdkReadmeStaleFutureLineageBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: stale SDK README Reserved-lineage wording was not detected"\)/u,
     "SDK README stale future-lineage negative control must only pass after detecting injected drift",
   );
@@ -14764,6 +16562,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeStaleFutureLineageBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK README stale future-lineage negative control must not unconditionally pass after run_checks",
+  );
+  const crossSdkHelperBodiesBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-cross-sdk-helper-bodies":'),
+    guard.indexOf('if mode == "--negative-control-cross-sdk-preferred-mode-fallback":'),
+  );
+  assert.match(
+    crossSdkHelperBodiesBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendProver\.swift[\s\S]*?Swift witnessless Reserved-lineage helper bounds[\s\S]*?Kotlin witnessless Reserved-lineage helper bounds[\s\S]*?Android witnessless Reserved-lineage helper bounds[\s\S]*?Python witnessless Reserved-lineage helper bounds[\s\S]*?C# witnessless Reserved-lineage helper bounds/u,
+    "cross-SDK helper body negative control must mutate every SDK helper body marker",
+  );
+  assert.match(
+    crossSdkHelperBodiesBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?helper body drift was not detected for/u,
+    "cross-SDK helper body negative control must require every SDK helper drift to be reported",
+  );
+  assert.match(
+    crossSdkHelperBodiesBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "cross-SDK helper body negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    crossSdkHelperBodiesBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: cross-SDK helper body drift was not detected"\)/u,
+    "cross-SDK helper body negative control must only pass after detecting injected drift",
   );
   const rustRecursiveCompactUnavailableClassifierBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":'),
@@ -14773,6 +16595,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     rustRecursiveCompactUnavailableClassifierBranch,
     /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
     "Rust recursive compact unavailable classifier negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    rustRecursiveCompactUnavailableClassifierBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?recursive compact unavailable classifier drift was not detected for/u,
+    "Rust recursive compact unavailable classifier negative control must require every host classifier drift to be reported",
+  );
+  assert.match(
+    rustRecursiveCompactUnavailableClassifierBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Rust recursive compact unavailable classifier negative control must print diagnostics for every mutated host surface",
   );
   assert.match(
     rustRecursiveCompactUnavailableClassifierBranch,
@@ -14795,6 +16627,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     rustKagemushaHopPublicInstanceShapeBranch,
+    /expected\s*=\s*\([\s\S]*?Rust Kagemusha hop public-instance shape missing[\s\S]*?ensure_kagemusha_confidential_v2_public_instance_shape\(&instance_columns\)\?;[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Rust Kagemusha hop public-instance shape negative control must require the exact missing enforcement diagnostic",
+  );
+  assert.match(
+    rustKagemushaHopPublicInstanceShapeBranch,
     /Rust Kagemusha hop public-instance shape[\s\S]*?except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Rust Kagemusha hop public-instance shape drift was not detected"\s*\)/u,
     "Rust Kagemusha hop public-instance shape negative control must only pass after detecting injected drift",
   );
@@ -14811,6 +16648,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     rustKagemushaFoldRootTransitionBranch,
     /if step\.root_before == step\.root_after[\s\S]*?must change the Merkle root[\s\S]*?run_checks\(mutated_texts\)/u,
     "Rust Kagemusha fold root-transition negative control must remove the early unchanged-root preflight and validate the mutation",
+  );
+  assert.match(
+    rustKagemushaFoldRootTransitionBranch,
+    /expected\s*=\s*\([\s\S]*?Rust Kagemusha fold root-transition preflight missing[\s\S]*?if step\.root_before == step\.root_after[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Rust Kagemusha fold root-transition negative control must require the exact missing preflight diagnostic",
   );
   assert.match(
     rustKagemushaFoldRootTransitionBranch,
@@ -14835,6 +16677,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkRecursiveCompactUnavailableHelperBranch,
     /Python recursive compact verifier and Pallas builder surface/u,
     "SDK recursive compact unavailable helper negative control must require the current Python verifier/Pallas label",
+  );
+  assert.match(
+    sdkRecursiveCompactUnavailableHelperBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK recursive compact unavailable helper drift was not detected for/u,
+    "SDK recursive compact unavailable helper negative control must require every helper drift to be reported",
+  );
+  assert.match(
+    sdkRecursiveCompactUnavailableHelperBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK recursive compact unavailable helper negative control must print diagnostics for every mutated helper surface",
   );
   assert.match(
     sdkRecursiveCompactUnavailableHelperBranch,
@@ -14880,6 +16732,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /Python recursive compact verifier and Pallas builder surface/u,
     "recursive compact verifier surface negative control must require the current Python verifier/Pallas label",
   );
+  assert.match(
+    recursiveCompactVerifierSurfaceBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?recursive compact verifier drift was not detected for/u,
+    "recursive compact verifier surface negative control must require every SDK/native verifier drift to be reported",
+  );
+  assert.match(
+    recursiveCompactVerifierSurfaceBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "recursive compact verifier surface negative control must print diagnostics for every mutated SDK/native surface",
+  );
   const recursiveCompactKeyPackageArityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-recursive-compact-key-package-arity":'),
     guard.indexOf('if mode == "--negative-control-python-recursive-compact-probe-arity":'),
@@ -14893,6 +16755,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     recursiveCompactKeyPackageArityBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "recursive compact key-package arity negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    recursiveCompactKeyPackageArityBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?recursive compact key-package arity drift was not detected for/u,
+    "recursive compact key-package arity negative control must require every SDK arity drift to be reported",
+  );
+  assert.match(
+    recursiveCompactKeyPackageArityBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "recursive compact key-package arity negative control must print diagnostics for every mutated SDK surface",
   );
   assert.match(
     recursiveCompactKeyPackageArityBranch,
@@ -14944,6 +16816,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRecursiveCompactKeyPackageDispatchBranch,
+    /expected\s*=\s*\([\s\S]*?JavaScript package dist recursive compact key-package dispatch coverage missing[\s\S]*?package dist Kagemusha recursive compact requires key packages before native dispatch[\s\S]*?if expected not in message/u,
+    "JS recursive compact key-package dispatch negative control must require the exact missing test marker",
+  );
+  assert.match(
+    jsRecursiveCompactKeyPackageDispatchBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript recursive compact key-package dispatch drift was not detected"\s*\)/u,
     "JS recursive compact key-package dispatch negative control must only pass after detecting injected drift",
   );
@@ -14965,6 +16842,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistRecursiveCompactDeclarationsBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "JS package dist recursive compact declarations negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistRecursiveCompactDeclarationsBranch,
+    /expected\s*=\s*\([\s\S]*?JavaScript package dist recursive compact declaration coverage missing[\s\S]*?package declarations expose recursive compact key-package signatures[\s\S]*?if expected not in message/u,
+    "JS package dist recursive compact declarations negative control must require the exact missing test marker",
   );
   assert.match(
     jsPackageDistRecursiveCompactDeclarationsBranch,
@@ -14992,6 +16874,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorDigestDeclarationsBranch,
+    /expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?package declarations keep accumulator digests native-owned[\s\S]*?if expected not in message/u,
+    "JS package dist accumulator digest declarations negative control must require the exact missing test marker",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDeclarationsBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist accumulator digest declaration drift was not detected"\s*\)/u,
     "JS package dist accumulator digest declarations negative control must only pass after detecting injected drift",
   );
@@ -15000,14 +16887,55 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS package dist accumulator digest declarations negative control must not unconditionally pass after run_checks",
   );
+  const digestDeclarationScannerLabel =
+    '"JavaScript package dist accumulator digest declaration coverage",\n        errors,';
+  const digestDeclarationScannerLabelIndex = guard.indexOf(digestDeclarationScannerLabel);
+  assert.notEqual(
+    digestDeclarationScannerLabelIndex,
+    -1,
+    "JS package dist guard must expose a digest declaration coverage label",
+  );
+  const digestDeclarationScanner = guard.slice(
+    guard.lastIndexOf("require_contains(", digestDeclarationScannerLabelIndex),
+    digestDeclarationScannerLabelIndex,
+  );
+  assert.doesNotMatch(
+    digestDeclarationScanner,
+    /"accumulatorMaterialDeclarationPattern"|"\$\{name\}: recursive accumulator material must remain native-owned"/u,
+    "JS package dist digest declaration scanner must not own material-only markers",
+  );
+  const digestExactSelfCheckScannerLabel =
+    '"JavaScript package dist accumulator digest declaration exact self-check entries",\n        errors,';
+  const digestExactSelfCheckScannerLabelIndex = guard.indexOf(digestExactSelfCheckScannerLabel);
+  assert.notEqual(
+    digestExactSelfCheckScannerLabelIndex,
+    -1,
+    "JS package dist guard must expose digest exact self-check declaration coverage",
+  );
+  const digestExactSelfCheckScanner = guard.slice(
+    guard.lastIndexOf("require_contains(", digestExactSelfCheckScannerLabelIndex),
+    digestExactSelfCheckScannerLabelIndex,
+  );
+  assert.match(
+    digestExactSelfCheckScanner,
+    /"ProofChainDigestBytes",[\s\S]*?"terminalAccumulatorDigest",[\s\S]*?"walletRecursiveProofChainDigest",/u,
+    "JS package dist digest exact self-check scanner must pin quoted ambiguous digest entries",
+  );
   const jsPackageDistAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-digest-denylist":'),
-    guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
+    guard.indexOf(
+      'if mode == "--negative-control-js-package-dist-accumulator-digest-self-check-exactness":',
+    ),
   );
   assert.match(
     jsPackageDistAccumulatorDigestDenylistBranch,
-    /appendBoundaryDigest\|AppendBoundaryDigest\|append_boundary_digest\|[\s\S]*?""/u,
-    "JS package dist accumulator digest denylist negative control must remove a guarded digest token",
+    /lineageDigest\|LineageDigest\|lineage_digest\|[\s\S]*?aggregationTranscriptDigest\|AggregationTranscriptDigest\|aggregation_transcript_digest\|[\s\S]*?fixedWindowTableScheduleDigest\|FixedWindowTableScheduleDigest\|fixed_window_table_schedule_digest\|[\s\S]*?fixedWindowSharedTableManifestDigest\|FixedWindowSharedTableManifestDigest\|fixed_window_shared_table_manifest_digest\|[\s\S]*?fixedWindowTableBaseDigest\|FixedWindowTableBaseDigest\|fixed_window_table_base_digest\|[\s\S]*?verifierWitnessBatchDigest\|VerifierWitnessBatchDigest\|verifier_witness_batch_digest\|[\s\S]*?recursiveProofChainDigest\|RecursiveProofChainDigest\|recursive_proof_chain_digest\|[\s\S]*?proofChainDigest\|ProofChainDigest\|proof_chain_digest\|[\s\S]*?transitionProfileBindingDigest\|TransitionProfileBindingDigest\|transition_profile_binding_digest\|[\s\S]*?appendOpeningPreflightDigest\|AppendOpeningPreflightDigest\|append_opening_preflight_digest\|[\s\S]*?appendBoundaryDigest\|AppendBoundaryDigest\|append_boundary_digest\|[\s\S]*?recursiveVerifierScalarProjectionDigest\|RecursiveVerifierScalarProjectionDigest\|recursive_verifier_scalar_projection_digest\|[\s\S]*?previousAccumulatorDigest\|PreviousAccumulatorDigest\|previous_accumulator_digest\|[\s\S]*?resultingAccumulatorDigest\|ResultingAccumulatorDigest\|resulting_accumulator_digest\|[\s\S]*?accumulatorDigest\|AccumulatorDigest\|accumulator_digest/u,
+    "JS package dist accumulator digest denylist negative control must cover every declaration digest token group",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDenylistBranch,
+    /for removed_token, digest_name in mutations:[\s\S]*?updated = original\.replace\(removed_token, "", 1\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator digest denylist negative control must mutate each guarded digest token group",
   );
   assert.match(
     jsPackageDistAccumulatorDigestDenylistBranch,
@@ -15016,13 +16944,54 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorDigestDenylistBranch,
-    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"\s*\)/u,
-    "JS package dist accumulator digest denylist negative control must only pass after detecting injected drift",
+    /required_token\s*=\s*removed_token\.removesuffix\("\|"\)[\s\S]*?expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?\+ required_token[\s\S]*?if expected not in message[\s\S]*?detected_messages\.append\([\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\][\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "JS package dist accumulator digest denylist negative control must require and print exact diagnostics for every digest token group",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: JavaScript package dist accumulator digest denylist drift was not detected for \{digest_name\}"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator digest denylist negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
     jsPackageDistAccumulatorDigestDenylistBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS package dist accumulator digest denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistAccumulatorDigestSelfCheckExactnessBranch = guard.slice(
+    guard.indexOf(
+      'if mode == "--negative-control-js-package-dist-accumulator-digest-self-check-exactness":',
+    ),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
+    /"ProofChainDigestBytes",[\s\S]*?"terminalAccumulatorDigest",[\s\S]*?"walletRecursiveProofChainDigest",/u,
+    "JS package dist accumulator digest self-check exactness negative control must mutate ambiguous quoted entries",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
+    /for removed_entry, digest_name in mutations:[\s\S]*?updated = original\.replace\(removed_entry, "", 1\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator digest self-check exactness negative control must mutate each exact entry",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator digest self-check exactness negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
+    /expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration exact self-check entries missing[\s\S]*?\+ removed_entry[\s\S]*?if expected not in message[\s\S]*?detected_messages\.append\([\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\][\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "JS package dist accumulator digest self-check exactness negative control must require and print exact diagnostics",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: JavaScript package dist accumulator digest self-check exactness drift was not detected for \{digest_name\}"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator digest self-check exactness negative control must only pass after detecting every injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator digest self-check exactness negative control must not unconditionally pass after run_checks",
   );
   const jsPackageDistTerminalAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
@@ -15030,8 +16999,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
-    /previousAccumulatorDigest\|PreviousAccumulatorDigest\|previous_accumulator_digest\|resultingAccumulatorDigest\|ResultingAccumulatorDigest\|resulting_accumulator_digest\|[\s\S]*?""/u,
-    "JS package dist terminal accumulator digest denylist negative control must remove previous/resulting digest tokens",
+    /previousAccumulatorDigest\|PreviousAccumulatorDigest\|previous_accumulator_digest\|[\s\S]*?resultingAccumulatorDigest\|ResultingAccumulatorDigest\|resulting_accumulator_digest\|/u,
+    "JS package dist terminal accumulator digest denylist negative control must cover previous/resulting digest tokens",
+  );
+  assert.match(
+    jsPackageDistTerminalAccumulatorDigestDenylistBranch,
+    /for removed_token, digest_name in mutations:[\s\S]*?updated = original\.replace\(removed_token, "", 1\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist terminal accumulator digest denylist negative control must mutate each guarded terminal digest token group",
   );
   assert.match(
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
@@ -15040,8 +17014,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
-    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"\s*\)/u,
-    "JS package dist terminal accumulator digest denylist negative control must only pass after detecting injected drift",
+    /required_token\s*=\s*removed_token\.removesuffix\("\|"\)[\s\S]*?expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?\+ required_token[\s\S]*?if expected not in message[\s\S]*?detected_messages\.append\([\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\][\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "JS package dist terminal accumulator digest denylist negative control must require and print exact diagnostics for every terminal digest token group",
+  );
+  assert.match(
+    jsPackageDistTerminalAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected for \{digest_name\}"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS package dist terminal accumulator digest denylist negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
@@ -15050,12 +17029,57 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsPackageDistAccumulatorMaterialDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-material-denylist":'),
-    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
+    guard.indexOf(
+      'if mode == "--negative-control-js-package-dist-accumulator-material-self-check-exactness":',
+    ),
   );
   assert.match(
     jsPackageDistAccumulatorMaterialDenylistBranch,
-    /terminalAccumulator\|TerminalAccumulator\|terminal_accumulator\|[\s\S]*?""/u,
-    "JS package dist accumulator material denylist negative control must remove a guarded material token",
+    /lineageAccumulator\|LineageAccumulator\|lineage_accumulator\|[\s\S]*?recursiveProofChain\|RecursiveProofChain\|recursive_proof_chain\|[\s\S]*?proofChain\|ProofChain\|proof_chain\|[\s\S]*?appendAccumulator\|AppendAccumulator\|append_accumulator\|[\s\S]*?recursiveAccumulator\|RecursiveAccumulator\|recursive_accumulator\|[\s\S]*?terminalAccumulator\|TerminalAccumulator\|terminal_accumulator\|[\s\S]*?walletRecursiveProofChain\|WalletRecursiveProofChain\|wallet_recursive_proof_chain\|[\s\S]*?accumulatorSnapshot\|AccumulatorSnapshot\|accumulator_snapshot\|[\s\S]*?recursiveProofState\|RecursiveProofState\|recursive_proof_state\|[\s\S]*?lineageProofState\|LineageProofState\|lineage_proof_state\|[\s\S]*?accumulatorState\|AccumulatorState\|accumulator_state/u,
+    "JS package dist accumulator material denylist negative control must cover representative material token groups",
+  );
+  assert.ok(
+    guard.includes("JavaScript package dist accumulator material declaration coverage"),
+    "JS package dist guard must expose a material-specific declaration coverage label",
+  );
+  const materialDeclarationScannerLabel =
+    '"JavaScript package dist accumulator material declaration coverage",\n        errors,';
+  const materialDeclarationScannerLabelIndex = guard.indexOf(materialDeclarationScannerLabel);
+  assert.notEqual(
+    materialDeclarationScannerLabelIndex,
+    -1,
+    "JS package dist guard must expose the material declaration scanner label",
+  );
+  const materialDeclarationScanner = guard.slice(
+    guard.lastIndexOf("require_contains(", materialDeclarationScannerLabelIndex),
+    materialDeclarationScannerLabelIndex,
+  );
+  assert.match(
+    materialDeclarationScanner,
+    /"accumulatorMaterialDeclarationPattern"[\s\S]*?"\$\{name\}: recursive accumulator material must remain native-owned"/u,
+    "JS package dist material declaration scanner must own material pattern and sweep assertion markers",
+  );
+  const materialExactSelfCheckScannerLabel =
+    '"JavaScript package dist accumulator material declaration exact self-check entries",\n        errors,';
+  const materialExactSelfCheckScannerLabelIndex = guard.indexOf(materialExactSelfCheckScannerLabel);
+  assert.notEqual(
+    materialExactSelfCheckScannerLabelIndex,
+    -1,
+    "JS package dist guard must expose material exact self-check declaration coverage",
+  );
+  const materialExactSelfCheckScanner = guard.slice(
+    guard.lastIndexOf("require_contains(", materialExactSelfCheckScannerLabelIndex),
+    materialExactSelfCheckScannerLabelIndex,
+  );
+  assert.match(
+    materialExactSelfCheckScanner,
+    /"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"proofChain",[\s\S]*?"accumulatorSnapshot",/u,
+    "JS package dist material exact self-check scanner must pin quoted ambiguous material entries",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /for removed_token, material_name in mutations:[\s\S]*?updated = original\.replace\(removed_token, "", 1\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator material denylist negative control must mutate each guarded material token group",
   );
   assert.match(
     jsPackageDistAccumulatorMaterialDenylistBranch,
@@ -15064,13 +17088,120 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorMaterialDenylistBranch,
-    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist accumulator material denylist drift was not detected"\s*\)/u,
-    "JS package dist accumulator material denylist negative control must only pass after detecting injected drift",
+    /required_token\s*=\s*removed_token\.removesuffix\("\|"\)[\s\S]*?expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator material declaration coverage missing[\s\S]*?\+ required_token[\s\S]*?if expected not in message[\s\S]*?detected_messages\.append\([\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\][\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "JS package dist accumulator material denylist negative control must require and print exact diagnostics for every material token group",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: JavaScript package dist accumulator material denylist drift was not detected for \{material_name\}"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator material denylist negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
     jsPackageDistAccumulatorMaterialDenylistBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS package dist accumulator material denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch = guard.slice(
+    guard.indexOf(
+      'if mode == "--negative-control-js-package-dist-accumulator-material-self-check-exactness":',
+    ),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-material-denylist":'),
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"proofChain",[\s\S]*?"accumulatorSnapshot",/u,
+    "JS package dist accumulator material self-check exactness negative control must mutate ambiguous quoted entries",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /for removed_entry, material_name in mutations:[\s\S]*?updated = original\.replace\(removed_entry, "", 1\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator material self-check exactness negative control must mutate each exact entry",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator material self-check exactness negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator material declaration exact self-check entries missing[\s\S]*?\+ removed_entry[\s\S]*?if expected not in message[\s\S]*?detected_messages\.append\([\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\][\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "JS package dist accumulator material self-check exactness negative control must require and print exact diagnostics",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?continue[\s\S]*?raise\s+SystemExit\(\s*f"negative control failed: JavaScript package dist accumulator material self-check exactness drift was not detected for \{material_name\}"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator material self-check exactness negative control must only pass after detecting every injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator material self-check exactness negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistPrefixedAccumulatorMaterialDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-material-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-suffixed-accumulator-material-denylist":'),
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorMaterialDenylistBranch,
+    /\\b\[A-Za-z0-9_\]\*\(\?:lineageAccumulator[\s\S]*?\\b\(\?:lineageAccumulator/u,
+    "JS package dist prefixed accumulator material denylist negative control must narrow prefixed matching",
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorMaterialDenylistBranch,
+    /JavaScript package dist accumulator material prefix denial missing[\s\S]*?\\b\[A-Za-z0-9_\]\*\(\?:lineageAccumulator[\s\S]*?if expected not in message/u,
+    "JS package dist prefixed accumulator material denylist negative control must require the exact missing prefix marker",
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorMaterialDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist prefixed accumulator material denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist prefixed accumulator material denylist drift was not detected"\s*\)/u,
+    "JS package dist prefixed accumulator material denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistPrefixedAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist prefixed accumulator material denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistSuffixedAccumulatorMaterialDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-suffixed-accumulator-material-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorMaterialDenylistBranch,
+    /accumulator_state\)\/u;[\s\S]*?accumulator_state\)\\b\/u;/u,
+    "JS package dist suffixed accumulator material denylist negative control must reintroduce the trailing boundary",
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorMaterialDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist suffixed accumulator material denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorMaterialDenylistBranch,
+    /JavaScript package dist accumulator material suffix denial contains forbidden pattern[\s\S]*?accumulatorMaterialDeclarationPattern\\s\*=\\s\*\/\[\^\\n\]\*\\\)\\s\*\\\\b\/u[\s\S]*?if expected not in message/u,
+    "JS package dist suffixed accumulator material denylist negative control must require the exact forbidden suffix regex",
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist suffixed accumulator material denylist drift was not detected"\s*\)/u,
+    "JS package dist suffixed accumulator material denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistSuffixedAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist suffixed accumulator material denylist negative control must not unconditionally pass after run_checks",
+  );
+  assert.ok(
+    guard.includes('r"accumulatorDigestDeclarationPattern\\s*=\\s*/[^\\n]*\\)\\s*\\\\b/u"'),
+    "JS package dist digest suffix denial scanner must stay line-bounded",
+  );
+  assert.ok(
+    guard.includes('r"accumulatorMaterialDeclarationPattern\\s*=\\s*/[^\\n]*\\)\\s*\\\\b/u"'),
+    "JS package dist material suffix denial scanner must stay line-bounded",
   );
   const jsPackageDistPrefixedAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
@@ -15080,6 +17211,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
     /\\b\[A-Za-z0-9_\]\*\(\?:lineageDigest[\s\S]*?\\b\(\?:lineageDigest/u,
     "JS package dist prefixed accumulator digest denylist negative control must narrow prefixed matching",
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
+    /JavaScript package dist accumulator digest prefix denial missing[\s\S]*?\\b\[A-Za-z0-9_\]\*\(\?:lineageDigest[\s\S]*?if expected not in message/u,
+    "JS package dist prefixed accumulator digest denylist negative control must require the exact missing prefix marker",
   );
   assert.match(
     jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
@@ -15112,6 +17248,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
+    /JavaScript package dist accumulator digest suffix denial contains forbidden pattern[\s\S]*?accumulatorDigestDeclarationPattern\\s\*=\\s\*\/\[\^\\n\]\*\\\)\\s\*\\\\b\/u[\s\S]*?if expected not in message/u,
+    "JS package dist suffixed accumulator digest denylist negative control must require the exact forbidden suffix regex",
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected"\s*\)/u,
     "JS package dist suffixed accumulator digest denylist negative control must only pass after detecting injected drift",
   );
@@ -15133,6 +17274,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistDeclarationSweepBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "JS package dist declaration sweep negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistDeclarationSweepBranch,
+    /JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?connect\.browser\.d\.ts[\s\S]*?if expected not in message/u,
+    "JS package dist declaration sweep negative control must require the exact missing declaration file marker",
   );
   assert.match(
     jsPackageDistDeclarationSweepBranch,
@@ -15160,6 +17306,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistNexusDeclarationSweepBranch,
+    /JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?nexus-app\.d\.ts[\s\S]*?if expected not in message/u,
+    "JS package dist Nexus declaration sweep negative control must require the exact missing declaration file marker",
+  );
+  assert.match(
+    jsPackageDistNexusDeclarationSweepBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected"\s*\)/u,
     "JS package dist Nexus declaration sweep negative control must only pass after detecting injected drift",
   );
@@ -15181,6 +17332,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistKotodamaDeclarationSweepBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "JS package dist Kotodama declaration sweep negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistKotodamaDeclarationSweepBranch,
+    /JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?kotodama-compiler\.d\.ts[\s\S]*?if expected not in message/u,
+    "JS package dist Kotodama declaration sweep negative control must require the exact missing declaration file marker",
   );
   assert.match(
     jsPackageDistKotodamaDeclarationSweepBranch,
@@ -15208,6 +17364,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsDtsRecursiveCompactKeyPackageBranch,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript TypeScript recursive compact prover key-package declaration[\s\S]*?JavaScript TypeScript recursive compact verifier key-package declaration[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS TypeScript recursive compact key-package negative control must require both declaration labels to fail",
+  );
+  assert.match(
+    jsDtsRecursiveCompactKeyPackageBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS TypeScript recursive compact key-package negative control must print diagnostics for both declaration labels",
+  );
+  assert.match(
+    jsDtsRecursiveCompactKeyPackageBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript TypeScript recursive compact key-package declaration drift was not detected"\s*\)/u,
     "JS TypeScript recursive compact key-package negative control must only pass after detecting injected drift",
   );
@@ -15232,8 +17398,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRecursiveCompactRootExportBranch,
-    /Python package recursive compact and Pallas builder re-exports/u,
-    "Python recursive compact root export negative control must require the current combined root-export label",
+    /expected_labels\s*=\s*\[[\s\S]*?Python package recursive compact and Pallas builder re-exports missing[\s\S]*?for method in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Python recursive compact root export negative control must require every removed recursive compact export",
+  );
+  assert.match(
+    pythonRecursiveCompactRootExportBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Python recursive compact root export negative control must print diagnostics for every removed recursive compact export",
   );
   assert.match(
     pythonRecursiveCompactRootExportBranch,
@@ -15266,6 +17437,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "recursive spend compact projection negative control must print diagnostics for every mutated SDK label",
+  );
+  assert.match(
+    recursiveSpendCompactProjectionSurfaceBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: recursive spend compact projection surface drift was not detected"\s*\)/u,
     "recursive spend compact projection negative control must only pass after detecting injected drift",
   );
@@ -15287,6 +17463,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsCompactProjectionBlockHeightValidationBranch,
     /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
     "JS compact projection block-height negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsCompactProjectionBlockHeightValidationBranch,
+    /JavaScript recursive spend compact projection gate missing[\s\S]*?const checkedBlockHeight = normalizeKagemushaBlockHeight\(blockHeight\);[\s\S]*?if expected not in message/u,
+    "JS compact projection block-height negative control must require the exact missing normalization marker",
   );
   assert.match(
     jsCompactProjectionBlockHeightValidationBranch,
@@ -15314,6 +17495,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRecursiveSpendCompactProjectionRootExportBranch,
+    /Python package recursive spend compact projection re-exports missing[\s\S]*?\+ method[\s\S]*?if expected not in message/u,
+    "Python recursive spend compact projection root export negative control must require the exact missing export marker",
+  );
+  assert.match(
+    pythonRecursiveSpendCompactProjectionRootExportBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend compact projection root export drift was not detected"\s*\)/u,
     "Python recursive spend compact projection root export negative control must only pass after detecting injected drift",
   );
@@ -15333,8 +17519,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonCompactProjectionHardeningBranch,
-    /Python recursive spend compact projection tests/u,
-    "Python compact projection hardening negative control must require the Python projection test label",
+    /expected_labels\s*=\s*\([\s\S]*?Python recursive spend compact projection tests missing test_recursive_spend_compact_projection_rejects_permissive_native_probes[\s\S]*?Python recursive spend compact projection tests missing expected_compact_token/u,
+    "Python compact projection hardening negative control must require probe and copy markers",
+  );
+  assert.match(
+    pythonCompactProjectionHardeningBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Python compact projection hardening negative control must print diagnostics for both mutated markers",
   );
   assert.match(
     pythonCompactProjectionHardeningBranch,
@@ -15345,6 +17536,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     pythonCompactProjectionHardeningBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Python compact projection hardening negative control must not unconditionally pass after run_checks",
+  );
+  const jvmCompactProjectionUnsignedBlockHeightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":'),
+    guard.indexOf('if mode == "--negative-control-jvm-compact-projection-block-height-vectors":'),
+  );
+  assert.match(
+    jvmCompactProjectionUnsignedBlockHeightBranch,
+    /let height = block_height\.map\(java_jlong_to_u64_bits\);[\s\S]*?blockHeight must be non-negative[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JVM compact projection unsigned block-height negative control must replace the raw u64 carrier with a signed rejection",
+  );
+  assert.match(
+    jvmCompactProjectionUnsignedBlockHeightBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Rust JNI recursive compact projection raw u64 block-height carrier missing[\s\S]*?let height = block_height\.map\(java_jlong_to_u64_bits\);[\s\S]*?Rust JNI recursive compact projection block-height carrier contains forbidden pattern[\s\S]*?blockHeight must be non-negative[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JVM compact projection unsigned block-height negative control must require both raw-carrier and forbidden signed-rejection diagnostics",
+  );
+  assert.match(
+    jvmCompactProjectionUnsignedBlockHeightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM compact projection unsigned block-height negative control must print diagnostics for both block-height carrier checks",
+  );
+  assert.match(
+    jvmCompactProjectionUnsignedBlockHeightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM compact projection unsigned block-height drift was not detected"\s*\)/u,
+    "JVM compact projection unsigned block-height negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmCompactProjectionUnsignedBlockHeightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM compact projection unsigned block-height negative control must not unconditionally pass after run_checks",
   );
   const kagemushaAbiProbeBoundsBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
@@ -15364,6 +17584,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     kagemushaAbiProbeBoundsBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?Kagemusha ABI probe bounds drift was not detected for/u,
     "Kagemusha ABI probe bounds negative control must require every mutated non-C# label to be reported",
+  );
+  assert.match(
+    kagemushaAbiProbeBoundsBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Kagemusha ABI probe bounds negative control must print diagnostics for every mutated non-C# surface",
   );
   assert.match(
     kagemushaAbiProbeBoundsBranch,
@@ -15425,6 +17650,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistPartialAbi6Branch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "package dist recursive spend partial ABI-6 negative control must print diagnostics for every mutated package-dist surface",
+  );
+  assert.match(
+    jsPackageDistPartialAbi6Branch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist recursive spend partial ABI-6 drift was not detected"\s*\)/u,
     "package dist recursive spend partial ABI-6 negative control must only pass after detecting injected drift",
   );
@@ -15458,6 +17688,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistCompactProjectionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "package dist compact projection negative control must print diagnostics for every mutated package-dist surface",
+  );
+  assert.match(
+    jsPackageDistCompactProjectionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist compact projection drift was not detected"\s*\)/u,
     "package dist compact projection negative control must only pass after detecting injected drift",
   );
@@ -15488,6 +17723,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistRecordBackedPallasBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?package dist record-backed\/Pallas builder drift was not detected for/u,
     "package dist record-backed/Pallas builder negative control must require both mutated labels to be reported",
+  );
+  assert.match(
+    jsPackageDistRecordBackedPallasBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "package dist record-backed/Pallas builder negative control must print diagnostics for every mutated package-dist surface",
   );
   assert.match(
     jsPackageDistRecordBackedPallasBranch,
@@ -15525,6 +17765,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     kagemushaProbeRejectionShapeBranch,
     /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?Kagemusha probe rejection shape drift was not detected for/u,
     "Kagemusha probe rejection shape negative control must require every mutated non-C# label to be reported",
+  );
+  assert.match(
+    kagemushaProbeRejectionShapeBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Kagemusha probe rejection shape negative control must print diagnostics for every mutated non-C# surface",
   );
   assert.match(
     kagemushaProbeRejectionShapeBranch,
@@ -15573,6 +17818,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileNativeOutputHeaderBranch,
     /Kotlin recursive spend native output Norito guard tests[\s\S]*?Android Java recursive spend native output Norito guard tests/u,
     "mobile native output header negative control must require both mobile guard labels",
+  );
+  assert.match(
+    mobileNativeOutputHeaderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile native output header negative control must print diagnostics for every mutated mobile label",
   );
   assert.match(
     mobileNativeOutputHeaderBranch,
@@ -16019,9 +18269,77 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile ZK Torii parser shape negative control must not unconditionally pass after run_checks",
   );
+  for (const [branch, label] of [
+    [
+      mobilePrivacyProductionGateBranch,
+      "mobile privacy production-gate negative control must print diagnostics for every mutated mobile label",
+    ],
+    [
+      mobilePrivacyAuditHashUniquenessBranch,
+      "mobile privacy audit-hash uniqueness negative control must print diagnostics for every mutated source and test label",
+    ],
+    [
+      mobilePrivacyLocalnetLifecycleBranch,
+      "mobile privacy localnet lifecycle negative control must print diagnostics for every mutated source and test label",
+    ],
+    [
+      publicPrivacyLocalnetLifecycleBranch,
+      "public privacy localnet lifecycle negative control must print diagnostics for every mutated public evidence label",
+    ],
+    [
+      publicPrivacySdkExportScopeBranch,
+      "public privacy SDK export/review-scope negative control must print diagnostics for every mutated declaration and runtime label",
+    ],
+    [
+      publicPrivacyZeroHashBranch,
+      "public privacy zero-hash negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyRepeatedHashBranch,
+      "public privacy repeated-hash negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyZeroSignatureBranch,
+      "public privacy zero-signature negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyRepeatedSignatureBranch,
+      "public privacy repeated-signature negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyReviewerIdentityBranch,
+      "public privacy reviewer-identity negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyArtifactLabelBranch,
+      "public privacy artifact-label negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyDuplicateRowBranch,
+      "public privacy duplicate-row negative control must print diagnostics for every mutated JS/Python label",
+    ],
+    [
+      publicPrivacyDeterministicTestArtifactBranch,
+      "public privacy deterministic test artifact negative control must print diagnostics for every mutated test label",
+    ],
+    [
+      mobileZkMerkleProviderBranch,
+      "mobile ZK Merkle provider negative control must print diagnostics for every mutated mobile label",
+    ],
+    [
+      mobileZkToriiParserBranch,
+      "mobile ZK Torii parser shape negative control must print diagnostics for every mutated mobile label",
+    ],
+  ]) {
+    assert.match(
+      branch,
+      /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+      label,
+    );
+  }
   const mobileConfidentialNoteBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-confidential-note-coverage":'),
-    guard.indexOf('if mode == "--negative-control-mobile-offline-readiness-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-confidential-witness-codecs":'),
   );
   assert.match(
     mobileConfidentialNoteBranch,
@@ -16040,6 +18358,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileConfidentialNoteBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile confidential note negative control must print diagnostics for every mutated mobile label",
+  );
+  assert.match(
+    mobileConfidentialNoteBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile confidential note coverage drift was not detected"\)/u,
     "mobile confidential note negative control must only pass after detecting injected drift",
   );
@@ -16047,6 +18370,64 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileConfidentialNoteBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile confidential note negative control must not unconditionally pass after run_checks",
+  );
+  const mobileConfidentialWitnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-confidential-witness-codecs":'),
+    guard.indexOf('if mode == "--negative-control-mobile-offline-readiness-coverage":'),
+  );
+  assert.match(
+    mobileConfidentialWitnessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile confidential witness codec negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileConfidentialWitnessBranch,
+    /buildConfidentialUnshieldProofRequestV1[\s\S]*?buildConfidentialGenericProofRequestV1[\s\S]*?typedConfidentialWitnessBuildersRejectAmbiguousShapes[\s\S]*?typedConfidentialWitnessBuildersAllowAmbiguousShapes/u,
+    "mobile confidential witness codec negative control must mutate source and test markers",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Kotlin confidential witness codecs",
+      "Android Java confidential witness codecs",
+      "Kotlin privacy confidential witness codec tests",
+      "Android Java privacy confidential witness codec tests",
+      "CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID",
+      "CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID",
+      "TRANSFER_PUBLIC_INPUTS_SCHEMA",
+      "UNSHIELD_PUBLIC_INPUTS_SCHEMA",
+      "typedConfidentialWitnessBuildersEncodeNativeReadyRequests",
+      "typedConfidentialWitnessBuildersRejectAmbiguousShapes",
+      "buildConfidentialUnshieldVerifyRequestV1",
+      "halo2-ipa-pasta:confidential_unshield_v3",
+      "halo2-ipa-pasta:confidential_transfer_v2",
+      "treeCommitments",
+      "transferOutputs",
+      "unshieldChange",
+      "rootHint",
+      "publicAmount",
+    ],
+    "SDK parity guard must pin JVM/Android confidential witness codec source and tests",
+  );
+  assert.match(
+    mobileConfidentialWitnessBranch,
+    /Kotlin confidential witness codecs[\s\S]*?Android Java confidential witness codecs[\s\S]*?Kotlin privacy confidential witness codec tests[\s\S]*?Android Java privacy confidential witness codec tests/u,
+    "mobile confidential witness codec negative control must require source and test labels",
+  );
+  assert.match(
+    mobileConfidentialWitnessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile confidential witness codec negative control must print diagnostics for every mutated mobile label",
+  );
+  assert.match(
+    mobileConfidentialWitnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile confidential witness codec drift was not detected"\)/u,
+    "mobile confidential witness codec negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileConfidentialWitnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile confidential witness codec negative control must not unconditionally pass after run_checks",
   );
   const mobileOfflineReadinessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-offline-readiness-coverage":'),
@@ -16066,6 +18447,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileOfflineReadinessBranch,
     /Kotlin Offline readiness client tests[\s\S]*?Kotlin Offline V2 readiness client tests[\s\S]*?Android Java Offline Torii readiness client tests[\s\S]*?Android Java Offline readiness parser tests/u,
     "mobile offline readiness negative control must require all mobile readiness labels",
+  );
+  assert.match(
+    mobileOfflineReadinessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile offline readiness negative control must print diagnostics for every mutated mobile label",
   );
   assert.match(
     mobileOfflineReadinessBranch,
@@ -16098,6 +18484,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     kotlinOfflineCashSettlementBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Kotlin offline cash settlement negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    kotlinOfflineCashSettlementBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Kotlin offline cash settlement coverage drift was not detected"\)/u,
     "Kotlin offline cash settlement negative control must only pass after detecting injected drift",
   );
@@ -16124,6 +18515,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidOfflineTransferPersistenceBranch,
     /Android offline QR stream tests[\s\S]*?Android offline journal tests[\s\S]*?Android HTTP transport pending queue replay tests/u,
     "Android offline transfer persistence negative control must require QR, journal, and queue labels",
+  );
+  assert.match(
+    androidOfflineTransferPersistenceBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Android offline transfer persistence negative control must print diagnostics for every mutated label",
   );
   assert.match(
     androidOfflineTransferPersistenceBranch,
@@ -16156,6 +18552,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileTransactionNoritoBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile transaction/Norito negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    mobileTransactionNoritoBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile transaction\/Norito coverage drift was not detected"\)/u,
     "mobile transaction/Norito negative control must only pass after detecting injected drift",
   );
@@ -16182,6 +18583,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     kotlinNoritoFramingBranch,
     /Kotlin Norito header layout flag tests[\s\S]*?Kotlin Norito columnar golden\/adversarial tests/u,
     "Kotlin Norito framing negative control must require both Norito labels",
+  );
+  assert.match(
+    kotlinNoritoFramingBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Kotlin Norito framing negative control must print diagnostics for every mutated label",
   );
   assert.match(
     kotlinNoritoFramingBranch,
@@ -16214,6 +18620,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileAccountAddressBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile account address negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    mobileAccountAddressBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\s*\(\s*"negative control failed: mobile account address canonical coverage drift was not detected"\s*\)/u,
     "mobile account address negative control must only pass after detecting injected drift",
   );
@@ -16243,6 +18654,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileConnectBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile Connect negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    mobileConnectBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile Connect runner coverage drift was not detected"\)/u,
     "mobile Connect negative control must only pass after detecting injected drift",
   );
@@ -16269,6 +18685,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileTransportInspectorAttestationBranch,
     /Kotlin URLConnection transport executor tests[\s\S]*?Android URLConnection transport executor tests[\s\S]*?Android pending queue inspector tests[\s\S]*?Android attestation verifier tests/u,
     "mobile transport/inspector/attestation negative control must require all labels",
+  );
+  assert.match(
+    mobileTransportInspectorAttestationBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile transport/inspector/attestation negative control must print diagnostics for every mutated label",
   );
   assert.match(
     mobileTransportInspectorAttestationBranch,
@@ -16306,6 +18727,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileSccpBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile SCCP negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    mobileSccpBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile SCCP runner coverage drift was not detected"\)/u,
     "mobile SCCP negative control must only pass after detecting injected drift",
   );
@@ -16334,6 +18760,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileToriiRpcSubscriptionWebSocketBranch,
     /Kotlin Torii transport security tests[\s\S]*?Android Norito RPC client tests[\s\S]*?Android ClientConfig Norito RPC tests[\s\S]*?Android Subscription Torii client tests[\s\S]*?Android Torii SSE subscription tests[\s\S]*?Android Torii WebSocket client tests[\s\S]*?Android Torii WebSocket subscription tests[\s\S]*?Android Torii mock server tests/u,
     "mobile Torii RPC/subscription/WebSocket negative control must require all Torii RPC/subscription labels",
+  );
+  assert.match(
+    mobileToriiRpcSubscriptionWebSocketBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "mobile Torii RPC/subscription/WebSocket negative control must print diagnostics for every mutated label",
   );
   assert.match(
     mobileToriiRpcSubscriptionWebSocketBranch,
@@ -16366,6 +18797,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsToriiRunnerBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JavaScript Torii runner negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    jsToriiRunnerBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JavaScript Torii runner coverage drift was not detected"\)/u,
     "JavaScript Torii runner negative control must only pass after detecting injected drift",
   );
@@ -16392,6 +18828,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsConnectRunnerBranch,
     /JavaScript Connect session tests[\s\S]*?JavaScript Connect error tests[\s\S]*?JavaScript Connect retry policy tests[\s\S]*?JavaScript Connect queue journal tests[\s\S]*?JavaScript Connect queue diagnostics tests[\s\S]*?JavaScript Connect browser tests[\s\S]*?JavaScript Connect preview flow tests[\s\S]*?JavaScript Connect journal record tests/u,
     "JavaScript Connect runner negative control must require all Connect labels",
+  );
+  assert.match(
+    jsConnectRunnerBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JavaScript Connect runner negative control must print diagnostics for every mutated label",
   );
   assert.match(
     jsConnectRunnerBranch,
@@ -16587,6 +19028,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNativeOutputHeaderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift native output header negative control must print diagnostics for every mutated Swift label",
+  );
+  assert.match(
+    swiftNativeOutputHeaderBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift native output header drift was not detected"\)/u,
     "Swift native output header negative control must only pass after detecting injected drift",
   );
@@ -16613,6 +19059,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftNativeInputHeaderBranch,
     /Swift recursive spend input header guard tests[\s\S]*?Swift compact-token input header guard tests[\s\S]*?Swift recursive aggregation input header guard tests[\s\S]*?Swift recursive compact input header guard tests/u,
     "Swift native input header negative control must require every Swift input guard label",
+  );
+  assert.match(
+    swiftNativeInputHeaderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift native input header negative control must print diagnostics for every mutated Swift label",
   );
   assert.match(
     swiftNativeInputHeaderBranch,
@@ -16679,6 +19130,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNoteAmountVectorBranch,
+    /expected\s*=\s*'Swift typed recursive spend note amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Swift note amount vector negative control must require the exact missing vector diagnostic",
+  );
+  assert.match(
+    swiftNoteAmountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift recursive spend note amount vector drift was not detected"\s*\)/u,
     "Swift note amount vector negative control must only pass after detecting injected drift",
   );
@@ -16712,6 +19168,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Self.u128MaxPlusOne",
     ],
     "SDK parity guard must pin Swift malformed publicAmount vector inventory",
+  );
+  assert.match(
+    swiftRedeemPublicAmountVectorBranch,
+    /expected\s*=\s*'Swift typed recursive spend public amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Swift publicAmount vector negative control must require the exact missing vector diagnostic",
   );
   assert.match(
     swiftRedeemPublicAmountVectorBranch,
@@ -16923,6 +19384,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsNoteAmountVectorBranch,
+    /expected\s*=\s*'JavaScript typed recursive spend note amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "JS note amount vector negative control must require the exact missing vector diagnostic",
+  );
+  assert.match(
+    jsNoteAmountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS recursive spend note amount vector drift was not detected"\s*\)/u,
     "JS note amount vector negative control must only pass after detecting injected drift",
   );
@@ -16963,6 +19429,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRedeemPublicAmountVectorBranch,
+    /expected\s*=\s*'JavaScript typed recursive spend public amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "JS publicAmount vector negative control must require the exact missing vector diagnostic",
+  );
+  assert.match(
+    jsRedeemPublicAmountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS recursive spend publicAmount vector drift was not detected"\s*\)/u,
     "JS publicAmount vector negative control must only pass after detecting injected drift",
   );
@@ -16993,6 +19464,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS recursive spend blockHeight vector drift was not detected"\s*\)/u,
     "JS blockHeight vector negative control must only pass after detecting injected drift",
   );
+  assert.match(
+    jsBlockHeightVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS blockHeight vector negative control must print diagnostics for source and package-dist labels",
+  );
   assert.doesNotMatch(
     jsBlockHeightVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
@@ -17019,6 +19495,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPythonNativeOutputHeaderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS/Python native output header negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    jsPythonNativeOutputHeaderBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS\/Python native output header drift was not detected"\)/u,
     "JS/Python native output header negative control must only pass after detecting injected drift",
   );
@@ -17026,6 +19507,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPythonNativeOutputHeaderBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS/Python native output header negative control must not unconditionally pass after run_checks",
+  );
+  const pythonKagemushaInstructionTransactionBuilderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":'),
+    guard.indexOf('if mode == "--negative-control-csharp-kagemusha-instruction-transaction-builder":'),
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /source_target\s*=\s*"python\/iroha_python\/src\/iroha_python\/kagemusha\.py"[\s\S]*?test_target\s*=\s*"python\/iroha_python\/tests\/kagemusha_test\.py"[\s\S]*?def build_kagemusha_recursive_redeem_transaction\([\s\S]*?instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?instruction = redeem_request_archive[\s\S]*?bad_request_flags\[39\] = 0x20[\s\S]*?run_checks\(mutated\)/u,
+    "Python Kagemusha instruction transaction negative control must mutate builder source and malformed-request test coverage",
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?Python Kagemusha instruction transaction tests missing bad_request_flags\[39\] = 0x20[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Python Kagemusha instruction transaction negative control must require source and test diagnostics",
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Python Kagemusha instruction transaction negative control must print both diagnostics",
+  );
+  assert.match(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
+    "Python Kagemusha instruction transaction negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python Kagemusha instruction transaction negative control must not unconditionally pass after run_checks",
   );
   const pythonAbi7FixtureNativeGuardBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":'),
@@ -17102,6 +19612,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /ABI-7 SDK fixture manifest coverage[\s\S]*?target not in message[\s\S]*?needle not in message[\s\S]*?raise\s+SystemExit\(0\)/u,
     "ABI-7 SDK fixture manifest coverage negative control must only pass after detecting all injected drifts",
   );
+  assert.match(
+    abi7SdkManifestCoverageBranch,
+    /detected_messages\s*=\s*\[\][\s\S]*?expected\s*=\s*f"ABI-7 SDK fixture manifest coverage missing \{target\}: \{needle\}"[\s\S]*?detected_messages\.append\(first_lines_for_labels\(message, \(expected,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "ABI-7 SDK fixture manifest coverage negative control must print every exact mutated manifest marker",
+  );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");
   const swiftRunner = source("ci/check_kagemusha_recursive_spend_swift_sdk.sh");
@@ -17131,6 +19646,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmRunner,
     /--tests org\.hyperledger\.iroha\.sdk\.offline\.KagemushaRecursiveSpendRequestCodecsTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.offline\.KagemushaRecursiveSpendProverTest/,
     "Kagemusha JVM SDK runner must exercise typed recursive spend request-codec tests",
+  );
+  assert.match(
+    jvmRunner,
+    /javac\s+\\[\s\S]*-sourcepath "java\/iroha_android\/src\/main\/java:java\/iroha_android\/src\/test\/java:java\/norito_java\/src\/main\/java"[\s\S]*java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*java -ea -cp "\$\{JAVA_OUT\}"\s+\\[\s\S]*org\.hyperledger\.iroha\.android\.offline\.KagemushaRecursiveSpendProverTest/,
+    "Kagemusha JVM SDK runner must directly compile and run the Android recursive spend harness with javac",
   );
   assert.match(
     jvmRunner,
@@ -17440,6 +19960,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonBlockHeightVectorBranch,
+    /expected\s*=\s*'Python typed recursive spend blockHeight test vectors missing " 7"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Python blockHeight vector negative control must require the exact missing vector diagnostic",
+  );
+  assert.match(
+    pythonBlockHeightVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend block_height vector drift was not detected"\s*\)/u,
     "Python blockHeight vector negative control must only pass after detecting injected drift",
   );
@@ -17480,6 +20005,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonNoteAmountVectorBranch,
+    /expected\s*=\s*'Python typed recursive spend note amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Python note amount vector negative control must require the exact missing vector diagnostic",
+  );
+  assert.match(
+    pythonNoteAmountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend note amount vector drift was not detected"\s*\)/u,
     "Python note amount vector negative control must only pass after detecting injected drift",
   );
@@ -17517,6 +20047,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "str(1 << 128)",
     ],
     "SDK parity guard must pin Python malformed public_amount vector inventory",
+  );
+  assert.match(
+    pythonRedeemPublicAmountVectorBranch,
+    /expected\s*=\s*'Python typed recursive spend public amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    "Python public_amount vector negative control must require the exact missing vector diagnostic",
   );
   assert.match(
     pythonRedeemPublicAmountVectorBranch,
