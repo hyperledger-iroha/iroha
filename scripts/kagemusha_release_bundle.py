@@ -95,7 +95,11 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS = frozenset(
     ("device_family", "device_model", "device_codename")
 )
 ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS = frozenset(
-    ("device_fingerprint_sha256", "attestation_challenge_sha256")
+    (
+        "device_fingerprint_sha256",
+        "attestation_challenge_sha256",
+        "d2d_payment_transcript_sha256",
+    )
 )
 
 
@@ -1157,6 +1161,8 @@ def _check_android_signed_evidence_summary_shape(
             )
         ]
 
+    min_bound = _parsed_android_signed_bound(android, "min_signed_at_utc")
+    max_bound = _parsed_android_signed_bound(android, "max_signed_at_utc")
     for raw_slot, entry in signed_evidence_summary.items():
         slot, slot_blockers = _validate_android_manifest_slot(raw_slot)
         for blocker in slot_blockers:
@@ -1250,6 +1256,24 @@ def _check_android_signed_evidence_summary_shape(
                                     "+00:00",
                                     "Z",
                                 ),
+                            )
+                        )
+                    if min_bound is not None and parsed_timestamp < min_bound:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_signed_bounds_drift",
+                                "Android signed-evidence summary timestamp must not predate min_signed_at_utc",
+                                slot=display_slot,
+                                field="min_signed_at_utc",
+                            )
+                        )
+                    if max_bound is not None and parsed_timestamp > max_bound:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_signed_bounds_drift",
+                                "Android signed-evidence summary timestamp must not exceed max_signed_at_utc",
+                                slot=display_slot,
+                                field="max_signed_at_utc",
                             )
                         )
             elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS:
@@ -1392,6 +1416,22 @@ def _check_android_signed_evidence_summary_shape(
                     )
                 )
     return blockers
+
+
+def _parsed_android_signed_bound(
+    android: dict[str, Any],
+    field: str,
+) -> dt.datetime | None:
+    value = android.get(field)
+    if not isinstance(value, str) or device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
+        return None
+    parsed, parse_blocker = readiness.parse_utc_timestamp(
+        value,
+        f"Android readiness summary {field}",
+    )
+    if parse_blocker is not None:
+        return None
+    return parsed
 
 
 def _check_android_duplicate_bindings_summary_shape(
@@ -1550,7 +1590,10 @@ def _check_android_duplicate_bindings_summary_shape(
                     kagemusha = slot_kagemusha_by_slot.get(slot)
                     if not isinstance(kagemusha, dict):
                         continue
-                    if kagemusha.get(raw_field) == value_sha256:
+                    if value_sha256 in _android_duplicate_binding_slot_values(
+                        kagemusha,
+                        raw_field,
+                    ):
                         continue
                     blockers.append(
                         _blocker(
@@ -1594,6 +1637,36 @@ def _check_android_duplicate_bindings_summary_shape(
                 )
             )
     return blockers
+
+
+def _android_duplicate_binding_slot_values(
+    kagemusha: dict[str, Any],
+    field: str,
+) -> set[str]:
+    values: set[str] = set()
+    value = kagemusha.get(field)
+    if (
+        isinstance(value, str)
+        and device_lab.SHA256_HEX_RE.fullmatch(value) is not None
+        and value != "0" * 64
+    ):
+        values.add(value)
+    if field != "d2d_payment_transcript_sha256":
+        return values
+    transcripts = kagemusha.get(device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if not isinstance(transcripts, dict):
+        return values
+    for entry in transcripts.values():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("sha256")
+        if (
+            isinstance(digest, str)
+            and device_lab.SHA256_HEX_RE.fullmatch(digest) is not None
+            and digest != "0" * 64
+        ):
+            values.add(digest)
+    return values
 
 
 def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3200,7 +3273,15 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                     "Android device-lab summary must cover the full standard matrix",
                 )
             )
+        duplicate_bindings = android.get("duplicate_bindings")
         blockers.extend(_check_android_duplicate_bindings_summary_shape(android))
+        if isinstance(duplicate_bindings, dict) and duplicate_bindings:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_duplicate_bindings_present",
+                    "Android duplicate-bindings summary must be empty for a production release",
+                )
+            )
         blockers.extend(_check_android_signed_evidence_summary_shape(android))
     for name, state in SUMMARY_REQUIRED_SECTION_STATES.items():
         section = _section(summary, name)
@@ -6013,6 +6094,14 @@ def _check_release_bundle_android_section_shape(
         _release_manifest_android_blocker(item)
         for item in _check_android_duplicate_bindings_summary_shape(android)
     )
+    duplicate_bindings = android.get("duplicate_bindings")
+    if isinstance(duplicate_bindings, dict) and duplicate_bindings:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_duplicate_bindings_present",
+                "Kagemusha release bundle Android duplicate_bindings must be empty",
+            )
+        )
     blockers.extend(
         _release_manifest_android_blocker(item)
         for item in _check_android_signed_evidence_summary_shape(android)

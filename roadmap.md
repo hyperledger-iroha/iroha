@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -42,7 +42,14 @@ and completed history lives in [`status.md`](./status.md).
   regression coverage exercises direct `subprocess.Popen(...)` launch failures,
   not only injected runner failures, so temporary child logs are removed and
   conventional staged-runner errors are preserved when the real process-launch
-  boundary fails.
+  boundary fails. The lineage and compact staged runners also absolutize
+  relative `--repo-root` values before prepending
+  `<repo-root>/target/release` and `<repo-root>/target/debug` to child PATHs,
+  while preserving canonical `iroha ...` command strings in run reports and
+  release evidence. The matching staged finalizers now reject staged artifact
+  directories that still contain runner-owned `.staged-runner.tmp` files before
+  exit-marker, report, or publish validation, so incomplete detached wrappers
+  cannot be promoted into evidence.
   The ABI-7 recursive compact key evidence helper now rejects symlinked or
   otherwise aliased canonical `--out` paths before artifact-directory metadata
   is read, and rejects symlinked `--artifact-dir` values plus symlinked
@@ -53,7 +60,20 @@ and completed history lives in [`status.md`](./status.md).
   path strings before reading artifact-directory metadata or resolving report
   parents, and it
   requires the canonical `kagemusha-localnet-lifecycle-acceptance.json`
-  acceptance filename before artifact-directory metadata is read. Lineage proof
+  acceptance filename before artifact-directory metadata is read. The acceptance
+  report producer now also rejects malformed run id, chain id, duplicate or
+  unsorted peer ids, secret/control-character identity values, and malformed
+  source artifact path strings before source metadata reads; missing or aliased
+  source artifact files and repeated source file identities are rejected before
+  hashing any source artifact. Source-document string diagnostics are now
+  field-specific for context, event, transaction hash, replay hash, and replay
+  rejection text, so the production-readiness guard can pin exact source
+  message markers instead of relying on generic f-string construction. The Rust
+  source recorder now rejects unsafe or
+  symlinked source roots before writing and publishes each source JSON through
+  private 0600 create-new temp files under a 0700 source directory. It
+  rejects detached acceptance-report output corridors before creating missing
+  `--out` parent directories. Lineage proof
   logs and ABI-7 compact generator logs likewise reject noncanonical filenames
   before artifact-directory metadata is read, and interrupted Reserved-lineage
   compile/start logs without the exact passing test line and one-test cargo
@@ -75,11 +95,22 @@ and completed history lives in [`status.md`](./status.md).
   stop before the final writer runs; and writer failures surface as structured
   helper errors, never as a successful evidence publication.
   Localnet stop helpers in Kagami-generated `stop.sh`, `scripts/deploy_localnet.sh`,
-  and `scripts/training_script_2.sh` now validate that any live `peer*.pid`
-  still belongs to the expected `--config <run-dir>/peerN.toml` command before
-  sending stop signals; malformed or dead pidfiles are cleaned up, but reused
-  live PIDs that do not match the localnet peer config are left untouched and
-  reported.
+  `scripts/training_script_2.sh`, and `scripts/run_local_swarm.sh` now validate
+  that any live `peer*.pid` still belongs to the expected
+  `--config <run-dir>/peerN.toml` command before sending stop signals; malformed
+  or dead pidfiles are cleaned up using `ps -p` liveness probes instead of
+  `kill -0`; if `ps` is unavailable, numeric pidfiles are treated as still
+  live rather than stale. Reused live PIDs that do not match the localnet peer
+  config are left untouched and reported. Kagami-generated
+  `stop.sh` and the bare-metal swarm helper also refuse to escalate to SIGKILL
+  when an owned peer is still live after TERM, leaving the pidfile visible for
+  operator inspection. The bare-metal swarm helper refuses to overwrite live
+  pidfiles on startup and points operators to its guarded `stop.sh` instead of
+  raw pidfile kill commands. The deployment and training helpers no longer
+  trust a previously generated `stop.sh` during forced cleanup and refuse to
+  remove or regenerate a run directory while any matching peer is still live.
+  The production-readiness guard pins those static regressions and workflow
+  routes.
   Validation scratch-file cleanup in the lineage proof, recursive compact key,
   and localnet lifecycle helpers now fsyncs the containing artifact directory
   after identity-checked unlink, so cleanup failures remain visible instead of
@@ -122,8 +153,9 @@ and completed history lives in [`status.md`](./status.md).
   validation directory or temporary evidence file.
   The lineage proof, recursive compact key, and localnet lifecycle evidence
   builders and CLI wrappers now also reject malformed scalar preflight inputs
-  before artifact directories, proof logs, generator logs, acceptance reports,
-  or output corridors are metadata-validated.
+  including direct `generated_at_utc`, `elapsed_seconds`, and future-skew
+  values before artifact directories, proof logs, generator logs, acceptance
+  reports, or output corridors are metadata-validated.
   Local release JSON, checked-in source-marker, and lineage artifact readers
   reject padded path components before ancestor validation or metadata reads.
   The release-bundle CLI applies the same component-whitespace preflight to
@@ -254,6 +286,10 @@ and completed history lives in [`status.md`](./status.md).
   dispatch, copied `Buffer` outputs, invalid local archive rejection before
   native dispatch, malformed native output rejection, and empty-payload native
   output rejection.
+  Accumulator material aliases remain native-owned across SDKs and package
+  declarations: guard scanners must reject proof-chain, accumulator-state,
+  accumulator-snapshot, recursive-snapshot, lineage-snapshot, and proof-state
+  names instead of letting wallet code supply or patch those bytes.
   Recursive-spend bundle decoders across JavaScript, Python, Swift,
   Kotlin/JVM, Android Java, and C# must also verify the accumulator domain
   equals `iroha:kagemusha:v1:recursive-spend-accumulator` before trusting
@@ -776,11 +812,27 @@ and completed history lives in [`status.md`](./status.md).
   release/readiness tooling now requires canonical
   `kagemusha-localnet-lifecycle-evidence.json` with a bound run id, chain id,
   four peer ids, smoke/replay/restart/state-recovery hashes, and the eight
-  shield-to-redeem lifecycle hashes normalized and distinct. The remaining
-  evidence work is collecting the fresh production acceptance report and
-  publishing it through `scripts/kagemusha_localnet_lifecycle_evidence.py` under
-  that schema. Operator docs and parity guards must keep release-bundle examples
-  passing `--localnet-lifecycle-evidence
+  shield-to-redeem lifecycle hashes normalized and distinct. The 4-peer
+  dual-restart localnet test now has an opt-in
+  `IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_SOURCE_DIR` recorder that runs the
+  network under `IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_CHAIN_ID` (defaulting to
+  `kagemusha-production-localnet-v1`) and emits the twelve source JSON
+  artifacts consumed by
+  `scripts/kagemusha_localnet_lifecycle_acceptance.py`; the acceptance helper
+  verifies each source document's schema, slot, run id, actual chain id, sorted
+  `peer-N@production-localnet:<actual-peer-id>` labels, kind,
+  transaction/replay/event fields, timestamp, and non-empty block target before
+  hashing source bytes. Source documents are closed-schema, and their
+  release-facing string fields reject control characters and secret-looking
+  material before digesting source artifacts. Transaction and replay source
+  hashes must also be non-zero lowercase SHA-256-shaped hex strings before the
+  acceptance report can be generated. A local target run of that recorder has
+  produced the
+  twelve source artifacts, acceptance report, and
+  `kagemusha-localnet-lifecycle-evidence.json`; passing that evidence file
+  explicitly to readiness clears the localnet lifecycle blocker. Operator docs
+  and parity guards must keep release-bundle examples passing
+  `--localnet-lifecycle-evidence
   artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` explicitly so
   the localnet lifecycle gate is not hidden behind tooling defaults.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
@@ -802,14 +854,27 @@ and completed history lives in [`status.md`](./status.md).
   before native dispatch. The SDK parity guard now pins the
   `invalidPositiveU128Amounts` and `invalidPublicAmounts` arrays directly with
   workflow-wired negative controls so either vector inventory cannot collapse to
-  only relationship checks or unrelated malformed-input coverage. The same
+  only relationship checks or unrelated malformed-input coverage. Those
+  JavaScript amount-vector negative controls must mutate the complete arrays
+  and require exact missing-vector diagnostics for every malformed amount
+  family, so overlapping string entries cannot mask removed adversarial values.
+  JavaScript package-dist recursive-spend request tests must mirror the same
+  malformed note `amount` and redeem `publicAmount` families through
+  `packageDistInvalidPositiveU128Amounts` and
+  `packageDistInvalidPublicAmounts`, including the snake_case `public_amount`
+  alias rejection, and the source amount-vector negative controls must mutate
+  those package-dist arrays with their own exact diagnostics.
+  The same
   typed codec tests must also keep snake_case `public_amount` and
   `block_height` aliases on the fail-closed path for malformed values, so
   alias normalization cannot bypass canonical decimal validation. JavaScript
   typed recursive-spend `blockHeight` vectors must include both leading and
   trailing whitespace, padded decimals, signed text, and u64 overflow, with the
   SDK parity guard parsing the `invalidBlockHeights` list directly and running
-  a workflow-wired negative control for block-height vector drift.
+  a workflow-wired negative control for block-height vector drift. The guard
+  must pin numeric negative zero as the exact `    -0,` array entry so the
+  string `"-0"` vector cannot mask removal of the numeric `-0` adversarial
+  case.
   JavaScript
   package declarations must also keep recursive spend accumulator digests
   native-owned by denying prefixed declaration aliases such as
@@ -832,17 +897,19 @@ and completed history lives in [`status.md`](./status.md).
   package declaration self-check inventory must include prefixed material
   aliases such as `inputTerminalAccumulator`,
   `staleWalletRecursiveProofChain`, `nativeAppendAccumulatorState`, and
-  `publicProofChainBytes`, plus suffixed material aliases such as
+  `publicProofChainBytes`, direct recursive-proof-chain material aliases such
+  as `recursiveProofChainBytes`, plus suffixed material aliases such as
   `ProofChainState`, `AppendAccumulatorState`, `recursiveAccumulatorV1`, and
   `AccumulatorStateBytes`, and narrow snapshot/proof-state aliases such as
-  `accumulatorSnapshot`, `recursiveProofState`, and `lineageProofState`, so
-  both prefixed and suffixed material matching stay broad. The package-dist
-  material negative controls must report first-line
+  `accumulatorSnapshot`, `proofState`, `recursiveProofState`, and
+  `lineageProofState`, so both prefixed and suffixed material matching stay
+  broad. The package-dist material negative controls must report first-line
   diagnostics for every material token family in the declaration regex,
   including lineage-accumulator, recursive-proof-chain, bare proof-chain,
   append-accumulator, recursive-accumulator, terminal-accumulator,
   wallet-recursive-proof-chain, accumulator-snapshot, recursive/lineage
-  proof-state, and generic accumulator-state aliases, and must
+  snapshot, generic proof-state, recursive/lineage proof-state, and generic
+  accumulator-state aliases, and must
   separately reject narrowing prefixed material matching or reintroducing a
   trailing suffix boundary with explicit prefix-denial labels and line-bounded
   suffix-denial scanners. The
@@ -851,10 +918,11 @@ and completed history lives in [`status.md`](./status.md).
   implementation surfaces, so recursive spend append APIs cannot accept raw
   accumulator state directly. Its
   public-input negative-control fixtures must inject bare proof-chain,
-  append-accumulator, recursive-accumulator, and generic accumulator-state
-  aliases across non-C# SDK surfaces and TypeScript declarations, so the
-  scanner proves those material families stay native-owned outside the
-  package-declaration test too. The proof-chain, digest, material, and
+  append-accumulator, recursive-accumulator, generic proof-state, and generic
+  accumulator-state aliases across non-C# SDK surfaces and TypeScript
+  declarations, so the scanner proves those material families stay
+  native-owned outside the package-declaration test too. The proof-chain,
+  digest, material, and
   boundary-digest negative controls must keep
   secondary scanned surfaces covered too, including Swift `NativeBridge`,
   Python root exports, and JavaScript `dist/crypto.js`, and must print
@@ -985,8 +1053,9 @@ and completed history lives in [`status.md`](./status.md).
 	  across ClaimIdentifier, identifier claim-record, RAM-LFE, identifier
 	  policy, account alias, and multisig SDK/source/test surfaces.
 	  JavaScript recursive-spend `blockHeight` vector controls must keep
-	  per-label diagnostics across source-test and package-dist coverage labels.
-	  Remaining non-C# broad-catch negative controls must also require exact
+	  exact per-vector diagnostics for leading-whitespace strings and numeric
+	  negative zero across source-test and package-dist coverage labels.
+	  Previously remaining non-C# broad-catch negative controls now require exact
 	  labels for Swift NFC success gates, JavaScript Node/filter/runtime lineage
 	  checks, Python/Swift/JVM/Android lineage-package and native-availability
 	  probes, JVM Pallas input guards, JavaScript readonly declarations, mobile
@@ -1042,7 +1111,10 @@ and completed history lives in [`status.md`](./status.md).
   The SDK parity guard now pins Kotlin/JVM and Android Java compact-projection
   `blockHeight` vectors directly, including signed long negatives, values
   above signed `Long.MAX_VALUE`, padded/whitespace decimal strings, u64
-  overflow, and negative `BigInteger` inputs.
+  overflow, and negative `BigInteger` inputs. Its focused negative control must
+  mutate every one of those Kotlin/JVM and Android Java vector families and
+  require exact missing-vector diagnostics for each SDK surface, not only the
+  broad compact-projection vector labels.
 - Kagemusha SDK README parity must keep the ABI-7 Pallas open-envelope builder
   helpers documented across Swift, Kotlin/JVM, Android Java, JavaScript/Node,
   Python, and C#. Those READMEs should name the current-hop record-bundle
@@ -1111,17 +1183,26 @@ and completed history lives in [`status.md`](./status.md).
   The SDK parity guard now parses Python's `invalid_block_heights` tuple
   directly so boolean, float, numeric string, padded/signed decimal-string,
   whitespace-padded, negative, and u64-overflow block-height vectors cannot be
-  hidden by unrelated request-codec markers.
+  hidden by unrelated request-codec markers. Its focused negative control must
+  mutate the whole tuple in one scoped replacement and require exact
+  missing-vector diagnostics for every tuple entry, so duplicate string vectors
+  elsewhere in the file cannot satisfy the guard.
   The SDK parity guard now parses Python's `invalid_amounts` tuple directly so
   zero, padded decimal-string, signed, non-decimal, whitespace-padded, and
   u128-overflow note amount vectors cannot be dropped while redeem coverage
-  stays intact.
+  stays intact. Its focused negative control must mutate the complete tuple and
+  require exact missing-vector diagnostics for every malformed amount family.
   The SDK parity guard now parses Python's `invalid_public_amounts` tuple
   directly so padded decimal-string, signed, non-decimal, whitespace-padded,
   zero, and u128-overflow public amount vectors cannot be hidden by unrelated
-  block-height string coverage. JavaScript/Python/Swift malformed amount and
-  block-height vector negative controls must require the exact missing-vector
-  diagnostic for the removed adversarial entry, not only the broad vector label.
+  block-height string coverage. Its focused negative control must mutate the
+  complete tuple and require exact missing-vector diagnostics for every
+  malformed public amount family. JavaScript/Python/Swift malformed amount and
+  block-height vector negative controls must require exact missing-vector
+  diagnostics for removed adversarial entries, not only the broad vector label.
+  Swift's note and redeem `publicAmount` tests share one `for amount in [...]`
+  loop, so both Swift amount-vector negative controls must mutate that complete
+  shared loop and require exact diagnostics for the affected note/public labels.
   The SDK parity guard now pins Swift, Kotlin/JVM, and Android Java malformed
   spendable-note amount loops separately from redeem public-amount loops, so
   zero, padded decimal-string, signed, non-decimal, whitespace-padded, and
@@ -1148,6 +1229,20 @@ and completed history lives in [`status.md`](./status.md).
   previous-proof Pallas opening generation. The focused JVM/Android regressions
   cover missing lineage records on auto-opening append calls, and the existing
   append previous-lineage negative control now mutates those helper guards too.
+  JavaScript package-dist typed recursive-spend request coverage must also keep
+  malformed current-hop and previous-proof Pallas opening archive vectors for
+  raw bytes, wrong schema, wrong envelope count, and missing domain tags; the
+  workflow-routed package-dist Pallas opening negative control must require an
+  exact diagnostic for every removed malformed vector. The same package-dist
+  surface must pin raw lineage-key request preflight for asymmetric
+  verifier/proving-key fields, wrong-circuit proving-key archives, and append
+  raw lineage keys without previous-proof openings; the workflow-routed raw
+  lineage-key negative control must require exact diagnostics for every removed
+  package-dist vector. Package-dist append request coverage must also keep the
+  previous-lineage verifier record parse ordered ahead of previous-proof opening
+  archive validation, and the shared append previous-lineage parse negative
+  control must report the package-dist marker alongside the source JS and Python
+  diagnostics.
   Cross-SDK witnessless Reserved-lineage helper-body checks and preferred mode
   fallback checks must keep reporting first-line diagnostics for every mutated
   SDK surface, including the C# labels that remain Windows-certified, so
@@ -1280,7 +1375,22 @@ and completed history lives in [`status.md`](./status.md).
   `adb disconnect`, and `adb shell am force-stop` before invoking any capture
   runner, and after a serial-scoped ADB failure it runs only the safe bounded
   `adb devices -l` diagnostic so missing physical-device visibility is
-  actionable without resetting ADB or touching other jobs. The standalone raw
+  actionable without resetting ADB or touching other jobs. Empty attached-device
+  lists now report the stable `no_visible_devices` token, while mixed
+  `device`/`offline`/`unauthorized`/`no_permissions` outputs report only
+  redacted state counts. The production-readiness guard now pins the diagnostic
+  state-classification regression and workflow-routed negative control so the
+  ADB visibility summary cannot collapse to a generic missing-device check. The
+  capture wrapper can also take
+  `--expected-device-family` and verify `ro.product.model` plus
+  `ro.product.device` against the standard family rules before
+  build/install/instrumentation, accepting a single ADB transport `\r\n` line
+  ending while still rejecting embedded control characters, so operators
+  rotating devices for the missing Android matrix fail before producing
+  wrong-family evidence. The production-readiness guard now pins the focused
+  expected-family preflight regressions and workflow-routed negative controls for
+  order, CRLF normalization, wrong-device rejection, CLI validation, redaction,
+  and non-disruptive `getprop` command handling. The standalone raw
   puller now applies the same non-disruptive command gate to its latest-slot
   query and raw-slot tar pull before invoking its ADB runner, and the
   signed-slot assembler applies it before bounded standalone `adb getprop`
@@ -1533,8 +1643,16 @@ and completed history lives in [`status.md`](./status.md).
   `--exit-file` path strings before staged or publish directory metadata is
   read. Those staged runners also
   identity-bind resume/replace cleanup and temporary log/output cleanup before
-  unlinking stale staged paths and report cleanup-sync failures after
-  identity-matched cleanup. Lineage and compact-key finalizers now require
+  unlinking stale staged paths, including runner-owned `.staged-runner.tmp`
+  files during explicit `--replace` recovery, and report cleanup-sync failures
+  after identity-matched cleanup. The matching staged finalizers now reject any
+  staged artifact directory that still contains runner-owned
+  `.staged-runner.tmp` files before exit-marker, report, or publish checks, so
+  interrupted detached wrappers remain visibly incomplete. The
+  production-readiness guard now pins both runner-temp-before-exit-marker
+  finalizer regressions and workflow-routed negative controls so either
+  incomplete-run test cannot disappear silently. Lineage and
+  compact-key finalizers now require
   successful staged exit markers to be the exact `0\n` line, and compact-key
   `--resume-keygen` reruns instead of reusing a padded zero marker; finalizer
   and resume diagnostics redact control-character or secret-looking marker
@@ -1632,6 +1750,10 @@ and completed history lives in [`status.md`](./status.md).
   `artifacts/android/device_lab/<slot>/`, D2D transcript paths under
   `handoff/`, wallet-integrity transcripts under `wallet/`, attestation chains
   under `attestation/`, and offline wallet APK paths under `evidence/`.
+  Cross-slot reuse of the primary `d2d_payment_transcript_sha256` or any
+  canonical non-zero `d2d_payment_transcripts[*].sha256` map entry now enters
+  `duplicate_bindings` and blocks readiness, preventing copied D2D handoff
+  transcripts from satisfying the transport matrix.
 - Kagemusha Reserved-lineage table-base handling must stay proof-witness
   specific: lineage witnesses may carry previous recursive proofs whose
   fixed-window table-base public input differs from the current bundle proof,
@@ -1678,7 +1800,15 @@ and completed history lives in [`status.md`](./status.md).
   top-level timestamps, lineage/compact evidence-section `generated_at_utc`
   values, and Android readiness timestamp bounds canonical and within the
   release validator clock-skew window where they represent generated or maximum
-  accepted evidence times;
+  accepted evidence times; readiness-summary Android `min_signed_at_utc` must
+  also match freshly scanned device-lab evidence during release-bundle
+  generation, while `max_signed_at_utc` must not exclude any signed Android
+  evidence timestamp. The production-readiness guard now pins adversarial
+  min/max signed-bound drift regressions and workflow-routed negative controls
+  so either timestamp-bound test cannot be removed silently. Saved
+  `--verify-existing` manifests also keep independent min/max signed-bound
+  exclusion regressions and workflow-routed negative controls, so refreshed
+  release manifests cannot exclude signed Android evidence timestamps.
   `--verify-existing` still allows ordinary top-level release-manifest timestamp
   refresh, but future-dated summary/manifest timestamps fail closed before
   stable manifest drift comparison. The release bundle gate now also requires
@@ -1692,8 +1822,15 @@ and completed history lives in [`status.md`](./status.md).
   are closed schemas. Accepted slots must carry no errors, must mark every
   release-critical artifact group present, and must publish positive file counts
   for each release-critical artifact group, with accepted slot metadata bound to
-  the freshly scanned device-lab evidence. Signed Android evidence must also name
-  a signer digest present in the trusted signer digest list. The gate also
+  the freshly scanned device-lab evidence. The gate now also rejects any
+  non-empty Android readiness-summary or saved release-manifest
+  `duplicate_bindings` inventory before a release bundle can be ready, so
+  duplicate production matrix bindings cannot be normalized into a packageable
+  summary or verified bundle. The production-readiness guard pins the named and
+  well-formed duplicate-binding present-inventory regressions across both the
+  readiness-summary and saved-manifest paths, with workflow-routed negative
+  controls for each test marker. Signed Android evidence must also name a signer
+  digest present in the trusted signer digest list. The gate also
   rejects missing readiness-summary top-level fields, non-object required
   sections, and missing section fields with explicit missing-field/shape
   blockers before deeper per-section validation; existing release manifests also
@@ -7355,7 +7492,15 @@ and completed history lives in [`status.md`](./status.md).
   broader MDR/XSD validation breadth beyond the checked-in live-profile fixture
   corridor, which now covers `pacs.002`, `pacs.004`, `camt.056`, `sese.023`,
   `sese.024`, `sese.025`, and `colr.012` payment, securities, and collateral
-  lifecycle XML, including official-MDR XSD assertions for
+  lifecycle XML, duplicate-free fail-closed profile version and required-BizSvc
+  allowlists in runtime and profile-catalog evidence preflight,
+  duplicate-free profile/reference/message-profile config,
+  trimmed non-empty profile config literals, duplicate-free trimmed
+  trust/revocation material config, CRL/OCSP DER-shape evidence preflight,
+  non-overlapping trust-pin alias fields, bounded profile numeric scalars, and
+  bounded ISO 4217 minor-unit overrides in runtime and profile-catalog evidence
+  preflight, plus official-MDR XSD
+  assertions for
   profile-advertised `pacs.004.001.09`/`pacs.004.001.10` and
   `camt.056.001.08`/`camt.056.001.09` return/cancellation variants. An offline
   XSD/XML fixture-manifest preflight now pins checked-in
@@ -7388,11 +7533,18 @@ and completed history lives in [`status.md`](./status.md).
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are
   schema-backed while rejecting unknown profile/message catalog keys before
-  release evidence is emitted; catalog `versions` lists can skip schema-backed
-  checks only for the exact message-family alias, not arbitrary strings, and
+  release evidence is emitted; final production-readiness replay now recomputes
+  those profile-version `schema_backed` flags from schema-backed XML fixture
+  message-definition IDs before accepting archived summaries; catalog
+  `versions` lists can skip schema-backed checks only for the exact
+  message-family alias, not arbitrary strings, and
   runtime-required catalog fields are required while optional catalog fields are
-  shape-checked when present, including fail-closed trust/revocation pin overlap
-  and bounded CRL/OCSP DER-sequence material checks; optional manifest/profile
+  shape-checked when present, including fail-closed trust/revocation pin overlap,
+  bounded CRL-like/successful Basic OCSP DER material checks in embedded core
+  loading and offline preflight, and malformed configured CRL/OCSP DER
+  plus over-limit revocation-material rejection in Torii runtime overrides,
+  with embedded core, offline preflight, and runtime overrides sharing the same
+  `8`-entry revocation-material list cap; optional manifest/profile
   fields are optional only when omitted, so present `null` reviewed reasons,
   trust/revocation material lists, booleans, numeric caps, business-service
   arrays, or amount minor-unit arrays fail before digest-bound XSD/profile
@@ -7521,7 +7673,7 @@ and completed history lives in [`status.md`](./status.md).
 			  embedded trust/profile DER base64 retaining its decoded-size guard,
 			  final-readiness `xsd.repository_fixture_manifest` blockers for
 			  summaries still generated from the checked-in ISO fixture manifest
-			  unless the run is explicitly local diagnostic mode, plus
+			  even in local diagnostic mode, plus
 			  `xsd.repository_xsd_summary` blockers for archived summary paths
 			  under the checked-in ISO fixture corpus, and
 			  `xsd.repository_profile_catalog` blockers for archived
@@ -7730,8 +7882,9 @@ and completed history lives in [`status.md`](./status.md).
 	  present explicitly so omissions cannot become production defaults. Archived
 	  profile overrides must also keep
   matching profile/rail/policy identities, canonical policy OIDs and CRL/OCSP
-  bounded canonical base64 DER SEQUENCEs, material-count agreement, CRL/OCSP DER
-  digest/byte-length agreement, and non-overlapping trusted/revoked pins.
+  bounded canonical base64 DER material with CRL-like or successful Basic OCSP
+  response shape, material-count agreement, CRL/OCSP DER digest/byte-length
+  agreement, and non-overlapping trusted/revoked pins.
   Canary summaries must also prove the runner used
 	  `--require-explicit-policy`, recorded complete stdout/stderr previews for
 		  every executed child stage without unsafe control characters or

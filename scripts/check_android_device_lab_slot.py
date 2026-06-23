@@ -1318,6 +1318,38 @@ def _summary_reports_for_release_output(
     return pruned_reports
 
 
+def _summary_duplicate_matrix_values(
+    kagemusha: dict[str, Any],
+    field: str,
+) -> set[str]:
+    """Return canonical duplicate-binding values from a release Kagemusha report."""
+
+    values: set[str] = set()
+    value = kagemusha.get(field)
+    if (
+        isinstance(value, str)
+        and SHA256_HEX_RE.fullmatch(value)
+        and value != "0" * 64
+    ):
+        values.add(value)
+    if field != "d2d_payment_transcript_sha256":
+        return values
+    transcripts = kagemusha.get(D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if not isinstance(transcripts, dict):
+        return values
+    for entry in transcripts.values():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("sha256")
+        if (
+            isinstance(digest, str)
+            and SHA256_HEX_RE.fullmatch(digest)
+            and digest != "0" * 64
+        ):
+            values.add(digest)
+    return values
+
+
 def infer_kagemusha_device_family(
     model: str | None,
     codename: str | None,
@@ -5259,11 +5291,15 @@ def kagemusha_duplicate_matrix_bindings(
     require_complete_signed_evidence: bool = False,
     trusted_signer_public_key_sha256: frozenset[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return duplicated physical-device bindings without exposing raw values."""
+    """Return duplicated release matrix bindings without exposing raw values."""
 
     duplicates: dict[str, list[dict[str, Any]]] = {}
-    for field in ("device_fingerprint_sha256", "attestation_challenge_sha256"):
-        seen: dict[str, list[str]] = {}
+    for field in (
+        "device_fingerprint_sha256",
+        "attestation_challenge_sha256",
+        "d2d_payment_transcript_sha256",
+    ):
+        seen: dict[str, set[str]] = {}
         for report in reports:
             if report.get("status") != "ok":
                 continue
@@ -5278,15 +5314,10 @@ def kagemusha_duplicate_matrix_bindings(
             )
             if kagemusha is None:
                 continue
-            value = kagemusha.get(field)
-            if (
-                not isinstance(slot, str)
-                or not isinstance(value, str)
-                or not SHA256_HEX_RE.fullmatch(value)
-                or value == "0" * 64
-            ):
+            if not isinstance(slot, str):
                 continue
-            seen.setdefault(value, []).append(_display_slot_name(slot))
+            for value in _summary_duplicate_matrix_values(kagemusha, field):
+                seen.setdefault(value, set()).add(_display_slot_name(slot))
         for value, slots in sorted(seen.items()):
             if len(slots) <= 1:
                 continue

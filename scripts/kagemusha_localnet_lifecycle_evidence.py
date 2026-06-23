@@ -139,13 +139,13 @@ def _load_acceptance_report(path: Path) -> tuple[dict[str, Any] | None, list[str
     return report, []
 
 
-def _validate_generated_at_utc(value: str) -> list[str]:
+def _validate_generated_at_utc(value: Any) -> list[str]:
     return lineage_helper._validate_generated_at_utc(value)
 
 
 def _validate_generated_at_future_skew(
     generated_at: dt.datetime | None,
-    max_future_skew_seconds: int,
+    max_future_skew_seconds: Any,
 ) -> list[str]:
     return lineage_helper._validate_generated_at_future_skew(
         generated_at,
@@ -157,21 +157,24 @@ def build_evidence(
     *,
     artifact_dir: Path,
     acceptance_report: Path,
-    generated_at_utc: str,
-    max_generated_at_future_skew_seconds: int = (
+    generated_at_utc: Any,
+    max_generated_at_future_skew_seconds: Any = (
         readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS
     ),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build a localnet lifecycle evidence document from an acceptance report."""
 
     errors: list[str] = []
-    errors.extend(_validate_generated_at_utc(generated_at_utc))
-    generated_at, timestamp_error = readiness.parse_utc_timestamp(
-        generated_at_utc,
-        "--generated-at-utc",
-    )
-    if timestamp_error is not None:
-        errors.append(timestamp_error["message"])
+    generated_at_errors = _validate_generated_at_utc(generated_at_utc)
+    errors.extend(generated_at_errors)
+    generated_at: dt.datetime | None = None
+    if not generated_at_errors:
+        generated_at, timestamp_error = readiness.parse_utc_timestamp(
+            generated_at_utc,
+            "--generated-at-utc",
+        )
+        if timestamp_error is not None:
+            errors.append(timestamp_error["message"])
     errors.extend(
         _validate_generated_at_future_skew(
             generated_at,

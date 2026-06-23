@@ -5183,10 +5183,42 @@ def _check_android_signed_evidence_freshness(
     return blockers
 
 
+def _android_report_duplicate_matrix_values(
+    kagemusha: dict[str, Any],
+    field: str,
+) -> set[str]:
+    """Return canonical matrix-binding values from a sanitized Android report."""
+
+    values: set[str] = set()
+    value = kagemusha.get(field)
+    if (
+        isinstance(value, str)
+        and device_lab.SHA256_HEX_RE.fullmatch(value)
+        and value != "0" * 64
+    ):
+        values.add(value)
+    if field != "d2d_payment_transcript_sha256":
+        return values
+    transcripts = kagemusha.get("d2d_payment_transcripts")
+    if not isinstance(transcripts, dict):
+        return values
+    for entry in transcripts.values():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("sha256")
+        if (
+            isinstance(digest, str)
+            and device_lab.SHA256_HEX_RE.fullmatch(digest)
+            and digest != "0" * 64
+        ):
+            values.add(digest)
+    return values
+
+
 def _check_android_matrix_unique_bindings(
     reports: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Reject matrix rows copied from the same physical device run."""
+    """Reject matrix rows copied from the same device or D2D evidence run."""
 
     blockers: list[dict[str, Any]] = []
     checks = (
@@ -5200,32 +5232,45 @@ def _check_android_matrix_unique_bindings(
             "android_device_lab_duplicate_attestation_challenge",
             "Android device-lab production slots must not reuse an attestation challenge",
         ),
+        (
+            "d2d_payment_transcript_sha256",
+            "android_device_lab_duplicate_d2d_payment_transcript",
+            "Android device-lab production slots must not reuse a D2D payment transcript digest",
+        ),
     )
     for field, code, message in checks:
-        seen: dict[str, list[str]] = {}
+        seen: dict[str, set[str]] = {}
         for report in reports:
             if report.get("status") != "ok":
                 continue
             slot = report.get("slot")
-            value = _android_report_kagemusha(report).get(field)
+            kagemusha = _android_report_kagemusha(report)
+            value = kagemusha.get(field)
             if not isinstance(slot, str) or not isinstance(value, str) or not value:
-                continue
-            safe_slot = _display_evidence_value(slot)
-            if field.endswith("_sha256") and (
-                device_lab.SHA256_HEX_RE.fullmatch(value) is None
-                or value == "0" * 64
-            ):
-                blockers.append(
-                    blocker(
-                        "android_device_lab_binding_digest_invalid",
-                        "Android device-lab production binding digests must be non-zero lowercase sha256 hex",
-                        slot=safe_slot,
-                        field=field,
-                        value_sha256=_display_evidence_value(value),
+                if not isinstance(slot, str):
+                    continue
+            else:
+                safe_slot = _display_evidence_value(slot)
+                if field.endswith("_sha256") and (
+                    device_lab.SHA256_HEX_RE.fullmatch(value) is None
+                    or value == "0" * 64
+                ):
+                    blockers.append(
+                        blocker(
+                            "android_device_lab_binding_digest_invalid",
+                            "Android device-lab production binding digests must be non-zero lowercase sha256 hex",
+                            slot=safe_slot,
+                            field=field,
+                            value_sha256=_display_evidence_value(value),
+                        )
                     )
-                )
-                continue
-            seen.setdefault(value, []).append(safe_slot)
+                    continue
+            safe_slot = _display_evidence_value(slot)
+            for duplicate_value in _android_report_duplicate_matrix_values(
+                kagemusha,
+                field,
+            ):
+                seen.setdefault(duplicate_value, set()).add(safe_slot)
         for value, slots in sorted(seen.items()):
             if len(slots) <= 1:
                 continue

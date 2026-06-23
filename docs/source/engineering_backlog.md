@@ -268,11 +268,11 @@ input files under checked-in ISO fixture coordinates as
 under checked-in `fixtures/iso20022/` artifacts fail before manifest loading,
 and archived `profile_catalog.path` values under those artifacts replay as
 `xsd.repository_profile_catalog` blockers. The local `--allow-reviewed-xsd-gaps`
-diagnostic mode can only downgrade reviewed corpus warnings, not make repository
-fixtures production evidence or suppress an unreviewed profile-catalog-only
-schema gap; advertised profile-version gaps remain blockers unless the exact
-message definition also has reviewed missing-schema, schema-only, or blocked
-source evidence.
+diagnostic mode can only downgrade reviewed missing-schema, schema-only, or
+blocked-source gap warnings, never repository fixture manifest blockers or an
+unreviewed profile-catalog-only schema gap; advertised profile-version gaps
+remain blockers unless the exact message definition also has reviewed
+missing-schema, schema-only, or blocked source evidence.
 Blocked schema-source evidence now also requires candidate SHA-256 values to
 stay disjoint from checked-in schema and fixture XML digests, and final
 readiness replays those overlaps as dedicated blockers so a forged
@@ -441,17 +441,26 @@ operator inbox paths before network delivery, malformed live notary anchor JSON,
 exported-index JSON, store-directory, and persisted record-source diagnostics
 avoid operator export/store paths before network delivery, audit-notary
 `--export-dir` discovery and empty `--all` anchor discovery failures now use
-role labels instead of local export paths before network delivery, malformed
-rail source sidecar JSON and source XML read-limit diagnostics use
+role labels instead of local export paths before network delivery, audit-notary
+latest-anchor digest-peer missing/mismatch failures now use the anchor source
+role instead of derived local peer paths before network delivery, audit-notary
+receipt-output directory and preflighted receipt-file target failures now use
+role labels instead of local output paths before network delivery, malformed rail
+source sidecar JSON and source XML read-limit diagnostics use
 receipt-relative labels instead of local source paths, and rail gateway
 `--inbox-dir` discovery failures now use the `inbox_dir` role label instead of
-local operator inbox paths before network delivery. Rail sidecar
+local operator inbox paths before network delivery. Rail gateway receipt-output
+directory and preflighted receipt-file target failures now use role labels
+instead of local output paths before network delivery. Rail sidecar
 `payload_sha256` values reject all-zero placeholders before network delivery.
 Top-level receipt file read, malformed JSON/UTF-8, object-shape, version,
 receipt-kind, symlink-ancestor, size-limit, and `--receipt-dir` discovery
 failures now use indexed receipt labels instead of local operator receipt paths,
 while accepted verifier summaries still preserve receipt paths for audit
 evidence.
+Direct receipt status, timestamp, endpoint policy/digest, response metadata, and
+rail source replay diagnostics now also use indexed receipt labels instead of
+local receipt paths.
 Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
 receipt verifier, evidence replay, readiness replay, and XSD profile catalog
 all reject Unicode digit confusables before unsupported-type diagnostics.
@@ -496,6 +505,13 @@ values.
 The live rail-gateway, audit-notary, canary, and XSD fixture tools also reject
 secret-looking key/value material in local output paths before those paths can
 be persisted into receipts or archived summaries.
+ISO text output writers for rail/notary receipts, trust profile JSON, XSD
+summaries, canary summaries, evidence summaries, and readiness summaries now
+report parent, leaf, and temporary-file failures with role labels instead of
+copying local output paths into stderr.
+Explicit rail `--message` containment, XSD manifest-relative containment, and
+canary runbook symlink-escape containment failures also report stable role
+labels instead of resolved operator roots.
 Canary runbook config read, parse, symlink-ancestor, and size-limit failures now
 use the `config` label instead of local operator runbook paths before planning
 or child command execution.
@@ -532,9 +548,9 @@ paths, and notary store directories, now reject narrow secret-looking
 identifiers, URI/drive prefixes, and percent-encoded path smuggling before
 missing-source or mismatch diagnostics can echo them.
 Malformed notary source replay diagnostics, including anchor JSON,
-exported-index JSON, store-directory, and persisted record-source failures, now
-use receipt-relative source labels instead of copying operator archive/store
-paths into stderr.
+exported-index JSON, store-directory, symlinked store-directory ancestor, and
+persisted record-source failures, now use receipt-index/source labels instead
+of copying local receipt/archive/store paths into stderr.
 Live rail sidecars now run the same recursive secret-material scan on known
 fields before unsupported message type, profile, payload digest, or
 rail-message-id validation can echo operator-provided values. Archived receipt
@@ -3611,6 +3627,61 @@ redistributable schemas, and official trust/revocation bundles.
   rejects BAH `MsgDefIdr` values outside the selected profile's version set, and
   covers known-original `pacs.004` return plus `camt.056` cancellation paths down
   to durable original-message and lifecycle-message status fields.
+- Completed 2026-06-23: tightened Torii live-profile BAH admission so profiles
+  that require an application header reject missing `BizMsgIdr`, `MsgDefIdr`,
+  or `CreDt` before profile-version fallback can classify the payload as an
+  unknown message type. Live Swift, Fedwire, SEPA, and CSD XML fixture
+  regressions now also cover missing required `BizSvc`, exact/key-path and
+  real-XML unstructured `PstlAdr/AdrLine`, and oversized `SplmtryData`.
+  Message-profile configuration now rejects empty or blank-padded accepted
+  version allowlists plus case-drifted duplicate version entries.
+  Required-BizSvc profile configuration now also fails closed when the
+  `business_services` allowlist is empty or contains blank-padded or
+  case-drifted duplicate entries, and key-value plus live XML runtime admission
+  rejects empty `BizSvc` values before matching allowlists. The offline XSD
+  profile-catalog verifier also rejects case-drifted duplicate
+  `business_services` entries and numeric scalars above `u64::MAX` before
+  release evidence is emitted. Amount minor-unit overrides now reject duplicate
+  normalized currencies and values above the ISO 4217 maximum precision used by
+  the live rail catalog, and the offline XSD profile-catalog verifier mirrors
+  that `4`-unit cap before release evidence is emitted. Override profile IDs,
+  required reference dataset lists, and message-profile family/direction entries
+  are now duplicate-free at configuration load. Default/override profile IDs,
+  rails, embedded signature policies, message types, directions,
+  structured-address modes, required reference dataset names, and minor-unit
+  currency literals must also be non-empty trimmed values. X.509
+  certificate-policy OID lists plus CRL/OCSP DER base64 material now reject
+  padded or duplicate entries instead of silently trimming or de-duplicating, so
+  padded trust/revocation profile config fails before runtime admission.
+  Current public-key and X.509 trust-anchor pin fields now also fail closed when
+  they overlap with their legacy alias fields in embedded or runtime profile
+  configuration.
+  Final production-readiness XSD replay now also recomputes
+  profile-version `schema_backed` flags from the schema-backed XML fixture
+  message-definition IDs in the same digest-bound summary, so forged archived
+  summaries cannot inflate or suppress profile schema coverage with catalog
+  boolean/count edits alone.
+  The embedded core catalog loader and offline XSD profile-catalog verifier now
+  also reject generic DER SEQUENCE placeholders in CRL/OCSP material by
+  requiring CRL-like or successful Basic OCSP response structure before catalog
+  construction or release evidence is emitted; embedded-core regressions cover
+  malformed DER encodings, CRL child-shape drift, and unsuccessful or
+  wrong-response-type OCSP material. Torii runtime override regressions now
+  also cover malformed but base64-valid configured CRL and OCSP response DER
+  plus over-limit revocation-material lists before live admission. Offline
+  profile-catalog verifier and embedded core catalog CRL/OCSP material lists
+  now share the Torii runtime `8`-entry cap and reject over-limit lists before
+  base64 decode, DER decode, or shape parsing. Trust-bundle verifier
+  regressions now also prove every DER material list rejects more than eight
+  entries before per-entry object validation or DER parsing. Evidence replay
+  and final readiness replay regressions now cover the same cap for archived
+  trust-summary DER lists, emitted CRL/OCSP override base64 lists, and compact
+  trust-profile DER proof lists before per-entry object validation, base64
+  decode, or DER parsing.
+  The direct strict XSD profile-catalog gate now reports the count of
+  non-schema-backed advertised message versions without echoing the profile or
+  message-definition values; the checked-in manifest/catalog pair still has
+  `24` missing profile schema proofs pending redistributable official XSDs.
 - Completed 2026-06-04: added a checked-in `sese.024` securities status-advice
   XML fixture and pinned it at both the IVM parser layer and the Torii
   lifecycle layer. The Torii regressions now cover known-original pending

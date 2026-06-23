@@ -348,43 +348,71 @@ pid_matches_localnet_peer() {
     || printf '%s' "$command_line" | grep -F -- "--config=$config_path" >/dev/null
 }
 
-if [[ -d "$OUT_DIR" ]]; then
-  if [[ -f "$OUT_DIR/stop.sh" ]]; then
-    echo "Stopping existing Iroha peers in $OUT_DIR..."
-    (cd "$OUT_DIR" && ./stop.sh 2>/dev/null) || true
-    out_dir_abs="$(cd "$OUT_DIR" 2>/dev/null && pwd || printf '%s' "$OUT_DIR")"
-    for pidfile in "$OUT_DIR"/peer*.pid; do
-      [[ -f "$pidfile" ]] || continue
-      pid="$(cat "$pidfile" 2>/dev/null || true)"
-      [[ -n "$pid" ]] || continue
-      if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
-        echo "Removing malformed pidfile $pidfile (pid=$pid)" >&2
-        rm -f "$pidfile"
-        continue
-      fi
-      if ! kill -0 "$pid" 2>/dev/null; then
-        rm -f "$pidfile"
-        continue
-      fi
-      peer_name="$(basename "$pidfile" .pid)"
-      config_path="$out_dir_abs/${peer_name}.toml"
-      if ! pid_matches_localnet_peer "$pid" "$config_path"; then
-        echo "Leaving $pidfile in place: live pid $pid does not match $config_path" >&2
-        continue
-      fi
-      for _ in {1..20}; do
-        if kill -0 "$pid" 2>/dev/null; then
-          sleep 0.25
-        else
-          break
-        fi
-      done
-      if kill -0 "$pid" 2>/dev/null; then
-        kill -9 "$pid" 2>/dev/null || true
+pid_is_running() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+stop_existing_localnet() {
+  local out_dir="$1"
+  local out_dir_abs
+  local had_live=0
+  local had_error=0
+  local pidfile pid peer_name config_path
+
+  out_dir_abs="$(cd "$out_dir" 2>/dev/null && pwd || printf '%s' "$out_dir")"
+  for pidfile in "$out_dir"/peer*.pid; do
+    [[ -f "$pidfile" ]] || continue
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -z "$pid" ]]; then
+      rm -f "$pidfile"
+      continue
+    fi
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      echo "Removing malformed pidfile $pidfile (pid=$pid)" >&2
+      rm -f "$pidfile"
+      continue
+    fi
+    if ! pid_is_running "$pid"; then
+      rm -f "$pidfile"
+      continue
+    fi
+    peer_name="$(basename "$pidfile" .pid)"
+    config_path="$out_dir_abs/${peer_name}.toml"
+    if ! pid_matches_localnet_peer "$pid" "$config_path"; then
+      echo "Leaving $pidfile in place: live pid $pid does not match $config_path" >&2
+      had_error=1
+      continue
+    fi
+    kill "$pid" 2>/dev/null || true
+    for _ in {1..20}; do
+      if pid_is_running "$pid"; then
+        sleep 0.25
+      else
+        break
       fi
     done
+    if pid_is_running "$pid"; then
+      echo "Refusing to remove existing out-dir while localnet peer $peer_name pid $pid is still running." >&2
+      had_live=1
+      continue
+    fi
+    rm -f "$pidfile"
+  done
+
+  if [[ "$had_live" -ne 0 || "$had_error" -ne 0 ]]; then
+    return 1
   fi
+}
+
+if [[ -d "$OUT_DIR" ]]; then
   if [[ "$FORCE" == true ]]; then
+    echo "Stopping existing Iroha peers in $OUT_DIR with guarded pid ownership checks..."
+    stop_existing_localnet "$OUT_DIR" \
+      || { echo "Out-dir $OUT_DIR still has live or mismatched pidfiles; not removing it." >&2; exit 1; }
     echo "Removing existing out-dir $OUT_DIR..."
     rm -rf "$OUT_DIR"
   else

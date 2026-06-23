@@ -950,35 +950,36 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_output_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise ReadinessError(f"{path.parent} must be a directory") from error
+        raise ReadinessError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise ReadinessError(f"{path.parent} must not be a symlink")
+        raise ReadinessError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise ReadinessError(f"{path.parent} must be a directory")
+        raise ReadinessError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise ReadinessError(f"{path} must not be a symlink")
+            raise ReadinessError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise ReadinessError(f"{path} must be a regular file")
+            raise ReadinessError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise ReadinessError(f"{path} must not be hard-linked")
+            raise ReadinessError(f"{label} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise ReadinessError(f"{path.parent} must not be a symlink") from error
-        raise ReadinessError(f"{path.parent} must be a directory") from error
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        raise ReadinessError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -991,15 +992,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise ReadinessError(f"{path} temp file must not be a symlink") from error
+                raise ReadinessError(f"{label} temp file must not be a symlink") from error
             raise ReadinessError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise ReadinessError(f"{path} temp file must be a regular file")
+            raise ReadinessError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise ReadinessError(f"{path} temp file must not be hard-linked")
+            raise ReadinessError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -2947,6 +2948,7 @@ def _verify_xsd_summary_entries(
     fixture_paths: list[str] = []
     fixture_digests: list[str] = []
     backed_schema_paths: set[str] = set()
+    schema_backed_message_ids: set[str] = set()
     computed_missing_schema_entries: list[tuple[str, str, str]] = []
     computed_schema_backed = 0
     computed_schema_validated = 0
@@ -2973,6 +2975,7 @@ def _verify_xsd_summary_entries(
         )
         if schema_backed:
             computed_schema_backed += 1
+            schema_backed_message_ids.add(fixture_message_def_id)
             if schema_validated:
                 computed_schema_validated += 1
             if missing_reason is not None:
@@ -3157,6 +3160,7 @@ def _verify_xsd_summary_entries(
     summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
     summary["_validated_fixture_paths"] = fixture_paths
     summary["_validated_fixture_digests"] = fixture_digests
+    summary["_validated_schema_backed_message_ids"] = schema_backed_message_ids
 
 
 def _xsd_gap_entry_key(
@@ -3225,6 +3229,7 @@ def _verify_xsd_profile_catalog_entries(
     profile_checked_versions: int,
     profile_schema_backed_versions: int,
     missing_profile_schema_versions: list[Any],
+    schema_backed_message_ids: set[str],
     blockers: list[dict[str, Any]],
 ) -> dict[str, str] | None:
     if "profile_catalog" not in summary:
@@ -3374,6 +3379,14 @@ def _verify_xsd_profile_catalog_entries(
         else:
             seen_versions[key] = offset
         schema_backed = _require_bool(version, "schema_backed", label)
+        expected_schema_backed = key[3] in schema_backed_message_ids
+        if schema_backed != expected_schema_backed:
+            _blocker(
+                blockers,
+                "xsd.profile_version_schema_backing_mismatch",
+                "XSD profile catalog version schema_backed flag does not match schema-backed fixtures",
+                path,
+            )
         if schema_backed:
             computed_schema_backed += 1
         else:
@@ -3980,6 +3993,7 @@ def verify_xsd_summary(
         profile_checked_versions=profile_checked_versions,
         profile_schema_backed_versions=profile_schema_backed_versions,
         missing_profile_schema_versions=missing_profile_schema_versions,
+        schema_backed_message_ids=summary["_validated_schema_backed_message_ids"],
         blockers=blockers,
     )
     if profile_catalog_summary is not None:
@@ -4024,8 +4038,7 @@ def verify_xsd_summary(
             )
 
     has_reviewed_xsd_gap = (
-        repository_fixture_manifest
-        or bool(missing_schema_fixtures)
+        bool(missing_schema_fixtures)
         or bool(schema_only_entries)
         or bool(blocked_schema_sources)
     )
@@ -4034,7 +4047,7 @@ def verify_xsd_summary(
         return warnings if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap else blockers
 
     if repository_fixture_manifest:
-        reviewed_gap_target().append(
+        blockers.append(
             {
                 "code": "xsd.repository_fixture_manifest",
                 "message": (
@@ -5861,8 +5874,8 @@ def run(args: argparse.Namespace) -> int:
     xsd_summary_paths = list(args.xsd_summary or [])
     evidence_summary_paths = list(args.evidence_summary or [])
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_output_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
     for offset, path in enumerate(xsd_summary_paths):
         _reject_output_path_smuggling(path, f"--xsd-summary[{offset}]")
     for offset, path in enumerate(evidence_summary_paths):
@@ -5962,7 +5975,7 @@ def run(args: argparse.Namespace) -> int:
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0 if output["ok"] else 1
 

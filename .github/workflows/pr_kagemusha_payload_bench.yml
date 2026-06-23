@@ -31,11 +31,18 @@ on:
       - "scripts/kagemusha_finalize_lineage_proof_staged_run.py"
       - "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py"
       - "scripts/kagemusha_release_bundle.py"
+      - "scripts/deploy_localnet.sh"
+      - "scripts/run_local_swarm.sh"
+      - "scripts/training_script_2.sh"
       - "scripts/tests/check_android_device_lab_slot_test.py"
       - "scripts/tests/kagemusha_production_readiness_test.py"
+      - "scripts/tests/deploy_localnet_test.py"
+      - "scripts/tests/run_local_swarm_test.py"
+      - "scripts/tests/training_script_2_test.py"
       - "fixtures/android/device_lab/**"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "fixtures/kagemusha_recursive_spend_abi7/**"
+      - "crates/iroha_kagami/src/localnet.rs"
       - "crates/iroha_data_model/Cargo.toml"
       - "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs"
       - "crates/iroha_data_model/src/offline/**"
@@ -812,6 +819,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-note-amount-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-redeem-public-amount-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-block-height-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-pallas-opening-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-raw-lineage-key-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder
@@ -1139,6 +1148,9 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py
           python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py
+          python3 -m unittest discover -s scripts/tests -p deploy_localnet_test.py
+          python3 -m unittest discover -s scripts/tests -p run_local_swarm_test.py
+          python3 -m unittest discover -s scripts/tests -p training_script_2_test.py
       - name: Kagemusha production readiness negative controls
         run: |
           ci/check_kagemusha_production_readiness.sh --negative-control-doc-route
@@ -1254,10 +1266,22 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-non-disruptive-commands
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-diagnostic-state-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-deploy-localnet-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-local-swarm-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-training-script-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagami-localnet-stop-script-pid-safety
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-path-component-whitespace
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-signer-input-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-order-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-crlf-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-wrong-device-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-cli-value-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-cli-secret-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-redaction-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-nondisruptive-test
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-published-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-temp-cleanup-identity
@@ -1266,6 +1290,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-path-root
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-wallet-integrity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-unique-bindings
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-duplicate-bindings
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-production-claim-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-complete-evidence
@@ -1740,6 +1765,17 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-report-path-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-report-filename
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-report-filename-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-identity-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-path-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-path-shape-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-document-fields
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-document-string-safety
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-document-hash-shape
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-event-marker
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-source-recorder-root-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-source-recorder-private-publish
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-identity-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-output-corridor-before-parent-create
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-output-early-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-output-corridor-resolve-failure
@@ -1808,6 +1844,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-counts
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-min-signed-bound-drift-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-max-signed-bound-drift-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-android-min-signed-bound-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-android-max-signed-bound-test
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-entry-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-entry-shape
@@ -1821,6 +1861,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-errors-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-present-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-file-counts-shape
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-summary-named-duplicate-binding-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-summary-well-formed-duplicate-binding-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-named-duplicate-binding-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-well-formed-duplicate-binding-test
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-list-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-entry-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-entry-schema
@@ -1976,6 +2020,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256
@@ -1990,6 +2035,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-staged-elapsed-file-path-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-runner-temp-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-runner-temp-test
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew

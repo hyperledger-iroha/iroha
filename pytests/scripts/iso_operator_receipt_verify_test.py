@@ -1856,6 +1856,69 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("endpoint_sha256 does not match endpoint", stderr)
 
+    def test_insecure_endpoint_policy_diagnostic_does_not_echo_receipt_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-receipt-endpoint"
+            inbox = root / hidden
+            inbox.mkdir()
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+            rc, stdout, stderr = run_verify(["--receipt", str(receipt)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt[0] uses insecure HTTP URL", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(hidden, stderr)
+
+    def test_status_metadata_diagnostic_does_not_echo_receipt_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-receipt-status"
+            inbox = root / hidden
+            inbox.mkdir()
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(receipt, lambda body: body.update({"status_code": True}))
+
+            rc, stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt[0] status_code must be null or an HTTP status integer", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_rail_receipt_required_strings_must_not_require_trimming(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -4549,6 +4612,77 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertEqual(stdout, "")
                 self.assertIn(expected, stderr)
                 self.assertNotIn(hidden, stderr)
+
+    def test_notary_store_dir_symlink_ancestor_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            hidden = "hidden-notary-store-link"
+            target_store = root / "store-target"
+            target_store.mkdir()
+            store_link = root / hidden
+            try:
+                store_link.symlink_to(target_store, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            export_dir.mkdir()
+            target_store_child = target_store / "store"
+            target_store_child.mkdir()
+            _index, _anchor, digest_anchor = audit_test.write_export(
+                export_dir,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            latest = export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["store_dir"] = str(store_link / "store")
+            anchor = audit_test.with_digest(
+                anchor,
+                audit_test.ADAPTER.ANCHOR_DIGEST_FIELD,
+            )
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            digest_anchor.write_text(anchor_text, encoding="utf-8")
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ]
+                    }
+                ),
+            )
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--require-source-files",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt[0] anchor source.audit_index.store_dir", stderr)
+            self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(store_link), stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_missing_notary_anchor_path_must_keep_digest_addressed_shape(self):
         with tempfile.TemporaryDirectory() as raw_root:

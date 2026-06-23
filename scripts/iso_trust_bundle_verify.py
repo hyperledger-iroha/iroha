@@ -538,35 +538,36 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_output_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise TrustBundleError(f"{path.parent} must be a directory") from error
+        raise TrustBundleError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise TrustBundleError(f"{path.parent} must not be a symlink")
+        raise TrustBundleError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise TrustBundleError(f"{path.parent} must be a directory")
+        raise TrustBundleError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise TrustBundleError(f"{path} must not be a symlink")
+            raise TrustBundleError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise TrustBundleError(f"{path} must be a regular file")
+            raise TrustBundleError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise TrustBundleError(f"{path} must not be hard-linked")
+            raise TrustBundleError(f"{label} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise TrustBundleError(f"{path.parent} must not be a symlink") from error
-        raise TrustBundleError(f"{path.parent} must be a directory") from error
+            raise TrustBundleError(f"{label} must not be a symlink") from error
+        raise TrustBundleError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -579,15 +580,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise TrustBundleError(f"{path} temp file must not be a symlink") from error
+                raise TrustBundleError(f"{label} temp file must not be a symlink") from error
             raise TrustBundleError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise TrustBundleError(f"{path} temp file must be a regular file")
+            raise TrustBundleError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise TrustBundleError(f"{path} temp file must not be hard-linked")
+            raise TrustBundleError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -1959,11 +1960,11 @@ def verify_bundle(
 
 def run(args: argparse.Namespace) -> int:
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_output_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
     if args.emit_profile_json is not None:
-        _reject_output_path_smuggling(args.emit_profile_json, "output path")
-        _reject_repository_output_path(args.emit_profile_json, "output path")
+        _reject_output_path_smuggling(args.emit_profile_json, "emit_profile_json")
+        _reject_repository_output_path(args.emit_profile_json, "emit_profile_json")
     bundle_paths = list(args.bundle or [])
     for offset, path in enumerate(bundle_paths):
         _reject_output_path_smuggling(path, f"--bundle[{offset}]")
@@ -2024,9 +2025,13 @@ def run(args: argparse.Namespace) -> int:
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
     if profile_text is not None:
-        _write_text_output(args.emit_profile_json, profile_text)
+        _write_text_output(
+            args.emit_profile_json,
+            profile_text,
+            display_label="emit_profile_json",
+        )
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0
 

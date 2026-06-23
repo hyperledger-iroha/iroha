@@ -191,6 +191,11 @@ checked folded transcript digest with the same field values. Accumulator
 validation also requires the recursive aggregation transcript digest to equal
 the lineage digest, so the proof public input cannot be detached from the
 spend-lineage accumulator it is supposed to compress.
+SDK surfaces must not expose recursive accumulator material as caller-provided
+inputs. Package declarations and source guards treat proof-chain,
+accumulator-state, accumulator-snapshot, recursive-snapshot, lineage-snapshot,
+generic proof-state (`proofState`, `ProofState`, `proof_state`), and
+recursive/lineage proof-state aliases as native-owned accumulator bytes.
 The C bridge, Node NAPI host, and Python native redeem helpers also reject zero
 or mismatched public amounts before emitting a `RedeemKagemushaRecursive`
 instruction. Their shared request validation also rejects final redeem proof
@@ -425,8 +430,13 @@ commands with surrounding whitespace, control characters, or secret-looking
 material such as `token=` are rejected without echoing unsafe command bytes.
 The helper rejects noncanonical `--generated-at-utc`
 values such as `+00:00` offsets or surrounding whitespace instead of
-normalizing them into the evidence JSON. Direct artifact-dir, proof-log,
-generator-log, acceptance-report, and output-preflight helper calls reject
+normalizing them into the evidence JSON. Direct helper calls also reject
+omitted, boolean, numeric, list, or empty `generated_at_utc` inputs before
+artifact, proof-log, generator-log, or localnet acceptance metadata is read.
+Malformed direct `elapsed_seconds` values and non-integer future-skew limits
+fail the same scalar preflight before local metadata is read. Direct
+artifact-dir, proof-log, generator-log, acceptance-report, and output-preflight
+helper calls reject
 control-character, surrounding-whitespace, or secret-looking artifact,
 proof-log, generator-log, acceptance-report, and output paths before resolving
 corridors, creating output parents, creating temporary evidence files, or
@@ -540,9 +550,14 @@ challenge SHA-256 from `attestation/challenge.hex`, renders the verifier report,
 reports bounded redacted ADB stdout/stderr when that serial-scoped preflight
 fails or reports a non-`device` state, runs a bounded redacted `adb devices -l`
 diagnostic after serial-scoped ADB failures that reports only attached-device
-row/state counts, redacts the configured ADB serial from command and
-stdout/stderr diagnostics, caps long non-`device` state strings, caps failed
-preflight command displays, assembles signed evidence with
+row/state counts or the stable `no_visible_devices` token, redacts the
+configured ADB serial from command and stdout/stderr diagnostics, caps long
+non-`device` state strings, caps failed
+preflight command displays, optionally checks `--expected-device-family` by
+reading `ro.product.model` and `ro.product.device` through the same
+non-disruptive ADB runner before build/install/instrumentation, accepting a
+single ADB transport `\r\n` line ending while still rejecting embedded control
+characters, assembles signed evidence with
 `nearby_offline`, `nfc_hce`, and `qr` D2D transcript bindings, and validates
 the resulting slot. The wrapper requires an
 explicit `--physical-device-attestation` assertion and does not manage or stop
@@ -865,6 +880,9 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
 # after its wrapper has written a zero exit marker. The wrapper also captures
 # the lineage key artifacts. With no path flags, the runner and finalizer both
 # use the symlink-free resolution of /tmp, for example /private/tmp on macOS.
+# The runner preserves the canonical `iroha ...` command in reports but prepends
+# `<repo-root>/target/release` and `<repo-root>/target/debug` to the child PATH,
+# so a built workspace does not require an operator shell PATH change.
 # Explicit staged path flags must already be canonical paths: parent-segment,
 # backslash-bearing, and surrounding-whitespace component aliases fail before
 # metadata reads. The runner rejects secret-looking, control-character,
@@ -915,7 +933,11 @@ python3 scripts/kagemusha_recursive_compact_key_evidence.py \
 # before staged-directory metadata is read. The finalizers apply the same
 # path-shape gate before staged or publish directory metadata; the lineage
 # finalizer also applies it to --elapsed-seconds-file.
+# Before checking the exit marker or publishing, finalizers also reject staged
+# artifact directories that still contain runner-owned `.staged-runner.tmp`
+# files, because those files mean the detached wrapper did not complete.
 python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py \
+  --repo-root . \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
   --exit-file <staged-exit-file>
 
@@ -927,12 +949,36 @@ python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
   --artifact-dir artifacts/kagemusha \
   --out artifacts/kagemusha/recursive-compact-key-evidence.json
 
+# Generate the twelve source artifacts from the real 4-peer lifecycle run. The
+# recorder is opt-in: with IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_SOURCE_DIR unset,
+# the integration test keeps its normal behavior and writes no release evidence.
+# With it set, the test fails if the pre-restart or post-restart replay
+# transaction is accepted instead of rejected, and each emitted JSON document
+# binds the run id, chain id, sorted peer ids, source slot, kind, transaction or
+# rejection material, and observed non-empty block target. Recorder mode uses
+# IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_CHAIN_ID as the actual network chain id,
+# defaulting to kagemusha-production-localnet-v1, and labels actual peer
+# identities as peer-N@production-localnet:<peer-id> for the acceptance report.
+# The recorder rejects secret-looking or aliased source directories, rejects
+# symlinked source roots or ancestors, creates the source directory as 0700 on
+# Unix, and publishes each source JSON through a create-new 0600 temporary file
+# before an atomic rename to the canonical artifact filename.
+KAGEMUSHA_LOCALNET_SOURCE_DIR="$PWD/artifacts/kagemusha/localnet-lifecycle-sources"
+IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_SOURCE_DIR="$KAGEMUSHA_LOCALNET_SOURCE_DIR" \
+IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_RUN_ID=<production-4-peer-localnet-run-id> \
+IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_CHAIN_ID=kagemusha-production-localnet-v1 \
+cargo test -p integration_tests --test consensus_and_da \
+  confidential_dual_restart_stress_mid_flow_localnet -- --nocapture
+
 # Publish the 4-peer production localnet lifecycle acceptance report. The
 # acceptance report must be named kagemusha-localnet-lifecycle-acceptance.json,
 # live directly under --artifact-dir, and contain the localnet_acceptance fields:
 # run id, chain id, four peer ids, smoke/replay/restart/state-recovery results,
-# and the full shield-to-redeem lifecycle artifact hashes. Run, chain, and peer
-# identifiers must be explicitly
+# and the full shield-to-redeem lifecycle artifact hashes. The acceptance helper
+# validates every source JSON document against the CLI run id, chain id, sorted
+# peer ids, expected artifact slot, expected kind, transaction/replay/event
+# fields, generated timestamp, and non-empty block target before hashing source
+# bytes. Run, chain, and peer identifiers must be explicitly
 # production/prod and localnet labeled, free of dev/testnet/sample/demo/mock/zero
 # markers including joined localnetqa/localnetpreprod/localnettest/localnetuat
 # labels, and free of contradictory mainnet/localnet labels such as
@@ -941,13 +987,46 @@ python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
 # prefixes, are normalized to the lowercase 64-hex digest in readiness
 # summaries, and reject uppercase, single-character placeholder, duplicate, or
 # suffix-bearing variants.
+# The acceptance helper validates the run id, chain id, and exact four distinct
+# sorted peer ids before hashing any source artifact, so malformed identities
+# cannot force local evidence reads or leak through diagnostics. It also raw-
+# preflights every source artifact path string before source metadata reads, and
+# validates missing, aliased, or reused source files before hashing any source
+# bytes. Source JSON documents are closed-schema and their context,
+# transaction, replay, and event strings are checked for control characters and
+# secret-looking material before any source artifact digest is computed.
+# Transaction and replay source hashes must also be non-zero lowercase
+# SHA-256-shaped hex strings, matching the recorder's emitted transaction ids.
 # The helper rejects secret-looking, control-character, backslash, and parent-segment
 # --acceptance-report paths before artifact-directory metadata is read. The
-# helper also preflights the canonical --out path, including symlinked
-# ancestors, before reading localnet acceptance input metadata. It wraps those
-# bytes with the release schema and timestamp, validates the result through the
-# production readiness gate, fsyncs validation scratch cleanup, and publishes
-# the canonical evidence JSON under the localnet lifecycle size cap.
+# helper also verifies the canonical --out path is directly under
+# --artifact-dir before creating a missing output parent, then preflights
+# symlinked ancestors before reading localnet acceptance input metadata. It
+# wraps those bytes with the release schema and timestamp, validates the result
+# through the production readiness gate, fsyncs validation scratch cleanup, and
+# publishes the canonical evidence JSON under the localnet lifecycle size cap.
+python3 scripts/kagemusha_localnet_lifecycle_acceptance.py \
+  --artifact-dir artifacts/kagemusha \
+  --out artifacts/kagemusha/kagemusha-localnet-lifecycle-acceptance.json \
+  --run-id <production-4-peer-localnet-run-id> \
+  --chain-id kagemusha-production-localnet-v1 \
+  --peer-id <peer-0@production-localnet:actual-peer-id> \
+  --peer-id <peer-1@production-localnet:actual-peer-id> \
+  --peer-id <peer-2@production-localnet:actual-peer-id> \
+  --peer-id <peer-3@production-localnet:actual-peer-id> \
+  --smoke-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/smoke-artifact.json" \
+  --replay-rejection-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/replay-rejection-artifact.json" \
+  --restart-replay-rejection-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/restart-replay-rejection-artifact.json" \
+  --state-recovery-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/state-recovery-artifact.json" \
+  --lifecycle-shield-tx-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-shield-tx-artifact.json" \
+  --lifecycle-hop-proof-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-hop-proof-artifact.json" \
+  --lifecycle-recursive-init-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-recursive-init-artifact.json" \
+  --lifecycle-recursive-init-verify-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-recursive-init-verify-artifact.json" \
+  --lifecycle-recursive-append-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-recursive-append-artifact.json" \
+  --lifecycle-recursive-append-verify-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-recursive-append-verify-artifact.json" \
+  --lifecycle-unshield-proof-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-unshield-proof-artifact.json" \
+  --lifecycle-redeem-tx-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/lifecycle-redeem-tx-artifact.json"
+
 python3 scripts/kagemusha_localnet_lifecycle_evidence.py \
   --artifact-dir artifacts/kagemusha \
   --acceptance-report artifacts/kagemusha/kagemusha-localnet-lifecycle-acceptance.json \
@@ -981,7 +1060,12 @@ The staged runner first runs the canonical init and append
 `iroha app zk kagemusha lineage-key-artifacts` commands from the staged root so
 the relative `artifacts/kagemusha/...` outputs match the release contract, then
 preserves the real keygen or cargo exit code in `<staged-exit-file>` instead of
-normalizing failures to success. Each init, append, and proof phase also writes
+normalizing failures to success. It keeps the command string canonical for
+evidence and run-report validation while absolutizing relative `--repo-root`
+values before prepending the validated repo root's `target/release` and
+`target/debug` directories to the child PATH, so detached staging can use
+locally built binaries without weakening command exactness.
+Each init, append, and proof phase also writes
 a closed-schema execution report beside its log, recording the canonical
 command, phase, exit code, elapsed seconds, log byte count, and
 execution-report SHA-256 of the child log. The keygen and
@@ -1007,6 +1091,14 @@ seconds, proof-log filename, proof-log byte count, and init/append
 lineage-key-artifact log byte counts, and refuses to overwrite previous staged
 key artifacts, staged keygen logs, proof logs, execution reports, run reports,
 elapsed-time files, or exit markers unless `--replace` is explicit. The
+`--replace` path also removes stale runner-owned `.staged-runner.tmp` files for
+child logs, execution reports, the run report, elapsed-time sidecar, and exit
+marker through the same identity-checked cleanup path before launching the next
+child process. The
+finalizer refuses any staged artifact directory that still contains a
+runner-owned `.staged-runner.tmp` file before reading the exit marker,
+validating run reports, or publishing evidence, so an interrupted wrapper
+cannot be mistaken for a completed production run. The
 explicit `--resume-key-artifacts` mode is narrower than `--replace`: it reuses
 an init or append key-artifact phase only when all four profile artifacts, the
 phase log, and a zero-exit execution report validate with the canonical command
@@ -1060,7 +1152,9 @@ text.
 The ABI-7 compact-key staged runner applies the same detached-run contract for
 the key-generation command: it runs the canonical
 `iroha app zk kagemusha recursive-compact-key-artifacts` command from the
-staged root, gives the child process direct ownership of the temporary
+staged root, absolutizes relative `--repo-root` values before building the
+child PATH, finds repo-local `target/release` or `target/debug` binaries, gives
+the child process direct ownership of the temporary
 `recursive-compact-key-artifacts.log` stdout/stderr target, flushes and fsyncs
 that log after child exit, installs it only after syncing the captured
 output-parent identity, rolls back the just-installed log identity if final
@@ -1088,6 +1182,13 @@ and reruns it; symlinked, hardlinked, special, or secret-looking staged outputs
 still fail closed before cleanup. `--resume-keygen` and `--replace` are
 mutually exclusive, so a caller cannot accidentally request both a validated
 resume and destructive staged-output replacement. The compact-key
+`--replace` path also identity-cleans stale runner-owned `.staged-runner.tmp`
+files for the generator log, execution report, run report, and exit marker
+before launching a replacement child process. The compact-key
+finalizer likewise rejects any staged artifact directory that still contains a
+runner-owned `.staged-runner.tmp` file before marker, report, or publish
+checks, ensuring an interrupted keygen wrapper remains visibly incomplete. The
+compact-key
 runner also reopens marker and JSON report outputs after the atomic rename,
 checks the opened file identity, syncs the captured output-parent identity, and
 compares the exact bytes before returning.
@@ -1229,11 +1330,15 @@ ABI constants, projected ABI-6 limits/modes, ABI-7 fixture manifest/archive
 paths, schemas, ABI versions, operation counts, circuit ids, digest maps, size
 maps, section map inventories, checked-file inventories, Android family
 coverage, readiness-summary Android matrix lists, Android trusted-signer pins,
-readiness-summary trusted-signer digest lists, duplicate-binding slot lists,
-duplicate-binding value inventories, and malformed summary
+readiness-summary trusted-signer digest lists, any non-empty readiness-summary
+or saved release-manifest Android `duplicate_bindings` inventory,
+duplicate-binding slot lists, duplicate-binding value inventories, and malformed summary
 digests, malformed, noncanonical, or future-dated summary/manifest timestamps,
 including nested readiness-summary and release-manifest lineage/compact
-evidence-section timestamps plus Android readiness timestamp bounds, non-standard
+evidence-section timestamps plus Android readiness timestamp bounds, and drift
+between readiness-summary Android minimum signed-evidence timestamp bounds and
+freshly scanned device-lab evidence, plus maximum signed-evidence bounds that
+exclude any signed Android evidence timestamp, non-standard
 `NaN`/`Infinity` JSON constants in summaries or manifests, malformed or
 inventory-mismatched Android readiness slot lists, malformed Android slot
 Kagemusha detail fields, unexpected nested slot/Kagemusha detail fields,
@@ -1492,7 +1597,11 @@ and artifact-root requirements before cutting Android D2D artifacts into a
 production bundle: release-bundle slot artifact paths must stay under
 `artifacts/android/device_lab/<slot>/`, D2D transcripts stay under `handoff/`,
 wallet-integrity transcripts under `wallet/`, attestation chains under
-`attestation/`, and offline wallet APKs under `evidence/`.
+`attestation/`, and offline wallet APKs under `evidence/`. Cross-slot reuse of
+the primary `d2d_payment_transcript_sha256` or any
+`d2d_payment_transcripts[*].sha256` map entry is reported through
+release-facing `duplicate_bindings` and blocks readiness, so copied D2D
+handoff transcripts cannot satisfy the transport matrix.
 Android signed evidence also requires `signed_evidence_artifact_path` to bind
 the canonical `evidence/signed-evidence.json`, and digest inventory only treats
 children under artifact roots as digestable slot artifacts. The

@@ -694,7 +694,7 @@ ADVERSARIAL_COVERAGE = {
         "fixed-window table schedule digest",
         "fixed-window shared-table manifest digest",
         "previous proof backend mismatch must reject",
-        "backend `stark/fri` is not",
+        'err.contains("backend `stark/fri` is not"),',
         "previous proof verifier-key backend mismatch must reject",
         "verifier-key backend `stark/fri` is not",
         "unsupported previous proof circuit id must reject",
@@ -1042,7 +1042,7 @@ ADVERSARIAL_COVERAGE = {
         "JS host must reject forged previous recursive proof circuit id",
         "forged previous proof circuit-id returned unexpected error",
         "fn kagemusha_recursive_spend_append_rejects_missing_lineage_key_artifacts",
-        "JS host must reject missing Reserved-lineage key artifacts",
+        "err.reason.contains(expected_field)",
         "fn kagemusha_recursive_spend_init_rejects_forged_current_hop_pallas_metadata",
         "JS host must reject forged current-hop Pallas metadata",
         "current-hop metadata splice returned unexpected error",
@@ -1050,7 +1050,7 @@ ADVERSARIAL_COVERAGE = {
         "JS host must reject forged current-hop proof circuit id",
         "current-hop proof circuit-id splice returned unexpected error",
         "fn kagemusha_recursive_spend_init_rejects_missing_lineage_key_artifacts",
-        "JS host must reject missing Reserved-lineage key artifacts",
+        'err.reason.contains("lineage_verifier_key")',
         "js-host-recursive-lineage-hop-public-inputs-v1",
         "encode JS host lineage hop proof",
         "js-host-mixed-lineage-hop-public-inputs-v1",
@@ -1168,7 +1168,7 @@ ADVERSARIAL_COVERAGE = {
         "Python host must reject forged previous recursive proof circuit id",
         "forged previous proof circuit-id returned unexpected error",
         "fn kagemusha_recursive_spend_append_python_rejects_missing_lineage_key_artifacts",
-        "Python host must reject missing Reserved-lineage key artifacts",
+        "err.contains(expected_field)",
         "fn kagemusha_recursive_spend_init_python_rejects_forged_current_hop_pallas_metadata",
         "Python host must reject forged current-hop Pallas metadata",
         "current-hop metadata splice returned unexpected error",
@@ -1176,7 +1176,7 @@ ADVERSARIAL_COVERAGE = {
         "Python host must reject forged current-hop proof circuit id",
         "current-hop proof circuit-id splice returned unexpected error",
         "fn kagemusha_recursive_spend_init_python_rejects_missing_lineage_key_artifacts",
-        "Python host must reject missing Reserved-lineage key artifacts",
+        'err.contains("lineage_verifier_key")',
         "fn kagemusha_recursive_spend_redeem_python_native_accepts_witnessless_reserved_lineage_public_binding",
         "witnessless reserved-lineage redeem validates before backend proof verification",
         "Python native redeem builder must reject final lineage verifier-record circuit mismatch",
@@ -1893,13 +1893,13 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
 
 RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
     "crates/iroha_data_model/src/offline/mod.rs": (
-        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
-        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: &str =",
+        "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: &str =",
         "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
         "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
         "normalize_kagemusha_recursive_spend_append_output_proof_circuit_id",
-        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
-        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+        "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1\n        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {\n            can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count)",
     ),
     "crates/iroha_core/src/zk.rs": (
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID: &str =",
@@ -2004,9 +2004,7 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
 VERIFY_RESULT_FAIL_CLOSED_COVERAGE = {
     "crates/iroha_core/src/zk.rs": (
         "let witnessless_redeem_supported =",
-        "can_redeem_kagemusha_recursive_spend_witnessless(",
-        "&bundle.recursive_proof.verifier_key_id.name",
-        "bundle.accumulator.hop_count",
+        "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n            &bundle.recursive_proof.verifier_key_id.name,\n            bundle.accumulator.hop_count,",
         "let lineage_witness_required_for_redeem = !witnessless_redeem_supported;",
         "witnessless_redeem_supported: false,",
         "lineage_witness_required_for_redeem: true,",
@@ -2018,7 +2016,7 @@ VERIFY_RESULT_FAIL_CLOSED_COVERAGE = {
         "assert!(wrong_record.lineage_witness_required_for_redeem);",
         "assert!(!wrong_multi_hop.witnessless_redeem_supported);",
         "assert!(wrong_multi_hop.lineage_witness_required_for_redeem);",
-        "can_redeem_kagemusha_recursive_spend_witnessless(",
+        "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n                &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,\n                two_hop_lineage_bundle.accumulator.hop_count,",
         "metadata-valid two-hop append lineage profile must remain witnessless-redeem capable",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
@@ -4551,8 +4549,11 @@ if mode == "--negative-control-sdk-selector-edge":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        if "semantic previous proofs cannot select Reserved-lineage output" not in message:
+            raise SystemExit("negative control failed: SDK selector edge drift was not detected")
         print("negative control rejected SDK Reserved-lineage selector edge drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK selector edge drift was not detected")
 
@@ -4570,8 +4571,11 @@ if mode == "--negative-control-sdk-preferred-cap-edge":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        if "preferred append selector falls back at the witnessless hop cap" not in message:
+            raise SystemExit("negative control failed: SDK preferred cap edge drift was not detected")
         print("negative control rejected SDK Reserved-lineage preferred cap edge drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK preferred cap edge drift was not detected")
 
@@ -4589,8 +4593,11 @@ if mode == "--negative-control-js-package-dist-selector-edge":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        if "semantic previous proofs cannot select Reserved-lineage output" not in message:
+            raise SystemExit("negative control failed: JavaScript package-dist selector edge drift was not detected")
         print("negative control rejected JavaScript package-dist selector edge drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript package-dist selector edge drift was not detected")
 
@@ -4604,8 +4611,11 @@ if mode == "--negative-control-python-hop-edges":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        if 'float("nan")' not in message:
+            raise SystemExit("negative control failed: Python hop-count policy drift was not detected")
         print("negative control rejected Python Reserved-lineage hop-count policy drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python hop-count policy drift was not detected")
 
@@ -4622,8 +4632,11 @@ if mode == "--negative-control-js-hop-edges":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        if "canAppendKagemushaRecursiveSpendWitnesslessLineage(1n)" not in message:
+            raise SystemExit("negative control failed: JavaScript BigInt hop-count policy drift was not detected")
         print("negative control rejected JavaScript Reserved-lineage BigInt hop-count policy drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript BigInt hop-count policy drift was not detected")
 
@@ -4640,8 +4653,11 @@ if mode == "--negative-control-js-package-dist-hop-edges":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        if "canAppendKagemushaRecursiveSpendWitnesslessLineage(1n)" not in message:
+            raise SystemExit("negative control failed: JavaScript package-dist BigInt hop-count policy drift was not detected")
         print("negative control rejected JavaScript package-dist Reserved-lineage BigInt hop-count policy drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript package-dist BigInt hop-count policy drift was not detected")
 
@@ -4905,8 +4921,15 @@ if mode == "--negative-control-shared-fixture-manifest":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = f"{target} must contain exactly nine ABI-6 operations"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared fixture manifest drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected shared recursive spend ABI-6 fixture drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: shared fixture manifest drift was not detected")
 
@@ -4924,8 +4947,18 @@ if mode == "--negative-control-shared-archive-fixture":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f'{target} is missing shared recursive spend ABI-6 fixture coverage: '
+            '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"'
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared archive fixture drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected shared recursive spend ABI-6 archive drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: shared archive fixture drift was not detected")
 
@@ -4939,8 +4972,15 @@ if mode == "--negative-control-shared-abi7-fixture-manifest":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = f"{target} must contain exactly five ABI-7 fixture operations"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared ABI-7 fixture manifest drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected shared recursive spend ABI-7 fixture drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: shared ABI-7 fixture manifest drift was not detected")
 
@@ -4958,8 +4998,18 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f'{target} is missing shared recursive spend ABI-7 fixture coverage: '
+            '"sha256_hex": "271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70"'
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: shared ABI-7 archive fixture drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected shared recursive spend ABI-7 archive drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: shared ABI-7 archive fixture drift was not detected")
 
@@ -5152,8 +5202,18 @@ if mode == "--negative-control-data-model-append-cap-boundary":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "Reserved-lineage append request at the witnessless hop cap must reject before proving"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: data-model append cap boundary drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected data-model append cap boundary drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: data-model append cap boundary drift was not detected")
 
@@ -5220,8 +5280,18 @@ if mode == "--negative-control-data-model-transition-profile-current-hop-sets":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "validate_kagemusha_unique_input_output_sets"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: transition-profile current-hop set drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected transition-profile current-hop set drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: transition-profile current-hop set drift was not detected")
 
@@ -5239,8 +5309,18 @@ if mode == "--negative-control-data-model-proof-public-input-circuit-binding":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "recursive spend proof public-input circuit binding is missing ordered preverification step: "
+            "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH]"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: proof public-input circuit binding drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected proof public-input circuit binding drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: proof public-input circuit binding drift was not detected")
 
@@ -5258,8 +5338,18 @@ if mode == "--negative-control-data-model-semantic-proof-append-opening":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "recursive spend proof public-input circuit binding is missing ordered preverification step: "
+            "if accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH]"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: semantic proof append-opening drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected semantic proof append-opening drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: semantic proof append-opening drift was not detected")
 
@@ -5277,8 +5367,15 @@ if mode == "--negative-control-data-model-public-input-one-hop-append-opening":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "missing Rust one-hop append-opening public-input rejection"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: one-hop append-opening public-input drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected one-hop append-opening public-input drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: one-hop append-opening public-input drift was not detected")
 
@@ -5296,8 +5393,15 @@ if mode == "--negative-control-data-model-generic-proof-scalar-projection":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "missing Rust generic proof spend-state rejection for recursive_verifier_scalar_projection_digest"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: generic proof scalar-projection drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected generic proof scalar-projection drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: generic proof scalar-projection drift was not detected")
 
@@ -5315,8 +5419,18 @@ if mode == "--negative-control-data-model-spend-proof-artifact-circuit-gates":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "recursive spend proof artifact circuit gate binding is missing ordered preverification step: "
+            "&& public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: spend proof artifact circuit gate drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected spend proof artifact circuit gate drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: spend proof artifact circuit gate drift was not detected")
 
@@ -5334,8 +5448,18 @@ if mode == "--negative-control-data-model-previous-proof-opening-bundle-binding"
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "previous proof opening domain-tag bundle binding is missing ordered preverification step: "
+            "previous_bundle.validate_public_input_binding()?;"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: previous-proof opening bundle binding drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected previous-proof opening bundle binding drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: previous-proof opening bundle binding drift was not detected")
 
@@ -5354,8 +5478,16 @@ if mode == "--negative-control-data-model-previous-proof-field-binding":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected_prefix = "recursive spend previous-proof public-input field binding drifted;"
+        expected_actual = "actual=['domain', 'evidence_digest', 'aggregation_transcript_digest'"
+        if expected_prefix not in message or expected_actual not in message:
+            raise SystemExit(
+                "negative control failed: previous-proof field binding drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected previous-proof field binding drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: previous-proof field binding drift was not detected")
 
@@ -5372,8 +5504,18 @@ if mode == "--negative-control-data-model-previous-proof-stale-hash-fixture":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "recursive-spend-stale-previous-proof-public-input-hash"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: stale previous-proof hash fixture drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected stale previous-proof hash fixture drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: stale previous-proof hash fixture drift was not detected")
 
@@ -5391,13 +5533,47 @@ if mode == "--negative-control-core-append-cap-boundary":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "direct Reserved-lineage append at the witnessless hop cap must reject before input parsing"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: core append cap boundary drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected core append cap boundary drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: core append cap boundary drift was not detected")
 
 if mode == "--negative-control-core-lineage-profile-split":
     cases = (
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: &str =",
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_FIRST_HOP_PROOF_CIRCUIT_ID_V1: &str =",
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: &str =",
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: &str =",
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_FOLD_PROOF_CIRCUIT_ID_V1: &str =",
+            "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: &str =",
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1\n        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1\n        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {\n            can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count)",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {\n            true",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {\n            can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count)",
+        ),
         (
             "crates/iroha_core/src/zk.rs",
             "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID: &str =",
@@ -5602,6 +5778,11 @@ if mode == "--negative-control-core-previous-proof-backend-profile":
     target = "crates/iroha_core/src/zk.rs"
     cases = (
         (
+            'err.contains("backend `stark/fri` is not"),',
+            'err.contains("backend `stark/fri` may pass"),',
+            'err.contains("backend `stark/fri` is not"),',
+        ),
+        (
             "previous proof verifier-key backend mismatch must reject",
             "previous proof verifier-key backend mismatch may pass",
             "previous proof verifier-key backend mismatch must reject",
@@ -5657,8 +5838,18 @@ if mode == "--negative-control-core-proof-chain-accumulator":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "proof-byte splice is bound into accumulator state"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: proof-chain accumulator drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected proof-chain accumulator drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: proof-chain accumulator drift was not detected")
 
@@ -5676,8 +5867,18 @@ if mode == "--negative-control-core-fixed-window-table-base-accumulator":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "per-hop fixed-window table-base digest must stream across append"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: fixed-window table-base accumulator drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected fixed-window table-base accumulator drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: fixed-window table-base accumulator drift was not detected")
 
@@ -5695,8 +5896,18 @@ if mode == "--negative-control-core-append-boundary-accumulator":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "append-boundary digest must not feed back into the accumulator digest"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append-boundary accumulator drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append-boundary accumulator drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append-boundary accumulator drift was not detected")
 
@@ -5725,8 +5936,18 @@ if mode == "--negative-control-core-previous-accumulator-boundary":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            'field: "append_boundary.previous_accumulator_digest"'
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: previous accumulator boundary drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected previous accumulator boundary drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: previous accumulator boundary drift was not detected")
 
@@ -5868,8 +6089,18 @@ if mode == "--negative-control-core-append-boundary-public-inputs-refresh":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "refresh_append_boundary_digest(&mut self_consistent_forged_public_inputs);"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append-boundary public inputs refresh drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append-boundary public inputs refresh drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: append-boundary public inputs refresh drift was not detected"
@@ -5900,8 +6131,18 @@ if mode == "--negative-control-core-append-boundary-verifier-context-refresh":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            'field: "append_boundary.verifier_params_fingerprint"'
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append-boundary verifier context refresh drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append-boundary verifier context refresh drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: append-boundary verifier context refresh drift was not detected"
@@ -5932,8 +6173,18 @@ if mode == "--negative-control-core-append-boundary-hop-count-refresh":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "refresh_append_boundary_digest(&mut self_consistent_forged_hop_count);"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append-boundary hop-count refresh drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append-boundary hop-count refresh drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: append-boundary hop-count refresh drift was not detected"
@@ -5979,8 +6230,18 @@ if mode == "--negative-control-core-append-boundary-digest-match":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "append_boundary.append_boundary_digest != accumulator.append_boundary_digest"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append-boundary digest match drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append-boundary digest match drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append-boundary digest match drift was not detected")
 
@@ -6054,8 +6315,18 @@ if mode == "--negative-control-core-append-digest-unchecked-surface":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "unchecked append digest helper must remain private: "
+            "kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append digest unchecked surface drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append digest unchecked surface drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append digest unchecked surface drift was not detected")
 
@@ -6084,8 +6355,18 @@ if mode == "--negative-control-core-append-digest-wrapper-bypass":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "append opening preflight public digest wrapper is missing ordered preverification step: "
+            "preflight.validate_context()?;"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append digest wrapper bypass drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append digest wrapper bypass drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append digest wrapper bypass drift was not detected")
 
@@ -6103,8 +6384,18 @@ if mode == "--negative-control-core-append-boundary-profile-comparison":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected_prefix = "append boundary transition-profile comparison fields drifted;"
+        expected_actual = (
+            "'fixed_window_table_schedule_digest', 'fixed_window_shared_table_manifest_digest']"
+        )
+        if expected_prefix not in message or expected_actual not in message:
+            raise SystemExit(
+                "negative control failed: append-boundary profile comparison drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append-boundary profile comparison drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append-boundary profile comparison drift was not detected")
 
@@ -6130,8 +6421,20 @@ if mode == "--negative-control-core-recursive-public-input-schema-order":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected_prefix = "recursive aggregation public-input schema order drifted;"
+        expected_actual = (
+            "'append_boundary_digest_limb0', 'append_boundary_digest_limb1', "
+            "'append_boundary_digest_limb2', 'append_boundary_digest_limb3', "
+            "'append_opening_preflight_digest_limb0'"
+        )
+        if expected_prefix not in message or expected_actual not in message:
+            raise SystemExit(
+                "negative control failed: recursive public-input schema order drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected recursive public-input schema order drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: recursive public-input schema order drift was not detected")
 
@@ -6149,8 +6452,18 @@ if mode == "--negative-control-core-recursive-public-input-index-map":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "recursive aggregation public-input index map drifted: "
+            "KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX expected 48 actual 44"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: recursive public-input index map drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected recursive public-input index map drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: recursive public-input index map drift was not detected")
 
@@ -6182,8 +6495,20 @@ if mode == "--negative-control-core-recursive-public-input-value-order":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected_prefix = "recursive aggregation public-input value builder order drifted;"
+        expected_actual = (
+            "'append_boundary_limbs[0]', 'append_boundary_limbs[1]', "
+            "'append_boundary_limbs[2]', 'append_boundary_limbs[3]', "
+            "'append_opening_preflight_limbs[0]'"
+        )
+        if expected_prefix not in message or expected_actual not in message:
+            raise SystemExit(
+                "negative control failed: recursive public-input value order drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected recursive public-input value order drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: recursive public-input value order drift was not detected")
 
@@ -6201,8 +6526,20 @@ if mode == "--negative-control-core-recursive-public-input-nonzero-groups":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected_prefix = "recursive aggregation non-zero public field groups drifted;"
+        expected_actual = (
+            "actual=[[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], "
+            "[12, 13, 14, 15], [16, 17, 18, 19], [20, 21, 22, 23], "
+            "[24, 25, 26, 27], [28, 29, 30, 31], [28, 29, 30, 31]]"
+        )
+        if expected_prefix not in message or expected_actual not in message:
+            raise SystemExit(
+                "negative control failed: recursive public-input nonzero group drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected recursive public-input nonzero group drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: recursive public-input nonzero group drift was not detected")
 
@@ -6228,8 +6565,19 @@ if mode == "--negative-control-core-recursive-append-semantic-nonzero-groups":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected_prefix = "append recursive verifier-slice semantic non-zero groups drifted;"
+        expected_actual = (
+            "('KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX', "
+            "'append-boundary digest')"
+        )
+        if expected_prefix not in message or expected_actual not in message:
+            raise SystemExit(
+                "negative control failed: append semantic nonzero group drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append semantic nonzero group drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append semantic nonzero group drift was not detected")
 
@@ -6251,8 +6599,18 @@ if mode == "--negative-control-core-vesta-ipa-h-fold":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_rejects_h_generator_fold_splice"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: non-native Vesta IPA H-fold drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected non-native Vesta IPA H-fold drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: non-native Vesta IPA H-fold drift was not detected")
 
@@ -6274,8 +6632,18 @@ if mode == "--negative-control-core-vesta-ipa-g-fold":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_generator_fold_splice"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: non-native Vesta IPA G-fold drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected non-native Vesta IPA G-fold drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: non-native Vesta IPA G-fold drift was not detected")
 
@@ -6375,8 +6743,18 @@ if mode == "--negative-control-core-opening-preflight-splices":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "pub struct KagemushaRecursiveSpendLineageAppendOpeningPreflight {"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: append opening-preflight splice drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected append opening-preflight splice drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: append opening-preflight splice drift was not detected")
 
@@ -6394,8 +6772,18 @@ if mode == "--negative-control-core-current-hop-opening-metadata-splice":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "metadata-spliced current-hop opening archive must reject"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: current-hop opening metadata splice drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected current-hop opening metadata splice drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: current-hop opening metadata splice drift was not detected")
 
@@ -6483,8 +6871,18 @@ if mode == "--negative-control-core-one-hop-verifier-slice-evidence-binding":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "one-hop verifier-slice evidence binding must reject params fingerprint splice"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: one-hop verifier-slice evidence binding drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected one-hop verifier-slice evidence binding drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: one-hop verifier-slice evidence binding drift was not detected")
 
@@ -6502,8 +6900,18 @@ if mode == "--negative-control-core-fold-overlap-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "record-backed cross-hop overlap error should come before proof decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: checked-fold overlap predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected checked-fold overlap predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: checked-fold overlap predecode drift was not detected")
 
@@ -6521,8 +6929,18 @@ if mode == "--negative-control-core-fold-public-input-binding":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "direct public-input binding mismatch must reject before proof verification"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: checked-fold public-input binding drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected checked-fold public-input binding drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: checked-fold public-input binding drift was not detected")
 
@@ -6542,8 +6960,18 @@ if mode == "--negative-control-core-fold-public-input-preverify-order":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "checked-fold direct public-input preverification path is missing ordered preverification step: "
+            "verified_steps.push(kagemusha_verified_fold_step(step)?);"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: checked-fold public-input preverification order drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected checked-fold public-input preverification order drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: checked-fold public-input preverification order drift was not detected")
 
@@ -6573,8 +7001,18 @@ if mode == "--negative-control-core-record-backed-fold-public-input-preverify-or
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "record-backed checked-fold public-input preverification path is missing ordered preverification step: "
+            "validate_required_kagemusha_confidential_v2_step_public_inputs("
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: record-backed checked-fold public-input preverification order drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected record-backed checked-fold public-input preverification order drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: record-backed checked-fold public-input preverification order drift was not detected"
@@ -6594,8 +7032,18 @@ if mode == "--negative-control-core-lineage-witness-fold-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "lineage witness root-continuity error should come before Pallas archive decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness fold predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness fold predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness fold predecode drift was not detected")
 
@@ -6613,8 +7061,18 @@ if mode == "--negative-control-core-lineage-witness-record-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "lineage witness verifier-record error should come before Pallas archive decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness verifier-record predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness verifier-record predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness verifier-record predecode drift was not detected")
 
@@ -6632,8 +7090,18 @@ if mode == "--negative-control-core-lineage-witness-count-mismatch-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "current-note count mismatch: expected 2, found 1"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness count mismatch predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness count mismatch predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness count mismatch predecode drift was not detected")
 
@@ -6700,8 +7168,18 @@ if mode == "--negative-control-core-lineage-witness-malformed-envelope-archive":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "fn kagemusha_recursive_spend_lineage_witness_rejects_malformed_envelope_archive"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness malformed envelope archive drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness malformed envelope archive drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness malformed envelope archive drift was not detected")
 
@@ -6719,8 +7197,18 @@ if mode == "--negative-control-core-lineage-witness-note-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "lineage witness current-note error should come before Pallas archive decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness current-note predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness current-note predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness current-note predecode drift was not detected")
 
@@ -6738,8 +7226,18 @@ if mode == "--negative-control-core-lineage-witness-note-binding-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "lineage witness current-note binding error should come before Pallas archive decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness current-note binding predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness current-note binding predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness current-note binding predecode drift was not detected")
 
@@ -6757,8 +7255,18 @@ if mode == "--negative-control-core-lineage-witness-current-note-invariants":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "current note 0 spend nullifier must be non-zero"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness current-note invariant drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness current-note invariant drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness current-note invariant drift was not detected")
 
@@ -6776,8 +7284,18 @@ if mode == "--negative-control-core-lineage-witness-handoff-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "lineage witness append-handoff error should come before Pallas archive decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness append-handoff predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness append-handoff predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness append-handoff predecode drift was not detected")
 
@@ -6795,8 +7313,18 @@ if mode == "--negative-control-core-lineage-witness-duplicate-current-note":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "current note 2 spend nullifier is duplicated"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness duplicate current-note drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness duplicate current-note drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness duplicate current-note drift was not detected")
 
@@ -6814,8 +7342,18 @@ if mode == "--negative-control-core-lineage-witness-final-bundle-context":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "hop count 1 does not match redeem bundle hop count 2"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness final-bundle context drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness final-bundle context drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness final-bundle context drift was not detected")
 
@@ -6833,8 +7371,18 @@ if mode == "--negative-control-core-lineage-witness-final-bundle-predecode":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "lineage witness final-bundle error should come before Pallas archive decoding"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: lineage witness final-bundle predecode drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected lineage witness final-bundle predecode drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: lineage witness final-bundle predecode drift was not detected")
 
@@ -6852,8 +7400,18 @@ if mode == "--negative-control-core-recursive-compact-public-instance-shape":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "recursive compact token multi-row public instances must reject"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: recursive compact public instance shape drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected recursive compact public instance shape drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: recursive compact public instance shape drift was not detected")
 
@@ -7057,8 +7615,18 @@ if mode == "--negative-control-core-recursive-spend-compact-projection-token":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection("
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: recursive spend compact projection token drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected recursive spend compact projection token drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: recursive spend compact projection token drift was not detected")
 
@@ -7076,8 +7644,18 @@ if mode == "--negative-control-bridge-recursive-compact-public-instance-shape":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: bridge recursive compact public instance shape drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected bridge recursive compact public instance shape drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: bridge recursive compact public instance shape drift was not detected")
 
@@ -7153,8 +7731,18 @@ if mode == "--negative-control-bridge-recursive-compact-pallas-metadata":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: bridge recursive compact Pallas metadata drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected bridge recursive compact Pallas metadata drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: bridge recursive compact Pallas metadata drift was not detected")
 
@@ -7172,8 +7760,18 @@ if mode == "--negative-control-bridge-recursive-compact-vk-hash":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: bridge recursive compact verifier-key hash drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected bridge recursive compact verifier-key hash drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: bridge recursive compact verifier-key hash drift was not detected")
 
@@ -7249,8 +7847,18 @@ if mode == "--negative-control-js-host-recursive-compact-vk-hash":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "recursive compact token with forged verifier-key hash must reject"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS host recursive compact verifier-key hash drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JS host recursive compact verifier-key hash drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS host recursive compact verifier-key hash drift was not detected")
 
@@ -7326,8 +7934,18 @@ if mode == "--negative-control-js-host-recursive-compact-pallas-metadata":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "recursive compact prover must reject forged multi-hop Pallas metadata"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS host recursive compact Pallas metadata drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JS host recursive compact Pallas metadata drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS host recursive compact Pallas metadata drift was not detected")
 
@@ -7345,8 +7963,18 @@ if mode == "--negative-control-js-host-recursive-compact-public-instance-shape":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "JS host recursive compact verifier must reject multi-row public instances"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS host recursive compact public instance shape drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JS host recursive compact public instance shape drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS host recursive compact public instance shape drift was not detected")
 
@@ -7368,8 +7996,18 @@ if mode == "--negative-control-js-host-kagemusha-archive-cap":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS host Kagemusha archive cap drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JS host Kagemusha archive cap drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS host Kagemusha archive cap drift was not detected")
 
@@ -7392,8 +8030,18 @@ if mode == "--negative-control-js-host-append-boundary-current-output-set":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "JS host append-boundary helper must reject duplicate current-hop outputs"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS host append-boundary current-hop output-set drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JS host append-boundary current-hop output-set drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS host append-boundary current-hop output-set drift was not detected")
 
@@ -7411,8 +8059,18 @@ if mode == "--negative-control-python-recursive-compact-vk-hash":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "recursive compact token with forged verifier-key hash must reject"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive compact verifier-key hash drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python recursive compact verifier-key hash drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python recursive compact verifier-key hash drift was not detected")
 
@@ -7488,8 +8146,18 @@ if mode == "--negative-control-python-recursive-compact-pallas-metadata":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "recursive compact prover must reject forged multi-hop Pallas metadata"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive compact Pallas metadata drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python recursive compact Pallas metadata drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python recursive compact Pallas metadata drift was not detected")
 
@@ -7507,8 +8175,18 @@ if mode == "--negative-control-python-recursive-compact-public-instance-shape":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "Python recursive compact verifier must reject multi-row public instances"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive compact public instance shape drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python recursive compact public instance shape drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python recursive compact public instance shape drift was not detected")
 
@@ -7530,8 +8208,18 @@ if mode == "--negative-control-python-kagemusha-archive-cap":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python Kagemusha archive cap drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python Kagemusha archive cap drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python Kagemusha archive cap drift was not detected")
 
@@ -7607,8 +8295,18 @@ if mode == "--negative-control-fixed-window-manifest-digest-splice":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage one-hop/append profile split coverage: "
+            "manifest row splice must change digest"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: fixed-window manifest digest splice drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected fixed-window manifest digest splice drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: fixed-window manifest digest splice drift was not detected")
 
@@ -7626,8 +8324,18 @@ if mode == "--negative-control-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected fail-closed workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: workflow path drift was not detected")
 
@@ -7645,8 +8353,18 @@ if mode == "--negative-control-js-package-dist-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "javascript/iroha_js/test/package_dist.test.js"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JS package-dist workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JS package-dist workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS package-dist workflow path drift was not detected")
 
@@ -7664,8 +8382,18 @@ if mode == "--negative-control-core-isi-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: core ISI workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected core ISI workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: core ISI workflow path drift was not detected")
 
@@ -7683,8 +8411,18 @@ if mode == "--negative-control-payload-script-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload reducer script workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload reducer script workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload reducer script workflow path drift was not detected")
 
@@ -7702,8 +8440,18 @@ if mode == "--negative-control-ci-guard-script-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "ci/check_connect_norito_bridge_header.sh"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: CI guard script workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected CI guard script workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: CI guard script workflow path drift was not detected")
 
@@ -7721,8 +8469,15 @@ if mode == "--negative-control-payload-self-test-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the payload reducer self-test before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload reducer self-test drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload reducer self-test workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload reducer self-test drift was not detected")
 
@@ -7743,8 +8498,15 @@ if mode == "--negative-control-payload-self-test-order-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the payload reducer self-test before the real benchmark"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload reducer self-test ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload reducer self-test ordering drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload reducer self-test ordering drift was not detected")
 
@@ -7762,8 +8524,15 @@ if mode == "--negative-control-payload-missing-payload-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the missing payload negative control before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: missing-payload reducer workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected missing-payload reducer workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: missing-payload reducer workflow drift was not detected")
 
@@ -7781,8 +8550,15 @@ if mode == "--negative-control-payload-negative-controls-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the transition-profile growth negative control before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload reducer negative-control drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload reducer negative-control workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload reducer negative-control drift was not detected")
 
@@ -7800,8 +8576,15 @@ if mode == "--negative-control-reserved-lineage-payload-negative-controls-workfl
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the Reserved-lineage payload growth negative control before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Reserved-lineage payload reducer drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Reserved-lineage payload reducer workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Reserved-lineage payload reducer drift was not detected")
 
@@ -7819,8 +8602,15 @@ if mode == "--negative-control-payload-hop-list-negative-controls-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the duplicate expected-hop negative control before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload hop-list reducer drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload hop-list reducer workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload hop-list reducer drift was not detected")
 
@@ -7838,8 +8628,15 @@ if mode == "--negative-control-payload-benchmark-name-negative-controls-workflow
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the malformed payload benchmark-name negative control before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload benchmark-name reducer drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload benchmark-name reducer workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload benchmark-name reducer drift was not detected")
 
@@ -7857,8 +8654,15 @@ if mode == "--negative-control-payload-negative-controls-comment-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the transition-profile growth negative control before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: commented payload reducer command drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected commented payload reducer command drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: commented payload reducer command drift was not detected")
 
@@ -7881,8 +8685,15 @@ if mode == "--negative-control-payload-negative-controls-order-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the transition-profile growth negative control before the real benchmark"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload reducer negative-control ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload reducer negative-control ordering drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload reducer negative-control ordering drift was not detected")
 
@@ -7900,8 +8711,18 @@ if mode == "--negative-control-payload-benchmark-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload benchmark workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload benchmark workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload benchmark workflow path drift was not detected")
 
@@ -7919,8 +8740,18 @@ if mode == "--negative-control-payload-benchmark-manifest-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover fail-closed policy sources: "
+            "crates/iroha_data_model/Cargo.toml"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: payload benchmark manifest workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected payload benchmark manifest workflow path drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: payload benchmark manifest workflow path drift was not detected")
 
@@ -7999,8 +8830,18 @@ if mode == "--negative-control-doc-payload-budget":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: "
+            "fixed-proof recursive spend bundle at 1,751 bytes"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: documented payload budget drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected documented payload budget drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: documented payload budget drift was not detected")
 
@@ -8018,8 +8859,18 @@ if mode == "--negative-control-doc-sdk-host-boundary":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: "
+            "the native bridge and SDK append wrappers validate the metadata tuple"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: documented SDK host-boundary drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected documented SDK host-boundary drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: documented SDK host-boundary drift was not detected")
 
@@ -8033,8 +8884,19 @@ if mode == "--negative-control-doc-sdk-availability-surface":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: "
+            "native availability probes: init, append, both transition-profile helpers, the append-boundary helper, "
+            "both lineage-witness helpers, verify, and redeem must be callable"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: documented SDK availability surface drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected documented SDK availability surface drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: documented SDK availability surface drift was not detected")
 
@@ -8048,8 +8910,15 @@ if mode == "--negative-control-doc-abi-entry-count":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "docs/source/offline_kagemusha.md contains stale ABI-6 eight-entry wording"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: documented ABI-6 entry-count drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected documented ABI-6 entry-count drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: documented ABI-6 entry-count drift was not detected")
 
@@ -8067,8 +8936,19 @@ if mode == "--negative-control-roadmap-abi-surface":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "roadmap.md is missing complete recursive spend ABI-6 surface documentation: "
+            "Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile helpers, "
+            "append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: roadmap ABI-6 surface drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected roadmap ABI-6 surface drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: roadmap ABI-6 surface drift was not detected")
 
@@ -8086,8 +8966,15 @@ if mode == "--negative-control-policy-negative-controls-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the policy core redeem execution-order negative control"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: policy negative-control workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected policy negative-control workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: policy negative-control workflow drift was not detected")
 
@@ -8105,8 +8992,15 @@ if mode == "--negative-control-policy-negative-controls-comment-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the policy core redeem execution-order negative control"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: commented policy command drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected commented policy command drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: commented policy command drift was not detected")
 
@@ -8126,8 +9020,15 @@ if mode == "--negative-control-policy-negative-controls-order-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the policy core redeem execution-order negative control before the main policy guard"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: policy negative-control ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected policy negative-control ordering drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: policy negative-control ordering drift was not detected")
 
@@ -8145,8 +9046,15 @@ if mode == "--negative-control-header-negative-controls-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the NoritoBridge bad recursive header signature negative control"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: header negative-control workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected header negative-control workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: header negative-control workflow drift was not detected")
 
@@ -8164,8 +9072,15 @@ if mode == "--negative-control-python-sdk-test-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the Python recursive spend SDK tests before benchmarking"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK test workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK test workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK test workflow drift was not detected")
 
@@ -8183,8 +9098,18 @@ if mode == "--negative-control-core-isi":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "fn kagemusha_recursive_redeem_rejects_semantic_recursive_spend_before_mint"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: core ISI coverage drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected core ISI redemption coverage drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: core ISI coverage drift was not detected")
 
@@ -8202,8 +9127,18 @@ if mode == "--negative-control-core-multi-hop-redeem-success":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "fn kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: multi-hop redeem success coverage drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected multi-hop redeem success coverage drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: multi-hop redeem success coverage drift was not detected")
 
@@ -8221,8 +9156,18 @@ if mode == "--negative-control-core-lineage-hop-proof":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            "fn kagemusha_recursive_redeem_rejects_malformed_lineage_hop_proof_before_mint"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: malformed lineage hop proof coverage drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected malformed lineage hop proof coverage drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: malformed lineage hop proof coverage drift was not detected")
 
@@ -8240,8 +9185,18 @@ if mode == "--negative-control-core-redeem-order":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "recursive Kagemusha redeem execution order no longer gates mint behind lineage, proof, and nullifier checks: "
+            "missing state_transaction.register_confidential_proof(self.redeem_proof.proof.bytes.len())"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: core redeem execution-order drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected core redeem execution-order drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: core redeem execution-order drift was not detected")
 
@@ -8263,8 +9218,18 @@ if mode == "--negative-control-core-redeem-early-mint":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = (
+            "recursive Kagemusha redeem must have exactly one production mint construction after all lineage, proof, "
+            "and nullifier gates; found 2"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: early core redeem mint drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected early core redeem mint drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: early core redeem mint drift was not detected")
 
@@ -8282,8 +9247,15 @@ if mode == "--negative-control-status-doc-drift":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "status.md contains stale one-hop witnessless chain-redemption boundary"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: status documentation drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected status documentation drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: status documentation drift was not detected")
 
@@ -8301,8 +9273,15 @@ if mode == "--negative-control-workflow-cancel-in-progress":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must not cancel in-progress runs; long proof/benchmark evidence must be allowed to finish"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: workflow cancellation drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected workflow cancellation drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: workflow cancellation drift was not detected")
 
@@ -8320,29 +9299,67 @@ if mode == "--negative-control-main-guards-workflow":
     try:
         run_checks()
     except PolicyError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the main Kagemusha recursive spend SDK parity guard"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: main guard workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected main guard workflow drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: main guard workflow drift was not detected")
 
 if mode == "--negative-control-verify-result-flags":
     target = "crates/iroha_core/src/zk.rs"
-    source = read(target)
-    mutated = source.replace(
-        "let lineage_witness_required_for_redeem = !witnessless_redeem_supported;",
-        "let lineage_witness_required_for_redeem = false;",
-        1,
+    cases = (
+        (
+            "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n            &bundle.recursive_proof.verifier_key_id.name,\n            bundle.accumulator.hop_count,",
+            "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n            &bundle.recursive_proof.verifier_key_id.name,\n            0,",
+            "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n            &bundle.recursive_proof.verifier_key_id.name,\n            bundle.accumulator.hop_count,",
+        ),
+        (
+            "let lineage_witness_required_for_redeem = !witnessless_redeem_supported;",
+            "let lineage_witness_required_for_redeem = false;",
+            "let lineage_witness_required_for_redeem = !witnessless_redeem_supported;",
+        ),
+        (
+            "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n                &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,\n                two_hop_lineage_bundle.accumulator.hop_count,",
+            "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n                &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,\n                1,",
+            "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\n                &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,\n                two_hop_lineage_bundle.accumulator.hop_count,",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate verify-result fail-closed flags")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        print("negative control rejected verify-result fail-closed flag drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: verify-result flag drift was not detected")
+    first_message = None
+    for before, after, label in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(f"negative control failed: unable to mutate verify-result fail-closed flags: {before}")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: verify-result flag drift was not detected for "
+                    + label
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: verify-result flag drift was not detected for "
+            + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: verify-result flag drift was not detected")
+    print("negative control rejected verify-result fail-closed flag drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode:
     raise SystemExit(f"unknown mode: {mode}")

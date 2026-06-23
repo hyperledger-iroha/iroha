@@ -184,7 +184,9 @@ def _sha256_text_file_with_size(
     return digest.hexdigest(), size, text, []
 
 
-def _validate_generated_at_utc(value: str) -> list[str]:
+def _validate_generated_at_utc(value: Any) -> list[str]:
+    if not isinstance(value, str) or value == "":
+        return ["--generated-at-utc must be a non-empty string"]
     if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
         return ["--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ"]
     return []
@@ -192,8 +194,13 @@ def _validate_generated_at_utc(value: str) -> list[str]:
 
 def _validate_generated_at_future_skew(
     generated_at: dt.datetime | None,
-    max_future_skew_seconds: int,
+    max_future_skew_seconds: Any,
 ) -> list[str]:
+    if isinstance(max_future_skew_seconds, bool) or not isinstance(
+        max_future_skew_seconds,
+        int,
+    ):
+        return ["--max-generated-at-future-skew-seconds must be a non-negative integer"]
     if max_future_skew_seconds < 0:
         return ["--max-generated-at-future-skew-seconds must be non-negative"]
     if generated_at is None:
@@ -353,9 +360,9 @@ def build_evidence(
     *,
     artifact_dir: Path,
     command: str,
-    generated_at_utc: str,
+    generated_at_utc: Any,
     generator_log_path: Path | None = None,
-    max_generated_at_future_skew_seconds: int = (
+    max_generated_at_future_skew_seconds: Any = (
         readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS
     ),
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -371,13 +378,16 @@ def build_evidence(
     )
     errors = []
     errors.extend(generator_log_shape_errors)
-    errors.extend(_validate_generated_at_utc(generated_at_utc))
-    generated_at, timestamp_error = readiness.parse_utc_timestamp(
-        generated_at_utc,
-        "--generated-at-utc",
-    )
-    if timestamp_error is not None:
-        errors.append(timestamp_error["message"])
+    generated_at_errors = _validate_generated_at_utc(generated_at_utc)
+    errors.extend(generated_at_errors)
+    generated_at: dt.datetime | None = None
+    if not generated_at_errors:
+        generated_at, timestamp_error = readiness.parse_utc_timestamp(
+            generated_at_utc,
+            "--generated-at-utc",
+        )
+        if timestamp_error is not None:
+            errors.append(timestamp_error["message"])
     errors.extend(
         _validate_generated_at_future_skew(
             generated_at,

@@ -82,6 +82,7 @@ import {
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaOfflineSpendModeForCapabilities,
+  buildKagemushaRecursiveSpendableNoteDescriptor,
   buildKagemushaRecursiveSpendVerifierRecordRef,
   kagemushaRecursiveSpendLineageKeyArtifacts,
   kagemushaRecursiveSpendLineageKeyArtifactsForAppend,
@@ -3880,6 +3881,338 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
   );
 });
 
+test("package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const previousProofOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  const initVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0xa1,
+  );
+  const initProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    initVerifierKey,
+    0xa2,
+  );
+  const appendVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    0xa3,
+  );
+  const appendProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    appendVerifierKey,
+    0xa4,
+  );
+  const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  assert.ok(
+    Buffer.isBuffer(
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageVerifierKey: initVerifierKey,
+        lineageProvingKeyArchive: initProvingKey,
+      }),
+    ),
+  );
+  assert.ok(
+    Buffer.isBuffer(
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageVerifierKey: appendVerifierKey,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    ),
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageProvingKeyArchive: initProvingKey,
+      }),
+    /lineageVerifierKey/,
+    "package dist accepted init raw lineage proving key without verifier key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageVerifierKey: initVerifierKey,
+      }),
+    /lineageProvingKeyArchive/,
+    "package dist accepted init raw lineage verifier key without proving key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageVerifierKey: initVerifierKey,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    /lineageKeyArtifacts/,
+    "package dist accepted init raw lineage key profile mismatch",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        lineageVerifierKey: appendVerifierKey,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    /previousProofOpenEnvelopes/,
+    "package dist accepted append raw lineage keys without previous proof openings",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    /lineageVerifierKey/,
+    "package dist accepted append raw lineage proving key without verifier key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageVerifierKey: appendVerifierKey,
+      }),
+    /lineageProvingKeyArchive/,
+    "package dist accepted append raw lineage verifier key without proving key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageVerifierKey: appendVerifierKey,
+        lineageProvingKeyArchive: initProvingKey,
+      }),
+    /lineageKeyArtifacts/,
+    "package dist accepted append raw lineage key profile mismatch",
+  );
+});
+
+test("package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord: {
+          verifierKeyId: "malformedPreviousLineageRecordBeforeOpeningsPackageDist",
+          recordBytes: Buffer.from([0]),
+        },
+        previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2),
+      }),
+    /previousLineageVerifierRecord/,
+    "package dist checked previous-proof openings before parsing previous lineage record",
+  );
+});
+
+test("package dist Kagemusha recursive spend typed requests reject malformed Pallas opening archives before native dispatch", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const previousProofOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  const initVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0x95,
+  );
+  const initProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    initVerifierKey,
+    0x96,
+  );
+  const appendVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    0x97,
+  );
+  const appendProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    appendVerifierKey,
+    0x98,
+  );
+  const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  const malformedPallasOpenEnvelopes = [
+    Buffer.from([1, 2, 3]),
+    syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72),
+    syntheticPallasOpenEnvelopesArchive(2),
+    syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false }),
+  ];
+  for (const malformedPallasOpenEnvelopesArchive of malformedPallasOpenEnvelopes) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendInitRequest({
+          recordBundle,
+          pallasOpenEnvelopes: malformedPallasOpenEnvelopesArchive,
+          currentNote,
+          lineageVerifierKey: initVerifierKey,
+          lineageProvingKeyArchive: initProvingKey,
+        }),
+      /pallasOpenEnvelopes/,
+      "package dist accepted malformed init Pallas open-envelope archive",
+    );
+  }
+  for (const malformedPallasOpenEnvelopesArchive of malformedPallasOpenEnvelopes) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes: malformedPallasOpenEnvelopesArchive,
+          currentNote,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes,
+          lineageVerifierKey: appendVerifierKey,
+          lineageProvingKeyArchive: appendProvingKey,
+        }),
+      /pallasOpenEnvelopes/,
+      "package dist accepted malformed append Pallas open-envelope archive",
+    );
+  }
+  for (const malformedPreviousProofOpenEnvelopes of malformedPallasOpenEnvelopes) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes,
+          lineageVerifierKey: appendVerifierKey,
+          lineageProvingKeyArchive: appendProvingKey,
+        }),
+      /previousProofOpenEnvelopes/,
+      "package dist accepted malformed previous-proof Pallas open-envelope archive",
+    );
+  }
+});
+
+test("package dist Kagemusha recursive spend typed requests reject malformed amount vectors before native dispatch", () => {
+  const packageDistInvalidPositiveU128Amounts = [
+    "",
+    "0",
+    "00",
+    "01",
+    "0007",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    "7 ",
+    " 7",
+    String(1n << 128n),
+  ];
+  for (const amount of packageDistInvalidPositiveU128Amounts) {
+    assert.throws(
+      () =>
+        buildKagemushaRecursiveSpendableNoteDescriptor({
+          noteCommitment: Buffer.alloc(32, 0x21),
+          spendNullifier: Buffer.alloc(32, 0x22),
+          amount,
+        }),
+      /amount|u128|positive decimal/,
+      `package dist accepted malformed note amount ${JSON.stringify(amount)}`,
+    );
+  }
+
+  const redeemProof = syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x98);
+  const packageDistInvalidPublicAmounts = [
+    "",
+    "0",
+    "00",
+    "01",
+    "0007",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    "7 ",
+    " 7",
+    String(1n << 128n),
+  ];
+  for (const publicAmount of packageDistInvalidPublicAmounts) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recipient: "dist-recipient",
+          publicAmount,
+          redeemProof,
+        }),
+      /publicAmount|u128|positive decimal/,
+      `package dist accepted malformed publicAmount ${JSON.stringify(publicAmount)}`,
+    );
+  }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recipient: "dist-recipient",
+        public_amount: "0007",
+        redeemProof,
+      }),
+    /publicAmount|positive decimal/,
+  );
+});
+
 test("package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch", () => {
   const recordBundle = syntheticKagemushaRecordBundleArchive();
   const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
@@ -7622,7 +7955,7 @@ test("package declarations keep accumulator digests native-owned", () => {
   const accumulatorDigestDeclarationPattern =
     /\b[A-Za-z0-9_]*(?:lineageDigest|LineageDigest|lineage_digest|aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|proofChainDigest|ProofChainDigest|proof_chain_digest|transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|accumulatorDigest|AccumulatorDigest|accumulator_digest)/u;
   const accumulatorMaterialDeclarationPattern =
-    /\b[A-Za-z0-9_]*(?:lineageAccumulator|LineageAccumulator|lineage_accumulator|recursiveProofChain|RecursiveProofChain|recursive_proof_chain|proofChain|ProofChain|proof_chain|appendAccumulator|AppendAccumulator|append_accumulator|recursiveAccumulator|RecursiveAccumulator|recursive_accumulator|terminalAccumulator|TerminalAccumulator|terminal_accumulator|walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain|accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot|recursiveProofState|RecursiveProofState|recursive_proof_state|lineageProofState|LineageProofState|lineage_proof_state|accumulatorState|AccumulatorState|accumulator_state)/u;
+    /\b[A-Za-z0-9_]*(?:lineageAccumulator|LineageAccumulator|lineage_accumulator|recursiveProofChain|RecursiveProofChain|recursive_proof_chain|proofChain|ProofChain|proof_chain|appendAccumulator|AppendAccumulator|append_accumulator|recursiveAccumulator|RecursiveAccumulator|recursive_accumulator|terminalAccumulator|TerminalAccumulator|terminal_accumulator|walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain|accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot|recursiveSnapshot|RecursiveSnapshot|recursive_snapshot|lineageSnapshot|LineageSnapshot|lineage_snapshot|proofState|ProofState|proof_state|recursiveProofState|RecursiveProofState|recursive_proof_state|lineageProofState|LineageProofState|lineage_proof_state|accumulatorState|AccumulatorState|accumulator_state)/u;
   for (const forbiddenName of [
     "lineageDigestV1",
     "LineageDigestBytes",
@@ -7697,6 +8030,7 @@ test("package declarations keep accumulator digests native-owned", () => {
     "WalletRecursiveProofChainBytes",
     "wallet_recursive_proof_chain",
     "wallet_recursive_proof_chain_bytes",
+    "recursiveProofChainBytes",
     "inputTerminalAccumulator",
     "staleWalletRecursiveProofChain",
     "nativeAppendAccumulatorState",
@@ -7723,6 +8057,15 @@ test("package declarations keep accumulator digests native-owned", () => {
     "accumulatorSnapshot",
     "AccumulatorSnapshotBytes",
     "accumulator_snapshot_v1",
+    "recursiveSnapshot",
+    "RecursiveSnapshotBytes",
+    "recursive_snapshot_v1",
+    "lineageSnapshot",
+    "LineageSnapshotBytes",
+    "lineage_snapshot_v1",
+    "proofState",
+    "ProofStateBytes",
+    "proof_state_v1",
     "recursiveProofState",
     "RecursiveProofStateBytes",
     "recursive_proof_state_v1",

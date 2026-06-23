@@ -95,9 +95,12 @@ PROFILE_SIGNATURE_POLICIES = {
 }
 PROFILE_REFERENCE_DATASETS = {"bic-lei", "isin-cusip", "mic-directory"}
 PROFILE_ADDRESS_MODES = {"permissive", "require-structured", "forbid-unstructured"}
+OCSP_BASIC_RESPONSE_OID_DER = b"\x2b\x06\x01\x05\x05\x07\x30\x01\x01"
 MAX_PROFILE_DER_BLOBS = 8
 MAX_PROFILE_DER_BYTES = 1024 * 1024
 MAX_PROFILE_DER_BASE64_CHARS = ((MAX_PROFILE_DER_BYTES + 2) // 3) * 4
+MAX_PROFILE_MINOR_UNITS = 4
+MAX_PROFILE_UNSIGNED_INT = (1 << 64) - 1
 MAX_MANIFEST_JSON_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_SCHEMA_BYTES = 8 * 1024 * 1024
@@ -659,35 +662,36 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_output_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise FixtureManifestError(f"{path.parent} must be a directory") from error
+        raise FixtureManifestError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise FixtureManifestError(f"{path.parent} must not be a symlink")
+        raise FixtureManifestError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise FixtureManifestError(f"{path.parent} must be a directory")
+        raise FixtureManifestError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise FixtureManifestError(f"{path} must not be a symlink")
+            raise FixtureManifestError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise FixtureManifestError(f"{path} must be a regular file")
+            raise FixtureManifestError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise FixtureManifestError(f"{path} must not be hard-linked")
+            raise FixtureManifestError(f"{label} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise FixtureManifestError(f"{path.parent} must not be a symlink") from error
-        raise FixtureManifestError(f"{path.parent} must be a directory") from error
+            raise FixtureManifestError(f"{label} must not be a symlink") from error
+        raise FixtureManifestError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -701,16 +705,16 @@ def _write_text_output(path: Path, text: str) -> None:
         except OSError as error:
             if error.errno == errno.ELOOP:
                 raise FixtureManifestError(
-                    f"{path} temp file must not be a symlink"
+                    f"{label} temp file must not be a symlink"
                 ) from error
             raise FixtureManifestError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise FixtureManifestError(f"{path} temp file must be a regular file")
+            raise FixtureManifestError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise FixtureManifestError(f"{path} temp file must not be hard-linked")
+            raise FixtureManifestError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -1374,6 +1378,8 @@ def _optional_nonnegative_int(value: dict[str, Any], key: str, label: str) -> in
     raw = value.get(key)
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
         raise FixtureManifestError(f"{label}.{key} must be a non-negative integer when set")
+    if raw > MAX_PROFILE_UNSIGNED_INT:
+        raise FixtureManifestError(f"{label}.{key} must fit in u64")
     return raw
 
 
@@ -1482,18 +1488,36 @@ def _optional_canonical_base64_list(
                 f"{MAX_PROFILE_DER_BYTES} bytes"
             )
         _require_der_sequence(decoded, f"{label}.{key}[{offset}]")
+        if key == "x509_crl_der_base64":
+            _require_der_crl_shape(decoded, f"{label}.{key}[{offset}]")
+        elif key == "x509_ocsp_response_der_base64":
+            _require_der_ocsp_response_shape(decoded, f"{label}.{key}[{offset}]")
         if base64.b64encode(decoded).decode("ascii") != item:
             raise FixtureManifestError(f"{label}.{key}[{offset}] must be canonical padded base64")
     return items
 
 
 def _require_der_sequence(value: bytes, label: str) -> None:
-    if not value or value[0] != 0x30:
+    tag, _full, _content, offset = _read_der_element(value, 0, label)
+    if tag != 0x30:
         raise FixtureManifestError(f"{label} must be a DER SEQUENCE")
-    if len(value) < 2:
-        raise FixtureManifestError(f"{label} has truncated DER length")
+    if offset != len(value):
+        raise FixtureManifestError(
+            f"{label} DER length does not consume the whole value"
+        )
 
-    first_length = value[1]
+
+def _read_der_element(
+    value: bytes,
+    offset: int,
+    label: str,
+) -> tuple[int, bytes, bytes, int]:
+    if offset >= len(value):
+        raise FixtureManifestError(f"{label} has truncated DER element")
+    if len(value) - offset < 2:
+        raise FixtureManifestError(f"{label} has truncated DER length")
+    tag = value[offset]
+    first_length = value[offset + 1]
     header_len = 2
     if first_length < 0x80:
         content_len = first_length
@@ -1501,20 +1525,83 @@ def _require_der_sequence(value: bytes, label: str) -> None:
         length_octets = first_length & 0x7F
         if length_octets == 0 or length_octets > 4:
             raise FixtureManifestError(f"{label} has invalid DER length")
-        if len(value) < 2 + length_octets:
+        if len(value) - offset < 2 + length_octets:
             raise FixtureManifestError(f"{label} has truncated DER length")
-        length_bytes = value[2 : 2 + length_octets]
+        length_start = offset + 2
+        length_bytes = value[length_start : length_start + length_octets]
         if length_bytes[0] == 0:
             raise FixtureManifestError(f"{label} has non-minimal DER length")
         content_len = int.from_bytes(length_bytes, "big")
         if content_len < 0x80:
             raise FixtureManifestError(f"{label} has non-minimal DER length")
         header_len += length_octets
-
-    if header_len + content_len != len(value):
+    content_start = offset + header_len
+    content_end = content_start + content_len
+    if content_end > len(value):
         raise FixtureManifestError(
             f"{label} DER length does not consume the whole value"
         )
+    return (
+        tag,
+        value[offset:content_end],
+        value[content_start:content_end],
+        content_end,
+    )
+
+
+def _require_der_crl_shape(value: bytes, label: str) -> None:
+    tag, _full, content, offset = _read_der_element(value, 0, label)
+    if tag != 0x30 or offset != len(value):
+        raise FixtureManifestError(f"{label} must look like a DER CRL")
+    cursor = 0
+    for expected_tag in (0x30, 0x30, 0x03):
+        tag, _full, _content, cursor = _read_der_element(content, cursor, label)
+        if tag != expected_tag:
+            raise FixtureManifestError(f"{label} must look like a DER CRL")
+    if cursor != len(content):
+        raise FixtureManifestError(f"{label} must look like a DER CRL")
+
+
+def _require_der_ocsp_response_shape(value: bytes, label: str) -> None:
+    tag, _full, content, offset = _read_der_element(value, 0, label)
+    if tag != 0x30 or offset != len(value):
+        raise FixtureManifestError(f"{label} must look like a DER OCSP response")
+    cursor = 0
+    tag, _full, status, cursor = _read_der_element(content, cursor, label)
+    if tag != 0x0A or status != b"\x00":
+        raise FixtureManifestError(
+            f"{label} must look like a successful DER OCSP response"
+        )
+    tag, _full, response_bytes, cursor = _read_der_element(content, cursor, label)
+    if tag != 0xA0 or cursor != len(content):
+        raise FixtureManifestError(
+            f"{label} must look like a successful DER OCSP response"
+        )
+    tag, _full, response_bytes_content, response_cursor = _read_der_element(
+        response_bytes,
+        0,
+        label,
+    )
+    if tag != 0x30 or response_cursor != len(response_bytes):
+        raise FixtureManifestError(
+            f"{label} must look like a successful DER OCSP response"
+        )
+    cursor = 0
+    tag, _full, response_type, cursor = _read_der_element(
+        response_bytes_content,
+        cursor,
+        label,
+    )
+    if tag != 0x06 or response_type != OCSP_BASIC_RESPONSE_OID_DER:
+        raise FixtureManifestError(f"{label} must carry an OCSP BasicResponse payload")
+    tag, _full, basic_response, cursor = _read_der_element(
+        response_bytes_content,
+        cursor,
+        label,
+    )
+    if tag != 0x04 or cursor != len(response_bytes_content):
+        raise FixtureManifestError(f"{label} must carry an OCSP BasicResponse payload")
+    _require_der_sequence(basic_response, f"{label}.basic_response")
 
 
 def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> None:
@@ -1636,17 +1723,27 @@ def _validate_amount_minor_units(message: dict[str, Any], label: str) -> None:
         units = _optional_nonnegative_int(entry, "minor_units", entry_label)
         if units is None:
             raise FixtureManifestError(f"{entry_label}.minor_units must be set")
-        if units > 255:
-            raise FixtureManifestError(f"{entry_label}.minor_units must fit in u8")
+        if units > MAX_PROFILE_MINOR_UNITS:
+            raise FixtureManifestError(
+                f"{entry_label}.minor_units must be at most {MAX_PROFILE_MINOR_UNITS}"
+            )
 
 
 def _validate_profile_catalog_message_fields(message: dict[str, Any], label: str) -> None:
     business_services = _optional_string_list(message, "business_services", label)
+    seen_business_services: dict[str, int] = {}
     for offset, service in enumerate(business_services):
         _reject_overlong_profile_catalog_identifier(
             service,
             f"{label}.business_services[{offset}]",
         )
+        service_key = service.lower()
+        if service_key in seen_business_services:
+            raise FixtureManifestError(
+                f"{label}.business_services[{offset}] duplicates "
+                f"{label}.business_services[{seen_business_services[service_key]}] ignoring ASCII case"
+            )
+        seen_business_services[service_key] = offset
     require_app_header = _optional_bool(message, "require_app_header", label)
     require_business_service = _optional_bool(message, "require_business_service", label)
     _optional_bool(message, "require_uetr", label)
@@ -2142,7 +2239,7 @@ def _validate_relative_path(
     resolved_parent = candidate.parent.resolve()
     root = containment_root.resolve()
     if not resolved_parent.is_relative_to(root):
-        raise FixtureManifestError(f"{label} must stay under {root}")
+        raise FixtureManifestError(f"{label} must stay under manifest root")
     _reject_secret_looking_path_material(raw, label)
     return candidate
 
@@ -2797,8 +2894,11 @@ def verify_manifest(
                     "without a current missing schema/profile gap"
                 )
     if args.require_profile_schema_backed_versions and missing_profile_schema_versions:
+        missing_count = len(missing_profile_schema_versions)
         raise FixtureManifestError(
-            "profile catalog version is not schema-backed by any checked-in XML fixture"
+            f"profile catalog has {missing_count} message version"
+            f"{'' if missing_count == 1 else 's'} not schema-backed by any "
+            "checked-in XML fixture"
         )
 
     summary: dict[str, Any] = {
@@ -2855,8 +2955,8 @@ def verify_manifest(
 
 def run(args: argparse.Namespace) -> int:
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_output_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
     _reject_output_path_smuggling(args.manifest, "--manifest")
     if args.profile_catalog is not None:
         _reject_output_path_smuggling(args.profile_catalog, "--profile-catalog")
@@ -2864,7 +2964,7 @@ def run(args: argparse.Namespace) -> int:
     summary = verify_manifest(args.manifest, args, display_label="manifest")
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0
 

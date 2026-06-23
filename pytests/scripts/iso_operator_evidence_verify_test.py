@@ -531,6 +531,31 @@ def run_evidence(argv, *, include_context=True, include_freshness=True):
 
 
 class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-evidence-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                EVIDENCE._write_text_output(
+                    link / "summary.json",
+                    "{}\n",
+                    display_label="summary_out",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("summary_out", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_evidence_unknown_secret", "evidence_unknown_secret"),
@@ -10650,6 +10675,28 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "must decode to no more than",
                 ),
                 (
+                    "crl-base64-too-many",
+                    lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                        "x509_crl_der_base64",
+                        [
+                            f"not-base64-{index}"
+                            for index in range(EVIDENCE.MAX_TRUST_DER_BLOBS + 1)
+                        ],
+                    ),
+                    "x509_crl_der_base64 must not contain more than",
+                ),
+                (
+                    "ocsp-base64-too-many",
+                    lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                        "x509_ocsp_response_der_base64",
+                        [
+                            f"not-base64-{index}"
+                            for index in range(EVIDENCE.MAX_TRUST_DER_BLOBS + 1)
+                        ],
+                    ),
+                    "x509_ocsp_response_der_base64 must not contain more than",
+                ),
+                (
                     "crl-der-wrong-class",
                     lambda summary: replace_profile_der(
                         summary,
@@ -10742,6 +10789,38 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         "0" * 64,
                     ),
                     "x509_crls[0].sha256 must not be all zero",
+                ),
+                (
+                    "anchor-summary-too-many",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "x509_trust_anchors",
+                        ["not-an-object"] * (EVIDENCE.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "x509_trust_anchors must not contain more than",
+                ),
+                (
+                    "revoked-summary-too-many",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "revoked_certificates",
+                        ["not-an-object"] * (EVIDENCE.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "revoked_certificates must not contain more than",
+                ),
+                (
+                    "crl-summary-too-many",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "x509_crls",
+                        ["not-an-object"] * (EVIDENCE.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "x509_crls must not contain more than",
+                ),
+                (
+                    "ocsp-summary-too-many",
+                    lambda summary: summary["bundles"][0].__setitem__(
+                        "x509_ocsp_responses",
+                        ["not-an-object"] * (EVIDENCE.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "x509_ocsp_responses must not contain more than",
                 ),
                 (
                     "revoked-overlap",
