@@ -1898,14 +1898,14 @@
       "blind_rotation_key_digest_hex": "487d0522196b9c2f6ff4b5d5a4dbe8b8c199f2c1deb88ec17f528c34d5e39c8d",
       "sample_extraction_key_digest_hex": "cd71c60067430e5a5361c069297d4dd284fb320996191a12bdc296693e052779",
       "accumulator_digest_hex": "b0f8780b34bb72f204d23a86d18f345975ce6c6ac0f22b20952e8dd77c684d5d",
-      "proof_public_input_schema_digest_hex": "2df07f4287dfd54d050081363f85440038957694efa11e34b9d1f5f016cc66c3",
-      "prover_key_digest_hex": "c4b6903545277610affa1c04f0407ccd590e26834039e98857a9b38c49444f53",
-      "prover_key_material_commitment_hex": "224e1558bb6007b895e4bdbf69b4135980679ef7a838f85cee8d3361c7c0c5ad",
+      "proof_public_input_schema_digest_hex": "8eee2fdff5c83ed7797a6c0e0b8f755ec953f16fde4e71df32aff3da884aa70f",
+      "prover_key_digest_hex": "a138d4ba7125de0ff8a368d82d13c697986ced91ed8b8b9c468bc3b694a26929",
+      "prover_key_material_commitment_hex": "66c2f9dbdabcc89150468d3369d1ff7c78824c01211091bc99bed51c4d5d0977",
       "verifier_key_digest_hex": "63c5755db74a73b47b9c4a38420a86f807c181bee9357eace19c235644a854ad",
       "verifier_key_material_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
       "vk_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
-      "expected_material_digest_hex": "3a5dfda22e6a429fb3097be71b48b4f3c019e9faecd8564ed4515df2de82c3cf",
-      "expected_statement_digest_hex": "1dc9d2ca00bd1f366ddbbcb16c72f101964703ed6cde50db0d9298db4b8e72e5"
+      "expected_material_digest_hex": "3452f02a52628f6a78bfdac707e2fa698264cd7b35ca93ff1cbb5081dc65e5bd",
+      "expected_statement_digest_hex": "99682800da76658dc2801ee1db9896edf9803d4d5f8b374bf888584401848f7d"
     },
     "bootstrap_refresh_vectors": [
       {

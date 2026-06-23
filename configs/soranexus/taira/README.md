@@ -89,8 +89,9 @@ config rather than wrapper-local defaults:
   checked-in Taira config bundle into one timestamped
   rollout artifact, building `irohad` with
   `--features embedded-soracloud-runtime`, running the focused SoraSwap
-  deploy-route router regression before packaging, and recording the git
-  revision plus pre-bundle checks in `rollout.manifest.json`.
+  deploy-route router regression plus the three-hop nested transfer canary
+  before packaging, and recording the git revision plus pre-bundle checks in
+  `rollout.manifest.json`.
 - `scripts/render_taira_edge_nginx_conf.py`: renders the shared-edge nginx
   config directly from the same validator roster used for per-validator
   `config.toml` generation so public Torii ingress cannot drift onto stale
@@ -103,8 +104,8 @@ config rather than wrapper-local defaults:
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
 - `verify_soraswap_rollout.sh`: post-upgrade wrapper that first runs the local
-  `iroha_core` router regression for SoraSwap universal contract deploys, then
-  runs the public MCP canary, the SoraFS capacity canary, the SoraSwap
+  `iroha_core` SoraSwap deploy-route router regression and three-hop nested
+  transfer authority canary, then runs the public MCP canary, the SoraFS capacity canary, the SoraSwap
   nested-call probe, and the optional `deploy-testnet` / signed
   `smoke-testnet` / `release-checklist` chain in the canonical order.
 - `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
@@ -763,9 +764,11 @@ away from the shipped MCP-enabled config:
      `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
      `sha256sums.txt`
    - the script runs `cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib`
-     before packaging so SoraSwap universal contract deploy routing is proven
-     against the exact source checkout; use `--skip-router-regression` only
-     after that exact runtime bundle was already validated from source
+     and `cargo test -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib`
+     before packaging so SoraSwap universal contract deploy routing and nested
+     AssetOps transfer authority are proven against the exact source checkout;
+     use `--skip-local-regressions` only after that exact runtime bundle was
+     already validated from source
    - the bundle now includes both `scripts/render_taira_validator_bundle.py`
      and `scripts/render_taira_edge_nginx_conf.py` so validator config and
      shared-edge nginx can be rendered from the same roster artifact
@@ -825,13 +828,16 @@ away from the shipped MCP-enabled config:
    - full gate:
      `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
    - the wrapper runs the focused `iroha_core` SoraSwap deploy-route router
-     regression, `check_mcp_rollout.sh`, `check_sorafs_rollout.sh`, the trader
-     app-api CID probe when a bundle is present, `make testnet-nested-call-probe`,
-     then the exact `deploy-testnet` / signed `smoke-testnet` /
-     `release-checklist` sequence when those deeper flags are enabled
-   - run it from a full `../iroha` source checkout for the default router
-     regression; use `--skip-router-regression` only after that exact runtime
+     regression and three-hop nested transfer canary, `check_mcp_rollout.sh`,
+     `check_sorafs_rollout.sh`, the trader app-api CID probe when a bundle is
+     present, `make testnet-nested-call-probe`, then the exact `deploy-testnet`
+     / signed `smoke-testnet` / `release-checklist` sequence when those deeper
+     flags are enabled
+   - run it from a full `../iroha` source checkout for the default local
+     regressions; use `--skip-local-regressions` only after that exact runtime
      bundle was already validated from source
+   - the wrapper refuses an invocation where every verification phase is
+     skipped, because that would otherwise report a false rollout pass
    - the script auto-discovers `${REPO_ROOT}/../soraswap` when the sibling repo
      exists, but `--soraswap-root` is available for non-default layouts
 

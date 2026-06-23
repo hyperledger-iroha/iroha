@@ -4591,7 +4591,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     [verified.nativeProverBundle.provingKey, provingKeyBytes],
     [verified.nativeProverBundle.verifierKey, verifierKeyBytes],
     [
-      verified.nativeProverBundle.crossSdkFixtureParityArtifact,
+      verified.nativeProverBundle.crossSdkParityArtifact,
       parityFixtureBytes,
     ],
     [
@@ -4735,8 +4735,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
           nativeProverBundle: bundle,
           sdk: "javascript",
           artifactResolver(path) {
-            return path ===
-              verified.nativeProverBundle.crossSdkFixtureParityArtifact
+            return path === verified.nativeProverBundle.crossSdkParityArtifact
               ? undefined
               : artifactBytesByPath.get(path);
           },

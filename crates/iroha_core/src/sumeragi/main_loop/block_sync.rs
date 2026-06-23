@@ -8607,6 +8607,11 @@ impl Actor {
                 block_rx_depth = queue_depths.block_rx,
                 "materialized block body from BlockBodyResponse"
             );
+            let _ = self.maybe_start_validation_for_pending_after_cached_new_view_qc(
+                response.height,
+                response.view,
+                "block_body_response_payload_ready",
+            );
         }
         let materialized_at = Instant::now();
         if body_materialized

@@ -54,6 +54,7 @@ public final class NoritoCodecAdapterTests {
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
     javaCodecEncodesNativeMultisigProposeRequest();
+    javaCodecRejectsInvalidValidationFeePolicyMetadata();
     javaCodecEncodesMultisigSignatures();
     javaCodecRejectsMalformedSignedTransactions();
     javaCodecEncodesChainIdLayout();
@@ -269,6 +270,8 @@ public final class NoritoCodecAdapterTests {
             .setSignatureB64("c2ln")
             .setFeeSponsor("sponsor@pob.cbsi")
             .setMemo("QR invoice 42")
+            .setValidationFeePolicyVersion(7L)
+            .setValidationFeePolicyHash("AB".repeat(32))
             .build();
 
     final byte[] encoded = NoritoJavaCodecAdapter.encodeMultisigProposeRequest(request);
@@ -305,6 +308,28 @@ public final class NoritoCodecAdapterTests {
         : "fee sponsor must be present";
     assert decodeOptionPayload(readField(decoder, "request.memo"), "request.memo").isPresent()
         : "memo must be present";
+    final byte[] policyVersionPayload =
+        decodeOptionPayload(
+                readField(decoder, "request.validation_fee_policy_version"),
+                "request.validation_fee_policy_version")
+            .orElseThrow(() -> new IllegalStateException("validation fee policy version missing"));
+    assert "7".equals(
+            decodeFieldPayload(
+                policyVersionPayload,
+                NoritoAdapters.stringAdapter(),
+                "request.validation_fee_policy_version"))
+        : "validation fee policy version mismatch";
+    final byte[] policyHashPayload =
+        decodeOptionPayload(
+                readField(decoder, "request.validation_fee_policy_hash"),
+                "request.validation_fee_policy_hash")
+            .orElseThrow(() -> new IllegalStateException("validation fee policy hash missing"));
+    assert "ab".repeat(32).equals(
+            decodeFieldPayload(
+                policyHashPayload,
+                NoritoAdapters.stringAdapter(),
+                "request.validation_fee_policy_hash"))
+        : "validation fee policy hash mismatch";
 
     final byte[] instructionsField = readField(decoder, "request.instructions");
     final NoritoDecoder instructionsDecoder = canonicalDecoder(instructionsField);
@@ -315,6 +340,29 @@ public final class NoritoCodecAdapterTests {
     assert instructionPayload.length > 0 : "encoded instruction must not be empty";
     assert instructionsDecoder.remaining() == 0 : "instruction list has trailing bytes";
     assert decoder.remaining() == 0 : "multisig propose request has trailing bytes";
+  }
+
+  private static void javaCodecRejectsInvalidValidationFeePolicyMetadata() {
+    final String signerAccountId = sampleAuthority((byte) 0x44);
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
+                    .setValidationFeePolicyVersion(1L)
+                    .build()));
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("not-hex")
+                    .build()));
   }
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {

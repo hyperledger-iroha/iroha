@@ -15741,6 +15741,84 @@ mod zk_roots_selector_tests {
         assert_eq!(fee_sponsor.as_deref(), Some("sponsor@cbsi"));
     }
 
+    #[test]
+    fn multisig_propose_metadata_with_default_gas_asset_forwards_validation_fee_policy_metadata() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        let policy_hash = "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
+        let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
+            Some("7".to_owned()),
+            Some(policy_hash.to_owned()),
+        )
+        .expect("valid policy metadata");
+
+        let metadata = build_multisig_propose_metadata_with_default_gas_asset(
+            state.as_ref(),
+            Some("sponsor@cbsi"),
+            Some("memo"),
+            validation_fee_policy_metadata
+                .as_ref()
+                .map(|(version, hash)| (*version, hash.as_str())),
+        );
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let policy_version = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
+        let policy_hash = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+
+        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
+        assert_eq!(policy_version, Some(7));
+        assert_eq!(
+            policy_hash.as_deref(),
+            Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
+        );
+    }
+
+    #[test]
+    fn normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair() {
+        assert!(
+            normalize_validation_fee_policy_metadata(None, None)
+                .expect("absent policy metadata is allowed")
+                .is_none()
+        );
+        assert_eq!(
+            normalize_validation_fee_policy_metadata(
+                Some(" 7 ".to_owned()),
+                Some(
+                    "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000"
+                        .to_owned(),
+                ),
+            )
+            .expect("valid metadata")
+            .as_ref()
+            .map(|(version, hash)| (*version, hash.as_str())),
+            Some((
+                7,
+                "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
+            )),
+        );
+        assert!(normalize_validation_fee_policy_metadata(Some("7".to_owned()), None).is_err());
+        assert!(
+            normalize_validation_fee_policy_metadata(Some("x".to_owned()), Some("0".repeat(64)))
+                .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(Some("7".to_owned()), Some("0".repeat(63)))
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn metadata_with_default_gas_asset_stays_empty_when_unconfigured() {
         let (state, _) = selector_state();
@@ -21988,6 +22066,38 @@ fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
 }
 
 #[cfg(feature = "app_api")]
+fn normalize_validation_fee_policy_metadata(
+    version: Option<String>,
+    hash: Option<String>,
+) -> Result<Option<(u64, String)>> {
+    let version = version
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let hash = hash
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    match (version, hash) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(conversion_error(
+            "validation fee policy metadata requires both version and hash".to_owned(),
+        )),
+        (Some(version), Some(hash)) => {
+            let version = version.parse::<u64>().map_err(|_| {
+                conversion_error(
+                    "validation_fee_policy_version must be an unsigned integer".to_owned(),
+                )
+            })?;
+            if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(conversion_error(
+                    "validation_fee_policy_hash must be a 64-character hex string".to_owned(),
+                ));
+            }
+            Ok(Some((version, hash.to_ascii_lowercase())))
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(fee_sponsor) = fee_sponsor {
@@ -22025,11 +22135,24 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
     state: &CoreState,
     fee_sponsor: Option<&str>,
     memo: Option<&str>,
+    validation_fee_policy_metadata: Option<(u64, &str)>,
 ) -> Metadata {
     let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
+    }
+    if let Some((policy_version, policy_hash)) = validation_fee_policy_metadata {
+        let version_key = Name::from_str(
+            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+        )
+        .expect("static metadata key `validation_fee_policy_version`");
+        metadata.insert(version_key, IrohaJson::new(policy_version));
+        let hash_key = Name::from_str(
+            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+        )
+        .expect("static metadata key `validation_fee_policy_hash`");
+        metadata.insert(hash_key, IrohaJson::new(policy_hash.to_owned()));
     }
     metadata
 }
@@ -27126,6 +27249,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27171,6 +27296,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27192,6 +27319,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27213,6 +27342,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27244,6 +27375,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27274,6 +27407,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27300,6 +27435,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27322,6 +27459,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27369,7 +27508,12 @@ seiyaku BlobPayloadNormalizeTest {
             state.as_ref(),
             &signer_account_id,
             creation_time_ms,
-            build_multisig_propose_metadata_with_default_gas_asset(state.as_ref(), None, None),
+            build_multisig_propose_metadata_with_default_gas_asset(
+                state.as_ref(),
+                None,
+                None,
+                None,
+            ),
             dm::Executable::Instructions(ConstVec::from(inner_instructions.clone())),
             ENDPOINT_MULTISIG_PROPOSE,
         )
@@ -27398,6 +27542,7 @@ seiyaku BlobPayloadNormalizeTest {
                     state.as_ref(),
                     None,
                     None,
+                    None,
                 ))
                 .with_instructions(transaction_instructions),
             signer_keypair.private_key(),
@@ -27423,6 +27568,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(creation_time_ms),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: inner_instructions,
             }),
         )
@@ -27523,6 +27670,8 @@ seiyaku BlobPayloadNormalizeTest {
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
                 memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27554,6 +27703,8 @@ seiyaku BlobPayloadNormalizeTest {
             creation_time_ms: Some(1_700_000_000_345),
             fee_sponsor: None,
             memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
             instructions: vec![instruction.clone()],
         };
 
@@ -27689,6 +27840,8 @@ seiyaku BlobPayloadNormalizeTest {
             creation_time_ms: Some(1_700_000_000_345),
             fee_sponsor: None,
             memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -28372,10 +28525,16 @@ pub async fn handle_post_multisig_propose(
         creation_time_ms,
         fee_sponsor,
         memo,
+        validation_fee_policy_version,
+        validation_fee_policy_hash,
         instructions,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let memo = normalize_transaction_memo(memo);
+    let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
+        validation_fee_policy_version,
+        validation_fee_policy_hash,
+    )?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
@@ -28409,6 +28568,9 @@ pub async fn handle_post_multisig_propose(
         state.as_ref(),
         fee_sponsor.as_deref(),
         memo.as_deref(),
+        validation_fee_policy_metadata
+            .as_ref()
+            .map(|(version, hash)| (*version, hash.as_str())),
     );
     let builder = builder
         .with_metadata(tx_metadata.clone())
@@ -30625,7 +30787,25 @@ const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "app_api")]
+const CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT: Duration = Duration::from_secs(600);
+#[cfg(all(test, feature = "app_api"))]
+static CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(u64::MAX);
+#[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+#[cfg(feature = "app_api")]
+fn contract_bundle_deploy_wait_timeout() -> Duration {
+    #[cfg(test)]
+    {
+        let override_ms = CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if override_ms != u64::MAX {
+            return Duration::from_millis(override_ms);
+        }
+    }
+    CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT
+}
 
 #[cfg(feature = "app_api")]
 fn contract_bundle_receipt_root() -> std::path::PathBuf {
@@ -30926,7 +31106,23 @@ async fn wait_for_contract_alias_target(
     contract_alias: &iroha_data_model::smart_contract::ContractAlias,
     expected_address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + CONTRACT_BUNDLE_WAIT_TIMEOUT;
+    wait_for_contract_alias_target_with_timeout(
+        state,
+        contract_alias,
+        expected_address,
+        CONTRACT_BUNDLE_WAIT_TIMEOUT,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_contract_alias_target_with_timeout(
+    state: Arc<CoreState>,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let (bound, active) =
             contract_alias_activation_state(state.as_ref(), contract_alias, expected_address);
@@ -31557,6 +31753,12 @@ pub struct MultisigProposeDto {
     /// Optional user-facing transfer memo forwarded to transaction metadata.
     #[norito(default)]
     pub memo: Option<String>,
+    /// Optional validation-fee policy version forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_version: Option<String>,
+    /// Optional validation-fee policy hash forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_policy_hash: Option<String>,
     /// Instruction batch that will be wrapped inside `MultisigPropose`.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
@@ -33592,7 +33794,6 @@ async fn execute_contract_bundle_request(
         .collect::<BTreeMap<_, _>>();
 
     if !bundle_stage_completed(&receipt, "deploy") {
-        let requires_active_contracts = !req.init_calls.is_empty() || !req.assertions.is_empty();
         for index in 0..receipt.contracts.len() {
             let contract_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
@@ -33652,25 +33853,30 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            if requires_active_contracts {
-                if let Err(err) = wait_for_contract_alias_target(
-                    state.clone(),
-                    &response_contract_alias,
-                    &response_contract_address,
-                )
-                .await
-                {
-                    mark_bundle_failure(
-                        &mut receipt,
-                        format!("activate contract `{contract_name}`: {err}"),
-                    );
-                    persist_contract_bundle_receipt(&receipt)?;
-                    return Err(err);
-                }
-
-                receipt.contracts[index].status = "deployed".to_owned();
+            let deploy_wait_timeout = contract_bundle_deploy_wait_timeout();
+            if deploy_wait_timeout.is_zero() {
                 persist_contract_bundle_receipt(&receipt)?;
+                return Ok(receipt);
             }
+
+            if let Err(err) = wait_for_contract_alias_target_with_timeout(
+                state.clone(),
+                &response_contract_alias,
+                &response_contract_address,
+                deploy_wait_timeout,
+            )
+            .await
+            {
+                mark_bundle_failure(
+                    &mut receipt,
+                    format!("activate contract `{contract_name}`: {err}"),
+                );
+                persist_contract_bundle_receipt(&receipt)?;
+                return Err(err);
+            }
+
+            receipt.contracts[index].status = "deployed".to_owned();
+            persist_contract_bundle_receipt(&receipt)?;
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -34004,6 +34210,25 @@ mod contract_bundle_tests {
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
 
+    struct ContractBundleDeployWaitGuard {
+        previous_ms: u64,
+    }
+
+    impl ContractBundleDeployWaitGuard {
+        fn disable() -> Self {
+            let previous_ms = CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
+                .swap(0, std::sync::atomic::Ordering::SeqCst);
+            Self { previous_ms }
+        }
+    }
+
+    impl Drop for ContractBundleDeployWaitGuard {
+        fn drop(&mut self) {
+            CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
+                .store(self.previous_ms, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     fn sample_authority() -> AccountId {
         AccountId::new(
             KeyPair::try_from_seed(vec![7u8; 32], Algorithm::Ed25519)
@@ -34305,6 +34530,7 @@ mod contract_bundle_tests {
     async fn execute_contract_bundle_resume_redeploys_when_completed_stage_is_stale() {
         let dir = tempdir().expect("tempdir");
         let _guard = OverrideGuard::new(dir.path());
+        let _deploy_wait = ContractBundleDeployWaitGuard::disable();
         let creds = crate::test_utils::random_authority();
         let (state, kura, queue, chain_id) = contract_test_state(&creds.account);
         let request = sample_bundle_request(creds.account.clone(), creds.private_key.clone());
@@ -34337,10 +34563,7 @@ mod contract_bundle_tests {
 
         assert!(resumed.ok);
         assert!(resumed.failure_point.is_none());
-        assert_eq!(
-            resumed.completed_stages,
-            vec!["plan".to_owned(), "deploy".to_owned()]
-        );
+        assert_eq!(resumed.completed_stages, vec!["plan".to_owned()]);
         assert_eq!(resumed.contracts[0].status, "submitted");
         assert_ne!(resumed.contracts[0].tx_hash_hex, Some("11".repeat(32)));
     }

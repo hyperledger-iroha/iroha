@@ -2088,6 +2088,10 @@ public final class HttpClientTransport implements IrohaClient {
     if (request.memo() != null) {
       payload.put("memo", normalizeNonBlank(request.memo(), "memo"));
     }
+    putValidationFeePolicyMetadata(
+        payload,
+        request.validationFeePolicyVersion(),
+        request.validationFeePolicyHash());
     final List<String> instructions = new ArrayList<>();
     int index = 0;
     for (final byte[] instruction : request.instructions()) {
@@ -2099,6 +2103,28 @@ public final class HttpClientTransport implements IrohaClient {
     }
     payload.put("instructions", instructions);
     return payload;
+  }
+
+  static void putValidationFeePolicyMetadata(
+      final Map<String, Object> payload,
+      final Long validationFeePolicyVersion,
+      final String validationFeePolicyHash) {
+    final boolean hasPolicyVersion = validationFeePolicyVersion != null;
+    final boolean hasPolicyHash = validationFeePolicyHash != null;
+    if (hasPolicyVersion != hasPolicyHash) {
+      throw new IllegalArgumentException(
+          "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
+    }
+    if (!hasPolicyVersion) {
+      return;
+    }
+    if (validationFeePolicyVersion.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeePolicyVersion must be non-negative");
+    }
+    payload.put("validation_fee_policy_version", validationFeePolicyVersion.toString());
+    payload.put(
+        "validation_fee_policy_hash",
+        normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
   }
 
   static Map<String, Object> buildVerifyingKeyRegisterPayload(

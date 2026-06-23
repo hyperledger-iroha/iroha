@@ -449,6 +449,28 @@ impl PendingBlock {
         self.last_quorum_reschedule_vote_count = 0;
     }
 
+    pub(super) fn reactivate_retired_same_height(&mut self) {
+        if !self.retired_same_height {
+            return;
+        }
+        let now = Instant::now();
+        self.aborted = false;
+        self.retired_same_height = false;
+        self.inserted_at = now;
+        self.last_progress = now;
+        self.reset_kura_retry();
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.last_precommit_rebroadcast = None;
+        self.last_validation_redrive = None;
+        self.last_commit_evidence_replay = None;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+        if !matches!(self.commit_stage, PendingCommitStage::CommitQcObserved) {
+            self.reset_commit_stage();
+        }
+    }
+
     pub(super) fn mark_aborted(&mut self) {
         self.aborted = true;
         self.retired_same_height = false;

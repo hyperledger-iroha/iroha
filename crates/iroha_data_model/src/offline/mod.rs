@@ -40,6 +40,9 @@ pub const OFFLINE_NOTE_NOTE_COMMITMENT_DOMAIN: &str = "iroha:offline-note:note-c
 pub const OFFLINE_NOTE_INPUT_NULLIFIER_DOMAIN: &str = "iroha:offline-note:input-nullifier";
 /// Domain-separation tag for wallet-derived Offline Note payment token identifiers.
 pub const OFFLINE_NOTE_PAYMENT_TOKEN_ID_DOMAIN: &str = "iroha:offline-note:payment-token-id";
+/// Domain-separation tag for on-chain Offline device-attestation challenges.
+pub const OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN: &str =
+    "iroha:offline-note:device-attestation-challenge:v1";
 /// Domain-separation tag for compact Kagemusha folded-proof public inputs.
 pub const KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN: &str = "iroha:kagemusha:v1:folded-public-inputs";
 /// Domain-separation tag for reserved Kagemusha recursive aggregation evidence.
@@ -2824,6 +2827,143 @@ mod model {
     }
 }
 
+/// On-chain platform-attested registration for an Offline one-use note key.
+///
+/// This is the trustless counterpart to the middleware-signed attestation receipt.
+/// The report and evidence bytes are included so consensus has enough material to
+/// perform deterministic platform checks; the hashes provide stable replay keys and
+/// compact audit anchors.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OfflineDeviceAttestationRegistration {
+    /// Registration format marker.
+    pub version: u16,
+    /// Platform class, for example `ios-appattest` or `android-keymint`.
+    pub platform: String,
+    /// Issuer-scoped one-use key identifier.
+    pub key_id: String,
+    /// Device identifier bound by the platform attestation.
+    pub device_id: String,
+    /// Account authorized to control the note key.
+    pub account_id: AccountId,
+    /// Optional asset definition this attestation is intended for.
+    pub asset_definition_id: Option<AssetDefinitionId>,
+    /// Apple Developer Team ID for iOS App Attest registrations.
+    pub ios_team_id: Option<String>,
+    /// iOS bundle identifier for App Attest registrations.
+    pub ios_bundle_id: Option<String>,
+    /// iOS App Attest environment, either `production` or `development`.
+    pub ios_environment: Option<String>,
+    /// Android package name expected in the `KeyMint` attestation application id.
+    pub android_package_name: Option<String>,
+    /// Android signing certificate SHA-256 expected in the `KeyMint` attestation application id.
+    pub android_signing_certificate_sha256: Option<Vec<u8>>,
+    /// Ed25519 public key bytes for local note/proof signatures.
+    pub public_key: Vec<u8>,
+    /// Hardware assertion scheme bound to this note key.
+    pub assertion_scheme: String,
+    /// Hardware assertion key algorithm, for example `ecdsa-p256-sha256`.
+    pub assertion_key_algorithm: String,
+    /// Hardware assertion public key bytes, for example SEC1 P-256.
+    pub assertion_public_key: Vec<u8>,
+    /// Hardware one-use limit when the platform exposes it.
+    pub assertion_usage_count_limit: Option<u32>,
+    /// True when the submitted evidence claims hardware one-use semantics.
+    pub one_use: bool,
+    /// Canonical challenge hash signed or embedded by the platform attestation.
+    pub challenge_hash: Hash,
+    /// Hash of the raw App Attest or `KeyMint` report submitted to the verifier.
+    pub attestation_report_hash: Hash,
+    /// Raw App Attest or `KeyMint` report bytes submitted for on-chain verification.
+    pub attestation_report: Vec<u8>,
+    /// Hash of the full platform evidence bundle.
+    pub evidence_hash: Hash,
+    /// Full platform evidence bundle bytes submitted for on-chain verification.
+    pub evidence: Vec<u8>,
+    /// Recent committed block height bound into the challenge.
+    pub recent_block_height: u64,
+    /// Recent committed block hash bound into the challenge.
+    pub recent_block_hash: Hash,
+    /// Registration validity limit in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
+/// Governed Offline device-attestation verifier policy.
+///
+/// Nodes use this chain-stored policy when present and otherwise fall back to
+/// the built-in first-release platform roots. Operators can publish this policy
+/// to rotate roots, publish deterministic revocations, and restrict accepted app
+/// identities without relying on external middleware state.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OfflineDeviceAttestationPolicy {
+    /// Policy format marker.
+    pub version: u16,
+    /// Trusted platform roots accepted by the on-chain verifier.
+    pub trusted_roots: Vec<OfflineDeviceAttestationTrustedRoot>,
+    /// SHA-256 digests of revoked certificate DER payloads.
+    pub revoked_certificate_sha256: Vec<Vec<u8>>,
+    /// Accepted iOS App Attest app identities.
+    pub ios_apps: Vec<OfflineIosAppAttestationPolicy>,
+    /// Accepted Android `KeyMint` app identities.
+    pub android_apps: Vec<OfflineAndroidAppAttestationPolicy>,
+    /// When true, iOS registration requires a matching entry in `ios_apps`.
+    pub require_ios_app_policy: bool,
+    /// When true, Android registration requires a matching entry in `android_apps`.
+    pub require_android_app_policy: bool,
+}
+
+/// Trusted platform root certificate for Offline device attestation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OfflineDeviceAttestationTrustedRoot {
+    /// Platform class, for example `ios-appattest` or `android-keymint`.
+    pub platform: String,
+    /// Root certificate DER bytes.
+    pub der: Vec<u8>,
+    /// Optional governance activation time in Unix milliseconds.
+    pub not_before_ms: Option<u64>,
+    /// Optional governance expiry time in Unix milliseconds.
+    pub not_after_ms: Option<u64>,
+}
+
+/// Allowed iOS App Attest app identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OfflineIosAppAttestationPolicy {
+    /// Apple Developer Team ID.
+    pub team_id: String,
+    /// iOS bundle identifier.
+    pub bundle_id: String,
+    /// App Attest environment, either `production` or `development`.
+    pub environment: String,
+}
+
+/// Allowed Android `KeyMint` app identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OfflineAndroidAppAttestationPolicy {
+    /// Android package name.
+    pub package_name: String,
+    /// Allowed Android signing certificate SHA-256 digests.
+    pub signing_certificate_sha256: Vec<Vec<u8>>,
+}
+
 /// Origin of a wallet-derived Offline Note note commitment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2873,6 +3013,31 @@ struct KagemushaFoldStepDigestPreimage {
     verifier_key_id: VerifyingKeyId,
     verifier_key_commitment: [u8; Hash::LENGTH],
     verifier_key_poseidon_digest: [u8; Hash::LENGTH],
+}
+
+#[derive(Debug, Clone, Decode, Encode)]
+struct OfflineDeviceAttestationChallengePreimage {
+    domain: String,
+    version: u16,
+    platform: String,
+    key_id: String,
+    device_id: String,
+    account_id: AccountId,
+    asset_definition_id: Option<AssetDefinitionId>,
+    ios_team_id: Option<String>,
+    ios_bundle_id: Option<String>,
+    ios_environment: Option<String>,
+    android_package_name: Option<String>,
+    android_signing_certificate_sha256: Option<Vec<u8>>,
+    public_key: Vec<u8>,
+    assertion_scheme: String,
+    assertion_key_algorithm: String,
+    assertion_public_key: Vec<u8>,
+    assertion_usage_count_limit: Option<u32>,
+    one_use: bool,
+    recent_block_height: u64,
+    recent_block_hash: Hash,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Decode, Encode)]
@@ -3072,6 +3237,74 @@ impl OfflineNoteKeyCertificate {
     /// Returns an error when the payload cannot be serialized with Norito.
     pub fn payload_hash(&self) -> Result<Hash, norito::Error> {
         self.signing_bytes().map(Hash::new)
+    }
+}
+
+impl OfflineDeviceAttestationRegistration {
+    fn challenge_preimage(&self) -> OfflineDeviceAttestationChallengePreimage {
+        OfflineDeviceAttestationChallengePreimage {
+            domain: OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN.to_owned(),
+            version: self.version,
+            platform: self.platform.clone(),
+            key_id: self.key_id.clone(),
+            device_id: self.device_id.clone(),
+            account_id: self.account_id.clone(),
+            asset_definition_id: self.asset_definition_id.clone(),
+            ios_team_id: self.ios_team_id.clone(),
+            ios_bundle_id: self.ios_bundle_id.clone(),
+            ios_environment: self.ios_environment.clone(),
+            android_package_name: self.android_package_name.clone(),
+            android_signing_certificate_sha256: self.android_signing_certificate_sha256.clone(),
+            public_key: self.public_key.clone(),
+            assertion_scheme: self.assertion_scheme.clone(),
+            assertion_key_algorithm: self.assertion_key_algorithm.clone(),
+            assertion_public_key: self.assertion_public_key.clone(),
+            assertion_usage_count_limit: self.assertion_usage_count_limit,
+            one_use: self.one_use,
+            recent_block_height: self.recent_block_height,
+            recent_block_hash: self.recent_block_hash,
+            expires_at_ms: self.expires_at_ms,
+        }
+    }
+
+    /// Deterministic challenge hash that platform attestation evidence must bind.
+    ///
+    /// The preimage intentionally excludes the attestation report and evidence hashes, because the
+    /// challenge must be known before the platform creates that evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the challenge preimage cannot be serialized with Norito.
+    pub fn canonical_challenge_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(&self.challenge_preimage()).map(Hash::new)
+    }
+
+    /// Build the certificate represented by this on-chain attestation registration.
+    #[must_use]
+    pub fn key_certificate(&self) -> OfflineNoteKeyCertificate {
+        OfflineNoteKeyCertificate {
+            version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+            platform: self.platform.clone(),
+            key_id: self.key_id.clone(),
+            device_id: self.device_id.clone(),
+            account_id: self.account_id.clone(),
+            public_key: self.public_key.clone(),
+            assertion_scheme: self.assertion_scheme.clone(),
+            assertion_key_algorithm: self.assertion_key_algorithm.clone(),
+            assertion_public_key: self.assertion_public_key.clone(),
+            assertion_usage_count_limit: self.assertion_usage_count_limit,
+            one_use: self.one_use,
+            issuer_signature: Signature::from_bytes(&[0_u8; 64]),
+        }
+    }
+
+    /// Deterministic hash of the represented key-certificate payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn key_certificate_payload_hash(&self) -> Result<Hash, norito::Error> {
+        self.key_certificate().payload_hash()
     }
 }
 
@@ -10995,6 +11228,113 @@ mod offline_note_tests {
         assert_ne!(
             escrow,
             offline_escrow_account_id(&chain_id, &other_definition_id)
+        );
+    }
+
+    fn sample_attestation_registration() -> OfflineDeviceAttestationRegistration {
+        let account_id = sample_account(0xA1, "offline");
+        let sample_public_key = sample_public_key(0xA2);
+        let (_algorithm, public_key) = sample_public_key
+            .try_to_bytes()
+            .expect("sample public key serializes");
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        let attestation_report = b"sample-ios-appattest-report".to_vec();
+        let evidence = b"sample-platform-evidence".to_vec();
+        OfflineDeviceAttestationRegistration {
+            version: 1,
+            platform: "ios-appattest".to_owned(),
+            key_id: "ios-key-1".to_owned(),
+            device_id: "ios-device-1".to_owned(),
+            account_id,
+            asset_definition_id: Some(asset_definition_id),
+            ios_team_id: Some("TEAMID1234".to_owned()),
+            ios_bundle_id: Some("jp.co.soramitsu.iroha.offline".to_owned()),
+            ios_environment: Some("production".to_owned()),
+            android_package_name: None,
+            android_signing_certificate_sha256: None,
+            public_key: public_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
+            one_use: true,
+            challenge_hash: Hash::new(b"challenge-placeholder"),
+            attestation_report_hash: Hash::new(&attestation_report),
+            attestation_report,
+            evidence_hash: Hash::new(&evidence),
+            evidence,
+            recent_block_height: 42,
+            recent_block_hash: Hash::new(b"recent-block"),
+            expires_at_ms: 10_000,
+        }
+    }
+
+    #[test]
+    fn offline_device_attestation_challenge_binds_registration_preimage() {
+        let registration = sample_attestation_registration();
+        let challenge = registration
+            .canonical_challenge_hash()
+            .expect("canonical attestation challenge");
+
+        let mut changed_key = registration.clone();
+        changed_key.key_id.push_str("-mutated");
+        assert_ne!(
+            changed_key
+                .canonical_challenge_hash()
+                .expect("mutated key challenge"),
+            challenge
+        );
+
+        let mut changed_anchor = registration.clone();
+        changed_anchor.recent_block_hash = Hash::new(b"other-recent-block");
+        assert_ne!(
+            changed_anchor
+                .canonical_challenge_hash()
+                .expect("mutated anchor challenge"),
+            challenge
+        );
+
+        let mut changed_lifetime = registration.clone();
+        changed_lifetime.expires_at_ms += 1;
+        assert_ne!(
+            changed_lifetime
+                .canonical_challenge_hash()
+                .expect("mutated lifetime challenge"),
+            challenge
+        );
+
+        let mut changed_ios_metadata = registration.clone();
+        changed_ios_metadata.ios_bundle_id = Some("jp.co.soramitsu.iroha.other".to_owned());
+        assert_ne!(
+            changed_ios_metadata
+                .canonical_challenge_hash()
+                .expect("mutated iOS metadata challenge"),
+            challenge
+        );
+
+        let mut changed_android_metadata = registration.clone();
+        changed_android_metadata.android_package_name =
+            Some("jp.co.soramitsu.iroha.android".to_owned());
+        changed_android_metadata.android_signing_certificate_sha256 = Some(vec![0xC3; 32]);
+        assert_ne!(
+            changed_android_metadata
+                .canonical_challenge_hash()
+                .expect("mutated Android metadata challenge"),
+            challenge
+        );
+
+        let mut changed_evidence = registration;
+        changed_evidence.challenge_hash = Hash::new(b"other-submitted-challenge");
+        changed_evidence.attestation_report_hash = Hash::new(b"other-report");
+        changed_evidence.evidence_hash = Hash::new(b"other-evidence");
+        assert_eq!(
+            changed_evidence
+                .canonical_challenge_hash()
+                .expect("evidence-independent challenge"),
+            challenge
         );
     }
 
