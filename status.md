@@ -27,6 +27,7 @@ Last updated: 2026-06-23
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii appeal_finance_deposit --features app_api -- --nocapture`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii appeal_pricing --features app_api -- --nocapture`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths --features app_api -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-orderbook-auth cargo clippy -j 1 -p iroha_torii --features app_api --all-targets --no-deps -- -D warnings`
 
 ## 2026-06-23 SoraFS appeal finance dashboard and alert pack
 

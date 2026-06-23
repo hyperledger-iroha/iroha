@@ -4433,7 +4433,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Reconcile an appeal deposit settlement.",
-            "Recompute the expected SoraFS appeal deposit settlement from confirmed deposit parameters and compare it with the current runtime native asset-lock ledger record after client-submitted DrawdownAssetLock/CancelAssetLock transactions.",
+            "Recompute the expected SoraFS appeal deposit settlement from confirmed deposit parameters and compare it with the current runtime native asset-lock ledger record after client-submitted DrawdownAssetLock/CancelAssetLock transactions. Responses include a deterministic reconciliation_digest_hex for audit and peer comparison.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),

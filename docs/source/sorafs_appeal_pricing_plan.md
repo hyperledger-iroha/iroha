@@ -12,7 +12,8 @@ SFM-4b2 has shipped deterministic appeal finance foundations in
 operator commands. Torii now exposes read-only appeal finance config/status/
 quote REST APIs, an authenticated native asset-lock deposit instruction builder
 with status, confirmation, settlement-execution instruction checks, and
-post-submission settlement reconciliation against runtime asset-lock records,
+post-submission settlement reconciliation against runtime asset-lock records
+with deterministic audit digests for peer/operator comparison,
 plus stateless settlement and disbursement plan APIs backed by the same baseline
 helpers, and `sorafs_node` can publish typed
 `SoraFsAppealFinanceReportV1` records into the local Governance DAG filesystem
@@ -114,7 +115,10 @@ for the implemented helpers and the remaining service gates.
   `X-Iroha-*` request authentication, recomputes the same baseline settlement
   expectation, reads the current native asset-lock ledger record, and reports
   whether settlement is still pending client submission, waiting for the refund
-  cancellation step, fully reconciled, or mismatched.
+  cancellation step, fully reconciled, or mismatched. Each response includes
+  `reconciliation_digest_hex`, a BLAKE3 digest over the config version,
+  requested settlement inputs, expected result, observed ledger state, and
+  ordered mismatch list.
 - `POST /v1/sorafs/moderation/ballots` requires a matching
   `deposit_confirmation` object and rejects the announcement unless Torii can
   confirm runtime ledger custody for the same case, round, and evidence bundle
@@ -157,7 +161,8 @@ The app API publishes the deterministic baseline through JSON endpoints:
 - `GET /v1/sorafs/appeals/pricing/status` reports that config and quote APIs are
   enabled, the authenticated native asset-lock deposit instruction/status/
   confirmation APIs, settlement-execution instruction builder, and
-  post-submission settlement reconciliation API are enabled, stateless
+  post-submission settlement reconciliation API with deterministic audit digests
+  is enabled, stateless
   settlement/disbursement plan APIs are enabled, local Governance DAG
   report/weekly rollup publication plus the local report and weekly rollup
   dashboard APIs and authenticated report/rollup publish APIs are enabled, and
@@ -206,7 +211,8 @@ The app API publishes the deterministic baseline through JSON endpoints:
   the current runtime asset-lock ledger record with the expected settlement
   result. It returns `pending_client_submission`, `awaiting_refund_cancel`,
   `settled`, or `mismatch` with expected and observed lifecycle/remaining
-  amounts plus mismatch details.
+  amounts, mismatch details, and `reconciliation_digest_hex` for deterministic
+  audit comparison across operators or peers.
 - `POST /v1/sorafs/appeals/finance/reports` accepts a
   `SoraFsAppealFinanceReportV1` JSON payload and publishes it to the configured
   local Governance DAG filesystem/runtime publication pipeline. The request must

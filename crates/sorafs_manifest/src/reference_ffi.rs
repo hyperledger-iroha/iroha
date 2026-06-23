@@ -126,7 +126,7 @@ pub struct SorafsReferenceFfiBuffer {
 }
 
 impl SorafsReferenceFfiBuffer {
-    fn from_bytes(mut bytes: Vec<u8>) -> Self {
+    fn from_bytes(bytes: Vec<u8>) -> Self {
         let len = bytes.len();
         if len == 0 {
             return Self {
@@ -134,8 +134,7 @@ impl SorafsReferenceFfiBuffer {
                 len: 0,
             };
         }
-        let ptr = bytes.as_mut_ptr();
-        std::mem::forget(bytes);
+        let ptr = Box::into_raw(bytes.into_boxed_slice()).cast::<u8>();
         Self { ptr, len }
     }
 }
@@ -166,8 +165,8 @@ pub unsafe extern "C" fn sorafs_reference_free_buffer(buffer: SorafsReferenceFfi
     if buffer.ptr.is_null() || buffer.len == 0 {
         return;
     }
-    // SAFETY: callers pass buffers returned by this crate, which were allocated
-    // from a `Vec<u8>` with length equal to capacity.
+    // SAFETY: callers pass buffers returned by this crate, which converts
+    // returned bytes into boxed slices with capacity equal to length.
     unsafe {
         drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.len));
     }
@@ -1229,6 +1228,19 @@ mod tests {
         // SAFETY: test helper frees exactly the buffer returned by the FFI call.
         let bytes = unsafe { read_and_free(buffer) };
         json::from_slice(&bytes).expect("parse FFI outcome JSON")
+    }
+
+    #[test]
+    fn ffi_buffer_from_bytes_handles_spare_capacity() {
+        let mut bytes = Vec::with_capacity(64);
+        bytes.extend_from_slice(b"spare capacity must not affect freeing");
+        assert!(bytes.capacity() > bytes.len());
+
+        let buffer = SorafsReferenceFfiBuffer::from_bytes(bytes);
+
+        // SAFETY: the buffer was returned by the FFI buffer constructor under test.
+        let returned = unsafe { read_and_free(buffer) };
+        assert_eq!(returned, b"spare capacity must not affect freeing");
     }
 
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {

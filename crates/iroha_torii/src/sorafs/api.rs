@@ -5677,11 +5677,17 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_reconcile(
         Ok(value) => value,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
     };
-    let reconciliation =
-        match appeal_finance_deposit_settlement_reconciliation(&expected, &record, &breakdown) {
-            Ok(value) => value,
-            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
-        };
+    let reconciliation = match appeal_finance_deposit_settlement_reconciliation(
+        &expected,
+        &record,
+        config.version(),
+        verdict,
+        panel_size,
+        &breakdown,
+    ) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     (
         StatusCode::OK,
         JsonBody(appeal_finance_deposit_settlement_reconciliation_json(
@@ -6038,7 +6044,7 @@ fn appeal_pricing_status_json(config: &AppealPricingConfig) -> Value {
         ),
         json_entry(
             "settlement_reconciliation_api",
-            Value::from("enabled_canonical_auth_runtime_asset_lock_reconciliation"),
+            Value::from("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest"),
         ),
         json_entry("disbursement_plan_api", Value::from("enabled")),
         json_entry(
@@ -6151,6 +6157,7 @@ struct AppealFinanceDepositSettlementExecution {
 struct AppealFinanceDepositSettlementReconciliation {
     status: &'static str,
     reconciled: bool,
+    reconciliation_digest_hex: String,
     expected_final_status: AssetEscrowStatus,
     expected_remaining_xor: iroha_primitives::numeric::Numeric,
     drawdown_xor: iroha_primitives::numeric::Numeric,
@@ -6288,6 +6295,9 @@ fn appeal_finance_deposit_settlement_execution(
 fn appeal_finance_deposit_settlement_reconciliation(
     expected: &AppealFinanceDepositExpectation,
     record: &AssetEscrowRecord,
+    settlement_config_version: &str,
+    verdict: AppealVerdict,
+    panel_size: u32,
     breakdown: &AppealSettlementBreakdown,
 ) -> Result<AppealFinanceDepositSettlementReconciliation, String> {
     let execution = appeal_finance_deposit_settlement_execution(expected, record, breakdown)?;
@@ -6345,16 +6355,243 @@ fn appeal_finance_deposit_settlement_reconciliation(
         }
         "mismatch"
     };
+    let reconciliation_digest_hex = appeal_finance_deposit_settlement_reconciliation_digest_hex(
+        expected,
+        record,
+        settlement_config_version,
+        verdict,
+        panel_size,
+        breakdown,
+        status,
+        expected_final_status,
+        &expected_remaining_xor,
+        &execution.drawdown_xor,
+        &execution.refund_xor,
+        &mismatches,
+    );
 
     Ok(AppealFinanceDepositSettlementReconciliation {
         status,
         reconciled: status == "settled",
+        reconciliation_digest_hex,
         expected_final_status,
         expected_remaining_xor,
         drawdown_xor: execution.drawdown_xor,
         refund_xor: execution.refund_xor,
         mismatches,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn appeal_finance_deposit_settlement_reconciliation_digest_hex(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    settlement_config_version: &str,
+    verdict: AppealVerdict,
+    panel_size: u32,
+    breakdown: &AppealSettlementBreakdown,
+    status: &str,
+    expected_final_status: AssetEscrowStatus,
+    expected_remaining_xor: &iroha_primitives::numeric::Numeric,
+    drawdown_xor: &iroha_primitives::numeric::Numeric,
+    refund_xor: &iroha_primitives::numeric::Numeric,
+    mismatches: &[String],
+) -> String {
+    let mut material = String::from("sorafs.appeal_finance.deposit_settlement_reconciliation.v1\n");
+    push_digest_field(&mut material, "source", "baseline_v1");
+    push_digest_field(
+        &mut material,
+        "settlement_config_version",
+        settlement_config_version,
+    );
+    push_digest_field(&mut material, "status", status);
+    push_digest_field(&mut material, "outcome", verdict);
+    push_digest_field(&mut material, "panel_size", panel_size);
+    push_digest_field(&mut material, "case_id", &expected.case_id);
+    push_digest_optional_field(&mut material, "round_id", expected.round_id.as_deref());
+    push_digest_field(&mut material, "escrow_id_hex", expected.escrow_id.as_hash());
+    push_digest_field(&mut material, "payer_account", &expected.payer_account);
+    push_digest_field(
+        &mut material,
+        "destination_account",
+        &expected.destination_account,
+    );
+    push_digest_optional_field(
+        &mut material,
+        "release_authority_account",
+        expected.release_authority_account.as_ref(),
+    );
+    push_digest_field(
+        &mut material,
+        "asset_definition_id",
+        &expected.asset_definition_id,
+    );
+    push_digest_field(&mut material, "deposit_xor", &expected.deposit_xor);
+    push_digest_optional_field(&mut material, "expires_at_ms", expected.expires_at_ms);
+    push_digest_field(&mut material, "idempotency_key", &expected.idempotency_key);
+    push_digest_field(
+        &mut material,
+        "expected_evidence_hash_count",
+        expected.evidence_hashes.len(),
+    );
+    for (index, hash) in expected.evidence_hashes.iter().enumerate() {
+        push_digest_field(
+            &mut material,
+            &format!("expected_evidence_hash_{index}_hex"),
+            hash,
+        );
+    }
+    push_digest_field(&mut material, "refund_xor", &breakdown.refund_xor);
+    push_digest_field(&mut material, "treasury_xor", &breakdown.treasury_xor);
+    push_digest_field(&mut material, "held_xor", &breakdown.held_xor);
+    push_digest_field(&mut material, "expected_drawdown_xor", drawdown_xor);
+    push_digest_field(&mut material, "expected_cancel_refund_xor", refund_xor);
+    push_digest_field(
+        &mut material,
+        "expected_final_lifecycle_status",
+        asset_escrow_status_label(expected_final_status),
+    );
+    push_digest_field(
+        &mut material,
+        "expected_remaining_amount",
+        expected_remaining_xor,
+    );
+    push_digest_field(&mut material, "observed_escrow_id_hex", record.id.as_hash());
+    push_digest_field(&mut material, "observed_seller_account", &record.seller);
+    push_digest_optional_field(
+        &mut material,
+        "observed_buyer_account",
+        record.buyer.as_ref(),
+    );
+    push_digest_field(
+        &mut material,
+        "observed_asset_definition_id",
+        &record.asset_definition,
+    );
+    push_digest_field(&mut material, "observed_amount", &record.amount);
+    push_digest_field(&mut material, "observed_custody_account", &record.custody);
+    push_digest_field(
+        &mut material,
+        "observed_lifecycle_status",
+        asset_escrow_status_label(record.status),
+    );
+    push_digest_field(
+        &mut material,
+        "observed_remaining_amount",
+        &record.remaining_amount,
+    );
+    push_digest_field(
+        &mut material,
+        "observed_kind",
+        asset_escrow_kind_label(record.kind),
+    );
+    push_digest_optional_field(
+        &mut material,
+        "observed_release_authority",
+        record.release_authority.as_ref(),
+    );
+    push_digest_optional_field(
+        &mut material,
+        "observed_expires_at_ms",
+        record.expires_at_ms,
+    );
+    push_digest_field(
+        &mut material,
+        "observed_evidence_hash_count",
+        record.evidence_hashes.len(),
+    );
+    for (index, hash) in record.evidence_hashes.iter().enumerate() {
+        push_digest_field(
+            &mut material,
+            &format!("observed_evidence_hash_{index}_hex"),
+            hash,
+        );
+    }
+    push_digest_field(
+        &mut material,
+        "observed_created_at_ms",
+        record.created_at_ms,
+    );
+    push_digest_optional_field(
+        &mut material,
+        "observed_accepted_at_ms",
+        record.accepted_at_ms,
+    );
+    push_digest_optional_field(
+        &mut material,
+        "observed_payment_sent_at_ms",
+        record.payment_sent_at_ms,
+    );
+    push_digest_optional_field(
+        &mut material,
+        "observed_disputed_at_ms",
+        record.disputed_at_ms,
+    );
+    push_digest_optional_field(&mut material, "observed_closed_at_ms", record.closed_at_ms);
+    match &record.resolution {
+        Some(resolution) => {
+            push_digest_field(&mut material, "observed_resolution_present", true);
+            push_digest_field(
+                &mut material,
+                "observed_resolution_resolver_account",
+                &resolution.resolver,
+            );
+            push_digest_field(
+                &mut material,
+                "observed_resolution_buyer_amount",
+                &resolution.buyer_amount,
+            );
+            push_digest_field(
+                &mut material,
+                "observed_resolution_seller_amount",
+                &resolution.seller_amount,
+            );
+            push_digest_field(
+                &mut material,
+                "observed_resolution_evidence_hash_count",
+                resolution.evidence_hashes.len(),
+            );
+            for (index, hash) in resolution.evidence_hashes.iter().enumerate() {
+                push_digest_field(
+                    &mut material,
+                    &format!("observed_resolution_evidence_hash_{index}_hex"),
+                    hash,
+                );
+            }
+            push_digest_field(
+                &mut material,
+                "observed_resolution_resolved_at_ms",
+                resolution.resolved_at_ms,
+            );
+        }
+        None => {
+            push_digest_field(&mut material, "observed_resolution_present", false);
+        }
+    }
+    push_digest_field(&mut material, "mismatch_count", mismatches.len());
+    for (index, mismatch) in mismatches.iter().enumerate() {
+        push_digest_field(&mut material, &format!("mismatch_{index}"), mismatch);
+    }
+
+    hex::encode(blake3_hash(material.as_bytes()).as_bytes())
+}
+
+fn push_digest_field(material: &mut String, key: &str, value: impl std::fmt::Display) {
+    material.push_str(key);
+    material.push('=');
+    material.push_str(&value.to_string());
+    material.push('\n');
+}
+
+fn push_digest_optional_field<T: std::fmt::Display>(
+    material: &mut String,
+    key: &str,
+    value: Option<T>,
+) {
+    match value {
+        Some(value) => push_digest_field(material, key, value),
+        None => push_digest_field(material, key, "null"),
+    }
 }
 
 fn appeal_finance_deposit_confirm_base_request(
@@ -6982,6 +7219,10 @@ fn appeal_finance_deposit_settlement_reconciliation_json(
         ),
         json_entry("status", Value::from(reconciliation.status)),
         json_entry("reconciled", Value::Bool(reconciliation.reconciled)),
+        json_entry(
+            "reconciliation_digest_hex",
+            Value::from(reconciliation.reconciliation_digest_hex.clone()),
+        ),
         json_entry("source", Value::from("baseline_v1")),
         json_entry(
             "settlement_config_version",
@@ -18909,6 +19150,16 @@ mod advert_tests {
         )
     }
 
+    fn assert_appeal_finance_reconciliation_digest_hex(value: &Value) -> &str {
+        let digest = value
+            .get("reconciliation_digest_hex")
+            .and_then(Value::as_str)
+            .expect("reconciliation digest hex");
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        digest
+    }
+
     fn appeal_finance_deposit_status_record(
         seller: AccountId,
         buyer: Option<AccountId>,
@@ -19188,7 +19439,7 @@ mod advert_tests {
             value
                 .get("settlement_reconciliation_api")
                 .and_then(Value::as_str),
-            Some("enabled_canonical_auth_runtime_asset_lock_reconciliation")
+            Some("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")
         );
         assert_eq!(
             value.get("disbursement_plan_api").and_then(Value::as_str),
@@ -19304,7 +19555,7 @@ mod advert_tests {
             status_value
                 .get("settlement_reconciliation_api")
                 .and_then(Value::as_str),
-            Some("enabled_canonical_auth_runtime_asset_lock_reconciliation")
+            Some("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")
         );
         assert_eq!(
             status_value
@@ -19978,6 +20229,7 @@ mod advert_tests {
                 .map(Vec::len),
             Some(0)
         );
+        assert_appeal_finance_reconciliation_digest_hex(&value);
     }
 
     #[tokio::test]
@@ -20034,6 +20286,7 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some("210.0")
         );
+        let in_progress_digest = assert_appeal_finance_reconciliation_digest_hex(&value).to_owned();
 
         cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
 
@@ -20064,6 +20317,8 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some("0")
         );
+        let settled_digest = assert_appeal_finance_reconciliation_digest_hex(&value);
+        assert_ne!(settled_digest, in_progress_digest);
     }
 
     #[tokio::test]

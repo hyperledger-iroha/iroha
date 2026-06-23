@@ -2613,7 +2613,8 @@ and completed history lives in [`status.md`](./status.md).
   deposit before admitting a case. Torii also builds ordered native
   `DrawdownAssetLock`/`CancelAssetLock` settlement instructions for confirmed
   appeal deposit locks, and it can reconcile the current runtime asset-lock
-  ledger state after those client-submitted settlement transactions. Deposit-backed
+  ledger state after those client-submitted settlement transactions with
+  deterministic audit digests for peer/operator comparison. Deposit-backed
   local moderation tallies now derive and publish deterministic
   `SoraFsAppealFinanceReportV1` records from the final decision, confirmed
   deposit snapshot, panel roster, revealed jurors, and no-show jurors, and Torii
