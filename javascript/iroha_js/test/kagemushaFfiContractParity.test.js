@@ -13884,12 +13884,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?numericPayloadWithTrailingField[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_numeric_payload_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?numericPayloadWithTrailingField[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?numericPayloadWithTrailingField\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?kagemushaZeroNumericPayload\(\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_numeric_payload_with_trailing_field\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaNumericPayloadWithTrailingField\(\)[\s\S]*?kagemushaZeroNumericPayload\(\)/u,
     "SDK current-note amount trailing-field vector negative control must mutate non-C# SDK test vectors and package dist",
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
-    /current-note amount trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
+    /current-note-amount-trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
     "SDK current-note amount trailing-field vector negative control must keep trailing-field labels visible",
   );
   assert.doesNotMatch(
@@ -14256,7 +14256,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkRedeemChangeOutputFixed32Branch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,

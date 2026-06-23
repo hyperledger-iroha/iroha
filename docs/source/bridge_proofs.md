@@ -1047,6 +1047,89 @@ python3 scripts/sccp_bsc_source_bridge_evidence.py \
   --toml
 ```
 
+The BSC destination leg also requires real Groth16 circuit, proving-key, and
+verifier material before a native prover bundle can be treated as production.
+The materializer must be given the full-message `r1cs`, final `zkey`,
+exported SnarkJS verifier key, canonical circuit source, the Powers-of-Tau
+file used to verify the final zkey, and both trusted-setup and reproducible
+build transcripts. Production materialization runs `snarkjs zkey verify
+<r1cs> <ptau> <zkey>` and records the successful `ZKey Ok!` result plus the
+Powers-of-Tau SHA-256 in the manifest, attestation request, signed role
+payloads, and native prover bundle checks. A manifest without the PTAU hash or
+with failed/missing zkey verification remains a candidate artifact and cannot
+be finalized as production-ready.
+
+```bash
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize \
+  --bsc-network testnet|mainnet \
+  --r1cs <full-message.r1cs> \
+  --zkey <full-message.final.zkey> \
+  --ptau <powersOfTau28_hez_final_22.ptau> \
+  --snarkjs-verifier-key <verification_key.json> \
+  --circuit-source <full-message.circom> \
+  --trusted-setup-transcript <trusted-setup-transcript.json> \
+  --reproducible-build-transcript <reproducible-build-transcript.json> \
+  --out-dir <groth16-material-dir>
+```
+
+The materializer no longer accepts signed production attestations directly.
+Operators first emit an attestation request, have independent Ed25519 signers
+sign the request-bound role payloads, inspect readiness, and only then finalize
+the manifest from those signed role files. The four production roles are
+`semanticSccpCircuit`, `circuitSecurity`, `trustedSetup`, and
+`reproducibleBuild`; signer fingerprints must be trusted explicitly and cannot
+be reused across roles. The transcript evidence must show at least two trusted
+setup contributors, destroyed toxic waste, a passing ceremony, a passing
+Powers-of-Tau verification, at least two independent rebuilders, and a
+reproducible rebuild. Transcript command logs, when supplied, must show
+`materialize` was run with `--ptau`, `--trusted-setup-transcript`, and
+`--reproducible-build-transcript`; command logs that pass signed attestations
+directly to `materialize` are rejected as stale.
+
+```bash
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request \
+  --manifest <candidate-groth16-material.manifest.json> \
+  --toolchain-sha256 <0x...> \
+  --out <attestation-request.json>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation \
+  --request <attestation-request.json> \
+  --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild \
+  --private-key-pem <ed25519-private-key.pem> \
+  --out <signed-role-attestation.json>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status \
+  --request <attestation-request.json> \
+  --semantic-attestation <semantic-sccp-circuit-attestation.json> \
+  --circuit-security-attestation <circuit-security-audit.json> \
+  --trusted-setup-attestation <trusted-setup-ceremony.json> \
+  --reproducible-build-attestation <reproducible-build-attestation.json> \
+  --trusted-attestation-signer <0x...>
+
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations \
+  --request <attestation-request.json> \
+  --semantic-attestation <semantic-sccp-circuit-attestation.json> \
+  --circuit-security-attestation <circuit-security-audit.json> \
+  --trusted-setup-attestation <trusted-setup-ceremony.json> \
+  --reproducible-build-attestation <reproducible-build-attestation.json> \
+  --trusted-attestation-signer <0x...> \
+  --out-dir <groth16-material-dir>
+```
+
+Before the finalized material can be attached to a BSC native EVM prover
+bundle, operators must run a manifest-bound proof self-test against the witness
+calculator. The self-test binds the manifest, public signals, proof artifact,
+and SnarkJS verification result, and includes adversarial witness evidence so a
+witness calculator that accepts mutated assignments cannot pass.
+
+```bash
+node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test \
+  --manifest <testnet|mainnet-bsc-groth16-material.manifest.json> \
+  --witness-wasm <full-message_js/full-message.wasm> \
+  --snarkjs-bin snarkjs \
+  --out <bsc-groth16-proof-self-test.json>
+```
+
 For deployed ETH/BSC source emitters, operators can collect the emitter code
 hash directly from read-only JSON-RPC with
 `scripts/sccp_evm_source_live_evidence.py`. The helper verifies `eth_chainId`
