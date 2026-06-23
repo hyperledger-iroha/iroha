@@ -10014,7 +10014,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         },
         { destinationBinding: ethereumMainnetBinding },
       ),
-    /crossSdkParityBytes must be at least 128 bytes/u,
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
   const tinySelfTestBundle = hashConsistentNativeProverBundle({
@@ -10761,6 +10761,14 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
         networkId: `0x${"33".repeat(32)}`,
       }),
     /sourceBridgeNetworkId must be Ethereum mainnet chain id/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        sourceBridgeEmitterCodeHash: SCCP_ETH_MAINNET_NETWORK_ID,
+      }),
+    /sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId/u,
   );
   assert.throws(
     () =>

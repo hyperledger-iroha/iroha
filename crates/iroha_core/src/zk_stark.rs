@@ -64,6 +64,10 @@ const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
 pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
 const STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS: usize = 8;
 const BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS: u32 = 1024;
+const GENERIC_STARK_AIR_BFV_FULL_BOOTSTRAP_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover";
+const GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR: &str =
+    "generic STARK AIR prover cannot target the ZK-ACE circuit; use the ZK-ACE STARK prover";
+const GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the IVM execution circuit; use the IVM execution STARK prover";
 
 fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
     if label.is_empty() {
@@ -87,6 +91,50 @@ fn validate_stark_circuit_id(circuit_id: &str) -> Result<(), &'static str> {
     }
     if !circuit_id.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err("circuit id must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
+
+fn stark_air_circuit_id_targets_reserved_circuit(circuit_id: &str, canonical: &str) -> bool {
+    let trimmed = circuit_id.trim();
+    trimmed == canonical
+        || trimmed
+            .strip_suffix(canonical)
+            .is_some_and(|prefix| prefix.ends_with(':') || prefix.ends_with('/'))
+}
+
+fn stark_air_circuit_id_targets_bfv_full_bootstrap(circuit_id: &str) -> bool {
+    stark_air_circuit_id_targets_reserved_circuit(
+        circuit_id,
+        iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+    )
+}
+
+fn stark_air_circuit_id_targets_zk_ace(circuit_id: &str) -> bool {
+    stark_air_circuit_id_targets_reserved_circuit(
+        circuit_id,
+        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+    )
+}
+
+fn stark_air_circuit_id_targets_ivm_execution(circuit_id: &str) -> bool {
+    stark_air_circuit_id_targets_reserved_circuit(
+        circuit_id,
+        crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+    )
+}
+
+fn validate_generic_stark_air_circuit_id(circuit_id: &str) -> Result<(), String> {
+    validate_stark_circuit_id(circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
+    if stark_air_circuit_id_targets_bfv_full_bootstrap(circuit_id) {
+        return Err(GENERIC_STARK_AIR_BFV_FULL_BOOTSTRAP_RESERVED_ERROR.to_owned());
+    }
+    if stark_air_circuit_id_targets_zk_ace(circuit_id) {
+        return Err(GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR.to_owned());
+    }
+    if stark_air_circuit_id_targets_ivm_execution(circuit_id) {
+        return Err(GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR.to_owned());
     }
     Ok(())
 }
@@ -911,6 +959,155 @@ mod tests {
         )
         .expect("ok");
         assert!(verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn public_generic_air_provers_reject_bfv_full_bootstrap_circuit_aliases() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:reserved-bfv-generic-air".to_owned(),
+        };
+        let rows = vec![vec![0]; 1_usize << usize::from(params.n_log2)];
+        let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
+        let circuit_ids = [
+            canonical.to_owned(),
+            format!("stark/fri/sha256-goldilocks:{canonical}"),
+            format!("stark/fri/sha256-goldilocks/{canonical}"),
+            format!("stark/fri/poseidon2-goldilocks:{canonical}"),
+        ];
+
+        for circuit_id in circuit_ids {
+            let err = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-BFV-GENERIC-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xB4; 32],
+            )
+            .expect_err("generic AIR prover must reject BFV full-bootstrap circuit aliases");
+            assert!(
+                err.contains("BFV full-bootstrap"),
+                "unexpected generic AIR rejection for {circuit_id}: {err}"
+            );
+
+            let err = prove_stark_fri_zero_composition_air_envelope_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-BFV-ZERO-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xB5; 32],
+                rows.clone(),
+            )
+            .expect_err(
+                "zero-composition AIR prover must reject BFV full-bootstrap circuit aliases",
+            );
+            assert!(
+                err.contains("BFV full-bootstrap"),
+                "unexpected zero-composition AIR rejection for {circuit_id}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_generic_air_provers_reject_zk_ace_circuit_aliases() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:reserved-zk-ace-generic-air".to_owned(),
+        };
+        let rows = vec![vec![0]; 1_usize << usize::from(params.n_log2)];
+        let canonical = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
+        let circuit_ids = [
+            canonical.to_owned(),
+            format!("stark/fri/sha256-goldilocks:{canonical}"),
+            format!("stark/fri/sha256-goldilocks/{canonical}"),
+            format!("stark/fri/poseidon2-goldilocks:{canonical}"),
+        ];
+
+        for circuit_id in circuit_ids {
+            let err = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-ZK-ACE-GENERIC-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xC4; 32],
+            )
+            .expect_err("generic AIR prover must reject ZK-ACE circuit aliases");
+            assert!(
+                err.contains("ZK-ACE"),
+                "unexpected generic AIR rejection for {circuit_id}: {err}"
+            );
+
+            let err = prove_stark_fri_zero_composition_air_envelope_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-ZK-ACE-ZERO-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xC5; 32],
+                rows.clone(),
+            )
+            .expect_err("zero-composition AIR prover must reject ZK-ACE circuit aliases");
+            assert!(
+                err.contains("ZK-ACE"),
+                "unexpected zero-composition AIR rejection for {circuit_id}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_generic_air_provers_reject_ivm_execution_circuit_aliases() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:reserved-ivm-generic-air".to_owned(),
+        };
+        let rows = vec![vec![0]; 1_usize << usize::from(params.n_log2)];
+        let canonical = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let circuit_ids = [
+            canonical.to_owned(),
+            format!("stark/fri/sha256-goldilocks:{canonical}"),
+            format!("stark/fri/sha256-goldilocks/{canonical}"),
+            format!("stark/fri/poseidon2-goldilocks:{canonical}"),
+        ];
+
+        for circuit_id in circuit_ids {
+            let err = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-IVM-GENERIC-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xD4; 32],
+            )
+            .expect_err("generic AIR prover must reject IVM execution circuit aliases");
+            assert!(
+                err.contains("IVM execution"),
+                "unexpected generic AIR rejection for {circuit_id}: {err}"
+            );
+
+            let err = prove_stark_fri_zero_composition_air_envelope_bytes(
+                params.clone(),
+                "IROHA-TEST-RESERVED-IVM-ZERO-AIR".to_owned(),
+                circuit_id.clone(),
+                [0xD5; 32],
+                rows.clone(),
+            )
+            .expect_err("zero-composition AIR prover must reject IVM execution circuit aliases");
+            assert!(
+                err.contains("IVM execution"),
+                "unexpected zero-composition AIR rejection for {circuit_id}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -5381,8 +5578,38 @@ pub fn prove_stark_fri_air_envelope_bytes(
     circuit_id: String,
     public_digest: [u8; 32],
 ) -> Result<Vec<u8>, String> {
+    validate_generic_stark_air_circuit_id(&circuit_id)?;
+    prove_stark_fri_air_envelope_bytes_for_validated_circuit(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+    )
+}
+
+/// Build an AIR envelope for crate-owned reserved circuits after caller-side family checks.
+pub(crate) fn prove_stark_fri_reserved_air_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+) -> Result<Vec<u8>, String> {
     validate_stark_circuit_id(&circuit_id)
         .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
+    prove_stark_fri_air_envelope_bytes_for_validated_circuit(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+    )
+}
+
+fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+) -> Result<Vec<u8>, String> {
     validate_stark_prover_params(&params, &transcript_label)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
@@ -5431,8 +5658,7 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     public_digest: [u8; 32],
     rows: Vec<Vec<u64>>,
 ) -> Result<Vec<u8>, String> {
-    validate_stark_circuit_id(&circuit_id)
-        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
+    validate_generic_stark_air_circuit_id(&circuit_id)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;

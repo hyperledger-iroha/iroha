@@ -9253,6 +9253,12 @@ Temporal properties:
   `[Next]_vars` steps preserve the honest/fault roster-budgeted vote counters,
   signed-stake accounting, latched commit evidence bounds, and delivered-RBC
   evidence in both pre-state and post-state.
+- The aggregate `CommittedStateAlwaysMatchesTerminalEnvelope` theorem composes
+  the committed-state terminal safety surface: finality/certificate/live-gate
+  equivalence, irrevocable committed phase, consensus artifact stability,
+  pre-GST GST-observation-only movement, committed+GST stuttering-only
+  quiescence, protocol-action exclusion, progress-gate closure, and
+  roster-budgeted RBC evidence preservation.
 - `CommitArtifactsOnlyInstallAtFinality` proves that the latched commit-view
   and commit-certificate witnesses can change only on the `CommitVote` to
   `Committed` finality transition, where they are installed from the live
@@ -9461,6 +9467,12 @@ Temporal properties:
   that every finality-latch transition completes the committed delivered state
   through exactly one certified source: honest commit vote, Byzantine commit
   vote, or RBC delivery.
+- The aggregate `FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope`
+  theorem composes the certified finality-installation surface: commit-artifact
+  provenance, finality-latch and committed-phase entry coupling, commit
+  certificate and commit-view witnesses, exact finality-source actions,
+  post-entry progress-gate closure, GST preservation, NewView isolation, and
+  exact-source committed-delivery completion.
 - `CommitViewNeverChanges` proves that the latched commit-view witness remains
   the active view after finality.
 - `CommittedViewWitnessAlwaysStaysAtCommittedView` proves that after finality
@@ -9485,6 +9497,11 @@ Temporal properties:
 - `CommitEvidenceNeverRegresses` proves that the latched commit-certificate
   vote and stake witnesses can only stay absent/preserved or advance to the
   committing certificate, never roll back.
+- The aggregate `PostFinalityStateAlwaysMatchesStabilityEnvelope` theorem
+  composes the post-finality stability surface: committed view/witness
+  agreement, commit-view future exclusion, explicit GST observation provenance,
+  GST monotonicity, active-view monotonicity, and commit certificate/view
+  witness non-regression.
 - `TimeoutTickGateNeverBypassesStalledProgress` proves that the timeout-driven
   view-change gate is enabled only before finality, and only before GST or when
   every post-GST honest/RBC progress action is disabled.

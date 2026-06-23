@@ -10,7 +10,7 @@ import {
   SCCP_CODEC_EVM_HEX,
   SCCP_CODEC_TEXT_UTF8,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
@@ -279,7 +279,7 @@ const sampleNativeEvmProverParityFixture = (bundle, overrides = {}) => {
     torii_submit_payload_hash: hex32("d4"),
   };
   return {
-    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_ETH,
     chain: "eth",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -4280,7 +4280,7 @@ test("EthereumMainnetSccp validates native prover cross-SDK parity fixtures", ()
   assert.deepEqual(parsedDescriptor, descriptor);
   assert.equal(
     descriptor.schema,
-    SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   );
   assert.equal(descriptor.domain, SCCP_DOMAIN_ETH);
   assert.equal(descriptor.chain, "eth");
@@ -4367,8 +4367,8 @@ test("EthereumMainnetSccp validates native prover cross-SDK parity fixtures", ()
     () =>
       parseEthereumMainnetNativeEvmProverParityFixture(
         JSON.stringify(fixture).replace(
-          `"schema":"${SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1}"`,
-          `"schema":"forged","schema":"${SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1}"`,
+          `"schema":"${SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1}"`,
+          `"schema":"forged","schema":"${SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1}"`,
         ),
         bundle,
       ),
@@ -4591,7 +4591,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     [verified.nativeProverBundle.provingKey, provingKeyBytes],
     [verified.nativeProverBundle.verifierKey, verifierKeyBytes],
     [
-      verified.nativeProverBundle.crossSdkFixtureParityArtifact,
+      verified.nativeProverBundle.crossSdkParityArtifact,
       parityFixtureBytes,
     ],
     [
@@ -4670,7 +4670,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     `proofArtifact:${verified.nativeProverBundle.proofArtifact}`,
     `provingKey:${verified.nativeProverBundle.provingKey}`,
     `verifierKey:${verified.nativeProverBundle.verifierKey}`,
-    `crossSdkFixtureParityArtifact:${verified.nativeProverBundle.crossSdkFixtureParityArtifact}`,
+    `crossSdkParityArtifact:${verified.nativeProverBundle.crossSdkParityArtifact}`,
     `nativeProverSelfTestArtifact:${verified.nativeProverBundle.nativeProverSelfTestArtifact}`,
     `implementationArtifact:${
       verified.nativeProverBundle.nativeSdkArtifacts.find(
@@ -4735,8 +4735,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
           nativeProverBundle: bundle,
           sdk: "javascript",
           artifactResolver(path) {
-            return path ===
-              verified.nativeProverBundle.crossSdkFixtureParityArtifact
+            return path === verified.nativeProverBundle.crossSdkParityArtifact
               ? undefined
               : artifactBytesByPath.get(path);
           },

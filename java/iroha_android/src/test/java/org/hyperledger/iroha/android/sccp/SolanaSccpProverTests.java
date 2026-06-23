@@ -4263,6 +4263,15 @@ public final class SolanaSccpProverTests {
                     repeat("ab", 32), SolanaSccpProver.ZERO_HASH_V1));
     assertTrue(ex.getMessage().contains("must both be zero"));
 
+    // Receipt-only deployment bindings must fail, not only deployment-only bindings.
+    final IllegalArgumentException receiptOnlyBinding =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
+                    SolanaSccpProver.ZERO_HASH_V1, repeat("cd", 32)));
+    assertTrue(receiptOnlyBinding.getMessage().contains("must both be zero"));
+
     final IllegalArgumentException reusedRoleHash =
         assertThrows(
             IllegalArgumentException.class,

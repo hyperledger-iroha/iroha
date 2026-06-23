@@ -246,6 +246,21 @@ public final class SourceSccpProofsTests {
                 "0x" + repeat("88", 32),
                 null,
                 "0x" + repeat("11", 20),
+                SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
+                SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
+                null,
+                "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"),
+        "sourceBridgeEmitterCodeHash");
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
+                SourceSccpProofs.DOMAIN_ETH,
+                "0x" + repeat("44", 32),
+                "0x" + repeat("55", 32),
+                "0x" + repeat("66", 32),
+                "0x" + repeat("88", 32),
+                null,
+                "0x" + repeat("11", 20),
                 "0x" + repeat("77", 32),
                 SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
                 "0x" + repeat("22", 20),

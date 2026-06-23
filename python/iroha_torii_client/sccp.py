@@ -1429,6 +1429,13 @@ def _reject_mismatched_eth_source_bridge_config_hash(
         raise TypeError(
             "sourceBridgeNetworkId must be Ethereum mainnet chain id"
         )
+    if (
+        material["source_bridge_emitter_code_hash"]
+        == material["source_bridge_network_id"]
+    ):
+        raise TypeError(
+            "sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId"
+        )
     if material["source_bridge_owner_address"] != "0x":
         raise TypeError("sourceBridgeOwnerAddress is not used for sourceDomain")
     supplied = _hex_to_bytes(
