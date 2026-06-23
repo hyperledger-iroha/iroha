@@ -2,6 +2,15 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 Iroha Config Minimal Snapshot Alignment
+
+- Refreshed the `minimal_config_snapshot` expectation so the SoraFS repair
+  auditor rate-limit defaults match the current actual config debug output:
+  `Some(4)` for `auditor_rate_per_sec` and `Some(16)` for `auditor_burst`.
+- Validation passed:
+  - `UPDATE_EXPECT=1 CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures -- --nocapture`
+
 ## 2026-06-23 Soracloud BFV Full-Bootstrap Schema Fixture Alignment
 
 - Re-aligned the Soracloud full-bootstrap material profile gate so it compares
