@@ -14,7 +14,7 @@ auditors share a single source of truth.
 | Chunking & proofs | CDC profile | Target 256 KiB (64 KiB min, 512 KiB max) with BLAKE3 digests, two-level (64 KiB / 4 KiB) PoR tree per chunk. | `cargo run -p sorafs_chunker --bin export_vectors` and `ci/check_sorafs_fixtures.sh` (see `docs/source/sorafs/chunker_conformance.md`). `sorafs_car::ChunkStore` emits the PoR tree (`sorafs_car/src/lib.rs`). |
 | Provider adverts | Refresh/expiry | Providers refresh adverts every 12 h; TTL is 24 h. Payloads are signed `ProviderAdvertBodyV1` envelopes with deterministic nonce/QoS metadata. | Provider advert publishing pipelines plus the admission fixtures enforce cadence/TLV limits. Dashboards: `torii_sorafs_admission_total`, `torii_sorafs_provider_range_capability_total` (see `docs/source/sorafs/provider_advert_multisource.md`). |
 | Proof cadence | PoR/PDP windows | 1 h epochs, ≤32 samples, 10 m probe window + 2 m grace. Sora-PDP runs on all hot replicas; Sora-PoTR classifies 90 s (hot) / 5 m (warm) deadlines. | `sorafs_cli proof verify` (PoR) and PDP probe harnesses; dashboards `dashboards/grafana/sorafs_capacity_health.json` (`torii_da_pdp_bonus_micro_total`, `torii_da_potr_bonus_micro_total`). HTTP fetches must carry `Sora-PDP` / `Sora-PoTR` headers (`docs/source/soradns_gateway_content_binding.md`). |
-| Replication orders | Acceptance SLA | Orders expire if not accepted within 5 minutes, require `precommit` plus QA PoR `PASS` before completion, and every artefact lands in the GovernanceLog DAG. | `torii_sorafs_registry_orders_total`, `torii_sorafs_replication_sla_total`, and the DAG fixtures in `docs/source/sorafs_governance_dag_plan.md`. Regenerate fixtures via `cargo run -p sorafs_manifest --bin generate_replication_order_fixture`. |
+| Replication orders | Acceptance SLA | Orders expire if not accepted within 5 minutes, require `precommit` plus QA PoR `PASS` before completion, and every artefact lands in the GovernanceLog DAG. | `torii_sorafs_registry_orders_total`, `torii_sorafs_replication_sla_total`, and the DAG fixtures in `docs/source/sorafs_governance_dag_plan.md`. Regenerate fixtures via `cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`. |
 | Pricing & auto-renew | Billing currency & decay ladder | Charges denominated in **XOR** with USD TWAP surfaced in UX; auto-renew enabled by default with per-account spend caps. Degradation ladder: Full service → Read-only (30 d) → Reduced replicas (30 d) → Cold archive (60 d) → Tombstone. | `sorafs.node.deal_*` metrics (deal engine), dashboards `dashboards/grafana/sorafs_capacity_health.json`, docs `docs/source/sorafs/deal_engine.md` and `docs/source/sorafs/storage_capacity_marketplace.md`. |
 | Transport | Default mode | Read-only retrieval defaults to SoraNet anonymity (entry/middle/exit relays). Direct mode requires explicit overrides in CLI/SDK. Handshake uses hybrid X25519 + Kyber (SNNet‑16) with PQ roll-out for relay identities/tickets. | `sorafs_cli fetch` / `sorafs_fetch` policy overrides, `crates/iroha_cli/src/commands/streaming.rs`, `crates/soranet_pq`, and the PQ rollout plan (`docs/source/soranet/pq_rollout_plan.md`). Dashboards flag direct-mode downgrades via `torii_stream_transport_policy_total`. |
 
@@ -92,8 +92,9 @@ auditors share a single source of truth.
 - Fixture refresh:
 
   ```bash
-  cargo run -p sorafs_manifest --bin generate_replication_order_fixture \
-    -- --manifest fixtures/sorafs_manifest/ci_sample/manifest.json
+  cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- \
+    capacity replication-order \
+    --spec fixtures/sorafs_manifest/replication_order/order_v1.json
   ```
 
 ## 5. Pricing, Auto-Renew, and Degradation Ladder

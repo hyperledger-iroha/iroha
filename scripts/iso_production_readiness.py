@@ -43,7 +43,7 @@ EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
-XSD_SUMMARY_VERSION = 1
+XSD_SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
@@ -295,6 +295,7 @@ XSD_SUMMARY_KEYS = {
     "missing_schema_fixtures",
     "schema_only_entries",
     "missing_profile_schema_versions",
+    "missing_profile_schema_message_ids",
     "blocked_schema_source_count",
     "blocked_schema_sources",
     "schemas",
@@ -389,6 +390,13 @@ XSD_PROFILE_MISSING_VERSION_KEYS = {
     "message_type",
     "direction",
     "message_def_id",
+}
+XSD_PROFILE_MISSING_MESSAGE_KEYS = {
+    "message_def_id",
+    "profile_version_count",
+    "reviewed_missing_schema_fixture",
+    "reviewed_schema_only",
+    "blocked_source",
 }
 XSD_PROFILE_SKIPPED_VERSION_KEYS = {
     "profile_id",
@@ -633,45 +641,51 @@ def _check_no_secret_material(value: Any, label: str = "$") -> None:
         _reject_secret_string(value, label)
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise ReadinessError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise ReadinessError(f"{path} does not exist") from error
+        raise ReadinessError(f"{label} does not exist") from error
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
-        raise ReadinessError(f"{path} must not be a symlink")
+        raise ReadinessError(f"{label} must not be a symlink")
     if not stat.S_ISREG(mode):
-        raise ReadinessError(f"{path} must be a regular file")
+        raise ReadinessError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise ReadinessError(f"{path} exceeds {max_bytes} byte JSON limit")
+        raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise ReadinessError(f"{path} must be a regular file")
+            raise ReadinessError(f"{label} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise ReadinessError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise ReadinessError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
         return raw
     except FileNotFoundError as error:
-        raise ReadinessError(f"{path} does not exist") from error
+        raise ReadinessError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise ReadinessError(f"{path} must not be a symlink") from error
-        raise ReadinessError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        raise ReadinessError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -944,35 +958,36 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_output_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise ReadinessError(f"{path.parent} must be a directory") from error
+        raise ReadinessError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise ReadinessError(f"{path.parent} must not be a symlink")
+        raise ReadinessError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise ReadinessError(f"{path.parent} must be a directory")
+        raise ReadinessError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise ReadinessError(f"{path} must not be a symlink")
+            raise ReadinessError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise ReadinessError(f"{path} must be a regular file")
+            raise ReadinessError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise ReadinessError(f"{path} must not be hard-linked")
+            raise ReadinessError(f"{label} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise ReadinessError(f"{path.parent} must not be a symlink") from error
-        raise ReadinessError(f"{path.parent} must be a directory") from error
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        raise ReadinessError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -985,15 +1000,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise ReadinessError(f"{path} temp file must not be a symlink") from error
+                raise ReadinessError(f"{label} temp file must not be a symlink") from error
             raise ReadinessError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise ReadinessError(f"{path} temp file must be a regular file")
+            raise ReadinessError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise ReadinessError(f"{path} temp file must not be hard-linked")
+            raise ReadinessError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -1016,7 +1031,11 @@ def _write_text_output(path: Path, text: str) -> None:
         os.close(parent_fd)
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -1028,15 +1047,21 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise ReadinessError(f"{current} must not be a symlink")
+            label = display_label or str(current)
+            raise ReadinessError(f"{label} must not be a symlink")
 
 
-def _load_json(path: Path) -> Any:
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
     try:
-        raw = _read_regular_file(path, max_bytes=MAX_SUMMARY_JSON_BYTES)
+        raw = _read_regular_file(
+            path,
+            max_bytes=MAX_SUMMARY_JSON_BYTES,
+            display_label=label,
+        )
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ReadinessError(f"{path} is not UTF-8 JSON") from error
+        raise ReadinessError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -1044,7 +1069,7 @@ def _load_json(path: Path) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise ReadinessError(f"{path} is not valid JSON: {error}") from error
+        raise ReadinessError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -1059,7 +1084,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise ReadinessError(f"JSON contains non-finite numeric constant {value}")
+    raise ReadinessError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -2900,7 +2925,7 @@ def _verify_xsd_summary_entries(
         _blocker(
             blockers,
             "xsd.blocked_source_already_checked_in",
-            f"XSD summary records blocked candidate for checked-in schema {message_def_id}",
+            "XSD summary records blocked candidate for a checked-in schema",
             path,
         )
     _block_duplicate_strings(
@@ -2931,6 +2956,7 @@ def _verify_xsd_summary_entries(
     fixture_paths: list[str] = []
     fixture_digests: list[str] = []
     backed_schema_paths: set[str] = set()
+    schema_backed_message_ids: set[str] = set()
     computed_missing_schema_entries: list[tuple[str, str, str]] = []
     computed_schema_backed = 0
     computed_schema_validated = 0
@@ -2957,6 +2983,7 @@ def _verify_xsd_summary_entries(
         )
         if schema_backed:
             computed_schema_backed += 1
+            schema_backed_message_ids.add(fixture_message_def_id)
             if schema_validated:
                 computed_schema_validated += 1
             if missing_reason is not None:
@@ -3141,6 +3168,7 @@ def _verify_xsd_summary_entries(
     summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
     summary["_validated_fixture_paths"] = fixture_paths
     summary["_validated_fixture_digests"] = fixture_digests
+    summary["_validated_schema_backed_message_ids"] = schema_backed_message_ids
 
 
 def _xsd_gap_entry_key(
@@ -3188,7 +3216,7 @@ def _profile_version_key(entry: dict[str, Any], label: str) -> tuple[str, str, s
     message_def_id = _require_message_def_id(entry, "message_def_id", label)
     if not message_def_id.startswith(message_type + "."):
         raise ReadinessError(
-            f"{label}.message_def_id must match message_type {message_type!r}"
+            f"{label}.message_def_id must match message_type"
         )
     return profile_id, message_type, direction, message_def_id
 
@@ -3209,6 +3237,7 @@ def _verify_xsd_profile_catalog_entries(
     profile_checked_versions: int,
     profile_schema_backed_versions: int,
     missing_profile_schema_versions: list[Any],
+    schema_backed_message_ids: set[str],
     blockers: list[dict[str, Any]],
 ) -> dict[str, str] | None:
     if "profile_catalog" not in summary:
@@ -3310,7 +3339,7 @@ def _verify_xsd_profile_catalog_entries(
             _blocker(
                 blockers,
                 "xsd.profile_catalog_skipped_family_mismatch",
-                f"{label}.version must equal message_type {key[1]!r}",
+                f"{label}.version must equal message_type",
                 path,
             )
         if key in seen_skipped:
@@ -3358,6 +3387,14 @@ def _verify_xsd_profile_catalog_entries(
         else:
             seen_versions[key] = offset
         schema_backed = _require_bool(version, "schema_backed", label)
+        expected_schema_backed = key[3] in schema_backed_message_ids
+        if schema_backed != expected_schema_backed:
+            _blocker(
+                blockers,
+                "xsd.profile_version_schema_backing_mismatch",
+                "XSD profile catalog version schema_backed flag does not match schema-backed fixtures",
+                path,
+            )
         if schema_backed:
             computed_schema_backed += 1
         else:
@@ -3414,6 +3451,77 @@ def _verify_xsd_profile_catalog_entries(
         "catalog_json_sha256": profile_catalog_json_sha256,
         "profiles": catalog_profiles,
     }
+
+
+def _verify_missing_profile_schema_message_ids(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    missing_profile_schema_versions: list[Any],
+    missing_schema_message_ids: set[str],
+    schema_only_message_ids: set[str],
+    blocked_schema_message_ids: set[str],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Verify the unique missing-message aggregate against raw profile gaps."""
+
+    raw_entries = _require_list(
+        summary.get("missing_profile_schema_message_ids"),
+        f"{path}.missing_profile_schema_message_ids",
+    )
+    counts: dict[str, int] = {}
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        message_def_id = _require_message_def_id(missing, "message_def_id", label)
+        counts[message_def_id] = counts.get(message_def_id, 0) + 1
+
+    expected = sorted(
+        (
+            message_def_id,
+            count,
+            message_def_id in missing_schema_message_ids,
+            message_def_id in schema_only_message_ids,
+            message_def_id in blocked_schema_message_ids,
+        )
+        for message_def_id, count in counts.items()
+    )
+    actual: list[tuple[str, int, bool, bool, bool]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(raw_entries):
+        label = f"{path}.missing_profile_schema_message_ids[{offset}]"
+        entry = _require_object(raw_entry, label)
+        _reject_unknown_keys(entry, XSD_PROFILE_MISSING_MESSAGE_KEYS, label)
+        message_def_id = _require_message_def_id(entry, "message_def_id", label)
+        if message_def_id in seen:
+            _blocker(
+                blockers,
+                "xsd.missing_profile_schema_message_id_duplicate",
+                (
+                    f"{label}.message_def_id duplicates "
+                    f"{path}.missing_profile_schema_message_ids"
+                    f"[{seen[message_def_id]}].message_def_id"
+                ),
+                path,
+            )
+        else:
+            seen[message_def_id] = offset
+        actual.append(
+            (
+                message_def_id,
+                _require_positive_int(entry, "profile_version_count", label),
+                _require_bool(entry, "reviewed_missing_schema_fixture", label),
+                _require_bool(entry, "reviewed_schema_only", label),
+                _require_bool(entry, "blocked_source", label),
+            )
+        )
+    if sorted(actual) != expected:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_message_ids_mismatch",
+            "XSD summary missing_profile_schema_message_ids does not match profile gaps",
+            path,
+        )
 
 
 def _block_xsd_profile_catalog_digest_role_confusion(
@@ -3823,13 +3931,15 @@ def verify_xsd_summary(
     max_age_days: int,
     blockers: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify one XSD preflight summary and append production blockers."""
 
-    summary = _require_object(_load_json(path), str(path))
-    digest = _require_summary_digest(summary, str(path))
-    _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, str(path))
-    _check_no_secret_material(summary)
+    label = display_label or "xsd summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
     version = summary.get("version")
     if (
         isinstance(version, bool)
@@ -3962,6 +4072,7 @@ def verify_xsd_summary(
         profile_checked_versions=profile_checked_versions,
         profile_schema_backed_versions=profile_schema_backed_versions,
         missing_profile_schema_versions=missing_profile_schema_versions,
+        schema_backed_message_ids=summary["_validated_schema_backed_message_ids"],
         blockers=blockers,
     )
     if profile_catalog_summary is not None:
@@ -3982,10 +4093,20 @@ def verify_xsd_summary(
         if isinstance(entry, dict)
     }
     current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
-    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | {
+    blocked_schema_message_ids = {
         blocked["message_def_id"]
         for blocked in summary["_validated_blocked_schema_sources"]
     }
+    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | blocked_schema_message_ids
+    _verify_missing_profile_schema_message_ids(
+        summary,
+        path,
+        missing_profile_schema_versions=missing_profile_schema_versions,
+        missing_schema_message_ids=missing_schema_message_ids,
+        schema_only_message_ids=schema_only_message_ids,
+        blocked_schema_message_ids=blocked_schema_message_ids,
+        blockers=blockers,
+    )
     blocked_gap_message_ids = missing_schema_message_ids | {
         _require_message_def_id(
             entry,
@@ -4001,16 +4122,12 @@ def verify_xsd_summary(
             _blocker(
                 blockers,
                 "xsd.blocked_source_without_gap",
-                (
-                    "XSD summary records blocked candidate "
-                    f"{message_def_id} without a current missing schema/profile gap"
-                ),
+                "XSD summary records blocked candidate without a current missing schema/profile gap",
                 path,
             )
 
     has_reviewed_xsd_gap = (
-        repository_fixture_manifest
-        or bool(missing_schema_fixtures)
+        bool(missing_schema_fixtures)
         or bool(schema_only_entries)
         or bool(blocked_schema_sources)
     )
@@ -4019,7 +4136,7 @@ def verify_xsd_summary(
         return warnings if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap else blockers
 
     if repository_fixture_manifest:
-        reviewed_gap_target().append(
+        blockers.append(
             {
                 "code": "xsd.repository_fixture_manifest",
                 "message": (
@@ -4595,7 +4712,7 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.source_missing",
-            f"trust profile {profile_id!r} has no source provenance",
+            "trust profile has no source provenance",
             path,
         )
         source_summary = None
@@ -4656,7 +4773,7 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.no_signature_or_x509_pins",
-            f"trust profile {profile_id!r} has no public-key or X.509 pins",
+            "trust profile has no public-key or X.509 pins",
             path,
         )
     if args.environment is not None and environment != args.environment:
@@ -4670,42 +4787,42 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.policy_unsupported",
-            f"trust profile {profile_id!r} uses unsupported embedded signature policy",
+            "trust profile uses unsupported embedded signature policy",
             path,
         )
     elif policy != REQUIRE_VERIFIED:
         _blocker(
             blockers,
             "trust.policy_not_require_verified",
-            f"trust profile {profile_id!r} does not require verified signatures",
+            "trust profile does not require verified signatures",
             path,
         )
     if not crl_required:
         _blocker(
             blockers,
             "trust.crl_revocation_not_required",
-            f"trust profile {profile_id!r} does not require CRL revocation checking",
+            "trust profile does not require CRL revocation checking",
             path,
         )
     elif x509_crl_count <= 0:
         _blocker(
             blockers,
             "trust.no_crl_revocation_material",
-            f"trust profile {profile_id!r} requires CRL revocation checking but has no CRLs",
+            "trust profile requires CRL revocation checking but has no CRLs",
             path,
         )
     if not ocsp_required:
         _blocker(
             blockers,
             "trust.ocsp_revocation_not_required",
-            f"trust profile {profile_id!r} does not require OCSP revocation checking",
+            "trust profile does not require OCSP revocation checking",
             path,
         )
     elif x509_ocsp_response_count <= 0:
         _blocker(
             blockers,
             "trust.no_ocsp_revocation_material",
-            f"trust profile {profile_id!r} requires OCSP revocation checking but has no OCSP responses",
+            "trust profile requires OCSP revocation checking but has no OCSP responses",
             path,
         )
     result = {
@@ -5501,13 +5618,15 @@ def verify_evidence_summary(
     *,
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify one aggregate operator-evidence summary and append blockers."""
 
-    summary = _require_object(_load_json(path), str(path))
-    digest = _require_summary_digest(summary, str(path))
-    _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, str(path))
-    _check_no_secret_material(summary)
+    label = display_label or "evidence summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -5844,8 +5963,8 @@ def run(args: argparse.Namespace) -> int:
     xsd_summary_paths = list(args.xsd_summary or [])
     evidence_summary_paths = list(args.evidence_summary or [])
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_output_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
     for offset, path in enumerate(xsd_summary_paths):
         _reject_output_path_smuggling(path, f"--xsd-summary[{offset}]")
     for offset, path in enumerate(evidence_summary_paths):
@@ -5890,12 +6009,18 @@ def run(args: argparse.Namespace) -> int:
             max_age_days=args.max_xsd_age_days,
             blockers=blockers,
             warnings=warnings,
+            display_label=f"xsd_summaries[{offset}]",
         )
-        for path in xsd_paths
+        for offset, path in enumerate(xsd_paths)
     ]
     evidence_summaries = [
-        verify_evidence_summary(path, args=args, blockers=blockers)
-        for path in evidence_paths
+        verify_evidence_summary(
+            path,
+            args=args,
+            blockers=blockers,
+            display_label=f"evidence_summaries[{offset}]",
+        )
+        for offset, path in enumerate(evidence_paths)
     ]
     if args.allow_reviewed_xsd_gaps and not warnings:
         raise ReadinessError(
@@ -5939,7 +6064,7 @@ def run(args: argparse.Namespace) -> int:
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0 if output["ok"] else 1
 

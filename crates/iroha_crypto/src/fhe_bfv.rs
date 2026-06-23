@@ -3128,6 +3128,10 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
 #[allow(clippy::struct_excessive_bools)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "release-audit wire profile exposes one boolean per audited proof obligation"
+)]
 pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     /// Evidence proof-profile version.
     pub version: u16,
@@ -3893,6 +3897,10 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Encode)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "native fingerprint preimage exposes one boolean per audited proof obligation"
+)]
 struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     version: u16,
     field_count: u16,
@@ -17603,11 +17611,11 @@ pub(crate) fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
 ///
 /// This is the verifier admission companion to
 /// [`validate_bfv_full_bootstrap_circuit_material_v1`]. Callers provide the
-/// application-specific public-input schema digest and, once a proof attachment
-/// is available, the verifier-key material commitment expected for the proof
-/// that will govern this material. The crypto layer then enforces that the
-/// full-bootstrap material commits to exactly those proof-facing values without
-/// hard-coding an application verifier profile.
+/// expected governed BFV proof public-input schema artifact digest and, once a
+/// proof attachment is available, the verifier-key material commitment
+/// expected for the proof that will govern this material. The crypto layer then
+/// enforces that the full-bootstrap material commits to exactly those
+/// proof-facing values.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the material is invalid, either expected digest is

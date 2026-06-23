@@ -1,7 +1,7 @@
 //! Proof-of-Retrievability (PoR) challenge, proof, and audit verdict schemas.
 
 use blake3::Hasher;
-use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
 use crate::{
@@ -773,7 +773,17 @@ pub enum PorChallengeStatusValidationError {
 }
 
 /// ISO-8601 week identifier used by PoR reports.
-#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    PartialEq,
+    Eq,
+)]
 pub struct PorReportIsoWeek {
     /// Calendar year (ISO week date).
     pub year: u16,

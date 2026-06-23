@@ -9,100 +9,102 @@ source_last_modified: "2025-12-05T17:03:20.752240+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Harness de conformidad del gateway SoraFS
+# SoraFS Gateway Conformance Harness
 
-Esta nota describe la arquitectura propuesta para el harness de conformidad SF-5a.
-Es un plan de implementación, no el entregable final. La intención es dar a QA y
-Tooling un blueprint compartido antes de iniciar la integración.
+This note records the implemented SF-5a conformance harness and the remaining
+rollout evidence hand-offs. The local regression contract is fixture-backed,
+deterministic, and signed through the same attestation envelope operators use
+for gateway self-certification.
 
-## Objetivos
+## Objectives
 
-1. **Validación por replay:** alimentar fixtures CAR canónicos en un gateway y
-   verificar que las pruebas BLAKE3 + PoR coinciden con los manifiestos publicados en los fixtures SoraFS.
-2. **Cobertura negativa:** asegurar que los gateways rechacen correctamente chunker handles no soportados, pruebas malformadas, desajustes de admisión e intentos de downgrade.
-3. **Pruebas de carga:** sostener ≥1.000 streams de rango concurrentes contra un set de payloads con semilla y verificar latencia, throughput y rechazos deterministas.
-4. **Atestación:** producir reportes estructurados de ejecución que los operadores puedan firmar al auto-certificar gateways.
+1. **Replay validation:** Feed canonical CAR fixtures through a gateway and
+   assert BLAKE3 + PoR proofs match the manifests published in SoraFS fixtures.
+2. **Negative coverage:** Ensure gateways correctly refuse unsupported chunker
+   handles, malformed proofs, admission mismatches, and downgrade attempts.
+3. **Load testing:** Sustain ≥1,000 concurrent range streams against a seeded
+   payload set and verify deterministic latency, throughput, and refusal behaviour.
+4. **Attestation:** Produce structured run reports that operators can sign when
+   self-certifying gateways.
 
-## Integración con CI
+## CI Integration
 
-La suite determinista de replay ya corre como parte de los helpers de CI del workspace vía
-`ci/check_sorafs_gateway_conformance.sh`. El script ejecuta
-`cargo test --locked -p integration_tests sorafs_gateway_conformance -- --nocapture`
-para reproducir la matriz canónica de fixtures y falla rápido ante regresiones.
-Los pipelines nightly deben invocar el script junto con `ci/check_sorafs_fixtures.sh`
-para mantener la conformidad ligada a las mismas pruebas, manifiestos y escenarios de rechazo
-usados para las atestaciones de operadores.
+The deterministic replay suite now runs as part of the workspace CI helpers via
+`ci/check_sorafs_gateway_conformance.sh`. The script executes
+`cargo test --locked -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`
+to replay the canonical fixture matrix and fails fast when regressions surface.
+Hosted nightly pipelines should invoke the script alongside
+`ci/check_sorafs_fixtures.sh` once rollout secrets and artifact retention are
+available, so conformance stays gated on the same proofs, manifests, and
+refusal scenarios used for operator attestations.
 
-El mismo binario de tests ahora ejecuta el harness de carga determinista
-(`run_deterministic_load_test`) que lanza ≥1.000 solicitudes concurrentes sobre la mezcla
-de éxito/rechazo definida por el plan SF-5a. Los resultados (percentiles de latencia y
-contadores de rechazos/errores) fluyen a `SuiteReport::to_json_value` para que los bundles
-de atestación incluyan evidencia tanto de replay como de carga.
+The same test binary now drives the deterministic load harness
+(`run_deterministic_load_test`) which spawns ≥1,000 concurrent requests across
+the success/refusal mix defined by the SF-5a plan. Results, including latency
+percentiles and refusal/error counters, flow into `SuiteReport::to_json_value`
+so governance attestation bundles include both replay and load-test evidence.
 
-## Boceto de arquitectura
+## Architecture Sketch
 
 ```
 ┌────────────────────────────┐
-│  Registro de fixtures      │
-│  (Norito)                  │
-│   - Manifiestos            │
-│   - Bundles de pruebas     │
-│   - Casos negativos        │
+│  Fixture Registry (Norito) │
+│   - Manifests              │
+│   - Proof bundles          │
+│   - Negative cases         │
 └────────────┬───────────────┘
              │
 ┌────────────▼─────────────┐      ┌──────────────────────────┐
-│   Controlador de replay  │      │   Generador de carga     │
-│ (Rust, orquestador Tokio │◀────▶│ (Rust + workers          │
-│  + validadores Norito)   │      │  configurables)          │
+│   Replay Controller      │      │   Load Generator          │
+│ (Rust, Tokio orchestrator│◀────▶│ (Rust + configurable     │
+│  + Norito validators)    │      │  workers, configurable)   │
 └────────────┬─────────────┘      └──────────────────────────┘
              │
 ┌────────────▼─────────────┐
-│ Capa de adaptadores      │
-│  de gateway              │
-│  - shim HTTP             │
-│  - inyección de headers  │
-│  - extracción de pruebas │
+│ Gateway Adapter Layer    │
+│  - HTTP client shim      │
+│  - Header injection      │
+│  - Proof extraction      │
 └────────────┬─────────────┘
              │
 ┌────────────▼─────────────┐
-│ Pipeline de verificación │
-│  - check digest manifest │
-│  - validación chunk plan │
-│  - verificación PoR      │
+│ Verification Pipeline    │
+│  - Manifest digest check │
+│  - Chunk plan validation │
+│  - PoR proof verification│
 └────────────┬─────────────┘
              │
 ┌────────────▼─────────────┐
-│ Reporte y atestación     │
-│  - resumen JSON          │
-│  - artefactos de fallos  │
-│  - hook de firma (sobre  │
-│    de atestación Norito) │
+│ Report & Attestation     │
+│  - JSON summary          │
+│  - Failure artifacts     │
+│  - Signing hook (Norito  │
+│    attestation envelope) │
 └──────────────────────────┘
 ```
 
-## Hook de firma de atestación
+## Attestation Signing Hook
 
-El harness de conformidad emite resultados legibles por máquina _y_ una atestación Norito
-firmada para que los operadores presenten evidencia a gobernanza. El flujo de firma es
-determinista y multiplataforma; no depende de tooling ad hoc.
+The conformance harness emits machine-readable results _and_ a Norito-signed
+attestation so operators can present evidence to governance. The signing flow
+is deterministic and cross-platform; it does not rely on bespoke tooling.
 
-1. **Canonizar el payload del reporte.** Serializar la estructura del reporte con
-   `norito::json::to_vec(&report)` para obtener la secuencia canónica de bytes (guardarla
-   como `payload_bytes`). El writer de Norito ya fuerza el orden determinista de claves.
-   La estructura del reporte debe corresponder al esquema descrito en
-   [Formato de reporte](#formato-de-reporte) y ya debe contener `fixtures_commit`, `run_id`
-   y el array `scenarios`.
-2. **Hash para auditabilidad.** Calcular `let digest = blake3::hash(&payload_bytes);`
-   y almacenar el resultado de 32 bytes en hex y multibase.
-   Este digest se convierte en `attestation.payload_hash`.
-3. **Firmar con material de claves configurado.** Cargar el par de claves del operador desde la
-   configuración del harness (por ejemplo, `gateway_attestor.key_path`). Las claves deben usar
-   el esquema que exigen los manifiestos de gobernanza — hoy `Ed25519`. El harness
-   llama `iroha_crypto::Signature::try_new(key_pair.private_key(), &payload_bytes)` y registra
-   la firma y el identificador de algoritmo.
-4. **Envolver en un sobre Norito.** Construir una estructura `SignedGatewayReport`.
+1. **Canonicalise the report payload.** Serialize the run report structure with
+   `norito::json::to_vec(&report)` to obtain the canonical byte sequence (store
+   it as `payload_bytes`). Norito's writer already enforces deterministic key ordering. The report structure must match the schema described in
+   [Reporting Format](#reporting-format) and should already contain the
+   `fixtures_commit`, `run_id`, and `scenarios` array.
+2. **Hash for auditability.** Compute `let digest = blake3::hash(&payload_bytes);`
+   and store the 32-byte output in both hexadecimal and multibase encodings.
+   This digest becomes the `attestation.payload_hash` field.
+3. **Sign with configured key material.** Load the operator's key pair from the
+   harness configuration (e.g., `gateway_attestor.key_path`). Keys must use the
+   same scheme enforced by governance manifests—`Ed25519` today. The harness
+   calls `iroha_crypto::Signature::try_new(key_pair.private_key(), &payload_bytes)`
+   and records both the signature bytes and the signing algorithm identifier.
+4. **Wrap in a Norito envelope.** Construct a `SignedGatewayReport` structure:
 
-   Ejemplo de snippet del harness:
+   Example harness snippet:
 
    ```rust
    use blake3;
@@ -134,76 +136,79 @@ determinista y multiplataforma; no depende de tooling ad hoc.
                .expect("system clock before UNIX_EPOCH")
                .as_secs(),
        },
-       "report": report_json_value, // idéntico al payload del reporte
+       "report": report_json_value, // identical to reporting payload
    });
    ```
 
-   Codifica el sobre con `norito::json::to_vec(&envelope)` para archivarlo.
-   El helper `load_key_pair_from_disk` es un wrapper delgado sobre
-   `iroha_crypto::KeyPair::from_private_key` que hace cumplir ACLs de filesystem y
-   soporta adaptadores con hardware-backed.
-5. **Persistir artefactos.** Escribe tres archivos por ejecución:
-   - `report.json` — reporte JSON sin firmar (formato canónico).
-   - `report.attestation.to` — sobre de atestación Norito.
-   - `report.attestation.txt` — resumen legible (hash + firmante).
+   Encode the envelope via `norito::json::to_vec(&envelope)` for archival.
+   The helper `load_key_pair_from_disk` is a thin wrapper around
+   `iroha_crypto::KeyPair::from_private_key` that enforces filesystem ACL checks
+   and supports hardware-backed adapters.
+5. **Persist artifacts.** Write three files per run:
+   - `sorafs_gateway_report.json` — the unsigned JSON report (canonical formatting).
+   - `sorafs_gateway_attestation.to` — Norito-encoded attestation envelope.
+   - `sorafs_gateway_attestation.txt` — human-readable summary (hash + signer).
 
-6. **CLI de verificación.** Publicar `sorafs-gateway-cert verify` (parte del crate planeado
-   `sorafs-gateway-cert`) que realice la operación inversa:
-   - Parsear la atestación Norito.
-   - Recalcular BLAKE3 sobre el reporte embebido.
-   - Verificar la firma con `iroha_crypto::Signature::verify`.
-   - Emitir éxito/fallo con exit code no cero si hay mismatch.
+6. **Verification CLI.** Use
+   `cargo xtask sorafs-gateway-attest --verify <attestation.to>` to perform the
+   inverse operation:
+   - Parse the Norito attestation.
+   - Recompute BLAKE3 over the embedded report.
+   - Verify the signature with `iroha_crypto::Signature::verify`.
+   - Emit success/failure with a non-zero exit code on mismatch.
 
-Puedes generar el bundle de reporte/atestación localmente con `cargo xtask sorafs-gateway-attest`.
-El comando acepta `--signing-key <path>` (private key en hex),
-`--signer-account <<i105-account-id>>` (AccountId codificado sin dominio; sufijo `@domain` rechazado), y `--gateway <url>` más `--out <dir>` opcional.
-Los artefactos se guardan por defecto en `artifacts/sorafs_gateway_attest/`.
+You can generate the report/attestation bundle locally via `cargo xtask sorafs-gateway-attest`.
+The command accepts `--signing-key <path>` (hex-encoded private key),
+`--signer-account <<i105-account-id>>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
+Artifacts default to `artifacts/sorafs_gateway_attest/`. Verify a generated or
+operator-supplied envelope with
+`cargo xtask sorafs-gateway-attest --verify <attestation.to>`; verification
+recomputes the embedded report BLAKE3 digest and checks the Ed25519 signature
+against the declared signer key.
 
-Al mantener el hook de firma dentro del binario del harness, los runs nightly de CI pueden
-publicar artefactos firmados automáticamente, y los operadores solo necesitan proporcionar
-una ruta de keypair o un signer hardware-backed vía el mismo trait.
+By keeping the signing hook inside the harness binary, nightly CI runs can
+auto-publish signed artifacts, and operators only need to provide a keypair
+path or hardware-backed signer implementation via the same trait.
 
-## Matriz de pruebas
+## Test Matrix
 
-| ID | Escenario | Resultado esperado |
-|----|-----------|-------------------|
-| A1 | Replay CAR completo (perfil sf1) | 200 OK, verificación chunk/PoR pasa |
-| A2 | Byte range (alineado a límites de chunk) | 206 Partial Content, pruebas limitadas al rango solicitado |
-| A3 | Byte range (solicitud desalineada) | 416 Range Not Satisfiable |
-| A4 | Replay multi-range (parcial + chunk completo) | 206 Partial Content con segmentos multipart ordenados |
-| B1 | Handle de chunker no soportado | 406 con body `unsupported_chunker` |
-| B2 | Sobre de manifiesto ausente | 428 fallo de admisión |
-| B3 | Prueba PoR corrupta | 422 fallo de prueba |
-| B4 | Payload CAR corrupto (digest mismatch) | 422 rechazo (payload digest mismatch) |
-| B5 | Proveedor no admitido | 412 precondition failure con `provider_not_admitted` |
-| B6 | Cliente excede ventana de rate limit | 429 `rate_limited` con header `Retry-After` |
-| C1 | 1k concurrentes streaming de rango (caché warm) | P95 < objetivo, sin fallos de prueba |
-| C2 | 1k concurrentes con 1% corrupción inyectada | Todas las respuestas corruptas rechazadas, gateway devuelve 422 |
-| D1 | Carga con trigger de denylist GAR | 451 Unavailable For Legal Reasons |
+| ID | Scenario | Expected Result |
+|----|----------|-----------------|
+| A1 | Full CAR replay (sf1 profile) | 200 OK, chunk/PoR verification pass |
+| A2 | Byte range (aligned to chunk boundaries) | 206 Partial Content, proofs limited to requested range |
+| A3 | Byte range (misaligned request) | 416 Range Not Satisfiable |
+| A4 | Multi-range byte replay (partial + full chunk) | 206 Partial Content with ordered multipart segments |
+| B1 | Unsupported chunker handle | 406 with `unsupported_chunker` body |
+| B2 | Missing manifest envelope | 428 admission failure |
+| B3 | Corrupted PoR proof | 422 proof failure |
+| B4 | Corrupted CAR payload (digest mismatch) | 422 refusal (payload digest mismatch) |
+| B5 | Provider not admitted | 412 precondition failure with `provider_not_admitted` |
+| B6 | Client exceeds rate limit window | 429 `rate_limited` with `Retry-After` header |
+| C1 | 1k concurrent range streaming (warm cache) | P95 latency < target, no proof failures |
+| C2 | 1k concurrent streaming with injected 1% corruption | All corrupted responses rejected, gateway returns 422 |
+| D1 | Load with GAR denylist trigger | 451 Unavailable For Legal Reasons |
 
-El harness en Rust ya ejerce los escenarios A1, A2, A3, A4, B1, B2, B3, B4, B5 y B6
-contra fixtures deterministas, afirmando digests canónicos, alineación de byte-range,
-semántica de rechazo y enforcement de políticas.
+The Rust harness already exercises scenarios A1, A2, A3, A4, B1, B2, B3, B4, B5, and B6 against deterministic fixtures, asserting canonical digests, byte-range alignment, refusal semantics, and policy enforcement.
 
-## Denylist de ejemplo
+## Sample Denylist
 
-Para ejercitar enforcement de políticas sin cablear feeds de gobernanza, apunta la configuración del nodo
-`torii.sorafs_gateway.denylist.path` a `docs/source/sorafs_gateway_denylist_sample.json`. El fixture
-contiene:
-- entradas `provider` y `manifest_digest` que demuestran identificadores hex de ancho fijo con ventanas de jurisdicción opcionales.
-- una entrada `cid` codificada en base64 junto a una ventana de expiración.
-- una entrada `url` para bloqueo a nivel de URL.
-- una entrada `account_id` usando el encoding hex canónico de AccountAddress para reflejar suspensiones de gobernanza.
-- una entrada `account_alias` que bloquea un alias de ruteo (`name@dataspace` or `name@domain.dataspace`).
-- una entrada `perceptual_family` que empareja un UUID de familia/variante con metadata de hash perceptual (`perceptual_hash_hex`, `perceptual_hamming_radius`) para que los gateways bloqueen clusters de contenido casi duplicado.
+To exercise policy enforcement without wiring governance feeds, point the node configuration
+`torii.sorafs_gateway.denylist.path` at `docs/source/sorafs_gateway_denylist_sample.json`. The
+fixture contains:
+- `provider` and `manifest_digest` entries that demonstrate fixed-width hex identifiers with optional jurisdiction windows.
+- a `cid` entry encoded in base64 alongside an expiry window.
+- a `url` entry for URL-level blocking.
+- an `account_id` entry using the canonical AccountAddress hex encoding to mirror governance suspensions.
+- an `account_alias` entry that blocks an on-chain account alias (`name@dataspace` or `name@domain.dataspace`).
+- a `perceptual_family` entry that pairs a family/variant UUID with perceptual hash metadata (`perceptual_hash_hex`, `perceptual_hamming_radius`) so gateways can block near-duplicate content clusters.
 
-Cada registro sigue el mismo layout Norito JSON que usa el loader, incluyendo campos opcionales
-`issued_at` y `expires_at`. Los operadores pueden copiar el archivo como punto de partida para
-sus feeds de gobernanza o tests de integración.
+Each record follows the same Norito JSON layout used by the loader, including optional `issued_at`
+and `expires_at` fields. Operators can copy the file as a starting point for their own governance
+feeds or integration tests.
 
-## Formato de reporte
+## Reporting Format
 
-El harness debe emitir un documento JSON firmado:
+The harness emits a signed JSON document:
 
 ```json
 {
@@ -221,12 +226,12 @@ El harness debe emitir un documento JSON firmado:
 }
 ```
 
-Los operadores pueden adjuntar su firma (sobre Norito firmado) para auto-certificación.
+Operators archive the Norito-signed envelope for self-certification and
+governance review.
 
-## Smoke test manual de gateway (`sorafs-fetch`)
+## Manual Gateway Smoke Test (`sorafs-fetch`)
 
-Para validación ligera fuera del harness completo, los operadores pueden apuntar el CLI multi-source
-directamente a un gateway Torii usando el nuevo flag `--gateway-provider`:
+For lightweight validation outside the full harness, operators can point the multi-source CLI directly at a Torii gateway using the new `--gateway-provider` flag:
 
 ```
 sorafs-fetch \
@@ -238,18 +243,23 @@ sorafs-fetch \
   --json-out=reports/gateway_smoke.json
 ```
 
-El reporte resultante refleja la salida de conformidad (incluyendo `provider_reports[].metadata`)
-y puede adjuntarse a tickets de cambio durante rollouts blue/green.
+The resulting report mirrors the conformance output (including `provider_reports[].metadata`) and can be attached to change tickets during blue/green rollouts.
 
-## Preguntas abiertas / próximos pasos
+## Rollout Follow-ups
 
-- Determinar layout del repositorio de fixtures (probablemente `fixtures/sorafs_gateway/`).
-- Decidir los defaults de muestreo PoR para pruebas de carga (relacionado con SF-13).
-- Seleccionar el driver de concurrencia (Tokio vs generador externo).
-- Integrar con CI (GitHub Actions e internos Jenkins).
+- Archive signed local conformance reports from
+  `ci/check_sorafs_gateway_conformance.sh` for each release candidate.
+- Run the same fixture bundle against live staging hardware and record gateway
+  version, cache state, duration, and hardware profile alongside the signed
+  report.
+- Add a live-target adapter only if operators need the integration test to
+  exercise deployed gateways directly instead of the deterministic fixture
+  adapter.
+- Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed
+  HTTP/3 endpoint and configuration surface.
 
-La cobertura de rechazo por downgrade/headers faltantes y el probe HEAD ya viven en el
-harness de integración (`integration_tests/tests/sorafs_gateway_conformance.rs:295`
-e `integration_tests/tests/sorafs_gateway_conformance.rs:442`).
+Downgrade/missing-header refusal and HEAD probe coverage now live in the
+integration harness (`integration_tests/tests/sorafs_gateway_conformance.rs:295`
+and `integration_tests/tests/sorafs_gateway_conformance.rs:442`).
 
-Se agradece el feedback — registrar comentarios bajo SF-5a en el roadmap.
+Track rollout evidence under the SF-5a entries in `roadmap.md` and `status.md`.

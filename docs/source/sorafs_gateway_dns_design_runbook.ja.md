@@ -8,7 +8,6 @@ source_hash: f1f8de6c5ff283479cd76dc60afbdc4bc142596f3e48c52472d2a943ec805b0d
 source_last_modified: "2026-01-03T18:07:57.668299+00:00"
 translation_last_reviewed: 2026-01-30
 ---
-
 ---
 title: SoraFS Gateway & DNS Kickoff Runbook
 summary: Roles, automation drills, and evidence requirements for the 2025-03 gateway/DNS design session (roadmap Decentralized DNS & Gateway workstream).
@@ -208,7 +207,7 @@ minute template, and push artefacts to governance immediately after the call.
 | T‑15 m | Ops Automation | Verify probe host health and update the run ID in `artifacts/sorafs_gateway_dns/current`. |
 | Kickoff | Moderator | Share the runbook link + minute template, call out success criteria, and assign a live scribe. |
 | +15 m | Docs/DevRel | Capture action items + evidence pointers directly in the minutes doc, highlighting blockers that require governance escalation. |
-| EoS | All owners | Confirm artefact uploads, note outstanding TODOs, and queue follow-up tickets. |
+| EoS | All owners | Confirm artefact uploads, note unresolved follow-ups, and queue owner tickets. |
 
 ## 6.2 Minute template
 
@@ -233,9 +232,11 @@ artefact bundle and link it from `docs/source/sorafs_gateway_dns_design_attendan
 
 ## 6.3 Evidence upload checklist
 
-1. Upload the tarball from § 5.5 plus the rendered minutes PDF to the governance
-   bucket (`s3://sora-governance/sorafs/gateway_dns/20250302/`).
-2. Record the SHA-256 hashes in the minutes and in the steering issue tracker.
+1. Upload the tarball from § 5.5 and, when rendered, the minutes PDF to the
+   governance bucket (`s3://sora-governance/sorafs/gateway_dns/20250302/`).
+2. Record the available SHA-256 hashes in the minutes and in the steering issue
+   tracker. If the rendered PDF is not present yet, record the markdown minutes
+   hash and the bundle manifest hash as the repo-local evidence.
 3. Ping the governance reviewer alias with the upload link, ACKs from Networking
    and Storage leads, and the PagerDuty screenshot.
 

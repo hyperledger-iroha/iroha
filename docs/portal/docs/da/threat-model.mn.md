@@ -221,7 +221,7 @@ PDP/PoTR сорилтуудыг хуурамч хариулт эсвэл тох�
   `crates/iroha_torii/src/da/ingest.rs` дахь Torii интеграцчлал нь
   `/v1/da/ingest`-ээр дамжуулан хурууны хээ шалгадаг.
 - PDP/PoTR урсгалын симуляцийг proof-stream бэхэлгээний тусламжтайгаар гүйцэтгэдэг
-  PoR/PDP/PoTR хүсэлтийн урсгалыг хамарсан `crates/sorafs_car/tests/sorafs_cli.rs`
+  PoR/PDP/PoTR хүсэлтийн урсгалыг хамарсан `crates/sorafs_orchestrator/tests/sorafs_cli.rs`
   аюулын загварт дүрслэгдсэн бүтэлгүйтлийн хувилбарууд.
 - Хүчин чадал, засвар нэвт норгох үр дүн дор амьдардаг
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, харин илүү өргөн

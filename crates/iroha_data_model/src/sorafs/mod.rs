@@ -1,6 +1,6 @@
-//! SoraFS data model scaffolding.
+//! `SoraFS` data model scaffolding.
 //!
-//! This module hosts forward-looking types for the SoraFS pin registry and
+//! This module hosts forward-looking types for the `SoraFS` pin registry and
 //! related governance flows. The pin registry operates alongside the manifest
 //! schema defined in `sorafs_manifest` and stores canonical manifest digests,
 //! replication policies, and lifecycle metadata. The deal module extends this
@@ -16,7 +16,7 @@ pub mod capacity;
 /// Gateway Authorization Record policy payload types.
 pub mod gar;
 
-/// Moderation reproducibility manifests and helpers.
+/// Moderation reproducibility manifests, `SoraFS` ballot payloads, and helpers.
 pub mod moderation;
 
 /// Pin registry manifest metadata and lifecycle records.
@@ -51,7 +51,11 @@ pub mod prelude {
             MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
             ModerationReproBodyV1, ModerationReproManifestSummary, ModerationReproManifestV1,
             ModerationReproSignatureV1, ModerationReproValidationError, ModerationSeedMaterialV1,
-            ModerationThresholdsV1,
+            ModerationThresholdsV1, SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotCommitV1,
+            SoraFsModerationBallotContextV1, SoraFsModerationBallotError,
+            SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
         },
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,

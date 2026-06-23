@@ -53,7 +53,7 @@ translation_last_reviewed: 2026-01-30
 ### Быстрый старт CLI
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 Команда печатает дайджесты чанков и детали манифеста; когда переданы `--manifest-out`
@@ -162,7 +162,7 @@ Norito-конверт, проверяет подпись Ed25519 и требуе
 удобно для CI smoke-tests, когда нужно убедиться, что оркестратор не тихо удалил или не
 переупорядочил чанки.
 
-Если у вас уже есть JSON-отчёт, созданный `sorafs-manifest-stub`, передайте его напрямую
+Если у вас уже есть JSON-отчёт, созданный `sorafs_manifest_stub`, передайте его напрямую
 через `--manifest-report=docs.report.json`. Fetch CLI переиспользует встроенные поля
 `chunk_fetch_specs`, `payload_digest_hex` и `payload_len`, поэтому не требуется отдельно
 управлять файлами плана или валидации.

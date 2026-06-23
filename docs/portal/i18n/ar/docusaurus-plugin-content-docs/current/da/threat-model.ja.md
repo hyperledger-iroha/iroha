@@ -234,7 +234,7 @@ whitelist لمزودين خبيثين، او يخفي التنبيهات.
   `crates/iroha_core/src/da/replay_cache.rs` (منطق cache) وتكامل Torii في
   `crates/iroha_torii/src/da/ingest.rs` الذي يمرر checks fingerprint عبر `/v1/da/ingest`.
 - محاكاة streaming PDP/PoTR تمارس عبر harness proof-stream في
-  `crates/sorafs_car/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
   الفشل المشار اليها في نموذج التهديدات.
 - نتائج capacity وrepair soak موجودة في
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`، بينما مصفوفة soak Sumeragi

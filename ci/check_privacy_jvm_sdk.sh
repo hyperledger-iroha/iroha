@@ -70,18 +70,10 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest
 
 cd "${ROOT_DIR}"
-javac -d "${JAVA_OUT}" \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java \
+javac \
+  -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \
+  -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionKind.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionTemplate.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterVerifyingKeyInstruction.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/UpdateVerifyingKeyInstruction.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java
 java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest

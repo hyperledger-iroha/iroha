@@ -53,7 +53,7 @@ un manifeste encodé Norito adapté au pinning dans le registre SoraFS.
 ### Démarrage rapide CLI
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 La commande imprime les empreintes des chunks et les détails du manifeste ; lorsque
@@ -159,7 +159,7 @@ payload assemblé correspond aux attentes du manifeste avant d'écrire les sorti
 les smoke-tests CI qui veulent s'assurer que l'orchestrateur n'a pas silencieusement supprimé ou
 réordonné des chunks.
 
-Si vous avez déjà le rapport JSON créé par `sorafs-manifest-stub`, passez-le directement via
+Si vous avez déjà le rapport JSON créé par `sorafs_manifest_stub`, passez-le directement via
 `--manifest-report=docs.report.json`. La CLI de fetch réutilisera les champs intégrés
 `chunk_fetch_specs`, `payload_digest_hex` et `payload_len`, vous évitant de gérer des fichiers de
 plan ou de validation séparés.

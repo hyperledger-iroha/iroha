@@ -17,6 +17,11 @@ build_all.log
 artifacts/*
 !artifacts/poseidon/
 !artifacts/poseidon/constants.ron
+!artifacts/sccp-bsc/
+artifacts/sccp-bsc/*
+!artifacts/sccp-bsc/circuits/
+artifacts/sccp-bsc/circuits/*
+!artifacts/sccp-bsc/circuits/sccp-bsc-full-message-v1.circom
 fake_home/*
 ./artifacts/nsc/*
 artifacts/nsc/rans_compare/*
@@ -203,6 +208,7 @@ security_*
 _apalache-out*
 
 # Root-level scratch artifacts from ad-hoc experiments or local builds
+/output/
 /localnet-*/
 /*.exit
 /*.out

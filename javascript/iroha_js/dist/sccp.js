@@ -61,6 +61,9 @@ export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
   "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
+export const SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1 =
+  "iroha-sccp-bsc-groth16-proof-self-test/v1";
+const SCCP_BSC_FULL_MESSAGE_CIRCUIT_PROFILE_V1 = "sccp-bsc-full-message-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1 =
   Object.freeze({
     javascript: "pure-typescript",
@@ -607,6 +610,17 @@ const SCCP_GROTH16_BN254_SIGNAL_LABELS_V1 = [
   "sccp:groth16-bn254:signal:statement-hash:v1",
   "sccp:groth16-bn254:signal:destination-binding-hash:v1",
 ];
+const SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1 = Object.freeze([
+  "message_id",
+  "payload_hash",
+  "target_domain",
+  "commitment_root",
+  "finality_height",
+  "finality_block_hash",
+  "source_domain",
+  "statement_hash",
+  "destination_binding_hash",
+]);
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
@@ -1607,6 +1621,385 @@ const normalizeNativeEvmProverProductionAttestationHash = (value, label) => {
   if (arithmeticDelta !== null) {
     throw new TypeError(
       `${label} must not look like a placeholder attestation hash: arithmetic byte sequence`,
+    );
+  }
+  return normalized;
+};
+
+const readBscVerifierKeyField = (material, label, ...names) => {
+  const present = names.filter((name) =>
+    Object.prototype.hasOwnProperty.call(material, name),
+  );
+  if (present.length > 1) {
+    throw new TypeError(`${label} must not use multiple aliases`);
+  }
+  if (present.length === 0) {
+    throw new TypeError(`${label} is required`);
+  }
+  return ownDataResultField(material, label, present[0]);
+};
+
+const readOptionalBscVerifierKeyField = (material, label, ...names) => {
+  const present = names.filter((name) =>
+    Object.prototype.hasOwnProperty.call(material, name),
+  );
+  if (present.length > 1) {
+    throw new TypeError(`${label} must not use multiple aliases`);
+  }
+  return present.length === 0
+    ? SCCP_OPTIONAL_FIELD_MISSING
+    : ownDataResultField(material, label, present[0]);
+};
+
+const normalizeBscVerifierKeyFieldElement = (value, label) => {
+  const numeric = normalizeUnsignedBigInt(value, label);
+  if (numeric >= SCCP_GROTH16_BN254_BASE_FIELD_MODULUS) {
+    throw new TypeError(`${label} must be a BN254 base-field element`);
+  }
+  return numeric;
+};
+
+const normalizeBscVerifierKeyG1 = (value, label) => {
+  if (!Array.isArray(value) || value.length < 2) {
+    throw new TypeError(`${label} must be a BN254 G1 point array`);
+  }
+  const point = [
+    normalizeBscVerifierKeyFieldElement(value[0], `${label}.x`),
+    normalizeBscVerifierKeyFieldElement(value[1], `${label}.y`),
+  ];
+  requireGroth16G1Point(
+    concatBytes(...point.map((entry) => abiWordU256(entry, label))),
+    [0, 1],
+    label,
+  );
+  return Object.freeze(point);
+};
+
+const normalizeBscVerifierKeyG2 = (value, label) => {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be a BN254 G2 point array`);
+  }
+  const flattened =
+    Array.isArray(value[0]) && Array.isArray(value[1])
+      ? [value[0][0], value[0][1], value[1][0], value[1][1]]
+      : value;
+  if (flattened.length < 4) {
+    throw new TypeError(`${label} must contain four BN254 G2 coordinates`);
+  }
+  const point = Object.freeze(
+    flattened
+      .slice(0, 4)
+      .map((entry, index) =>
+        normalizeBscVerifierKeyFieldElement(entry, `${label}[${index}]`),
+      ),
+  );
+  requireGroth16G2Point(
+    concatBytes(...point.map((entry) => abiWordU256(entry, label))),
+    [0, 1, 2, 3],
+    label,
+  );
+  return point;
+};
+
+const normalizeBscVerifierKeyIc = (value, label) => {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be a BN254 G1 point vector`);
+  }
+  const points = Array.isArray(value[0])
+    ? value.map((point, index) =>
+        normalizeBscVerifierKeyG1(point, `${label}[${index}]`),
+      )
+    : (() => {
+        if (value.length % 2 !== 0) {
+          throw new TypeError(`${label} must contain complete G1 pairs`);
+        }
+        return Array.from({ length: value.length / 2 }, (_, index) =>
+          normalizeBscVerifierKeyG1(
+            value.slice(index * 2, index * 2 + 2),
+            `${label}[${index}]`,
+          ),
+        );
+      })();
+  if (points.length !== 10) {
+    throw new TypeError(`${label} must contain exactly 10 BN254 G1 points`);
+  }
+  return Object.freeze(points.flat());
+};
+
+const sameBigIntVector = (left, right) =>
+  left.length === right.length &&
+  left.every((entry, index) => entry === right[index]);
+
+const BSC_GROTH16_SMOKE_FIXTURE_G1 = Object.freeze([1n, 2n]);
+const BSC_GROTH16_SMOKE_FIXTURE_G2 = Object.freeze([
+  10857046999023057135944570762232829481370756359578518086990519993285655852781n,
+  11559732032986387107991004021392285783925812861821192530917403151452391805634n,
+  8495653923123431417604973247489272438418190587263600148770280649306958101930n,
+  4082367875863433681332203403145435568316851327593401208105741076214120093531n,
+]);
+
+const isBscVerifierKeySmokeFixture = (material) =>
+  sameBigIntVector(material.alpha1, BSC_GROTH16_SMOKE_FIXTURE_G1) &&
+  sameBigIntVector(material.beta2, BSC_GROTH16_SMOKE_FIXTURE_G2) &&
+  sameBigIntVector(material.gamma2, BSC_GROTH16_SMOKE_FIXTURE_G2) &&
+  sameBigIntVector(material.delta2, BSC_GROTH16_SMOKE_FIXTURE_G2) &&
+  Array.from({ length: 10 }, (_, index) =>
+    sameBigIntVector(
+      material.ic.slice(index * 2, index * 2 + 2),
+      BSC_GROTH16_SMOKE_FIXTURE_G1,
+    ),
+  ).every(Boolean);
+
+const bscVerifierKeyHashFromCoordinates = (material) =>
+  bytesToHex(
+    keccak_256(
+      concatBytes(
+        ...[
+          ...material.alpha1,
+          ...material.beta2,
+          ...material.gamma2,
+          ...material.delta2,
+          ...material.ic,
+        ].map((value) => abiWordU256(value, "BSC verifier key coordinate")),
+      ),
+    ),
+  );
+
+const normalizeBscGroth16VerifierKeyCoordinates = (material) => {
+  requireNativeEvmProverBundleObject(material, "BSC verifier key material");
+  return Object.freeze({
+    alpha1: normalizeBscVerifierKeyG1(
+      readBscVerifierKeyField(
+        material,
+        "BSC verifier key alpha1",
+        "alpha1",
+        "configuredAlpha1",
+        "vk_alpha_1",
+      ),
+      "BSC verifier key alpha1",
+    ),
+    beta2: normalizeBscVerifierKeyG2(
+      readBscVerifierKeyField(
+        material,
+        "BSC verifier key beta2",
+        "beta2",
+        "configuredBeta2",
+        "vk_beta_2",
+      ),
+      "BSC verifier key beta2",
+    ),
+    gamma2: normalizeBscVerifierKeyG2(
+      readBscVerifierKeyField(
+        material,
+        "BSC verifier key gamma2",
+        "gamma2",
+        "configuredGamma2",
+        "vk_gamma_2",
+      ),
+      "BSC verifier key gamma2",
+    ),
+    delta2: normalizeBscVerifierKeyG2(
+      readBscVerifierKeyField(
+        material,
+        "BSC verifier key delta2",
+        "delta2",
+        "configuredDelta2",
+        "vk_delta_2",
+      ),
+      "BSC verifier key delta2",
+    ),
+    ic: normalizeBscVerifierKeyIc(
+      readBscVerifierKeyField(
+        material,
+        "BSC verifier key IC",
+        "ic",
+        "configuredIc",
+        "vk_ic",
+        "IC",
+      ),
+      "BSC verifier key IC",
+    ),
+  });
+};
+
+export const bscGroth16VerifierKeyHash = (material) =>
+  bscVerifierKeyHashFromCoordinates(
+    normalizeBscGroth16VerifierKeyCoordinates(material),
+  );
+
+
+const optionalBscVerifierKeyStringEquals = (
+  material,
+  expected,
+  label,
+  ...names
+) => {
+  const value = readOptionalBscVerifierKeyField(material, label, ...names);
+  if (value !== SCCP_OPTIONAL_FIELD_MISSING && value !== expected) {
+    throw new TypeError(`${label} must be ${expected}`);
+  }
+};
+
+const optionalBscVerifierKeyU32Equals = (
+  material,
+  expected,
+  label,
+  ...names
+) => {
+  const value = readOptionalBscVerifierKeyField(material, label, ...names);
+  if (value === SCCP_OPTIONAL_FIELD_MISSING) {
+    return;
+  }
+  const numeric = normalizeSccpDomainId(value, label);
+  if (numeric !== expected) {
+    throw new TypeError(`${label} must be ${expected}`);
+  }
+};
+
+const readOptionalConsistentBscVerifierKeyHash = (
+  material,
+  label,
+  ...names
+) => {
+  const values = names
+    .filter((name) => Object.prototype.hasOwnProperty.call(material, name))
+    .map((name) =>
+      normalizeCanonicalNativeEvmProverBundleHex32(
+        ownDataResultField(material, label, name),
+        label,
+      ),
+    );
+  if (values.length === 0) {
+    return SCCP_OPTIONAL_FIELD_MISSING;
+  }
+  if (values.some((value) => value !== values[0])) {
+    throw new TypeError(`${label} aliases must agree`);
+  }
+  return values[0];
+};
+
+function normalizeBscGroth16VerifierKeyMaterial(
+  material,
+  profile = nativeEvmProverBundleProfiles.bscTestnet,
+) {
+  requireNativeEvmProverBundleObject(material, "BSC verifier key material");
+  optionalBscVerifierKeyStringEquals(
+    material,
+    SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    "BSC verifier key proofBackend",
+    "proofBackend",
+    "proof_backend",
+    "backend",
+  );
+  optionalBscVerifierKeyStringEquals(
+    material,
+    SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    "BSC verifier key proofFamily",
+    "proofFamily",
+    "proof_family",
+  );
+  optionalBscVerifierKeyStringEquals(
+    material,
+    profile.chain,
+    "BSC verifier key chain",
+    "chain",
+  );
+  optionalBscVerifierKeyU32Equals(
+    material,
+    SCCP_DOMAIN_SORA,
+    "BSC verifier key sourceDomain",
+    "sourceDomain",
+    "source_domain",
+  );
+  optionalBscVerifierKeyU32Equals(
+    material,
+    SCCP_DOMAIN_BSC,
+    "BSC verifier key targetDomain",
+    "targetDomain",
+    "target_domain",
+  );
+  const protocol = readOptionalBscVerifierKeyField(
+    material,
+    "BSC verifier key protocol",
+    "protocol",
+  );
+  if (protocol !== SCCP_OPTIONAL_FIELD_MISSING && protocol !== "groth16") {
+    throw new TypeError("BSC verifier key protocol must be groth16");
+  }
+  const curve = readOptionalBscVerifierKeyField(
+    material,
+    "BSC verifier key curve",
+    "curve",
+  );
+  if (
+    curve !== SCCP_OPTIONAL_FIELD_MISSING &&
+    curve !== "bn128" &&
+    curve !== "bn254"
+  ) {
+    throw new TypeError("BSC verifier key curve must be bn128 or bn254");
+  }
+  const publicInputCount = readOptionalBscVerifierKeyField(
+    material,
+    "BSC verifier key public input count",
+    "publicInputCount",
+    "public_input_count",
+    "nPublic",
+  );
+  if (publicInputCount === SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError("BSC verifier key public input count is required");
+  }
+  if (Number(publicInputCount) !== 9) {
+    throw new TypeError("BSC verifier key public input count must be 9");
+  }
+  const normalized = normalizeBscGroth16VerifierKeyCoordinates(material);
+  if (isBscVerifierKeySmokeFixture(normalized)) {
+    throw new TypeError(
+      "BSC verifier key material must not use deterministic smoke-test Groth16 fixtures",
+    );
+  }
+  const computedVerifierKeyHash =
+    bscVerifierKeyHashFromCoordinates(normalized);
+  const expectedVerifierKeyHash = readOptionalConsistentBscVerifierKeyHash(
+    material,
+    "BSC verifier key expectedVerifierKeyHash",
+    "expectedVerifierKeyHash",
+    "expected_verifier_key_hash",
+    "verifierKeyHash",
+    "verifier_key_hash",
+    "verifyingKeyHash",
+    "verifying_key_hash",
+  );
+  if (
+    expectedVerifierKeyHash !== SCCP_OPTIONAL_FIELD_MISSING &&
+    expectedVerifierKeyHash !== computedVerifierKeyHash
+  ) {
+    throw new TypeError(
+      "BSC verifier key expectedVerifierKeyHash must match computed verifier key hash",
+    );
+  }
+  return Object.freeze({
+    ...normalized,
+    verifierKeyHash: computedVerifierKeyHash,
+  });
+}
+
+const validateBscVerifierKeyBytes = (bytes, nativeProverBundle, profile) => {
+  let material;
+  try {
+    const json = textDecoder.decode(bytes);
+    rejectDuplicateJsonObjectKeys(json, "verifierKeyBytes");
+    material = JSON.parse(json);
+  } catch (error) {
+    throw new TypeError(
+      `verifierKeyBytes must be duplicate-free BSC Groth16 verifier JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const normalized = normalizeBscGroth16VerifierKeyMaterial(material, profile);
+  if (normalized.verifierKeyHash !== nativeProverBundle.verifierKeyHash) {
+    throw new TypeError(
+      "verifierKeyBytes computed verifier key hash must match nativeProverBundle.verifierKeyHash",
     );
   }
   return normalized;
@@ -8529,6 +8922,10 @@ const nativeEvmProverBundleManifestKeys = Object.freeze(
     "native_prover_self_test_artifact",
     "selfTestArtifact",
     "self_test_artifact",
+    "groth16ProofSelfTestArtifact",
+    "groth16_proof_self_test_artifact",
+    "groth16ProofSelfTestHash",
+    "groth16_proof_self_test_hash",
     "auditHashes",
     "audit_hashes",
   ]),
@@ -8707,6 +9104,151 @@ const nativeEvmProverSelfTestSdkResultKeys = Object.freeze(
     "calldata_hash",
     "toriiSubmitPayloadHash",
     "torii_submit_payload_hash",
+  ]),
+);
+
+const bscGroth16ProofSelfTestReportKeys = Object.freeze(
+  new Set([
+    "schema",
+    "routeId",
+    "route_id",
+    "assetKey",
+    "asset_key",
+    "bscNetwork",
+    "bsc_network",
+    "network",
+    "chain",
+    "chainIdHex",
+    "chain_id_hex",
+    "networkIdHex",
+    "network_id_hex",
+    "circuitProfile",
+    "circuit_profile",
+    "proofBackend",
+    "proof_backend",
+    "backend",
+    "proofFamily",
+    "proof_family",
+    "generatedAt",
+    "generated_at",
+    "manifest",
+    "artifacts",
+    "sample",
+    "witnessHash",
+    "witness_hash",
+    "proofHash",
+    "proof_hash",
+    "publicSignalsHash",
+    "public_signals_hash",
+    "snarkjs",
+    "adversarialChecks",
+    "adversarial_checks",
+    "proof",
+    "publicSignals",
+    "public_signals",
+  ]),
+);
+
+const bscGroth16ProofSelfTestManifestKeys = Object.freeze(
+  new Set([
+    "path",
+    "sha256",
+    "manifestSha256",
+    "manifest_sha256",
+    "productionReady",
+    "production_ready",
+    "productionBlockers",
+    "production_blockers",
+    "generatedAt",
+    "generated_at",
+  ]),
+);
+
+const bscGroth16ProofSelfTestArtifactsKeys = Object.freeze(
+  new Set([
+    "circuitSource",
+    "circuit_source",
+    "r1cs",
+    "provingKey",
+    "proving_key",
+    "snarkjsVerificationKey",
+    "snarkjs_verification_key",
+    "bscVerifierKey",
+    "bsc_verifier_key",
+    "witnessWasm",
+    "witness_wasm",
+  ]),
+);
+
+const bscGroth16ProofSelfTestArtifactKeys = Object.freeze(
+  new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
+);
+
+const bscGroth16ProofSelfTestSampleKeys = Object.freeze(
+  new Set([
+    "id",
+    "syntheticInputWords",
+    "synthetic_input_words",
+    "publicSignalNames",
+    "public_signal_names",
+    "publicSignalWords",
+    "public_signal_words",
+    "inputSha256",
+    "input_sha256",
+  ]),
+);
+
+const bscGroth16ProofSelfTestSnarkjsKeys = Object.freeze(
+  new Set(["binary", "wtnsCalculate", "groth16Prove", "groth16Verify"]),
+);
+
+const bscGroth16ProofSelfTestAdversarialChecksKeys = Object.freeze(
+  new Set([
+    "publicSignalMismatch",
+    "public_signal_mismatch",
+    "nonBooleanValueBit",
+    "non_boolean_value_bit",
+  ]),
+);
+
+const bscGroth16ProofSelfTestPublicSignalMismatchKeys = Object.freeze(
+  new Set(["attempted", "rejected", "cases"]),
+);
+
+const bscGroth16ProofSelfTestAdversarialCaseKeys = Object.freeze(
+  new Set(["index", "name", "phase", "rejected"]),
+);
+
+const bscGroth16ProofSelfTestNonBooleanValueBitKeys = Object.freeze(
+  new Set(["attempted", "rejected", "case"]),
+);
+
+const bscGroth16ProofSelfTestNonBooleanValueBitCaseKeys = Object.freeze(
+  new Set([
+    "signalName",
+    "signal_name",
+    "inputName",
+    "input_name",
+    "bitIndex",
+    "bit_index",
+    "phase",
+    "rejected",
+  ]),
+);
+
+const bscGroth16ProofSelfTestProofKeys = Object.freeze(
+  new Set([
+    "pi_a",
+    "piA",
+    "a",
+    "pi_b",
+    "piB",
+    "b",
+    "pi_c",
+    "piC",
+    "c",
+    "protocol",
+    "curve",
   ]),
 );
 
@@ -9141,7 +9683,10 @@ const nativeEvmProverBundleProfiles = Object.freeze({
     displayName: "BSC testnet",
     className: "BscTestnetSccp",
     domain: SCCP_DOMAIN_BSC,
+    bscNetwork: "testnet",
     chain: "bsc-testnet",
+    chainIdHex: "0x61",
+    networkIdHex: SCCP_BSC_TESTNET_NETWORK_ID,
     bundleId: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     paritySchema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     parityFixtureSchema:
@@ -9157,7 +9702,10 @@ const nativeEvmProverBundleProfiles = Object.freeze({
     displayName: "BSC mainnet",
     className: "BscMainnetSccp",
     domain: SCCP_DOMAIN_BSC,
+    bscNetwork: "mainnet",
     chain: "bsc-mainnet",
+    chainIdHex: "0x38",
+    networkIdHex: SCCP_BSC_MAINNET_NETWORK_ID,
     bundleId: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     paritySchema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     parityFixtureSchema:
@@ -9225,6 +9773,7 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   verifierKeyHash,
   verifierKeyArtifactHash,
   destinationBindingHash,
+  groth16ProofSelfTestHash,
   nativeSdkArtifacts,
   auditHashes,
 }) => {
@@ -9243,6 +9792,9 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   add("verifierKeyHash", verifierKeyHash);
   add("verifierKeyArtifactHash", verifierKeyArtifactHash);
   add("destinationBindingHash", destinationBindingHash);
+  if (groth16ProofSelfTestHash !== undefined) {
+    add("groth16ProofSelfTestHash", groth16ProofSelfTestHash);
+  }
   for (const artifact of nativeSdkArtifacts) {
     add(
       `nativeSdkArtifacts[${artifact.sdk}].implementationHash`,
@@ -9260,6 +9812,7 @@ const requireNativeEvmProverBundleArtifactPathRoleSeparation = ({
   verifierKey,
   crossSdkParityArtifact,
   nativeProverSelfTestArtifact,
+  groth16ProofSelfTestArtifact,
   nativeSdkArtifacts,
 }) => {
   const seen = new Map();
@@ -9277,6 +9830,9 @@ const requireNativeEvmProverBundleArtifactPathRoleSeparation = ({
   add("verifierKey", verifierKey);
   add("crossSdkParityArtifact", crossSdkParityArtifact);
   add("nativeProverSelfTestArtifact", nativeProverSelfTestArtifact);
+  if (groth16ProofSelfTestArtifact !== undefined) {
+    add("groth16ProofSelfTestArtifact", groth16ProofSelfTestArtifact);
+  }
   for (const artifact of nativeSdkArtifacts) {
     add(
       `nativeSdkArtifacts[${artifact.sdk}].implementationArtifact`,
@@ -9446,6 +10002,13 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     ),
     "verifierKey",
   );
+  if (profile.domain === SCCP_DOMAIN_BSC) {
+    requireNativeEvmProverArtifactPathExtension(
+      verifierKey,
+      "verifierKey",
+      ".json",
+    );
+  }
   rejectNonProductionNativeEvmProverArtifactPath(verifierKey, "verifierKey");
   const destinationBindingHash = normalizeCanonicalNativeEvmProverBundleHex32(
     requiredNativeEvmProverBundleField(
@@ -9527,6 +10090,40 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     nativeProverSelfTestArtifact,
     "nativeProverSelfTestArtifact",
   );
+  const groth16ProofSelfTestArtifact =
+    profile.domain === SCCP_DOMAIN_BSC
+      ? requireNativeEvmProverArtifactPathExtension(
+          normalizeNativeEvmProverArtifactPath(
+            requiredNativeEvmProverBundleField(
+              manifest,
+              "groth16ProofSelfTestArtifact",
+              "groth16ProofSelfTestArtifact",
+              "groth16_proof_self_test_artifact",
+            ),
+            "groth16ProofSelfTestArtifact",
+          ),
+          "groth16ProofSelfTestArtifact",
+          ".json",
+        )
+      : undefined;
+  if (groth16ProofSelfTestArtifact !== undefined) {
+    rejectNonProductionNativeEvmProverArtifactPath(
+      groth16ProofSelfTestArtifact,
+      "groth16ProofSelfTestArtifact",
+    );
+  }
+  const groth16ProofSelfTestHash =
+    profile.domain === SCCP_DOMAIN_BSC
+      ? normalizeCanonicalNativeEvmProverBundleHex32(
+          requiredNativeEvmProverBundleField(
+            manifest,
+            "groth16ProofSelfTestHash",
+            "groth16ProofSelfTestHash",
+            "groth16_proof_self_test_hash",
+          ),
+          "groth16ProofSelfTestHash",
+        )
+      : undefined;
   requireNativeEvmProverBundleObject(auditHashesInput, "auditHashes");
   if (
     profile.domain === SCCP_DOMAIN_BSC &&
@@ -9618,6 +10215,7 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     verifierKey,
     crossSdkParityArtifact,
     nativeProverSelfTestArtifact,
+    groth16ProofSelfTestArtifact,
     nativeSdkArtifacts,
   });
   requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation({
@@ -9626,6 +10224,7 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     verifierKeyHash,
     verifierKeyArtifactHash,
     destinationBindingHash,
+    groth16ProofSelfTestHash,
     nativeSdkArtifacts,
     auditHashes,
   });
@@ -9653,6 +10252,12 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
       ? {}
       : { crossSdkFixtureParityArtifact: crossSdkParityArtifact }),
     nativeProverSelfTestArtifact,
+    ...(profile.domain === SCCP_DOMAIN_BSC
+      ? {
+          groth16ProofSelfTestArtifact,
+          groth16ProofSelfTestHash,
+        }
+      : {}),
     auditHashes,
   });
 };
@@ -10622,6 +11227,732 @@ export function parseBscMainnetNativeEvmProverSelfTestFixture(
 
 const sha256Hex32 = (bytes, label) => bytesToHex(sha256(toBytes(bytes, label)));
 
+const canonicalJson = (value, label = "canonical JSON value") => {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError(`${label} number must be finite`);
+    }
+    return JSON.stringify(value);
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry, label)).join(",")}]`;
+  }
+  if (value && typeof value === "object" && !ArrayBuffer.isView(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key], label)}`)
+      .join(",")}}`;
+  }
+  throw new TypeError(`${label} must be JSON-compatible`);
+};
+
+const normalizeBscGroth16ProofSelfTestDecimalWord = (value, label) => {
+  if (typeof value !== "string" || !isCanonicalDecimalText(value)) {
+    throw new TypeError(`${label} must be a canonical decimal BN254 scalar word`);
+  }
+  const numeric = normalizeUnsignedBigInt(value, label);
+  if (numeric >= SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS) {
+    throw new RangeError(`${label} must be a BN254 scalar field element`);
+  }
+  return numeric.toString();
+};
+
+const normalizeBscGroth16ProofSelfTestPublicSignals = (value, label) => {
+  if (
+    !Array.isArray(value) ||
+    value.length !== SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1.length
+  ) {
+    throw new TypeError(`${label} must contain 9 canonical decimal words`);
+  }
+  return Object.freeze(
+    value.map((word, index) =>
+      normalizeBscGroth16ProofSelfTestDecimalWord(
+        word,
+        `${label}[${index}]`,
+      ),
+    ),
+  );
+};
+
+const requiredBscGroth16ProofSelfTestString = (record, label, ...keys) => {
+  const value = requiredNativeEvmProverBundleField(record, label, ...keys);
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new TypeError(`${label} must be a non-empty canonical string`);
+  }
+  return value;
+};
+
+const requireBscGroth16ProofSelfTestStringEquals = (
+  record,
+  expected,
+  label,
+  ...keys
+) => {
+  const value = requiredBscGroth16ProofSelfTestString(record, label, ...keys);
+  if (value !== expected) {
+    throw new TypeError(`${label} must be ${expected}`);
+  }
+  return value;
+};
+
+const normalizeBscGroth16ProofSelfTestRelativePath = (value, label) => {
+  const normalized = requiredBscGroth16ProofSelfTestString(value, label, "path");
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("\\") ||
+    normalized.includes("\\") ||
+    normalized.includes("://") ||
+    normalized.split("/").some((part) => part === "..")
+  ) {
+    throw new TypeError(`${label}.path must be a safe relative path`);
+  }
+  return normalized;
+};
+
+const requiredBscGroth16ProofSelfTestHex32 = (record, label, ...keys) =>
+  normalizeCanonicalNativeEvmProverBundleHex32(
+    requiredNativeEvmProverBundleAliasField(record, label, ...keys),
+    label,
+  );
+
+const requiredBscGroth16ProofSelfTestArtifactHash = (
+  artifacts,
+  artifactLabel,
+  ...keys
+) => {
+  const artifact = requiredNativeEvmProverBundleField(
+    artifacts,
+    `groth16ProofSelfTest.artifacts.${artifactLabel}`,
+    ...keys,
+  );
+  requireNativeEvmProverBundleObject(
+    artifact,
+    `groth16ProofSelfTest.artifacts.${artifactLabel}`,
+  );
+  requireNativeEvmProverBundleKnownFields(
+    artifact,
+    `groth16ProofSelfTest.artifacts.${artifactLabel}`,
+    bscGroth16ProofSelfTestArtifactKeys,
+  );
+  normalizeBscGroth16ProofSelfTestRelativePath(
+    artifact,
+    `groth16ProofSelfTest.artifacts.${artifactLabel}`,
+  );
+  return requiredBscGroth16ProofSelfTestHex32(
+    artifact,
+    `groth16ProofSelfTest.artifacts.${artifactLabel}.sha256`,
+    "sha256",
+    "hash",
+    "artifactHash",
+    "artifact_hash",
+  );
+};
+
+const requireBscGroth16ProofSelfTestIntegerEquals = (
+  record,
+  label,
+  expected,
+  ...keys
+) => {
+  const value = requiredNativeEvmProverBundleField(record, label, ...keys);
+  if (!Number.isSafeInteger(value) || value !== expected) {
+    throw new TypeError(`${label} must be ${expected}`);
+  }
+  return value;
+};
+
+const requireBscGroth16ProofSelfTestAdversarialCase = (
+  value,
+  label,
+  expected,
+) => {
+  requireNativeEvmProverBundleObject(value, label);
+  requireNativeEvmProverBundleKnownFields(
+    value,
+    label,
+    bscGroth16ProofSelfTestAdversarialCaseKeys,
+  );
+  requireBscGroth16ProofSelfTestIntegerEquals(
+    value,
+    `${label}.index`,
+    expected.index,
+    "index",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    value,
+    expected.name,
+    `${label}.name`,
+    "name",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    value,
+    "wtnsCalculate",
+    `${label}.phase`,
+    "phase",
+  );
+  requiredNativeEvmProverBundleBoolean(
+    requiredNativeEvmProverBundleField(value, `${label}.rejected`, "rejected"),
+    `${label}.rejected`,
+    true,
+  );
+};
+
+const requireBscGroth16ProofSelfTestAdversarialChecks = (report) => {
+  const checks = requiredNativeEvmProverBundleField(
+    report,
+    "groth16ProofSelfTest.adversarialChecks",
+    "adversarialChecks",
+    "adversarial_checks",
+  );
+  requireNativeEvmProverBundleObject(
+    checks,
+    "groth16ProofSelfTest.adversarialChecks",
+  );
+  requireNativeEvmProverBundleKnownFields(
+    checks,
+    "groth16ProofSelfTest.adversarialChecks",
+    bscGroth16ProofSelfTestAdversarialChecksKeys,
+  );
+
+  const publicSignalMismatch = requiredNativeEvmProverBundleField(
+    checks,
+    "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch",
+    "publicSignalMismatch",
+    "public_signal_mismatch",
+  );
+  requireNativeEvmProverBundleObject(
+    publicSignalMismatch,
+    "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch",
+  );
+  requireNativeEvmProverBundleKnownFields(
+    publicSignalMismatch,
+    "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch",
+    bscGroth16ProofSelfTestPublicSignalMismatchKeys,
+  );
+  requireBscGroth16ProofSelfTestIntegerEquals(
+    publicSignalMismatch,
+    "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch.attempted",
+    SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1.length,
+    "attempted",
+  );
+  requireBscGroth16ProofSelfTestIntegerEquals(
+    publicSignalMismatch,
+    "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch.rejected",
+    SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1.length,
+    "rejected",
+  );
+  const cases = requiredNativeEvmProverBundleField(
+    publicSignalMismatch,
+    "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch.cases",
+    "cases",
+  );
+  if (
+    !Array.isArray(cases) ||
+    cases.length !== SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1.length
+  ) {
+    throw new TypeError(
+      "groth16ProofSelfTest.adversarialChecks.publicSignalMismatch.cases must contain 9 entries",
+    );
+  }
+  cases.forEach((entry, index) =>
+    requireBscGroth16ProofSelfTestAdversarialCase(
+      entry,
+      `groth16ProofSelfTest.adversarialChecks.publicSignalMismatch.cases[${index}]`,
+      {
+        index,
+        name: SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1[index],
+      },
+    ),
+  );
+
+  const nonBooleanValueBit = requiredNativeEvmProverBundleField(
+    checks,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit",
+    "nonBooleanValueBit",
+    "non_boolean_value_bit",
+  );
+  requireNativeEvmProverBundleObject(
+    nonBooleanValueBit,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit",
+  );
+  requireNativeEvmProverBundleKnownFields(
+    nonBooleanValueBit,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit",
+    bscGroth16ProofSelfTestNonBooleanValueBitKeys,
+  );
+  requireBscGroth16ProofSelfTestIntegerEquals(
+    nonBooleanValueBit,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.attempted",
+    1,
+    "attempted",
+  );
+  requireBscGroth16ProofSelfTestIntegerEquals(
+    nonBooleanValueBit,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.rejected",
+    1,
+    "rejected",
+  );
+  const nonBooleanCase = requiredNativeEvmProverBundleField(
+    nonBooleanValueBit,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case",
+    "case",
+  );
+  requireNativeEvmProverBundleObject(
+    nonBooleanCase,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case",
+  );
+  requireNativeEvmProverBundleKnownFields(
+    nonBooleanCase,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case",
+    bscGroth16ProofSelfTestNonBooleanValueBitCaseKeys,
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    nonBooleanCase,
+    SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1[0],
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case.signalName",
+    "signalName",
+    "signal_name",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    nonBooleanCase,
+    "messageIdBits",
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case.inputName",
+    "inputName",
+    "input_name",
+  );
+  requireBscGroth16ProofSelfTestIntegerEquals(
+    nonBooleanCase,
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case.bitIndex",
+    0,
+    "bitIndex",
+    "bit_index",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    nonBooleanCase,
+    "wtnsCalculate",
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case.phase",
+    "phase",
+  );
+  requiredNativeEvmProverBundleBoolean(
+    requiredNativeEvmProverBundleField(
+      nonBooleanCase,
+      "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case.rejected",
+      "rejected",
+    ),
+    "groth16ProofSelfTest.adversarialChecks.nonBooleanValueBit.case.rejected",
+    true,
+  );
+};
+
+const validateBscGroth16ProofSelfTestReport = ({
+  report,
+  nativeProverBundle,
+  reportHash,
+  profile,
+}) => {
+  requireNativeEvmProverBundleObject(report, "groth16ProofSelfTest");
+  requireNativeEvmProverBundleKnownFields(
+    report,
+    "groth16ProofSelfTest",
+    bscGroth16ProofSelfTestReportKeys,
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
+    "groth16ProofSelfTest.schema",
+    "schema",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    "groth16ProofSelfTest.routeId",
+    "routeId",
+    "route_id",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    "groth16ProofSelfTest.assetKey",
+    "assetKey",
+    "asset_key",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    profile.bscNetwork,
+    "groth16ProofSelfTest.bscNetwork",
+    "bscNetwork",
+    "bsc_network",
+    "network",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    profile.chain,
+    "groth16ProofSelfTest.chain",
+    "chain",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    profile.chainIdHex,
+    "groth16ProofSelfTest.chainIdHex",
+    "chainIdHex",
+    "chain_id_hex",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    profile.networkIdHex,
+    "groth16ProofSelfTest.networkIdHex",
+    "networkIdHex",
+    "network_id_hex",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    SCCP_BSC_FULL_MESSAGE_CIRCUIT_PROFILE_V1,
+    "groth16ProofSelfTest.circuitProfile",
+    "circuitProfile",
+    "circuit_profile",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    "groth16ProofSelfTest.proofBackend",
+    "proofBackend",
+    "proof_backend",
+    "backend",
+  );
+  requireBscGroth16ProofSelfTestStringEquals(
+    report,
+    SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    "groth16ProofSelfTest.proofFamily",
+    "proofFamily",
+    "proof_family",
+  );
+
+  const manifest = requiredNativeEvmProverBundleField(
+    report,
+    "groth16ProofSelfTest.manifest",
+    "manifest",
+  );
+  requireNativeEvmProverBundleObject(manifest, "groth16ProofSelfTest.manifest");
+  requireNativeEvmProverBundleKnownFields(
+    manifest,
+    "groth16ProofSelfTest.manifest",
+    bscGroth16ProofSelfTestManifestKeys,
+  );
+  normalizeBscGroth16ProofSelfTestRelativePath(
+    manifest,
+    "groth16ProofSelfTest.manifest",
+  );
+  const materialManifestHash = requiredBscGroth16ProofSelfTestHex32(
+    manifest,
+    "groth16ProofSelfTest.manifest.sha256",
+    "sha256",
+    "manifestSha256",
+    "manifest_sha256",
+  );
+  requiredNativeEvmProverBundleBoolean(
+    requiredNativeEvmProverBundleField(
+      manifest,
+      "groth16ProofSelfTest.manifest.productionReady",
+      "productionReady",
+      "production_ready",
+    ),
+    "groth16ProofSelfTest.manifest.productionReady",
+    true,
+  );
+  const productionBlockers = requiredNativeEvmProverBundleField(
+    manifest,
+    "groth16ProofSelfTest.manifest.productionBlockers",
+    "productionBlockers",
+    "production_blockers",
+  );
+  if (!Array.isArray(productionBlockers) || productionBlockers.length !== 0) {
+    throw new TypeError(
+      "groth16ProofSelfTest.manifest.productionBlockers must be an empty array",
+    );
+  }
+
+  const artifacts = requiredNativeEvmProverBundleField(
+    report,
+    "groth16ProofSelfTest.artifacts",
+    "artifacts",
+  );
+  requireNativeEvmProverBundleObject(artifacts, "groth16ProofSelfTest.artifacts");
+  requireNativeEvmProverBundleKnownFields(
+    artifacts,
+    "groth16ProofSelfTest.artifacts",
+    bscGroth16ProofSelfTestArtifactsKeys,
+  );
+  const circuitSourceHash = requiredBscGroth16ProofSelfTestArtifactHash(
+    artifacts,
+    "circuitSource",
+    "circuitSource",
+    "circuit_source",
+  );
+  const proofArtifactHash = requiredBscGroth16ProofSelfTestArtifactHash(
+    artifacts,
+    "r1cs",
+    "r1cs",
+  );
+  const provingKeyHash = requiredBscGroth16ProofSelfTestArtifactHash(
+    artifacts,
+    "provingKey",
+    "provingKey",
+    "proving_key",
+  );
+  const snarkjsVerificationKeyHash = requiredBscGroth16ProofSelfTestArtifactHash(
+    artifacts,
+    "snarkjsVerificationKey",
+    "snarkjsVerificationKey",
+    "snarkjs_verification_key",
+  );
+  const bscVerifierKeyArtifactHash = requiredBscGroth16ProofSelfTestArtifactHash(
+    artifacts,
+    "bscVerifierKey",
+    "bscVerifierKey",
+    "bsc_verifier_key",
+  );
+  const witnessWasmHash = requiredBscGroth16ProofSelfTestArtifactHash(
+    artifacts,
+    "witnessWasm",
+    "witnessWasm",
+    "witness_wasm",
+  );
+  for (const [label, value, expected] of [
+    ["R1CS", proofArtifactHash, nativeProverBundle.proofArtifactHash],
+    ["proving key", provingKeyHash, nativeProverBundle.provingKeyHash],
+    [
+      "BSC verifier key",
+      bscVerifierKeyArtifactHash,
+      nativeProverBundle.verifierKeyArtifactHash,
+    ],
+  ]) {
+    if (value !== expected) {
+      throw new TypeError(
+        `groth16ProofSelfTest ${label} hash must match nativeProverBundle`,
+      );
+    }
+  }
+
+  const sample = requiredNativeEvmProverBundleField(
+    report,
+    "groth16ProofSelfTest.sample",
+    "sample",
+  );
+  requireNativeEvmProverBundleObject(sample, "groth16ProofSelfTest.sample");
+  requireNativeEvmProverBundleKnownFields(
+    sample,
+    "groth16ProofSelfTest.sample",
+    bscGroth16ProofSelfTestSampleKeys,
+  );
+  const publicSignalNames = requiredNativeEvmProverBundleField(
+    sample,
+    "groth16ProofSelfTest.sample.publicSignalNames",
+    "publicSignalNames",
+    "public_signal_names",
+  );
+  if (
+    !Array.isArray(publicSignalNames) ||
+    publicSignalNames.length !== SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1.length ||
+    publicSignalNames.some(
+      (name, index) => name !== SCCP_BSC_GROTH16_PUBLIC_SIGNAL_NAMES_V1[index],
+    )
+  ) {
+    throw new TypeError(
+      "groth16ProofSelfTest.sample.publicSignalNames must match BSC Groth16 public signals",
+    );
+  }
+  const samplePublicSignalWords = normalizeBscGroth16ProofSelfTestPublicSignals(
+    requiredNativeEvmProverBundleField(
+      sample,
+      "groth16ProofSelfTest.sample.publicSignalWords",
+      "publicSignalWords",
+      "public_signal_words",
+    ),
+    "groth16ProofSelfTest.sample.publicSignalWords",
+  );
+  const publicSignals = normalizeBscGroth16ProofSelfTestPublicSignals(
+    requiredNativeEvmProverBundleField(
+      report,
+      "groth16ProofSelfTest.publicSignals",
+      "publicSignals",
+      "public_signals",
+    ),
+    "groth16ProofSelfTest.publicSignals",
+  );
+  if (
+    publicSignals.some(
+      (word, index) => word !== samplePublicSignalWords[index],
+    )
+  ) {
+    throw new TypeError(
+      "groth16ProofSelfTest.publicSignals must match sample.publicSignalWords",
+    );
+  }
+
+  const snarkjs = requiredNativeEvmProverBundleField(
+    report,
+    "groth16ProofSelfTest.snarkjs",
+    "snarkjs",
+  );
+  requireNativeEvmProverBundleObject(snarkjs, "groth16ProofSelfTest.snarkjs");
+  requireNativeEvmProverBundleKnownFields(
+    snarkjs,
+    "groth16ProofSelfTest.snarkjs",
+    bscGroth16ProofSelfTestSnarkjsKeys,
+  );
+  for (const key of ["wtnsCalculate", "groth16Prove", "groth16Verify"]) {
+    requiredNativeEvmProverBundleBoolean(
+      requiredNativeEvmProverBundleField(
+        snarkjs,
+        `groth16ProofSelfTest.snarkjs.${key}`,
+        key,
+      ),
+      `groth16ProofSelfTest.snarkjs.${key}`,
+      true,
+    );
+  }
+  requireBscGroth16ProofSelfTestAdversarialChecks(report);
+
+  const witnessHash = requiredBscGroth16ProofSelfTestHex32(
+    report,
+    "groth16ProofSelfTest.witnessHash",
+    "witnessHash",
+    "witness_hash",
+  );
+  const proofHash = requiredBscGroth16ProofSelfTestHex32(
+    report,
+    "groth16ProofSelfTest.proofHash",
+    "proofHash",
+    "proof_hash",
+  );
+  const publicSignalsHash = requiredBscGroth16ProofSelfTestHex32(
+    report,
+    "groth16ProofSelfTest.publicSignalsHash",
+    "publicSignalsHash",
+    "public_signals_hash",
+  );
+  const actualPublicSignalsHash = sha256Hex32(
+    textEncoder.encode(JSON.stringify(publicSignals)),
+    "groth16ProofSelfTest.publicSignals",
+  );
+  if (actualPublicSignalsHash !== publicSignalsHash) {
+    throw new TypeError(
+      "groth16ProofSelfTest.publicSignalsHash must match publicSignals",
+    );
+  }
+
+  const proof = requiredNativeEvmProverBundleField(
+    report,
+    "groth16ProofSelfTest.proof",
+    "proof",
+  );
+  requireNativeEvmProverBundleObject(proof, "groth16ProofSelfTest.proof");
+  requireNativeEvmProverBundleKnownFields(
+    proof,
+    "groth16ProofSelfTest.proof",
+    bscGroth16ProofSelfTestProofKeys,
+  );
+  const protocol = strictOptionalDataResultField(
+    proof,
+    "groth16ProofSelfTest.proof.protocol",
+    "protocol",
+  );
+  if (protocol !== SCCP_OPTIONAL_FIELD_MISSING && protocol !== "groth16") {
+    throw new TypeError("groth16ProofSelfTest.proof.protocol must be groth16");
+  }
+  const curve = strictOptionalDataResultField(
+    proof,
+    "groth16ProofSelfTest.proof.curve",
+    "curve",
+  );
+  if (curve !== SCCP_OPTIONAL_FIELD_MISSING && curve !== "bn128") {
+    throw new TypeError("groth16ProofSelfTest.proof.curve must be bn128");
+  }
+  normalizeGroth16AdapterG1Point(
+    requiredNativeEvmProverBundleField(
+      proof,
+      "groth16ProofSelfTest.proof.pi_a",
+      "pi_a",
+      "piA",
+      "a",
+    ),
+    "groth16ProofSelfTest.proof.pi_a",
+  );
+  normalizeGroth16AdapterFq2Point(
+    requiredNativeEvmProverBundleField(
+      proof,
+      "groth16ProofSelfTest.proof.pi_b",
+      "pi_b",
+      "piB",
+      "b",
+    ),
+    "groth16ProofSelfTest.proof.pi_b",
+    "proof-json",
+  );
+  normalizeGroth16AdapterG1Point(
+    requiredNativeEvmProverBundleField(
+      proof,
+      "groth16ProofSelfTest.proof.pi_c",
+      "pi_c",
+      "piC",
+      "c",
+    ),
+    "groth16ProofSelfTest.proof.pi_c",
+  );
+  const actualProofHash = sha256Hex32(
+    textEncoder.encode(canonicalJson(proof, "groth16ProofSelfTest.proof")),
+    "groth16ProofSelfTest.proof",
+  );
+  if (actualProofHash !== proofHash) {
+    throw new TypeError("groth16ProofSelfTest.proofHash must match proof");
+  }
+
+  requireNativeEvmProverHashRoleSeparation(
+    [
+      ["reportHash", reportHash],
+      ["materialManifestHash", materialManifestHash],
+      ["circuitSourceHash", circuitSourceHash],
+      ["proofArtifactHash", proofArtifactHash],
+      ["provingKeyHash", provingKeyHash],
+      ["verifierKeyHash", nativeProverBundle.verifierKeyHash],
+      ["verifierKeyArtifactHash", bscVerifierKeyArtifactHash],
+      ["destinationBindingHash", nativeProverBundle.destinationBindingHash],
+      ["snarkjsVerificationKeyHash", snarkjsVerificationKeyHash],
+      ["witnessWasmHash", witnessWasmHash],
+      ["witnessHash", witnessHash],
+      ["proofHash", proofHash],
+      ["publicSignalsHash", publicSignalsHash],
+    ],
+    "groth16ProofSelfTest",
+  );
+  return immutableProverCallbackValue({
+    schema: SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
+    routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    bscNetwork: profile.bscNetwork,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    circuitProfile: SCCP_BSC_FULL_MESSAGE_CIRCUIT_PROFILE_V1,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    materialManifestHash,
+    circuitSourceHash,
+    proofArtifactHash,
+    provingKeyHash,
+    bscVerifierKeyArtifactHash,
+    snarkjsVerificationKeyHash,
+    witnessWasmHash,
+    witnessHash,
+    proofHash,
+    publicSignalsHash,
+    publicSignals,
+  });
+};
+
 const requiredNativeEvmProverArtifactBytes = (input, label, ...aliases) =>
   toBytes(requiredNativeEvmProverBundleField(input, label, ...aliases), label);
 
@@ -10993,6 +12324,10 @@ function requireVerifiedNativeEvmProverReportHashRoleSeparation(
         nativeProverBundle.auditHashes.no_wasm_no_remote_scan,
       ],
       [
+        "groth16ProofSelfTestHash",
+        nativeProverBundle.groth16ProofSelfTestHash,
+      ],
+      [
         "crossSdkParity.receiptProofHash",
         crossSdkFixtureParity.receiptProofHash,
       ],
@@ -11120,6 +12455,15 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     "selfTestBytes",
     "self_test_bytes",
   );
+  const groth16ProofSelfTestBytes =
+    profile.domain === SCCP_DOMAIN_BSC
+      ? requiredNativeEvmProverArtifactBytes(
+          input,
+          "groth16ProofSelfTestBytes",
+          "groth16ProofSelfTestBytes",
+          "groth16_proof_self_test_bytes",
+        )
+      : undefined;
   const proofArtifactHash = sha256Hex32(
     proofArtifactBytes,
     "proofArtifactBytes",
@@ -11137,6 +12481,13 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     nativeProverSelfTestBytes,
     "nativeProverSelfTestBytes",
   );
+  const groth16ProofSelfTestHash =
+    groth16ProofSelfTestBytes === undefined
+      ? undefined
+      : sha256Hex32(
+          groth16ProofSelfTestBytes,
+          "groth16ProofSelfTestBytes",
+        );
   if (proofArtifactHash !== nativeProverBundle.proofArtifactHash) {
     throw new TypeError(
       "proofArtifactBytes sha256 must match nativeProverBundle.proofArtifactHash",
@@ -11168,6 +12519,14 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
       "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test",
     );
   }
+  if (
+    profile.domain === SCCP_DOMAIN_BSC &&
+    groth16ProofSelfTestHash !== nativeProverBundle.groth16ProofSelfTestHash
+  ) {
+    throw new TypeError(
+      "groth16ProofSelfTestBytes sha256 must match nativeProverBundle.groth16ProofSelfTestHash",
+    );
+  }
   assertNativeEvmProverArtifactHasProductionSize(
     proofArtifactBytes,
     "proofArtifactBytes",
@@ -11193,8 +12552,18 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     "nativeProverSelfTestBytes",
     SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
   );
+  if (groth16ProofSelfTestBytes !== undefined) {
+    assertNativeEvmProverArtifactHasProductionSize(
+      groth16ProofSelfTestBytes,
+      "groth16ProofSelfTestBytes",
+      SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
+    );
+  }
   assertNativeEvmProofArtifactFormat(proofArtifactBytes, "proofArtifactBytes");
   assertNativeEvmProvingKeyFormat(provingKeyBytes, "provingKeyBytes");
+  if (profile.domain === SCCP_DOMAIN_BSC) {
+    validateBscVerifierKeyBytes(verifierKeyBytes, nativeProverBundle, profile);
+  }
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     proofArtifactBytes,
     "proofArtifactBytes",
@@ -11230,6 +12599,22 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     nativeProverBundle,
     profile,
   );
+  let groth16ProofSelfTest;
+  if (groth16ProofSelfTestBytes !== undefined) {
+    const groth16ProofSelfTestJson = textDecoder.decode(
+      groth16ProofSelfTestBytes,
+    );
+    rejectDuplicateJsonObjectKeys(
+      groth16ProofSelfTestJson,
+      "groth16ProofSelfTest",
+    );
+    groth16ProofSelfTest = validateBscGroth16ProofSelfTestReport({
+      report: JSON.parse(groth16ProofSelfTestJson),
+      nativeProverBundle,
+      reportHash: groth16ProofSelfTestHash,
+      profile,
+    });
+  }
   requireVerifiedNativeEvmProverReportHashRoleSeparation(
     nativeProverBundle,
     crossSdkParity,
@@ -11299,6 +12684,12 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
         }),
     nativeProverSelfTestHash,
     nativeProverSelfTest,
+    ...(profile.domain === SCCP_DOMAIN_BSC
+      ? {
+          groth16ProofSelfTestHash,
+          groth16ProofSelfTest,
+        }
+      : {}),
     sdk,
     implementation,
     implementationHash,
@@ -11449,6 +12840,15 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
     "nativeProverSelfTestBytes",
     { ...sharedMetadata, role: "nativeProverSelfTestArtifact" },
   );
+  const groth16ProofSelfTestBytes =
+    profile.domain === SCCP_DOMAIN_BSC
+      ? await resolveNativeEvmProverArtifactBytes(
+          resolver,
+          nativeProverBundle.groth16ProofSelfTestArtifact,
+          "groth16ProofSelfTestBytes",
+          { ...sharedMetadata, role: "groth16ProofSelfTestArtifact" },
+        )
+      : undefined;
   const implementationBytes = await resolveNativeEvmProverArtifactBytes(
     resolver,
     artifact.implementationArtifact,
@@ -11463,6 +12863,9 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
       verifierKeyBytes,
       crossSdkParityBytes,
       nativeProverSelfTestBytes,
+      ...(groth16ProofSelfTestBytes === undefined
+        ? {}
+        : { groth16ProofSelfTestBytes }),
       sdk,
       implementationBytes,
     },
@@ -11528,6 +12931,8 @@ const hasNativeEvmProverArtifactBytes = (input) =>
     "native_prover_self_test_bytes",
     "selfTestBytes",
     "self_test_bytes",
+    "groth16ProofSelfTestBytes",
+    "groth16_proof_self_test_bytes",
     "implementationBytes",
     "implementation_bytes",
     "nativeImplementationBytes",

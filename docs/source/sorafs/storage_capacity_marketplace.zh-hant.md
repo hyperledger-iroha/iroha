@@ -8,13 +8,13 @@ source_hash: 2f830d4a4549c49d0c9649b728ab6ec00b0b7bcfcbd5a50230686ff0cd0648d7
 source_last_modified: "2026-01-22T14:35:37.719643+00:00"
 translation_last_reviewed: 2026-02-07
 ---
-
-# SoraFS Storage Capacity Marketplace (SF-2c Draft)
+# SoraFS Storage Capacity Marketplace (SF-2c)
 
 The SF-2c roadmap item introduces a governed marketplace where storage
 providers declare committed capacity, receive replication orders, and earn fees
-proportional to delivered availability. This document scopes the deliverables
-required for the first release and breaks them into actionable tracks.
+proportional to delivered availability. This document tracks the implemented
+first-release schemas, Torii/node surfaces, CLI helpers, metering evidence, and
+rollout checks required before hosted production settlement.
 
 ## Objectives
 
@@ -29,12 +29,12 @@ required for the first release and breaks them into actionable tracks.
 
 ## Domain Concepts
 
-| Concept | Description | Initial Deliverable |
-|---------|-------------|---------------------|
-| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema + validator in `sorafs_manifest::capacity`. |
-| `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | Norito schema shared with Torii + smart contract API. |
-| `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | Smart contract module or off-chain service stub with deterministic snapshot. |
-| `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Config struct in `sorafs_manifest` + governance document. |
+| Concept | Description | Implemented / Tracked Surface |
+|---------|-------------|-------------------------------|
+| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema, validator, fixtures, and CLI helpers in `sorafs_manifest::capacity` / `sorafs_manifest_stub capacity declaration`. |
+| `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | `ReplicationOrderV1` schema, fixture generator, Torii scheduling endpoint, and node reservation hooks. |
+| `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | `/v1/sorafs/capacity/state`, fee/credit ledger export, dispute records, and reconciliation tooling. |
+| `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Policy defaults, telemetry penalty hooks, dispute/slash runbook, and governance archive evidence. |
 
 ### Implemented Schemas (Status)
 
@@ -47,7 +47,7 @@ required for the first release and breaks them into actionable tracks.
 | Define `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Storage Team / Governance | Use Norito; include semantic versioning and capability references. |
 | Implement parser + validator modules in `sorafs_manifest`. | Storage Team | Enforce monotonic IDs, capacity bounds, stake requirements. |
 | Extend chunker registry metadata with `min_capacity_gib` per profile. | Tooling WG | Helps clients enforce per-profile minimum hardware requirements. |
-| Draft `MarketplacePolicy` document capturing admission guardrails and penalty schedule. | Governance Council | Publish in docs alongside policy defaults. |
+| Maintain `MarketplacePolicy` admission guardrails and penalty schedule. | Governance Council | Keep policy defaults, dispute thresholds, and governance evidence in sync with live rollout decisions. |
 
 #### Schema Definitions (Implemented)
 
@@ -57,7 +57,7 @@ required for the first release and breaks them into actionable tracks.
 - Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run -p sorafs_manifest --bin generate_replication_order_fixture`.
+- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
 
 ### 2. Smart Contract / Control Plane
 
@@ -107,7 +107,7 @@ required for the first release and breaks them into actionable tracks.
   `POST /v1/sorafs/capacity/por`, and `POST /v1/sorafs/capacity/failure` update the embedded
   `CapacityMeter`, telemetry accumulator, and Prometheus gauges without issuing transactions,
   ensuring probe data and replication failures feed dashboards and fee accrual logic immediately.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
-- The trustless gateway profile draft enumerates the HTTP request/response matrix, proof formats, and
+- The trustless gateway profile enumerates the HTTP request/response matrix, proof formats, and
   telemetry expectations that gateways must satisfy before joining the SF-5 conformance suite. See
   `docs/source/sorafs_gateway_profile.md` for the normative specification.
 - `GET /v1/sorafs/capacity/state` now includes a `local_usage` projection that reports the node’s
@@ -216,6 +216,9 @@ in-sync with the implementation.
    and Alertmanager rule `SoraFSCapacityReconciliationMismatch`
    (`dashboards/alerts/sorafs_capacity_rules.yml`). The rule fires whenever reconciliation
    metrics report missing/overpaid settlements or unexpected provider transfers.
+   Capacity telemetry can also carry gateway/orchestrator egress counters for the same
+   settlement window; `SoraFSEgressCounterDrift` alerts when either source stays more than
+   10% away from billing `egress_bytes` for 10 minutes.
 3. Archive the nightly reconciliation digest alongside the governance packets in
    `docs/examples/sorafs_capacity_marketplace_validation/` so treasury approvals can
    reference deterministic evidence. The validation checklist in
@@ -266,11 +269,17 @@ Completing the steps above provides the auditors referenced in roadmap item SF-2
 same artefacts the acceptance checklist expects—nightly XOR reconciliations, deterministic
 dispute handling, and repeatable onboarding/exit smoke tests.
 
-## Dependencies & Sequencing
+## Rollout Sequencing
 
-1. Finish SF-2b (admission policy) — marketplace relies on vetted providers.
-2. Implement schema + registry layer (this doc) before Torii integration.
-3. Complete metering pipeline before enabling payouts.
-4. Final step: enable governance-controlled fee distribution once metering data is verified in staging.
+1. Keep SF-2b admission artefacts current for every provider before accepting
+   capacity declarations.
+2. Archive signed declaration, replication-order, telemetry, dispute, and
+   reconciliation evidence for each hosted rollout window.
+3. Verify `/v1/sorafs/capacity/state`, Grafana panels, alert rules, and XOR
+   reconciliation outputs before treasury approval.
+4. Enable governance-controlled fee distribution only after staging evidence
+   proves metering, disputes, and settlement replay deterministically.
 
-Progress should be tracked in the roadmap with references to this document. Update the roadmap once each major section (schema, control plane, integration, metering, dispute handling) reaches feature complete status.
+Progress should be tracked in `roadmap.md`, `status.md`, and
+`docs/source/sorafs/reports/capacity_marketplace_validation.md` as rollout
+evidence changes.

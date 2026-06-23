@@ -81,7 +81,7 @@ jobs:
 
 ## မှတ်ချက်
 
-- `sorafs_cli` ကို အပြေးသမားတွင် ရနိုင်ရမည် (ဥပမာ၊ `cargo install --path crates/sorafs_car --features cli` ဤအဆင့်များမတိုင်မီ)။
+- `sorafs_cli` ကို အပြေးသမားတွင် ရနိုင်ရမည် (ဥပမာ၊ `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` ဤအဆင့်များမတိုင်မီ)။
 - အလုပ်အသွားအလာသည် ရှင်းလင်းပြတ်သားသော OIDC ပရိသတ်ကို ပေးဆောင်ရမည် (ဤနေရာတွင် `sorafs`); သင်၏ Fulcio မူဝါဒနှင့် ကိုက်ညီစေရန် `--identity-token-audience` ကို ချိန်ညှိပါ။
 - လွှတ်တင်ရေးပိုက်လိုင်းသည် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်ရန်အတွက် `artifacts/manifest.bundle.json`၊ `artifacts/manifest.sig` နှင့် `artifacts/proof.json` ကို သိမ်းဆည်းထားသင့်သည်။
 - အဆုံးအဖြတ်ပေးသော နမူနာလက်ရာများသည် `fixtures/sorafs_manifest/ci_sample` တွင် နေထိုင်သည်; ရွှေရောင်ဖော်ပြချက်များ၊ အတုံးအခဲအစီအမံများ သို့မဟုတ် ပိုက်လိုင်းကို ပြန်လည်တွက်ချက်ခြင်းမပြုဘဲ JSON အတွဲလိုက် လိုအပ်သည့်အခါ ၎င်းတို့ကို စမ်းသပ်မှုအဖြစ် ကူးယူပါ။

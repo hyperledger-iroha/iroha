@@ -16,8 +16,9 @@ usage() {
   cat <<'USAGE'
 sorafs_gateway_self_cert.sh --signing-key <path> --signer <account> [options]
 
-Runs the SoraFS gateway self-certification harness (cargo xtask sorafs-gateway-attest),
-producing a signed attestation envelope, JSON report, and human-readable summary.
+Runs the SoraFS gateway self-certification harness (the xtask
+sorafs-gateway-attest command), producing a signed attestation envelope, JSON
+report, and human-readable summary.
 When provided with manifest artefacts, the script also runs
 `sorafs_cli manifest verify-signature` to ensure release bundles remain valid.
 
@@ -47,6 +48,16 @@ Optional:
   --denylist-report <path>        Override path for diff JSON (default: <out>/denylist_diff.json).
   --help                          Show this help message and exit.
 USAGE
+}
+
+run_xtask() {
+  local -a args=("$@")
+  if cargo --list 2>/dev/null | awk '{print $1}' | grep -qx 'xtask'; then
+    cargo xtask "${args[@]}"
+  else
+    echo "cargo xtask unavailable; falling back to cargo run -p xtask --bin xtask -- ${args[*]}" >&2
+    cargo run -p xtask --bin xtask -- "${args[@]}"
+  fi
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -275,14 +286,14 @@ else
   output_dir="$(abs_path "${output_dir}")"
 fi
 
-cmd=(cargo xtask sorafs-gateway-attest --signing-key "${signing_key}" --signer-account "${signer_account}" --out "${output_dir}")
+cmd=(sorafs-gateway-attest --signing-key "${signing_key}" --signer-account "${signer_account}" --out "${output_dir}")
 if [[ -n "${gateway_target}" ]]; then
   cmd+=(--gateway "${gateway_target}")
 fi
 
 (
   cd "${workspace}"
-  "${cmd[@]}"
+  run_xtask "${cmd[@]}"
 )
 
 if [[ -n "${manifest_path}" && ( -n "${bundle_path}" || ( -n "${signature_path}" && -n "${public_key_hex}" )) ]]; then
@@ -317,7 +328,7 @@ if [[ -n "${manifest_path}" && ( -n "${bundle_path}" || ( -n "${signature_path}"
     cli_path="${workspace}/target/release/sorafs_cli"
     if [[ ! -x "${cli_path}" ]]; then
       echo "Building sorafs_cli (release)..."
-      (cd "${workspace}" && cargo build -p sorafs_car --features cli --bin sorafs_cli --release)
+      (cd "${workspace}" && cargo build -p sorafs_orchestrator --bin sorafs_cli --release)
     fi
   fi
   if [[ ! -x "${cli_path}" ]]; then
@@ -364,7 +375,7 @@ if [[ -n "${denylist_old_bundle}" || -n "${denylist_new_bundle}" ]]; then
     echo "Generating denylist diff evidence..."
     (
       cd "${workspace}"
-      cargo xtask sorafs-gateway denylist diff \
+      run_xtask sorafs-gateway denylist diff \
         --old "${denylist_old_bundle}" \
         --new "${denylist_new_bundle}" \
         --report-json "${diff_report_path}"

@@ -224,7 +224,7 @@ lista de permissões - provedores maliciosos ou alertas.
   `crates/iroha_core/src/da/replay_cache.rs` (lógica de cache) e integração Torii em
   `crates/iroha_torii/src/da/ingest.rs`, as verificações de impressão digital são processadas pelo `/v1/da/ingest`.
 - Simulações de streaming PDP / PoTR упражняются через arnês de fluxo de prova em
-  `crates/sorafs_car/tests/sorafs_cli.rs`, fluxos de solicitação PoR/PDP/PoTR e
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, fluxos de solicitação PoR/PDP/PoTR e
   cenários de falha do modelo do jogo.
 - Capacidade e reparação de imersão результаты в
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, e Sumeragi matriz de imersão em

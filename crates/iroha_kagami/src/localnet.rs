@@ -3247,6 +3247,15 @@ fn write_start_script(
     writeln!(start_file, "set -euo pipefail")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(start_file, "cd \"$DIR\"")?;
+    writeln!(start_file, "pid_is_running() {{")?;
+    writeln!(start_file, "  pid=\"$1\"")?;
+    writeln!(
+        start_file,
+        "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+    )?;
+    writeln!(start_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
+    writeln!(start_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
+    writeln!(start_file, "}}")?;
     writeln!(
         start_file,
         "export IROHA_BUILD_LINE=\"{}\"",
@@ -3351,7 +3360,7 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "    if [ -n \"$existing_pid\" ] && kill -0 \"$existing_pid\" 2>/dev/null; then"
+        "    if [ -n \"$existing_pid\" ] && pid_is_running \"$existing_pid\"; then"
     )?;
     writeln!(
         start_file,
@@ -3458,6 +3467,37 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
+    writeln!(stop_file, "pid_matches_peer() {{")?;
+    writeln!(stop_file, "  pid=\"$1\"")?;
+    writeln!(stop_file, "  config=\"$2\"")?;
+    writeln!(
+        stop_file,
+        "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+    )?;
+    writeln!(stop_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
+    writeln!(
+        stop_file,
+        "  command_line=\"$(ps -p \"$pid\" -o command= 2>/dev/null || true)\""
+    )?;
+    writeln!(stop_file, "  [ -n \"$command_line\" ] || return 1")?;
+    writeln!(
+        stop_file,
+        "  printf '%s' \"$command_line\" | grep -F -- \"--config $config\" >/dev/null \\"
+    )?;
+    writeln!(
+        stop_file,
+        "    || printf '%s' \"$command_line\" | grep -F -- \"--config=$config\" >/dev/null"
+    )?;
+    writeln!(stop_file, "}}")?;
+    writeln!(stop_file, "pid_is_running() {{")?;
+    writeln!(stop_file, "  pid=\"$1\"")?;
+    writeln!(
+        stop_file,
+        "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+    )?;
+    writeln!(stop_file, "  command -v ps >/dev/null 2>&1 || return 1")?;
+    writeln!(stop_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
+    writeln!(stop_file, "}}")?;
     writeln!(stop_file, "for pidfile in \"$DIR\"/peer*.pid; do")?;
     writeln!(stop_file, "  [ -f \"$pidfile\" ] || continue")?;
     writeln!(
@@ -3468,16 +3508,46 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     writeln!(stop_file, "    rm -f \"$pidfile\"")?;
     writeln!(stop_file, "    continue")?;
     writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  case \"$pid\" in")?;
+    writeln!(stop_file, "    ''|*[!0-9]*)")?;
+    writeln!(
+        stop_file,
+        "      echo \"removing malformed pidfile $pidfile (pid=$pid)\" >&2"
+    )?;
+    writeln!(stop_file, "      rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "      continue")?;
+    writeln!(stop_file, "      ;;")?;
+    writeln!(stop_file, "  esac")?;
+    writeln!(stop_file, "  if ! pid_is_running \"$pid\"; then")?;
+    writeln!(stop_file, "    rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "    continue")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  peer_name=\"$(basename \"$pidfile\" .pid)\"")?;
+    writeln!(stop_file, "  config=\"$DIR/${{peer_name}}.toml\"")?;
+    writeln!(
+        stop_file,
+        "  if ! pid_matches_peer \"$pid\" \"$config\"; then"
+    )?;
+    writeln!(
+        stop_file,
+        "    echo \"leaving $pidfile in place: live pid $pid does not match $config\" >&2"
+    )?;
+    writeln!(stop_file, "    continue")?;
+    writeln!(stop_file, "  fi")?;
     writeln!(stop_file, "  kill \"$pid\" 2>/dev/null || true")?;
     writeln!(stop_file, "  for _ in $(seq 1 40); do")?;
-    writeln!(stop_file, "    if kill -0 \"$pid\" 2>/dev/null; then")?;
+    writeln!(stop_file, "    if pid_is_running \"$pid\"; then")?;
     writeln!(stop_file, "      sleep 0.25")?;
     writeln!(stop_file, "    else")?;
     writeln!(stop_file, "      break")?;
     writeln!(stop_file, "    fi")?;
     writeln!(stop_file, "  done")?;
-    writeln!(stop_file, "  if kill -0 \"$pid\" 2>/dev/null; then")?;
-    writeln!(stop_file, "    kill -9 \"$pid\" 2>/dev/null || true")?;
+    writeln!(stop_file, "  if pid_is_running \"$pid\"; then")?;
+    writeln!(
+        stop_file,
+        "    echo \"leaving $pidfile in place: localnet peer $peer_name pid $pid is still running\" >&2"
+    )?;
+    writeln!(stop_file, "    continue")?;
     writeln!(stop_file, "  fi")?;
     writeln!(stop_file, "  rm -f \"$pidfile\"")?;
     writeln!(stop_file, "done")?;
@@ -7541,13 +7611,54 @@ mod tests {
             "start script should refuse to overwrite live pidfiles"
         );
         assert!(
+            start_contents.contains("pid_is_running()")
+                && start_contents.contains("pid_is_running \"$existing_pid\""),
+            "start script should probe pid liveness without null signals"
+        );
+        assert!(
+            start_contents.contains("command -v ps >/dev/null 2>&1 || return 0"),
+            "start script should treat missing ps as live rather than stale"
+        );
+        assert!(
+            !start_contents.contains("kill -0"),
+            "start script should not use null-signal pid probes"
+        );
+        assert!(
             start_contents.contains("rm -f \"$PIDFILE\""),
             "start script should clear stale pidfiles before relaunch"
         );
         let stop_contents = fs::read_to_string(&stop_path).expect("read stop script");
         assert!(
-            stop_contents.contains("kill -9 \"$pid\" 2>/dev/null || true"),
-            "stop script should force-stop stubborn peers"
+            stop_contents.contains("pid_matches_peer()"),
+            "stop script should validate pid ownership before signaling"
+        );
+        assert!(
+            stop_contents.contains("pid_is_running()"),
+            "stop script should probe pid liveness without null signals"
+        );
+        assert!(
+            stop_contents.contains("command -v ps >/dev/null 2>&1 || return 0"),
+            "stop script should treat missing ps as live rather than stale"
+        );
+        assert!(
+            !stop_contents.contains("kill -0"),
+            "stop script should not use null-signal pid probes"
+        );
+        assert!(
+            stop_contents.contains("grep -F -- \"--config $config\""),
+            "stop script should bind live pid checks to the peer config path"
+        );
+        assert!(
+            stop_contents.contains("live pid $pid does not match $config"),
+            "stop script should leave reused pidfiles untouched"
+        );
+        assert!(
+            !stop_contents.contains("kill -9 \"$pid\""),
+            "stop script should not escalate to SIGKILL"
+        );
+        assert!(
+            stop_contents.contains("localnet peer $peer_name pid $pid is still running"),
+            "stop script should leave still-running owned peers visible"
         );
         assert!(
             stop_contents.contains("rm -f \"$pidfile\""),

@@ -205,7 +205,7 @@ translator: machine-google-reviewed
   በ `crates/iroha_torii/src/da/ingest.rs` ውስጥ ያለው የ Torii ውህደት
   የጣት አሻራ በ`/v1/da/ingest` በኩል ይፈትሻል።
 - የPDP/PoTR ዥረት ማስመሰያዎች የሚከናወኑት በማረጋገጫ ዥረት መታጠቂያ በኩል ነው።
-  `crates/sorafs_car/tests/sorafs_cli.rs`፣ የPoR/PDP/PoTR የጥያቄ ፍሰቶችን ይሸፍናል።
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`፣ የPoR/PDP/PoTR የጥያቄ ፍሰቶችን ይሸፍናል።
   እና በስጋት ሞዴል ውስጥ የታነሙ የውድቀት ሁኔታዎች።
 - አቅም እና የጥገና soak ውጤቶች ስር ይኖራሉ
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, ሰፊው ሳለ

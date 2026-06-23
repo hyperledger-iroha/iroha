@@ -25,7 +25,7 @@ I18NI0000001X chunker መገለጫ። Tooling WG የማረጋገጫ ዝርዝሩ
 |-------|--------|
 | 1 | I18NI0000002X | ሁሉም ፈተናዎች ያልፋሉ; `vectors` እኩልነት ፈተና ተሳክቷል። | የቀኖናዊ ዕቃዎችን ያጠናቅራል እና የዝገት ትግበራን ያዛምዳል። |
 | 2 | `ci/check_sorafs_fixtures.sh` | ስክሪፕት 0 ይወጣል; ከዚህ በታች የተገለጹትን መግለጫዎች ዘግቧል። | የቤት ዕቃዎች በንጽህና እንደገና መወለዳቸውን ያረጋግጣል እና ፊርማዎች እንደተያያዙ ይቆያሉ። |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | ለI18NI0000006X ግጥሚያዎች የመመዝገቢያ ገላጭ (`profile_id=1`)። | የመመዝገቢያ ዲበ ውሂብ በማመሳሰል ውስጥ መቆየቱን ያረጋግጣል። |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | ለI18NI0000006X ግጥሚያዎች የመመዝገቢያ ገላጭ (`profile_id=1`)። | የመመዝገቢያ ዲበ ውሂብ በማመሳሰል ውስጥ መቆየቱን ያረጋግጣል። |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | ያለ I18NI0000009X ማደስ ይሳካል; አንጸባራቂ እና ፊርማ ፋይሎች አልተቀየሩም። | ለክንች ድንበሮች የመወሰኛ ማረጋገጫ ያቀርባል እና ይገለጣል። |
 | 5 | `node scripts/check_sf1_vectors.mjs` | በTyScript ቋሚዎች እና Rust JSON መካከል ምንም ልዩነት እንደሌለ ሪፖርት አድርጓል። | አማራጭ ረዳት; በሁሉም የሩጫ ጊዜዎች መካከል ያለውን እኩልነት ያረጋግጡ (ስክሪፕት በTooling WG ይጠበቃል)። |
 

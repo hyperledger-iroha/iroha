@@ -3482,6 +3482,33 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
     Ok(())
 }
 
+/// Verify a SoraFS gateway conformance attestation envelope and print metadata.
+pub fn verify_gateway_attestation(envelope_path: &Path) -> Result<(), Box<dyn Error>> {
+    let envelope_bytes = fs::read(envelope_path).map_err(|err| {
+        format!(
+            "failed to read attestation envelope {}: {err}",
+            envelope_path.display()
+        )
+    })?;
+    let verified =
+        integration_tests::sorafs_gateway_conformance::verify_attestation_envelope(&envelope_bytes)
+            .map_err(|err| format!("failed to verify SoraFS gateway attestation: {err}"))?;
+
+    println!(
+        "Verified SoraFS gateway conformance attestation:\n  envelope: {}\n  profile: {}\n  scenarios: {}\n  digest: {}\n  signer: {}\n  algorithm: {}\n  public_key: {}\n  signed_at_unix: {}",
+        envelope_path.display(),
+        verified.profile_version,
+        verified.scenario_count,
+        verified.payload_hash_hex,
+        verified.signer_account,
+        verified.algorithm.as_static_str(),
+        verified.public_key_hex,
+        verified.signed_at_unix
+    );
+
+    Ok(())
+}
+
 const DEFAULT_CACHE_MAX_AGE: u64 = 600;
 const DEFAULT_CACHE_STALE_WHILE_REVALIDATE: u64 = 120;
 const DEFAULT_CACHE_HARD_EXPIRY: u64 = 900;

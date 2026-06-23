@@ -77,7 +77,7 @@ _רענון אחרון דרך `python3 scripts/inventory_env_toggles.py --json d
 
 ## CARGO_BIN_EXE_sorafs_cli (בדיקה: 1)
 
-- בדיקה: crates/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- בדיקה: crates/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_fetch (בדיקה: 1)
 
@@ -85,7 +85,7 @@ _רענון אחרון דרך `python3 scripts/inventory_env_toggles.py --json d
 
 ## CARGO_BIN_EXE_taikai_car (מבחן: 1)
 
-- בדיקה: crates/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- בדיקה: crates/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## CARGO_BIN_NAME (תפוקה: 3)
 

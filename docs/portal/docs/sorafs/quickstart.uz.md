@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Manifest tuzing va imzolang
 
 Bo'lak rejasi, taxalluslar va boshqaruv imzolarini manifestga o'rash
-`sorafs-manifest-stub`. Quyidagi buyruq bitta faylli foydali yukni ko'rsatadi; o'tish
+`sorafs_manifest_stub`. Quyidagi buyruq bitta faylli foydali yukni ko'rsatadi; o'tish
 daraxtni qadoqlash uchun katalog yo'li (CLI uni leksikografik jihatdan boshqaradi).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

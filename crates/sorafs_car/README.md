@@ -35,11 +35,11 @@ chunker, emits a CAR plan report, and supports `--list-profiles` along with
 either `--profile-id=<id>` or the canonical handle form
 `--profile=<namespace.name@semver>` for tooling that wants to introspect the
 registry. The CLI
-is shipped from the `sorafs_manifest` crate so that manifest tooling and the
-chunk store stay in lockstep. Example:
+is shipped from the `sorafs_car` crate so CAR, fetch, and chunk-store tooling
+stay in lockstep. Example:
 
 ```
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf1@1.0.0 \
   --json-out=chunk_report.json \
   payload.tar
@@ -51,7 +51,7 @@ Ingest a payload, emit a CAR plan report, and persist both the main summary,
 the PoR tree, and sampled proofs in JSON:
 
 ```
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf1@1.0.0 \
   --json-out=chunk_report.json \
   --por-json-out=por_tree.json \
@@ -68,12 +68,12 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 List the registered chunker profiles:
 
 ```
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 ```
 
 Reassemble a payload from multiple local providers using the multi-source fetch
 orchestrator (`chunk_fetch_specs.json` can be the array emitted by
-`sorafs-manifest-stub --chunk-fetch-plan-out`):
+`sorafs_manifest_stub --chunk-fetch-plan-out`):
 
 ```
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -91,7 +91,7 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - Add `--expect-payload-digest=<hex>` and/or `--expect-payload-len=<bytes>` to
   verify the reconstructed payload against manifest expectations during the run.
 - `--manifest-report=report.json` lets the CLI consume the JSON emitted by
-  `sorafs-manifest-stub`; it will reuse `chunk_fetch_specs`, `payload_digest_hex`,
+  `sorafs_manifest_stub`; it will reuse `chunk_fetch_specs`, `payload_digest_hex`,
   and `payload_len` so you don’t have to pass those values manually.
 - `--manifest=manifest.to` feeds the Norito-encoded manifest to the CLI so it can
   invoke the trustless `CarVerifier` after assembly and attach verification

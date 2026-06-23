@@ -1668,6 +1668,12 @@ public sealed record class ToriiSoraFsPinRegisterRequest
     [JsonPropertyName("manifest_digest_hex")]
     public string? ManifestDigestHex { get; init; }
 
+    [JsonPropertyName("manifest_b64")]
+    public string? ManifestBase64 { get; init; }
+
+    [JsonIgnore]
+    public byte[]? ManifestBytes { get; init; }
+
     [JsonPropertyName("chunk_digest_sha3_256_hex")]
     public string? ChunkDigestSha3_256Hex { get; init; }
 
@@ -1712,6 +1718,9 @@ internal sealed record class ToriiSoraFsPinRegisterWireRequest
 
     [JsonPropertyName("manifest_digest_hex")]
     public string? ManifestDigestHex { get; init; }
+
+    [JsonPropertyName("manifest_b64")]
+    public string? ManifestBase64 { get; init; }
 
     [JsonPropertyName("chunk_digest_sha3_256_hex")]
     public string? ChunkDigestSha3_256Hex { get; init; }

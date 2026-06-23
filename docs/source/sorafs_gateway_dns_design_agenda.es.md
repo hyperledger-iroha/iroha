@@ -9,97 +9,107 @@ source_last_modified: "2025-11-02T17:18:17.688536+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Arranque de diseño de SoraFS Gateway y DNS — Agenda
+# SoraFS Gateway & DNS Design Kickoff — Agenda Archive
 
-**Fecha:** 2025-03-03  
-**Hora:** 16:00–17:00 UTC (60 minutos)  
-**Facilitador:** Networking TL  
-**Tipo de reunión:** taller de decisiones (Zoom/Meet + doc de notas compartidas)
+**Date:** 2025-03-03
+**Time:** 16:00–17:00 UTC (60 minutes)
+**Facilitator:** Networking TL
+**Meeting type:** Completed decision workshop (Zoom/Meet + shared notes doc)
 
-## 1. Lista de asistentes
+This agenda is retained as the archival session plan. Decisions, owners, and
+close-out actions are recorded in
+`docs/source/sorafs_gateway_dns_design_minutes.md`; the current operator-facing
+summary remains in `docs/source/sorafs_gateway_dns_design_pre_read.md`.
 
-| Rol | Nombre / alias | Responsabilidades |
-|------|---------------|------------------|
-| Networking TL (facilitador) | `networking.tl@soranet` | Conducir discusión enfocada en resultados, capturar decisiones, asumir seguimientos. |
-| Ops Lead | `ops.lead@soranet` | Automatización DNS, runbooks de despliegue, preparación operativa. |
-| Storage Team Rep | `storage.rep@sorafs` | Integración de manifiestos, fixtures de chunker, impactos en orquestación de clientes. |
-| Tooling WG Rep | `tooling.wg@sorafs` | Mantenimiento del harness de conformidad, cambios de CLI/tooling. |
-| Governance Liaison | `governance@sora` | Alineación de política GAR, rutas de escalamiento, archivo de artefactos. |
-| QA Guild Lead | `qa.guild@sorafs` | Plan de cobertura de tests, recursos de suites de carga, ownership de regresiones. |
-| Docs/DevRel Observer | `docs.devrel@sora` | Runbooks de operadores, actualizaciones Docusaurus, comunicación pública. |
-| Torii Platform Rep | `torii.platform@soranet` | Integración de API, pipelines de telemetría, superficies de configuración. |
-| Security Engineering Observer | `security@soranet` | Modelado de amenazas de enforcement GAR, requisitos de trazabilidad de auditoría. |
+## 1. Attendee Roster
 
-> **Acción:** Confirmar disponibilidad con cada asistente antes del 2025-02-26; sustituir roles si surgen conflictos.
+| Role | Name / Alias | Responsibilities |
+|------|--------------|------------------|
+| Networking TL (facilitator) | `networking.tl@soranet` | Drive outcome-focused discussion, capture decisions, own follow-ups. |
+| Ops Lead | `ops.lead@soranet` | DNS automation, rollout runbooks, operator readiness. |
+| Storage Team Rep | `storage.rep@sorafs` | Manifest integration, chunker fixtures, client orchestration impacts. |
+| Tooling WG Rep | `tooling.wg@sorafs` | Conformance harness maintenance, CLI/tooling changes. |
+| Governance Liaison | `governance@sora` | GAR policy alignment, escalation routing, artefact archival. |
+| QA Guild Lead | `qa.guild@sorafs` | Test coverage plan, load suite resources, regression ownership. |
+| Docs/DevRel Observer | `docs.devrel@sora` | Operator runbooks, Docusaurus updates, public comms. |
+| Torii Platform Rep | `torii.platform@soranet` | API integration, telemetry pipelines, config surfaces. |
+| Security Engineering Observer | `security@soranet` | GAR enforcement threat modelling, audit trail requirements. |
 
-## 2. Revisión del pre-read (0–5 min)
-- Confirmación rápida de que todos leyeron:
+> **Archive status:** Attendance was confirmed by 2025-02-26 and the completed
+> roster is tracked in `docs/source/sorafs_gateway_dns_design_attendance.md`.
+
+## 2. Pre-read Review (0–5 min)
+- Quick acknowledgement that everyone read:
   - `docs/source/sorafs_gateway_dns_design_pre_read.md`
   - `docs/source/sorafs_gateway_profile.md`
   - `docs/source/sorafs_gateway_conformance.md`
   - `docs/source/sorafs_gateway_deployment_handbook.md`
-- Destacar cualquier documento nuevo añadido desde la circulación.
+- Highlight any new documents added since circulation.
 
-## 3. Alcance DNS determinista (5–20 min)
-1. **Reglas de derivación de hosts (5 min):**
-   - Esquema canónico propuesto (`<capability>.<lane>.gateway.sora`).
-   - Ownership de reservas de namespace y manejo de colisiones.
-2. **Pruebas de alias y política TTL (5 min):**
-   - Revisar requisitos SF-4a, flujo de invalidación de pruebas en caché.
-3. **Ruta de automatización (5 min):**
-   - Elección de toolchain: Terraform + RFC2136 vs Torii-managed.
-   - Gestión de secretos, logging de auditoría, enlace con GAR.
-4. **Captura de decisiones (5 min):**
-   - Registrar decisiones finales en notas compartidas.
-   - Asignar owner para codificar decisiones en docs/config.
+## 3. Deterministic DNS Scope (5–20 min)
+1. **Host Derivation Rules (5 min):**
+   - Proposed canonical naming scheme (`<capability>.<lane>.gateway.sora`).
+   - Ownership of namespace reservations and collision handling.
+2. **Alias Proof & TTL Policy (5 min):**
+   - Review SF-4a requirements, cached proof invalidation flow.
+3. **Automation Path (5 min):**
+   - Toolchain choice: Terraform + RFC2136 vs Torii-managed.
+   - Secrets management, audit logging, GAR linkage.
+4. **Decision Capture (5 min):**
+   - Record final decisions in the minutes.
+   - Assign owner to codify decisions in docs/config.
 
-## 4. Enforcement del gateway y runtime (20–40 min)
-1. **Motor de política GAR (8 min):**
-   - Enfoque de integración (librería vs caché Norito).
-   - Knobs de configuración, toggles de despliegue.
-2. **Alineación de perfil trustless (5 min):**
-   - Confirmar ítems pendientes de `sorafs_gateway_profile.md`.
-3. **Modo directo y rate limiting (4 min):**
-   - Requisitos para enforcement de capacidades de manifiesto, ganchos de denylist.
-4. **Telemetría y alertas (8 min):**
-   - Métricas a capturar (`torii_sorafs_gar_violations_total`, histogramas de latencia).
-   - Enrutamiento de alertas a governance/on-call.
-5. **Captura de decisiones (5 min):**
-   - Documentar criterios de aceptación y owner de PRs de implementación.
+## 4. Gateway Enforcement & Runtime (20–40 min)
+1. **GAR Policy Engine (8 min):**
+   - Integration approach (library vs Norito cache).
+   - Config knobs, rollout toggles.
+2. **Trustless Profile Alignment (5 min):**
+   - Confirm the shipped `sorafs_gateway_profile.md` acceptance criteria and
+     any rollout evidence follow-ups.
+3. **Direct Mode & Rate Limiting (4 min):**
+   - Requirements for manifest capability enforcement, denylist hooks.
+4. **Telemetry & Alerts (8 min):**
+   - Metrics to capture (`torii_sorafs_gar_violations_total`, latency histograms).
+   - Alert routing to governance/on-call.
+5. **Decision Capture (5 min):**
+   - Record acceptance criteria and owners in the minutes.
 
-## 5. Plan del harness de conformidad (40–50 min)
-1. **Revisión de cobertura (5 min):**
-   - Suites de replay, negativas y de carga según `sorafs_gateway_conformance.md`.
-2. **Pipeline de atestación (3 min):**
-   - Formato de sobre Norito, responsabilidades de `sorafs-gateway-cert`.
-3. **Chequeo de recursos y timeline (2 min):**
-   - Staffing de QA Guild, timelines de Tooling WG, integración CI.
+## 5. Conformance Harness Plan (40–50 min)
+1. **Coverage Review (5 min):**
+   - Replay, negative, and load suites per `sorafs_gateway_conformance.md`.
+2. **Attestation Pipeline (3 min):**
+   - Norito envelope format, `sorafs-gateway-cert` responsibilities.
+3. **Resource & Timeline Check (2 min):**
+   - QA Guild staffing, Tooling WG timelines, CI integration.
 
-## 6. Dependencias y alineación con roadmap (50–55 min)
-- Mapear decisiones a ítems del roadmap (SF-4, SF-4a, SF-5, SF-5a).
-- Identificar bloqueos provenientes de entregables SF-2/SF-3.
-- Confirmar actualizaciones necesarias en `status.md` y el portal Docusaurus.
+## 6. Dependencies & Roadmap Alignment (50–55 min)
+- Map decisions to roadmap items (SF-4, SF-4a, SF-5, SF-5a).
+- Identify blockers from SF-2/SF-3 deliverables.
+- Confirm required updates to `status.md` and Docusaurus portal.
 
-## 7. Registro de acciones y próximos pasos (55–60 min)
-- Resumir decisiones y acciones pendientes.
-- Asignar owners, fechas límite y checkpoints de seguimiento.
-- Confirmar plan de publicación para notas de reunión y artefactos.
+## 7. Action Register & Next Steps (55–60 min)
+- Summarise decisions and outstanding actions.
+- Assign owners, due dates, and follow-up checkpoints.
+- Confirm publication plan for minutes, the outcome brief, and artefacts.
 
-## 8. Checklist de pretrabajo (owners)
+## 8. Pre-work Checklist (Completed)
 
-| Tarea | Owner | Fecha límite | Notas |
-|-------|-------|--------------|-------|
-| Confirmar disponibilidad de asistentes | Networking TL | 2025-02-26 | Usar plantilla en `docs/source/sorafs_gateway_dns_design_invite.txt`. |
-| Circular agenda y pre-read | Networking TL | 2025-02-27 | Enviar agenda + pre-read en un solo email. |
-| Recopilar snapshot actual de métricas GAR | Ops Lead / Torii Rep | 2025-02-28 | Ejecutar variante de `scripts/telemetry/run_schema_diff.sh` (ver acción). |
-| Preparar diagramas (flujo DNS, motor de política) | Tooling WG / Security | 2025-03-01 | Guardar en `docs/source/images/sorafs_gateway_kickoff/`. |
-| Borrador de doc de notas | Docs/DevRel | 2025-02-28 | Proveer outline de decisiones/acciones. |
+| Task | Owner | Due | Notes |
+|------|-------|-----|-------|
+| Confirm attendee availability | Networking TL | 2025-02-26 | Use template in `docs/source/sorafs_gateway_dns_design_invite.txt`. |
+| Circulate agenda & pre-read | Networking TL | 2025-02-27 | Bundle agenda + pre-read in single email. |
+| Gather current GAR metric snapshot | Ops Lead / Torii Rep | 2025-02-28 | Run `scripts/telemetry/run_schema_diff.sh` variant (see action item). |
+| Prepare diagrams (DNS flow, policy engine) | Tooling WG / Security | 2025-03-01 | Store under `docs/source/images/sorafs_gateway_kickoff/`. |
+| Publish note-taking doc | Docs/DevRel | 2025-02-28 | Completed; decisions/actions are now in the minutes. |
 
-## 9. Plantilla de seguimiento post-reunión
-- **Dentro de 24h:** Publicar notas + registro de acciones en roadmap/status.
-- **Dentro de 48h:** Actualizar todos los docs referenciados con decisiones acordadas.
-- **Dentro de 72h:** Abrir issues/PRs de implementación y agendar checkpoints de progreso.
+## 9. Post-meeting Close-out
+- **Within 24h:** Published notes + action register to roadmap/status.
+- **Within 48h:** Updated referenced docs with agreed decisions.
+- **Within 72h:** Filed implementation issues/PRs and scheduled progress checks.
 
 ---
 
-Para ajustes o puntos adicionales de agenda, comentar directamente en este documento o escribir a `networking.tl@soranet`. Todos los cambios deben congelarse 24 horas antes de la sesión para mantener el foco en decisiones.
+This agenda is archived. Update
+`docs/source/sorafs_gateway_dns_design_minutes.md` for corrections to decisions
+or action ownership, and update the outcome brief when the shipped gateway/DNS
+surface changes.

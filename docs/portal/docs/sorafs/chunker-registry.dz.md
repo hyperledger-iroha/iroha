@@ -57,7 +57,7 @@ SoraFS གིས་ མིང་ཐོ་བཀོད་ཆུང་བ་ཅི
 ཐོ་བཀོད་འདི་ ལག་ཆས་ཚུ་ནང་ལས་ བརྟག་དཔྱད་འབད་ནི་ལུ་ གྲོགས་རམ་པ་སི་ཨེལ་ཨའི་འདི་ གཡོག་བཀོལ།
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -113,7 +113,7 @@ $ ཅ་ཆས་བང་རྒྱུག་ -p སོ་རཕ་_མན་ཕ�
 གསལ་སྟོན་འདི་གིས་ གནས་སྡུད་གཅིགཔོ་འདི་ གསལ་སྟོན་འབདཝ་ཨིནམ་ད་ འདི་ཡང་ པའིཔ་ལའིན་ནང་ལུ་ I18NI000000039X སེལ་འཐུ་འབད་བའི་སྐབས་ སྟབས་བདེ་ཏོག་ཏོ་ཨིན། ཆ་རྐྱེན་ཚོང་ཁང་གིས་ སི་ཨེལ་ཨའི་གཉིས་ཆ་ར་གིས་ ཀེ་ནོ་ནིག་ལག་ལེབ་ཀྱི་རྣམ་པ་ (`--profile=sorafs.sf1@1.0.0`) ཡང་ངོས་ལེན་འབདཝ་ལས་ ཡིག་ཚུགས་ཚུ་བཟོ་བསྐྲུན་འབད་མི་འདི་གིས་ ཧརཌི་ཀོཌིང་ཨང་གྲངས་ཀྱི་ཨའི་ཌི་ཚུ་ བཀག་ཚུགས།
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -159,7 +159,7 @@ I18NF0000009X
 
 * `sorafs.sf1@1.0.0` གསལ་སྡུད་འདི་གིས་ ༢༠༠༨ ལུ་ མི་མང་སྒྲིག་བཀོད་ཚུ་ལུ་ སབ་ཁྲ་བཟོཝ་ཨིན།
   ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",

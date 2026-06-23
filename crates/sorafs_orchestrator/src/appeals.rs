@@ -577,6 +577,41 @@ impl FromStr for AppealDecision {
     }
 }
 
+/// Error returned when parsing [`AppealVerdict`] values.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[error(
+    "unknown appeal verdict `{raw}` (expected uphold|overturn|modify|withdrawn_before_panel|withdrawn_after_panel|frivolous|escalated)"
+)]
+pub struct AppealVerdictParseError {
+    raw: String,
+}
+
+impl FromStr for AppealVerdict {
+    type Err = AppealVerdictParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let normalized = s.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "uphold" => Ok(Self::Decision(AppealDecision::Uphold)),
+            "overturn" => Ok(Self::Decision(AppealDecision::Overturn)),
+            "modify" => Ok(Self::Decision(AppealDecision::Modify)),
+            "withdrawn_before_panel"
+            | "withdrawn-before-panel"
+            | "withdrawn_pre"
+            | "withdrawn-pre" => Ok(Self::WithdrawnBeforePanel),
+            "withdrawn_after_panel"
+            | "withdrawn-after-panel"
+            | "withdrawn_post"
+            | "withdrawn-post" => Ok(Self::WithdrawnAfterPanel),
+            "frivolous" => Ok(Self::Frivolous),
+            "escalated" | "pending" => Ok(Self::Escalated),
+            _ => Err(AppealVerdictParseError {
+                raw: s.trim().to_string(),
+            }),
+        }
+    }
+}
+
 /// Mapping of refund/slash ratios for a particular verdict.
 #[derive(Clone, Debug)]
 pub struct AppealSettlementRule {
@@ -1117,6 +1152,29 @@ fn clamp_decimal(value: Decimal, min: Decimal, max: Decimal) -> Decimal {
     }
 }
 
+/// Error returned when parsing a decimal XOR literal.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[error("failed to parse `{label}` decimal `{raw}`: {reason}")]
+pub struct AppealDecimalParseError {
+    label: String,
+    raw: String,
+    reason: String,
+}
+
+/// Parse a user-supplied decimal XOR amount without relying on JSON number heuristics.
+pub fn parse_appeal_decimal_literal(
+    label: impl Into<String>,
+    raw: &str,
+) -> Result<Decimal, AppealDecimalParseError> {
+    let label = label.into();
+    let trimmed = raw.trim();
+    Decimal::from_str(trimmed).map_err(|err| AppealDecimalParseError {
+        label,
+        raw: trimmed.to_string(),
+        reason: err.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
@@ -1271,6 +1329,32 @@ mod tests {
             breakdown.panel_reward_total_xor,
             config.panel_rewards().total_reward(panel)
         );
+    }
+
+    #[test]
+    fn appeal_verdict_parser_accepts_decisions_and_aliases() {
+        assert_eq!(
+            "overturn".parse::<AppealVerdict>().expect("decision"),
+            AppealVerdict::Decision(AppealDecision::Overturn)
+        );
+        assert_eq!(
+            "withdrawn-post".parse::<AppealVerdict>().expect("alias"),
+            AppealVerdict::WithdrawnAfterPanel
+        );
+        assert_eq!(
+            "pending".parse::<AppealVerdict>().expect("alias"),
+            AppealVerdict::Escalated
+        );
+        assert!("unknown".parse::<AppealVerdict>().is_err());
+    }
+
+    #[test]
+    fn appeal_decimal_literal_parser_accepts_precise_strings() {
+        assert_eq!(
+            parse_appeal_decimal_literal("deposit_xor", "339.30").expect("decimal"),
+            Decimal::new(33930, 2)
+        );
+        assert!(parse_appeal_decimal_literal("deposit_xor", "not-a-number").is_err());
     }
 
     #[test]

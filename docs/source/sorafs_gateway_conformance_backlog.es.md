@@ -9,96 +9,102 @@ source_last_modified: "2025-11-07T10:28:14.055720+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Backlog de conformidad del gateway SoraFS
+# SoraFS Gateway Conformance Status
 
-Este documento vivo registra el trabajo requerido para entregar el harness de
-conformidad SF-5a, cubriendo verificacion de replay, pruebas de carga,
-automatizacion de release y reportes de governance.
+This living document records the shipped SF-5a conformance harness and the
+external rollout evidence still owned by operators or hosted CI. Replay
+verification, deterministic load testing, local CI gating, signed attestation
+generation, and dashboard assets are implemented in this checkout.
 
-## Desglose de hitos
+## Implementation And Rollout Breakdown
 
-### 1. Nucleo del harness de replay (Owner: Conformance WG, Issue: SF-5a-REPLAY)
-- **Alcance**
-  - Implementar un shim adaptador HTTP (Tokio + reqwest) con inyeccion determinista de headers.
-  - Conectar la ingesta de manifiestos Norito y el pipeline de verificacion de pruebas (digest BLAKE3, validacion PoR).
-  - Emitir reportes de atestacion firmados en Norito usando el hook de firmado definido en `sorafs_gateway_conformance.md`.
-- **Dependencias**
-  - Indice de fixtures (`fixtures/sorafs_gateway/index.norito.json`).
-  - Helpers de schema de tokens desde `sorafs_token_schema`.
-- **Entregables**
-  - Crate Rust `sorafs_gateway_cert::replay`.
-  - Fixtures golden + tests de regresion (`cargo test -p sorafs_gateway_cert -- replay_*`).
-  - Muestras de atestacion archivadas bajo `artifacts/sorafs_gateway/replay/`.
+### 1. Replay Harness Core (Owner: Conformance WG, Issue: SF-5a-REPLAY)
+- **Scope**
+  - Implement HTTP adapter shim (Tokio + reqwest) with deterministic header injection.
+  - Wire Norito manifest ingestion and proof verification pipeline (BLAKE3 digest, PoR validation).
+  - Emit Norito-signed attestation reports using the signing hook defined in `sorafs_gateway_conformance.md`.
+- **Dependencies**
+  - Fixture index (`fixtures/sorafs_gateway/index.norito.json`).
+  - Token schema helpers from `sorafs_token_schema`.
+- **Deliverables**
+  - Harness module `integration_tests::sorafs_gateway_conformance`.
+  - Golden fixture and regression tests (`cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance`).
+  - Attestation samples archived under `artifacts/sorafs_gateway/replay/`.
 
-### 2. Runner de carga concurrente (Owner: Reliability WG, Issue: SF-5a-LOAD)
-- **Alcance**
-  - Construir un generador de workload con semillas que sostenga >= 1 000 streams de rango concurrentes.
-  - Capturar telemetria por request (histogramas de latencia, resultados de pruebas) y exportar via Prometheus.
-  - Soportar inyeccion de fallas (timeouts, corrupcion PoR) controlada por flags de CLI.
-- **Dependencias**
-  - Librerias del harness de replay (reusar adaptador HTTP + pipeline de pruebas).
-  - Pipeline de export de metricas (`sorafs_telemetry`).
-- **Entregables**
-  - Modulo `sorafs_gateway_cert::load` con integracion CLI (`--profile mock-chaos`).
-  - Dashboards de telemetria agregados a `dashboards/sorafs_gateway_conformance.json`.
-  - Documentacion que cubra perfiles de carga dentro de este backlog.
+### 2. Concurrent Load Runner (Owner: Reliability WG, Issue: SF-5a-LOAD)
+- **Scope**
+  - Build seeded workload generator sustaining ≥1 000 concurrent range streams.
+  - Capture per-request telemetry (latency histograms, proof results) and export via Prometheus.
+  - Support failure injection (timeouts, PoR corruption) toggled via CLI flags.
+- **Dependencies**
+  - Replay harness libraries (reuse HTTP adapter + proof pipeline).
+  - Metrics export pipeline (`sorafs_telemetry`).
+- **Deliverables**
+  - Deterministic load helper `run_deterministic_load_test` in the conformance harness.
+  - Telemetry dashboards added to `dashboards/grafana/sorafs_gateway_conformance.json`.
+  - Documentation covering load profiles within this backlog.
 
-### 3. Empaquetado CLI (`sorafs-gateway-cert`) (Owner: Tooling WG, Issue: SF-5a-CLI)
-- **Alcance**
-  - Exponer flujos de replay y carga via un solo CLI con subcomandos:
-    - `replay run --scenario sf1/full`
-    - `load run --profile mock-chaos`
-    - `report sign --input report.json`
-  - Implementar discovery de configuracion (`.sorafs-gateway-cert/config.toml` + overrides de env).
-- **Entregables**
-  - Binary crate `sorafs-gateway-cert`.
-  - Guia de instalacion en `docs/source/sorafs_gateway_cert_cli.md`.
-  - Smoke tests ejecutados en CI (`cargo run --bin sorafs-gateway-cert -- replay --help`).
+### 3. CLI Packaging (`sorafs-gateway-attest`) (Owner: Tooling WG, Issue: SF-5a-CLI)
+- **Scope**
+  - Expose attestation generation and verification through `cargo xtask
+    sorafs-gateway-attest`.
+  - Keep replay and load execution in the deterministic harness used by the
+    generator; avoid a second config surface until a standalone operator binary
+    is needed.
+- **Deliverables**
+  - Implemented `cargo xtask sorafs-gateway-attest --signing-key ...` report
+    generation and `--verify <attestation.to>` envelope verification.
+  - Parser and verifier regression tests covering command selection, digest
+    drift, and signature verification.
+  - Future standalone packaging can wrap the same verified helper without
+    changing the attestation format.
 
-### 4. Automatizacion de publicacion de fixtures (Owner: Build Infra, Issue: SF-5a-FIXTURES)
-- **Alcance**
-  - Crear job de CI (`.buildkite/sorafs-fixtures.yml`) que empaquete bundles de fixtures, firme manifiestos y suba artefactos.
-  - Publicar la lista de manifiestos firmados en Norito a `fixtures/releases/latest.manifest`.
-  - Verificar firmas durante la ejecucion del pipeline y fallar ante drift.
-- **Entregables**
-  - Paso de Buildkite integrado en pipelines nightly y de merge.
-  - Politica de retencion de artefactos documentada en `docs/source/fixtures_retention.md`.
-  - Script de validacion `scripts/verify_sorafs_fixtures.sh` (envuelve `cargo xtask sorafs-gateway-fixtures --verify`) invocado pre-merge para que digests de fixtures, archivos auxiliares y matrices de escenarios solo cambien con commits intencionales.
+### 4. Fixture Publication Automation (Owner: Build Infra, Issue: SF-5a-FIXTURES)
+- **Scope**
+  - Keep local fixture drift gated by `scripts/verify_sorafs_fixtures.sh`.
+  - Package, sign, upload, and retain hosted fixture-release artifacts once
+    Buildkite credentials and release storage are provisioned.
+  - Verify signatures during hosted pipeline execution and fail on drift.
+- **Deliverables**
+  - Local validation script `scripts/verify_sorafs_fixtures.sh` wraps
+    `cargo xtask sorafs-gateway-fixtures --verify` and is ready for pre-merge
+    or nightly invocation.
+  - Hosted fixture publication and retention remain deployment evidence, not a
+    local harness implementation blocker.
 
-### 5. Integracion CI / Nightly (Owner: CI WG, Issue: SF-5a-CI)
-- **Alcance**
-  - Agregar pipeline `ci/sorafs-gateway-cert` que ejecute perfiles de replay + carga contra builds nightly.
-  - Introducir gate de merge para PRs que toquen gateway, orchestrator o codigo de fixtures.
-- **Entregables**
-  - Configuracion Buildkite con notificaciones al servicio PagerDuty `svc_sorafs_cert`.
-  - Metricas exportadas a `ci/sorafs-gateway-cert:{profile}`.
-  - Actualizaciones de documentacion CI en `docs/source/ci_matrix.md`.
+### 5. CI / Nightly Integration (Owner: CI WG, Issue: SF-5a-CI)
+- **Scope**
+  - Keep `ci/check_sorafs_gateway_conformance.sh` as the local merge gate for gateway, orchestrator, fixture, and conformance harness changes.
+  - Let hosted nightly jobs wrap the same script when Buildkite and PagerDuty rollout secrets are available.
+- **Deliverables**
+  - Scripted conformance gate invoking `cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`.
+  - CI documentation points at the local script; hosted notification wiring remains deployment work, not harness implementation.
 
-### 6. Integracion de dashboard de governance (Owner: GovOps WG, Issue: SF-5a-DASHBOARD)
-- **Alcance**
-  - Exponer el estado de conformidad, el ultimo hash de atestacion y fallas pendientes en el dashboard de governance.
-  - Proveer vistas de drill-down para corridas recientes con links a artefactos.
-- **Entregables**
-  - Paneles del dashboard (`dashboards/governance.json` secciones `sorafs_conformance_*`).
-  - Job de ingesta de telemetria que lee sobres Norito de atestacion y actualiza el datastore del dashboard.
-  - Entrada de runbook operacional para interpretar alertas del dashboard.
+### 6. Governance Dashboard Integration (Owner: GovOps WG, Issue: SF-5a-DASHBOARD)
+- **Scope**
+  - Provide local Grafana panels for fixture metadata, refusal totals, latency, throughput, and active concurrency.
+  - Keep live governance portal embedding and attestation datastore ingestion as rollout evidence once GovOps supplies the deployment surface.
+- **Deliverables**
+  - Dashboard panels in `dashboards/grafana/sorafs_gateway_conformance.json`.
+  - Runbook references interpret `torii_sorafs_gateway_refusals_total` and fixture metadata alongside signed attestations.
 
-## Mejoras futuras
+## Future Enhancements
 
-1. **Perfil HTTP/3 (QUIC)** — Extender el harness para ejercitar endpoints QUIC una vez el gateway los soporte (SF-5a-QUIC).
-2. **Adaptadores de corrupcion/falla** — Implementar injectores modulares de fallas (p. ej., drop de headers, pruebas retrasadas) para tests personalizados de operadores (SF-5a-FAULTS).
-3. **Laboratorio de latencia sintetica** — Proveer un harness de inyeccion de latencia controlada para dry runs de observabilidad (SF-5a-LATENCY).
-4. **Alineacion de telemetria TLS** — Incorporar metricas de handshake TLS desde SF-5b en los reportes de conformidad para asegurar instrumentacion consistente (SF-5b-TLS-BRIDGE).
+1. **HTTP/3 (QUIC) profile** — Extend the harness to exercise QUIC endpoints once the gateway supports them (SF-5a-QUIC).
+2. **Corruption/failure adapters** — Implement modular fault injectors (e.g., header drop, delayed proofs) for bespoke operator tests (SF-5a-FAULTS).
+3. **Synthetic latency lab** — Provide controlled latency injection harness for observability dry runs (SF-5a-LATENCY).
+4. **TLS telemetry alignment** — Feed TLS handshake metrics from SF-5b into the conformance reports to ensure consistent instrumentation (SF-5b-TLS-BRIDGE).
 
-## Seguimiento de estado
+## Status Tracking
 
-| Workstream | Issue ID | Estado | Proximo checkpoint | Notas |
-|------------|----------|--------|-------------------|-------|
-| Replay harness core | SF-5a-REPLAY | En diseno | 2026-03-05 | A la espera de la finalizacion del indice de fixtures. |
-| Load runner | SF-5a-LOAD | Planeado | 2026-03-08 | Distribucion de seeds acordada con Reliability WG. |
-| CLI packaging | SF-5a-CLI | En progreso | 2026-03-04 | El scaffolding de parsing esta en revision. |
-| Fixture publication | SF-5a-FIXTURES | No iniciado | 2026-03-06 | Requiere aprobacion de secretos Buildkite. |
-| CI integration | SF-5a-CI | Planeado | 2026-03-10 | Depende de disponibilidad del CLI. |
-| Governance dashboard | SF-5a-DASHBOARD | Planeado | 2026-03-12 | Mock-ups de diseno esperan sign-off de GovOps. |
+| Workstream | Issue ID | Status | Next Checkpoint | Notes |
+|------------|----------|--------|-----------------|-------|
+| Replay harness core | SF-5a-REPLAY | Implemented | 2026-06-22 | Deterministic fixture replay is covered by `integration_tests::sorafs_gateway_conformance`. |
+| Load runner | SF-5a-LOAD | Implemented | 2026-06-22 | `run_deterministic_load_test` covers the seeded ≥1,000 request profile in the harness. |
+| CLI packaging | SF-5a-CLI | Implemented | 2026-06-22 | `cargo xtask sorafs-gateway-attest` now generates and verifies signed envelopes; standalone packaging is optional wrapper work. |
+| Fixture publication | SF-5a-FIXTURES | Local verification implemented | Deployment rollout | `scripts/verify_sorafs_fixtures.sh` verifies fixture digests locally; hosted Buildkite publication waits on credentials and release storage. |
+| CI integration | SF-5a-CI | Implemented | 2026-06-22 | `ci/check_sorafs_gateway_conformance.sh` runs the `nexus_and_streaming` conformance harness; hosted nightly wrapping remains rollout work. |
+| Governance dashboard | SF-5a-DASHBOARD | Implemented | 2026-06-22 | Grafana panels live at `dashboards/grafana/sorafs_gateway_conformance.json`; GovOps embedding remains deployment evidence. |
 
-Revisar y actualizar esta tabla al final de cada sprint para mantener a los stakeholders alineados con el roadmap.
+Update this table when live rollout evidence, hosted fixture publication, or
+new transport scenarios land.

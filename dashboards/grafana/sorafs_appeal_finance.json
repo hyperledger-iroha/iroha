@@ -1,0 +1,377 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sorafs_governance_dag_publish_total{payload_kind=\"appeal_finance_report\",result=\"success\",sink=~\"$sink\"}[1h]))",
+          "legendFormat": "reports",
+          "refId": "A"
+        }
+      ],
+      "title": "Reports Published 1h",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sorafs_governance_dag_publish_total{payload_kind=\"appeal_finance_weekly_rollup\",result=\"success\",sink=~\"$sink\"}[24h]))",
+          "legendFormat": "rollups",
+          "refId": "A"
+        }
+      ],
+      "title": "Weekly Rollups 24h",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (payload_kind) (increase(sorafs_governance_dag_publish_total{payload_kind=~\"appeal_finance_report|appeal_finance_weekly_rollup\",result=\"failure\",sink=~\"$sink\"}[1h]))",
+          "legendFormat": "{{payload_kind}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Finance Publish Failures 1h",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "time() - max by (payload_kind, sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind=~\"$payload_kind\",sink=~\"$sink\"})",
+          "legendFormat": "{{payload_kind}} {{sink}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest Publication Age",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (payload_kind, result) (rate(sorafs_governance_dag_publish_total{payload_kind=~\"$payload_kind\",sink=~\"$sink\"}[5m]))",
+          "legendFormat": "{{payload_kind}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Publication Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (payload_kind) (rate(sorafs_governance_dag_published_bytes_total{payload_kind=~\"$payload_kind\",sink=~\"$sink\"}[5m]))",
+          "legendFormat": "{{payload_kind}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Published Payload Bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "time() - max by (payload_kind, sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind=~\"$payload_kind\",sink=~\"$sink\"})",
+          "legendFormat": "{{payload_kind}} {{sink}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Publication Freshness",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (sink) (sorafs_governance_dag_backlog{sink=~\"$sink\"})",
+          "legendFormat": "{{sink}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Governance DAG Backlog",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 9,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "max by (payload_kind, sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind=~\"$payload_kind\",sink=~\"$sink\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{payload_kind}} {{sink}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest Finance Publication Timestamp",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "sorafs",
+    "appeal-finance",
+    "governance-dag"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "label": "Datasource",
+        "name": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        },
+        "datasource": "$datasource",
+        "includeAll": true,
+        "label": "Sink",
+        "name": "sink",
+        "query": "label_values(sorafs_governance_dag_publish_total{payload_kind=~\"appeal_finance_report|appeal_finance_weekly_rollup|reconciliation\"}, sink)",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "allValue": "appeal_finance_report|appeal_finance_weekly_rollup|reconciliation",
+        "current": {
+          "text": "All",
+          "value": "appeal_finance_report|appeal_finance_weekly_rollup|reconciliation"
+        },
+        "includeAll": true,
+        "label": "Payload Kind",
+        "multi": true,
+        "name": "payload_kind",
+        "query": "appeal_finance_report,appeal_finance_weekly_rollup,reconciliation",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "SoraFS Appeal Finance",
+  "uid": "sorafs-appeal-finance",
+  "version": 1,
+  "weekStart": ""
+}

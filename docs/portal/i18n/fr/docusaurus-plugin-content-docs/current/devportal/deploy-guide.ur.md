@@ -16,14 +16,14 @@ Il s'agit de **DOCS-7** (SoraFS اشاعت) et **DOCS-8**
 alias پروموشن، توثیق، اور rollback ڈرلز کو کور کرتی ہے تاکہ ہر aperçu اور
 release آرٹیفیکٹ قابلِ اعادہ اور قابلِ آڈٹ ہو۔
 
-یہ فلو فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری (`--features cli` کے ساتھ
+یہ فلو فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری (`sorafs_orchestrator` Cargo target کے ساتھ
 build شدہ) ہے، pin-registry اجازتوں والے Torii endpoint تک رسائی ہے، اور
 Sigstore pour OIDC pour OIDC pour Sigstore طویل مدتی راز (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii ٹوکنز) et CI والٹ میں رکھیں؛ لوکل رنز انہیں
 exportations de coquilles
 
 ## پیشگی شرائط- Nœud 18.18+ pour `npm` ou `pnpm`.
-- `sorafs_cli` et `cargo run -p sorafs_car --features cli --bin sorafs_cli` ou `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` et `cargo run -p sorafs_orchestrator --bin sorafs_cli` ou `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - Torii URL et `/v1/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
   مینی فیسٹس اور alias جمع کر سکے۔
 - Émetteur OIDC (GitHub Actions, GitLab, Workload Identity et autres)

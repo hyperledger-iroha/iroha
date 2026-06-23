@@ -74,7 +74,7 @@ Manifiesto del marcador کی ضروریات، anuncios de proveedores اور ٹ�
 
 ## CLI اور SDK فلیگ ریفرنس
 
-`sorafs_cli fetch` (دیکھیں `crates/sorafs_car/src/bin/sorafs_cli.rs`)
+`sorafs_cli fetch` (دیکھیں `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`)
 Envoltorio `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) ایک ہی
 superficie de configuración del orquestador شیئر کرتے ہیں۔ evidencia de implementación یا canónica
 repetición de partidos کرنے کے لیے یہ banderas استعمال کریں:

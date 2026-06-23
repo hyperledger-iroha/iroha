@@ -47,6 +47,23 @@ pub(crate) struct GcReconciliationSnapshot {
     pub(crate) chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
 
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct AppealFinanceRollupReconciliationSnapshot {
+    pub(crate) version: u8,
+    pub(crate) rollups: Vec<AppealFinanceRollupReconciliationEntry>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct AppealFinanceRollupReconciliationEntry {
+    pub(crate) cycle: String,
+    pub(crate) encoded_blake3: String,
+    pub(crate) report_count: u64,
+    pub(crate) case_count: u64,
+    pub(crate) total_treasury_xor: String,
+    pub(crate) total_rewards_forfeited_treasury_xor: String,
+    pub(crate) published_at_unix: u64,
+}
+
 pub(crate) fn hash_snapshot<T: norito::core::NoritoSerialize>(
     snapshot: &T,
 ) -> Result<[u8; 32], norito::Error> {

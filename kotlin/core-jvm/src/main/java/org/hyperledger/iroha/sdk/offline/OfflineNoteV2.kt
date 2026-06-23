@@ -28,6 +28,8 @@ object OfflineNoteV2 {
         "iroha:offline-note:redeem-public-inputs"
     const val AUDIT_PUBLIC_INPUTS_DOMAIN: String =
         "iroha:offline-note:audit-public-inputs"
+    const val DEVICE_ATTESTATION_CHALLENGE_DOMAIN: String =
+        "iroha:offline-note:device-attestation-challenge:v1"
     const val RECURSIVE_BACKEND: String = "halo2/ipa"
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
     const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
@@ -48,6 +50,10 @@ object OfflineNoteV2 {
         "iroha_data_model::offline::model::OfflineNoteKeyCertificate"
     private const val KEY_CERTIFICATE_PAYLOAD_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayload"
+    private const val DEVICE_ATTESTATION_REGISTRATION_SCHEMA =
+        "iroha_data_model::offline::OfflineDeviceAttestationRegistration"
+    private const val DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA =
+        "iroha_data_model::offline::OfflineDeviceAttestationChallengePreimage"
     private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssue"
     private const val ISSUED_CLAIM_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
@@ -68,6 +74,8 @@ object OfflineNoteV2 {
         "iroha_data_model::isi::offline::RedeemOfflineNote"
     const val AUDIT_INSTRUCTION_SCHEMA: String =
         "iroha_data_model::isi::offline::AuditOfflineNote"
+    const val REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA: String =
+        "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
     private const val ISSUE_INSTRUCTION_ALIAS_SCHEMA =
         "iroha_data_model::isi::offline::IssueOfflineNoteV2"
     private const val REDEEM_INSTRUCTION_ALIAS_SCHEMA =
@@ -82,6 +90,14 @@ object OfflineNoteV2 {
     @JvmStatic
     fun encodeCertificate(value: KeyCertificateV2): ByteArray =
         encodeWithHeader(value, KEY_CERTIFICATE_SCHEMA, KeyCertificateAdapter)
+
+    @JvmStatic
+    fun encodeDeviceAttestationRegistration(value: DeviceAttestationRegistrationV2): ByteArray =
+        encodeWithHeader(
+            value,
+            DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
+            DeviceAttestationRegistrationAdapter,
+        )
 
     @JvmStatic
     fun encodeIssue(value: IssueV2): ByteArray =
@@ -156,12 +172,32 @@ object OfflineNoteV2 {
     }
 
     @JvmStatic
+    fun registerDeviceAttestationInstruction(value: DeviceAttestationRegistrationV2): InstructionBox =
+        InstructionBox.fromWirePayload(
+            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            encodeInstructionWrapper(
+                REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                value,
+                DeviceAttestationRegistrationAdapter,
+                encodeDeviceAttestationRegistration(value),
+            ),
+        )
+
+    @JvmStatic
     fun decodeCertificatePayload(bytes: ByteArray): KeyCertificatePayloadV2 =
         decodeWithHeader(bytes, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KeyCertificatePayloadAdapter)
 
     @JvmStatic
     fun decodeCertificate(bytes: ByteArray): KeyCertificateV2 =
         decodeWithHeader(bytes, KEY_CERTIFICATE_SCHEMA, KeyCertificateAdapter)
+
+    @JvmStatic
+    fun decodeDeviceAttestationRegistration(bytes: ByteArray): DeviceAttestationRegistrationV2 =
+        decodeWithHeader(
+            bytes,
+            DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
+            DeviceAttestationRegistrationAdapter,
+        )
 
     @JvmStatic
     fun decodeIssue(bytes: ByteArray): IssueV2 =
@@ -223,6 +259,16 @@ object OfflineNoteV2 {
             AUDIT_INSTRUCTION_ALIAS_SCHEMA,
             AUDIT_SCHEMA,
             AuditAdapter,
+        )
+
+    @JvmStatic
+    fun decodeRegisterDeviceAttestationInstruction(bytes: ByteArray): DeviceAttestationRegistrationV2 =
+        decodeInstructionModel(
+            bytes,
+            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
+            DeviceAttestationRegistrationAdapter,
         )
 
     @JvmStatic
@@ -475,6 +521,206 @@ object OfflineNoteV2 {
         fun signingBytes(): ByteArray = signingPayload().noritoEncoded()
         fun payloadHash(): ByteArray = hash(signingBytes())
         fun noritoEncoded(): ByteArray = encodeCertificate(this)
+    }
+
+    class DeviceAttestationRegistrationV2(
+        val version: Int = KEY_CERTIFICATE_VERSION,
+        val platform: String,
+        val keyId: String,
+        val deviceId: String,
+        val accountId: String,
+        val assetDefinitionId: String?,
+        val iosTeamId: String?,
+        val iosBundleId: String?,
+        val iosEnvironment: String?,
+        val androidPackageName: String?,
+        androidSigningCertificateSha256: ByteArray?,
+        publicKey: ByteArray,
+        val assertionScheme: String,
+        val assertionKeyAlgorithm: String,
+        assertionPublicKey: ByteArray,
+        val assertionUsageCountLimit: Int?,
+        val oneUse: Boolean = true,
+        challengeHash: ByteArray? = null,
+        attestationReportHash: ByteArray? = null,
+        attestationReport: ByteArray = ByteArray(0),
+        evidenceHash: ByteArray? = null,
+        evidence: ByteArray = ByteArray(0),
+        val recentBlockHeight: Long,
+        recentBlockHash: ByteArray,
+        val expiresAtMs: Long,
+    ) {
+        private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
+        private val _publicKey = publicKey.copyOf()
+        private val _assertionPublicKey = assertionPublicKey.copyOf()
+        private val _attestationReport = attestationReport.copyOf()
+        private val _evidence = evidence.copyOf()
+        private val _recentBlockHash = recentBlockHash.copyOf()
+        private val _challengeHash: ByteArray
+        private val _attestationReportHash: ByteArray
+        private val _evidenceHash: ByteArray
+
+        init {
+            requireCertificateCore(version, accountId, _publicKey, oneUse)
+            assetDefinitionId?.let { AssetDefinitionIdEncoder.parseAddressBytes(it) }
+            require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
+                "assertion usage count limit must be non-negative"
+            }
+            if (_androidSigningCertificateSha256 != null) {
+                require(_androidSigningCertificateSha256.size == 32) {
+                    "android_signing_certificate_sha256 must be 32 bytes"
+                }
+            }
+            requireHash(_recentBlockHash, "recent_block_hash")
+
+            val resolvedChallengeHash = computeChallengeHash()
+            if (challengeHash != null) {
+                requireHash(challengeHash, "challenge_hash")
+                require(challengeHash.contentEquals(resolvedChallengeHash)) {
+                    "device attestation challenge hash mismatch"
+                }
+            }
+            _challengeHash = resolvedChallengeHash
+
+            val expectedReportHash = hash(_attestationReport)
+            val resolvedReportHash = attestationReportHash?.copyOf() ?: expectedReportHash
+            requireHash(resolvedReportHash, "attestation_report_hash")
+            require(resolvedReportHash.contentEquals(expectedReportHash)) {
+                "attestation_report_hash does not match attestation_report"
+            }
+            _attestationReportHash = resolvedReportHash
+
+            val expectedEvidenceHash = hash(_evidence)
+            val resolvedEvidenceHash = evidenceHash?.copyOf() ?: expectedEvidenceHash
+            requireHash(resolvedEvidenceHash, "evidence_hash")
+            require(resolvedEvidenceHash.contentEquals(expectedEvidenceHash)) {
+                "evidence_hash does not match evidence"
+            }
+            _evidenceHash = resolvedEvidenceHash
+        }
+
+        fun androidSigningCertificateSha256(): ByteArray? = _androidSigningCertificateSha256?.copyOf()
+        fun publicKey(): ByteArray = _publicKey.copyOf()
+        fun assertionPublicKey(): ByteArray = _assertionPublicKey.copyOf()
+        fun challengeHash(): ByteArray = _challengeHash.copyOf()
+        fun attestationReportHash(): ByteArray = _attestationReportHash.copyOf()
+        fun attestationReport(): ByteArray = _attestationReport.copyOf()
+        fun evidenceHash(): ByteArray = _evidenceHash.copyOf()
+        fun evidence(): ByteArray = _evidence.copyOf()
+        fun recentBlockHash(): ByteArray = _recentBlockHash.copyOf()
+
+        fun canonicalChallengeHash(): ByteArray = computeChallengeHash()
+
+        fun replacingAttestationEvidence(
+            attestationReport: ByteArray,
+            evidence: ByteArray,
+            challengeHash: ByteArray? = null,
+        ): DeviceAttestationRegistrationV2 = DeviceAttestationRegistrationV2(
+            version = version,
+            platform = platform,
+            keyId = keyId,
+            deviceId = deviceId,
+            accountId = accountId,
+            assetDefinitionId = assetDefinitionId,
+            iosTeamId = iosTeamId,
+            iosBundleId = iosBundleId,
+            iosEnvironment = iosEnvironment,
+            androidPackageName = androidPackageName,
+            androidSigningCertificateSha256 = androidSigningCertificateSha256(),
+            publicKey = publicKey(),
+            assertionScheme = assertionScheme,
+            assertionKeyAlgorithm = assertionKeyAlgorithm,
+            assertionPublicKey = assertionPublicKey(),
+            assertionUsageCountLimit = assertionUsageCountLimit,
+            oneUse = oneUse,
+            challengeHash = challengeHash ?: challengeHash(),
+            attestationReport = attestationReport,
+            evidence = evidence,
+            recentBlockHeight = recentBlockHeight,
+            recentBlockHash = recentBlockHash(),
+            expiresAtMs = expiresAtMs,
+        )
+
+        fun keyCertificate(): KeyCertificateV2 = KeyCertificateV2(
+            version = KEY_CERTIFICATE_VERSION,
+            platform = platform,
+            keyId = keyId,
+            deviceId = deviceId,
+            accountId = accountId,
+            publicKey = publicKey(),
+            assertionScheme = assertionScheme,
+            assertionKeyAlgorithm = assertionKeyAlgorithm,
+            assertionPublicKey = assertionPublicKey(),
+            assertionUsageCountLimit = assertionUsageCountLimit,
+            oneUse = oneUse,
+            issuerSignature = ByteArray(64),
+        )
+
+        fun keyCertificatePayloadHash(): ByteArray = keyCertificate().payloadHash()
+        fun noritoEncoded(): ByteArray = encodeDeviceAttestationRegistration(this)
+
+        private fun computeChallengeHash(): ByteArray =
+            hash(NoritoCodec.encode(
+                DeviceAttestationChallengePreimage(
+                    version = version,
+                    platform = platform,
+                    keyId = keyId,
+                    deviceId = deviceId,
+                    accountId = accountId,
+                    assetDefinitionId = assetDefinitionId,
+                    iosTeamId = iosTeamId,
+                    iosBundleId = iosBundleId,
+                    iosEnvironment = iosEnvironment,
+                    androidPackageName = androidPackageName,
+                    androidSigningCertificateSha256 = androidSigningCertificateSha256(),
+                    publicKey = publicKey(),
+                    assertionScheme = assertionScheme,
+                    assertionKeyAlgorithm = assertionKeyAlgorithm,
+                    assertionPublicKey = assertionPublicKey(),
+                    assertionUsageCountLimit = assertionUsageCountLimit,
+                    oneUse = oneUse,
+                    recentBlockHeight = recentBlockHeight,
+                    recentBlockHash = recentBlockHash(),
+                    expiresAtMs = expiresAtMs,
+                ),
+                DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
+                DeviceAttestationChallengePreimageAdapter,
+                NoritoHeader.COMPACT_LEN,
+            ))
+    }
+
+    private class DeviceAttestationChallengePreimage(
+        val domain: String = DEVICE_ATTESTATION_CHALLENGE_DOMAIN,
+        val version: Int,
+        val platform: String,
+        val keyId: String,
+        val deviceId: String,
+        val accountId: String,
+        val assetDefinitionId: String?,
+        val iosTeamId: String?,
+        val iosBundleId: String?,
+        val iosEnvironment: String?,
+        val androidPackageName: String?,
+        androidSigningCertificateSha256: ByteArray?,
+        publicKey: ByteArray,
+        val assertionScheme: String,
+        val assertionKeyAlgorithm: String,
+        assertionPublicKey: ByteArray,
+        val assertionUsageCountLimit: Int?,
+        val oneUse: Boolean,
+        val recentBlockHeight: Long,
+        recentBlockHash: ByteArray,
+        val expiresAtMs: Long,
+    ) {
+        private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
+        private val _publicKey = publicKey.copyOf()
+        private val _assertionPublicKey = assertionPublicKey.copyOf()
+        private val _recentBlockHash = recentBlockHash.copyOf()
+
+        fun androidSigningCertificateSha256(): ByteArray? = _androidSigningCertificateSha256?.copyOf()
+        fun publicKey(): ByteArray = _publicKey.copyOf()
+        fun assertionPublicKey(): ByteArray = _assertionPublicKey.copyOf()
+        fun recentBlockHash(): ByteArray = _recentBlockHash.copyOf()
     }
 
     class IssueV2(
@@ -930,6 +1176,116 @@ object OfflineNoteV2 {
             )
     }
 
+    private object DeviceAttestationRegistrationAdapter : TypeAdapter<DeviceAttestationRegistrationV2> {
+        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationRegistrationV2) {
+            writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
+            writeField(encoder) { writeString(it, value.platform) }
+            writeField(encoder) { writeString(it, value.keyId) }
+            writeField(encoder) { writeString(it, value.deviceId) }
+            writeField(encoder) { writeAccountId(it, value.accountId) }
+            writeField(encoder) { writeOptionAssetDefinitionId(it, value.assetDefinitionId) }
+            writeField(encoder) { writeOptionString(it, value.iosTeamId) }
+            writeField(encoder) { writeOptionString(it, value.iosBundleId) }
+            writeField(encoder) { writeOptionString(it, value.iosEnvironment) }
+            writeField(encoder) { writeOptionString(it, value.androidPackageName) }
+            writeField(encoder) { writeOptionBytesVec(it, value.androidSigningCertificateSha256()) }
+            writeField(encoder) { writeBytesVec(it, value.publicKey()) }
+            writeField(encoder) { writeString(it, value.assertionScheme) }
+            writeField(encoder) { writeString(it, value.assertionKeyAlgorithm) }
+            writeField(encoder) { writeBytesVec(it, value.assertionPublicKey()) }
+            writeField(encoder) { writeOptionU32(it, value.assertionUsageCountLimit) }
+            writeField(encoder) { it.writeByte(if (value.oneUse) 1 else 0) }
+            writeField(encoder) { it.writeBytes(value.challengeHash()) }
+            writeField(encoder) { it.writeBytes(value.attestationReportHash()) }
+            writeField(encoder) { writeBytesVec(it, value.attestationReport()) }
+            writeField(encoder) { it.writeBytes(value.evidenceHash()) }
+            writeField(encoder) { writeBytesVec(it, value.evidence()) }
+            writeField(encoder) { it.writeUInt(value.recentBlockHeight, 64) }
+            writeField(encoder) { it.writeBytes(value.recentBlockHash()) }
+            writeField(encoder) { it.writeUInt(value.expiresAtMs, 64) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): DeviceAttestationRegistrationV2 =
+            DeviceAttestationRegistrationV2(
+                version = readField(decoder) { it.readUInt(16).toInt() },
+                platform = readField(decoder) { readString(it) },
+                keyId = readField(decoder) { readString(it) },
+                deviceId = readField(decoder) { readString(it) },
+                accountId = readField(decoder) { readAccountId(it) },
+                assetDefinitionId = readField(decoder) { readOptionAssetDefinitionId(it) },
+                iosTeamId = readField(decoder) { readOptionString(it) },
+                iosBundleId = readField(decoder) { readOptionString(it) },
+                iosEnvironment = readField(decoder) { readOptionString(it) },
+                androidPackageName = readField(decoder) { readOptionString(it) },
+                androidSigningCertificateSha256 = readField(decoder) { readOptionBytesVec(it) },
+                publicKey = readField(decoder) { readBytesVec(it) },
+                assertionScheme = readField(decoder) { readString(it) },
+                assertionKeyAlgorithm = readField(decoder) { readString(it) },
+                assertionPublicKey = readField(decoder) { readBytesVec(it) },
+                assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
+                oneUse = readField(decoder) { readBool(it) },
+                challengeHash = readField(decoder) { readHash(it, "challenge_hash") },
+                attestationReportHash = readField(decoder) { readHash(it, "attestation_report_hash") },
+                attestationReport = readField(decoder) { readBytesVec(it) },
+                evidenceHash = readField(decoder) { readHash(it, "evidence_hash") },
+                evidence = readField(decoder) { readBytesVec(it) },
+                recentBlockHeight = readField(decoder) { it.readUInt(64) },
+                recentBlockHash = readField(decoder) { readHash(it, "recent_block_hash") },
+                expiresAtMs = readField(decoder) { it.readUInt(64) },
+            )
+    }
+
+    private object DeviceAttestationChallengePreimageAdapter : TypeAdapter<DeviceAttestationChallengePreimage> {
+        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationChallengePreimage) {
+            writeField(encoder) { writeString(it, value.domain) }
+            writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
+            writeField(encoder) { writeString(it, value.platform) }
+            writeField(encoder) { writeString(it, value.keyId) }
+            writeField(encoder) { writeString(it, value.deviceId) }
+            writeField(encoder) { writeAccountId(it, value.accountId) }
+            writeField(encoder) { writeOptionAssetDefinitionId(it, value.assetDefinitionId) }
+            writeField(encoder) { writeOptionString(it, value.iosTeamId) }
+            writeField(encoder) { writeOptionString(it, value.iosBundleId) }
+            writeField(encoder) { writeOptionString(it, value.iosEnvironment) }
+            writeField(encoder) { writeOptionString(it, value.androidPackageName) }
+            writeField(encoder) { writeOptionBytesVec(it, value.androidSigningCertificateSha256()) }
+            writeField(encoder) { writeBytesVec(it, value.publicKey()) }
+            writeField(encoder) { writeString(it, value.assertionScheme) }
+            writeField(encoder) { writeString(it, value.assertionKeyAlgorithm) }
+            writeField(encoder) { writeBytesVec(it, value.assertionPublicKey()) }
+            writeField(encoder) { writeOptionU32(it, value.assertionUsageCountLimit) }
+            writeField(encoder) { it.writeByte(if (value.oneUse) 1 else 0) }
+            writeField(encoder) { it.writeUInt(value.recentBlockHeight, 64) }
+            writeField(encoder) { it.writeBytes(value.recentBlockHash()) }
+            writeField(encoder) { it.writeUInt(value.expiresAtMs, 64) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): DeviceAttestationChallengePreimage =
+            DeviceAttestationChallengePreimage(
+                domain = readField(decoder) { readString(it) },
+                version = readField(decoder) { it.readUInt(16).toInt() },
+                platform = readField(decoder) { readString(it) },
+                keyId = readField(decoder) { readString(it) },
+                deviceId = readField(decoder) { readString(it) },
+                accountId = readField(decoder) { readAccountId(it) },
+                assetDefinitionId = readField(decoder) { readOptionAssetDefinitionId(it) },
+                iosTeamId = readField(decoder) { readOptionString(it) },
+                iosBundleId = readField(decoder) { readOptionString(it) },
+                iosEnvironment = readField(decoder) { readOptionString(it) },
+                androidPackageName = readField(decoder) { readOptionString(it) },
+                androidSigningCertificateSha256 = readField(decoder) { readOptionBytesVec(it) },
+                publicKey = readField(decoder) { readBytesVec(it) },
+                assertionScheme = readField(decoder) { readString(it) },
+                assertionKeyAlgorithm = readField(decoder) { readString(it) },
+                assertionPublicKey = readField(decoder) { readBytesVec(it) },
+                assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
+                oneUse = readField(decoder) { readBool(it) },
+                recentBlockHeight = readField(decoder) { it.readUInt(64) },
+                recentBlockHash = readField(decoder) { readHash(it, "recent_block_hash") },
+                expiresAtMs = readField(decoder) { it.readUInt(64) },
+            )
+    }
+
     private object RecursiveProofAdapter : TypeAdapter<RecursiveProofV2> {
         override fun encode(encoder: NoritoEncoder, value: RecursiveProofV2) {
             writeField(encoder) { writeVerifyingKeyId(it, value.verifierKeyId) }
@@ -1197,6 +1553,27 @@ object OfflineNoteV2 {
             else -> throw IllegalArgumentException("invalid option tag: $tag")
         }
 
+    private fun readOptionString(decoder: NoritoDecoder): String? =
+        when (val tag = decoder.readByte()) {
+            0 -> null
+            1 -> readField(decoder) { readString(it) }
+            else -> throw IllegalArgumentException("invalid option tag: $tag")
+        }
+
+    private fun readOptionBytesVec(decoder: NoritoDecoder): ByteArray? =
+        when (val tag = decoder.readByte()) {
+            0 -> null
+            1 -> readField(decoder) { readBytesVec(it) }
+            else -> throw IllegalArgumentException("invalid option tag: $tag")
+        }
+
+    private fun readOptionAssetDefinitionId(decoder: NoritoDecoder): String? =
+        when (val tag = decoder.readByte()) {
+            0 -> null
+            1 -> readField(decoder) { AssetDefinitionIdEncoder.encodeFromBytes(readAssetDefinitionAddress(it)) }
+            else -> throw IllegalArgumentException("invalid option tag: $tag")
+        }
+
     private fun <T> readVec(
         decoder: NoritoDecoder,
         readElement: (NoritoDecoder) -> T,
@@ -1325,6 +1702,33 @@ object OfflineNoteV2 {
         writeField(encoder) { it.writeUInt(value.toLong(), 32) }
     }
 
+    private fun writeOptionString(encoder: NoritoEncoder, value: String?) {
+        if (value == null) {
+            encoder.writeByte(0)
+            return
+        }
+        encoder.writeByte(1)
+        writeField(encoder) { writeString(it, value) }
+    }
+
+    private fun writeOptionBytesVec(encoder: NoritoEncoder, value: ByteArray?) {
+        if (value == null) {
+            encoder.writeByte(0)
+            return
+        }
+        encoder.writeByte(1)
+        writeField(encoder) { writeBytesVec(it, value) }
+    }
+
+    private fun writeOptionAssetDefinitionId(encoder: NoritoEncoder, value: String?) {
+        if (value == null) {
+            encoder.writeByte(0)
+            return
+        }
+        encoder.writeByte(1)
+        writeField(encoder) { writeAssetDefinitionId(it, value) }
+    }
+
     private fun writeVerifyingKeyId(encoder: NoritoEncoder, value: VerifyingKeyIdReference) {
         writeField(encoder) { writeString(it, value.backend) }
         writeField(encoder) { writeString(it, value.name) }
@@ -1401,6 +1805,10 @@ object OfflineNoteV2 {
             encoder.writeLength(1, compact(encoder))
             encoder.writeByte(byte.toInt())
         }
+    }
+
+    private fun writeAssetDefinitionId(encoder: NoritoEncoder, assetDefinitionId: String) {
+        writeAssetDefinitionAddress(encoder, AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId))
     }
 
     private fun writeAssetBalanceScope(encoder: NoritoEncoder, dataspaceId: Long?) {

@@ -31,7 +31,7 @@ SoraFS بائنریز (`sorafs_cli` ، `sorafs_fetch` ، مددگار) اور SD
 - علاج کے ٹکٹ کا لنک (جیسے `governance/tickets/SF6-SR-2026.md`) منسلک کریں اور اسے لکھ دیں
   سیکیورٹی انجینئرنگ اور ٹولنگ ورکنگ گروپ کی منظوری۔
 - چیک کریں کہ میمو میں تدارک چیک لسٹ بند ہے۔ زیر التواء آئٹمز ریلیز کو روکتے ہیں۔
-- برابری کے استعمال کے نوشتہ جات (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) کا اپ لوڈ تیار کریں
+- برابری کے استعمال کے نوشتہ جات (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`) کا اپ لوڈ تیار کریں
   مینی فیسٹ بنڈل کے ساتھ۔
 - تصدیق کریں کہ دستخطی کمانڈ جس پر آپ عملدرآمد کرنے جارہے ہیں اس میں `--identity-token-provider` اور شامل ہیں
   رہائی کے شواہد میں فلسیو کے دائرہ کار کو حاصل کرنے کے لئے ایک واضح `--identity-token-audience=<aud>`۔
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 اسکرپٹ مندرجہ ذیل چیک کرتا ہے:
 
 - `cargo fmt --all -- --check` (ورک اسپیس)
-- `cargo clippy --locked --all-targets` to `sorafs_car` (خصوصیت `cli` کے ساتھ) ،
-  `sorafs_manifest` اور `sorafs_chunker`
-- ان ہی کریٹوں کے لئے `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 اگر کوئی قدم ناکام ہوجاتا ہے تو ، ٹیگنگ سے پہلے رجعت کو درست کریں۔ رہائی کی تعمیر ضروری ہے
 مین کے ساتھ مستقل رہیں ؛ ریلیز شاخوں میں چیری پک ٹھیک نہ کریں۔ اے

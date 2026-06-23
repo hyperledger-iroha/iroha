@@ -29,7 +29,7 @@ Você pode usar CLI e usar lint/test, além de criar arquivos de teste
 - أرفق رابط تذكرة المعالجة (مثل `governance/tickets/SF6-SR-2026.md`) e
   Grupo de Trabalho de Ferramentas de Engenharia de Segurança.
 - تحقّق من إغلاق قائمة المعالجة في المذكرة؛ Você pode usar o software para obter mais informações.
-- استعد لرفع سجلات chicote de fios (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- استعد لرفع سجلات chicote de fios (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   بجانب حزمة المانيفست.
 - تأكد أن أمر التوقيع الذي ستنفذه يتضمن `--identity-token-provider` e
   `--identity-token-audience=<aud>` صريحًا حتى يُلتقط نطاق Fulcio ضمن أدلة الإصدار.
@@ -49,9 +49,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ينفذ السكربت التحققات التالية:
 
 - `cargo fmt --all -- --check` (área de trabalho)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (como `cli`),
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   e`sorafs_manifest` e`sorafs_chunker`
-- `cargo test --locked --all-targets` para obter mais informações
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Isso é o que acontece com o telefone e o computador. يجب أن تكون بناءات
 الإصدار متصلة بـ main؛ Não há necessidade de escolher a cereja no lugar certo.

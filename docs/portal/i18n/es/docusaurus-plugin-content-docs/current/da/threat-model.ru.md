@@ -208,7 +208,7 @@ Lista blanca: proveedores maliciosos o alertas.
   `crates/iroha_core/src/da/replay_cache.rs` (lógica de caché) e integración Torii en
   `crates/iroha_torii/src/da/ingest.rs`, el proceso de verificación de huellas dactilares es `/v1/da/ingest`.
 - Simulaciones de transmisión PDP/PoTR mejoradas con arnés de flujo de prueba
-  `crates/sorafs_car/tests/sorafs_cli.rs`, muestra flujos de solicitud PoR/PDP/PoTR y
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, muestra flujos de solicitud PoR/PDP/PoTR y
   escenarios de falla из модели угроз.
 - Capacidad y reparación de remojo результаты в
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, una matriz de inmersión Sumeragi

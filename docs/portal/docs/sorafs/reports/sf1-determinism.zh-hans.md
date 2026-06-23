@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 |------|---------|------------------|--------|
 | 1 | `cargo test -p sorafs_chunker` |所有测试均通过； `vectors` 奇偶校验测试成功。 |确认规范装置编译并匹配 Rust 实现。 |
 | 2 | `ci/check_sorafs_fixtures.sh` |脚本退出0；下面报告清单摘要。 |验证装置是否干净地重新生成并且签名是否保持连接。 |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` 条目与注册表描述符 (`profile_id=1`) 匹配。 |确保注册表元数据保持同步。 |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` 条目与注册表描述符 (`profile_id=1`) 匹配。 |确保注册表元数据保持同步。 |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` |再生成功，无需 `--allow-unsigned`；清单和签名文件不变。 |为块边界和清单提供确定性证明。 |
 | 5 | `node scripts/check_sf1_vectors.mjs` |报告 TypeScript 装置和 Rust JSON 之间没有差异。 |可选帮手；确保运行时之间的奇偶性（由工具工作组维护的脚本）。 |
 

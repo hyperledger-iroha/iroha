@@ -29,7 +29,7 @@ récents de la révision de la sécurité :- Téléchargez le mémo le plus ré
 - Ajouter l'enlacement du ticket de remédiation (par exemple, `governance/tickets/SF6-SR-2026.md`) et note
   les arobateurs du groupe de travail sur l'ingénierie de sécurité et l'outillage.
 - Vérifier que la liste de remédiation du mémo est fermée ; Les éléments sans résolveur bloquent le lancement.
-- Préparer pour subir les bûches du harnais de parité (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Préparer pour subir les bûches du harnais de parité (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   avec le bundle du manifeste.
 - Confirma que le commando de firma que planas ejecutar incluya tanto `--identity-token-provider` como
   un `--identity-token-audience=<aud>` explique clairement que l'alcance de Fulcio est capturée dans la preuve de sa libération.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Le script réalise les implémentations suivantes :
 
 - `cargo fmt --all -- --check` (espace de travail)
-- `cargo clippy --locked --all-targets` pour `sorafs_car` (avec la fonctionnalité `cli`),
-  `sorafs_manifest` et `sorafs_chunker`
-- `cargo test --locked --all-targets` pour ces caisses mismosSi quelque chose n'arrive pas, corrigez la régression avant l'étiquette. Les builds de sortie
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 deben estar continue avec main; il n'est pas nécessaire de sélectionner les correctifs dans les dernières versions.
 El gate aussi comprueba que los flags de firma sin claves (`--identity-token-issuer`,
 `--identity-token-audience`) se proporcionen donde corresponda; les arguments

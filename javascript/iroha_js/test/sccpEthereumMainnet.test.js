@@ -4742,7 +4742,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkFixtureParityBytes resolver returned no bytes/u,
+    /crossSdkParityBytes resolver returned no bytes/u,
   );
   let preflightHookCalls = 0;
   const preflightSdk = new EthereumMainnetSccp({
@@ -4999,7 +4999,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkFixtureParityBytes is required/u,
+    /crossSdkParityBytes is required/u,
   );
   assert.throws(
     () =>
@@ -5121,7 +5121,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+    /crossSdkParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestSupportFixtureBytes = Buffer.from("{}", "utf8");
   const tinySelfTestSupportBundle = hashConsistentNativeEvmProverBundle({
@@ -5186,7 +5186,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /crossSdkFixtureParityBytes sha256/u,
+    /crossSdkParityBytes sha256/u,
   );
   const flaggedArtifactBytes = nativeEvmSnarkjsArtifactBytes(
     "native proof artifact imports local prover code",

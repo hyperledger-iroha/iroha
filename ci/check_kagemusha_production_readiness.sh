@@ -511,6 +511,7 @@ TEXT_REQUIREMENTS = {
         "python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py",
         "python3 scripts/kagemusha_lineage_proof_evidence.py",
         "python3 scripts/kagemusha_recursive_compact_key_evidence.py",
+        "python3 scripts/kagemusha_localnet_lifecycle_acceptance.py",
         "python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py",
         "python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
         "tee artifacts/kagemusha/recursive-compact-key-artifacts.log",
@@ -899,7 +900,11 @@ TEXT_REQUIREMENTS = {
         "required_d2d_payment_transports",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
-        "if missing_d2d_payment_transports:",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
+        "def _summary_release_d2d_payment_transport_coverage_by_family",
+        "def _missing_summary_release_d2d_payment_transport_pairs",
+        "if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:",
         "D2D_PAYMENT_TRANSCRIPTS_FIELD",
         "validate_d2d_payment_transcripts_binding",
         "def _safe_relative_path_is_child_of",
@@ -967,6 +972,8 @@ TEXT_REQUIREMENTS = {
         "kagemusha device-lab run complete",
         "telemetry/status.ndjson must use LF line endings",
         "telemetry/status.ndjson must end with a trailing newline",
+        "telemetry/status.ndjson line {line_no} contains non-finite constant",
+        "JSON_NONFINITE_CONSTANT_REDACTION",
         "telemetry/status.ndjson line {line_no} contains unexpected field",
         "telemetry/status.ndjson line {line_no} must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} status must not contain surrounding whitespace",
@@ -1060,6 +1067,7 @@ TEXT_REQUIREMENTS = {
         "SUMMARY_NON_STRING_KEY_REDACTION",
         "SUMMARY_NONFINITE_NUMBER_NORMALIZED_FIELD",
         "SUMMARY_NONFINITE_NUMBER_REDACTION",
+        "JSON_NONFINITE_CONSTANT_REDACTION",
         "SUMMARY_UNSUPPORTED_VALUE_NORMALIZED_FIELD",
         "SUMMARY_UNSUPPORTED_VALUE_REDACTION",
         "SUMMARY_KAGEMUSHA_SHAPE_NORMALIZED_FIELD",
@@ -1173,6 +1181,7 @@ TEXT_REQUIREMENTS = {
         "parse_constant=_reject_nonfinite_json_constant",
         "contains duplicate JSON object key",
         "contains non-finite constant",
+        "contains non-finite constant {JSON_NONFINITE_CONSTANT_REDACTION}",
         "validate_no_slot_symlink_artifacts",
         'def validate_no_slot_symlink_artifacts(slot_path: Path, errors: list[str]) -> None:\n    """Reject symlinked slot metadata, directories, and evidence artifacts."""\n\n    if _reject_secret_slot_path(slot_path, errors):\n        return\n',
         '        try:\n            mode = path.lstat().st_mode\n        except FileNotFoundError:\n            continue\n        except OSError:\n            _append_error_once(errors, f"{relative} file metadata could not be read")\n            continue\n        if stat.S_ISLNK(mode):\n            errors.append(f"{relative} must not be a symlink")\n',
@@ -1474,8 +1483,10 @@ TEXT_REQUIREMENTS = {
         "trusted signer public key path must be a pathlib Path",
         "def _trusted_signer_digest_sort_key(",
         "key=_trusted_signer_digest_sort_key",
+        "def _summary_duplicate_matrix_values(",
         "def kagemusha_duplicate_matrix_bindings(",
-        '                or value == "0" * 64\n',
+        '        "d2d_payment_transcript_sha256",\n    ):\n        seen: dict[str, set[str]] = {}',
+        '        and value != "0" * 64\n    ):\n        values.add(value)',
         "trusted signer public key path must not contain control characters",
         "trusted signer public key path must not contain backslashes",
         "trusted signer public key path must be canonical",
@@ -1901,6 +1912,8 @@ TEXT_REQUIREMENTS = {
         "errors = _command_disruption_errors(command, f\"ADB getprop {prop}\")",
         "timeout=timeout_seconds",
         "ADB getprop {prop} timed out after {timeout_seconds} seconds",
+        "ADB getprop {prop} failed with exit code {exc.returncode}",
+        "ADB getprop {prop} could not be executed",
         "stdout.count(\"\\n\") != 1",
         "adb getprop output must be exactly one LF-terminated value",
         "adb getprop {prop} failed",
@@ -1987,7 +2000,9 @@ TEXT_REQUIREMENTS = {
         "(\"am\", \"force-stop\"),",
         "CONTROL_OUTPUT_REDACTION",
         "NON_UTF8_OUTPUT_REDACTION",
+        "ADB_SERIAL_REDACTION",
         "def _safe_detail",
+        "redact_tokens",
         "return NON_UTF8_OUTPUT_REDACTION",
         "def _safe_adb_command_display(",
         "def _command_disruption_errors(",
@@ -2127,6 +2142,8 @@ TEXT_REQUIREMENTS = {
         "\"transport_offline\"",
         "\"rollback_rejection_passed\"",
         "_validate_raw_status_ndjson",
+        "telemetry/status.ndjson line {line_no} contains non-finite constant",
+        "device_lab.JSON_NONFINITE_CONSTANT_REDACTION",
         "device_lab._loads_json_without_duplicate_keys",
         "device_lab.STATUS_EVENT_FIELDS",
         "device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES",
@@ -2233,6 +2250,7 @@ TEXT_REQUIREMENTS = {
     "scripts/kagemusha_android_device_lab_capture.py": (
         "Capture, assemble, and validate one Kagemusha Android device-lab slot",
         "without modifying other running jobs",
+        "kagemusha_android_device_lab_slot as slot_assembler",
         "DEVICE_LAB_EXPORT_TEST_CLASS",
         "KagemushaDeviceLabArtifactExportTest",
         "GRADLE_LAB_APP_TASKS",
@@ -2240,10 +2258,13 @@ TEXT_REQUIREMENTS = {
         ":offline-wallet-lab-app:installReleaseAndroidTest",
         "DEFAULT_INSTRUMENTATION_RUNNER",
         "MAX_CAPTURE_SIGNING_KEY_BYTES",
+        "ADB_SERIAL_REDACTION",
         "DISRUPTIVE_EXECUTABLE_NAMES",
         "DISRUPTIVE_COMMAND_TOKENS",
         "DISRUPTIVE_TOKEN_SEQUENCES",
         '("am", "force-stop")',
+        "ADB_DEVICES_NO_VISIBLE_ROWS",
+        "redact_tokens",
         "def _command_disruption_errors",
         "must not manage other running jobs",
         "errors = _command_disruption_errors(command, label)",
@@ -2252,9 +2273,13 @@ TEXT_REQUIREMENTS = {
         "[args.adb, \"-s\", args.serial, \"get-state\"]",
         "def _adb_devices_command",
         "[args.adb, \"devices\", \"-l\"]",
+        "def _adb_getprop_command",
+        "[args.adb, \"-s\", args.serial, \"shell\", \"getprop\", prop]",
         "MAX_ADB_PREFLIGHT_OUTPUT_CHARS",
         "def _safe_adb_message_display",
         "def _safe_adb_devices_output_display",
+        "no_visible_devices",
+        "rows={row_count}; states={state_summary}",
         "def _safe_adb_failure_detail",
         "def _validate_required_regular_file",
         "def _validate_path_shape(path: Path, label: str) -> list[str]:",
@@ -2267,12 +2292,19 @@ TEXT_REQUIREMENTS = {
         "                max_bytes=MAX_CAPTURE_SIGNING_KEY_BYTES,\n"
         "            )\n"
         "        )",
-        "detail = _safe_adb_failure_detail(result)",
+        "detail = _safe_adb_failure_detail(result, redact_tokens=(args.serial,))",
         "stderr=",
         "stdout=",
         "if len(rendered) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:",
         "def _run_adb_visibility_preflight",
         "def _run_adb_devices_diagnostic",
+        "def _run_expected_device_family_preflight",
+        "ADB expected device family preflight",
+        "ro.product.model",
+        "ro.product.device",
+        'if value.endswith("\\r"):',
+        "value = value[:-1]",
+        "slot_assembler.infer_device_family",
         "ADB device visibility preflight",
         "ADB attached-device diagnostic",
         "stdout=subprocess.PIPE",
@@ -2282,6 +2314,9 @@ TEXT_REQUIREMENTS = {
         "message = f\"{label} must report state device, got {state}\"",
         "diagnostic = _run_adb_devices_diagnostic(args, env=env, runner=runner)",
         "errors = _run_adb_visibility_preflight(args, env=env, runner=runner)",
+        "errors = _run_expected_device_family_preflight(args, env=env, runner=runner)",
+        "--expected-device-family",
+        "checked before build/install/instrumentation",
         "--physical-device-attestation is required for production capture",
         "def _validate_attestation_result_for_capture",
         "attestation result attestation_challenge_sha256 must match attestation/challenge.hex",
@@ -2292,6 +2327,7 @@ TEXT_REQUIREMENTS = {
         "def _read_regular_text_file",
         "def _read_regular_file_bytes",
         "changed while being read",
+        "device_lab.JSON_NONFINITE_CONSTANT_REDACTION",
         "def _directory_open_flags",
         "O_NOFOLLOW",
         "def _open_capture_summary_parent",
@@ -2439,7 +2475,11 @@ TEXT_REQUIREMENTS = {
         "d2d_payment_transcripts",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
-        "if missing_transports:",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
+        "def _android_d2d_payment_transport_coverage_by_family",
+        "def _missing_android_d2d_payment_transport_pairs",
+        "if missing_transports or missing_transport_pairs:",
         "android_device_lab_d2d_transport_matrix_missing",
         "MAX_ABI6_MANIFEST_JSON_BYTES",
         "MAX_ABI7_FIXTURE_JSON_BYTES",
@@ -2768,6 +2808,8 @@ TEXT_REQUIREMENTS = {
         "parse_constant=_reject_nonfinite_json_constant",
         "contains duplicate JSON object key",
         "non-finite constant",
+        'f"{label} is not strict JSON: non-finite constant "',
+        'f"{EVIDENCE_NONFINITE_NUMBER_REDACTION} is not allowed"',
         "def _display_evidence_value(value: Any) -> Any:",
         "NON_PRODUCTION_TEXT_MARKERS",
         "NON_PRODUCTION_COMPACT_MARKERS",
@@ -2938,13 +2980,16 @@ TEXT_REQUIREMENTS = {
         "check_android_device_lab",
         "root_exists, root_errors = device_lab.classify_device_lab_root_path(root)",
         "if not root_exists:",
+        "_android_report_duplicate_matrix_values",
         "_check_android_matrix_unique_bindings",
         "_android_report_kagemusha",
         "_android_report_device_family",
         "android_device_lab_duplicate_device_fingerprint",
         "android_device_lab_duplicate_attestation_challenge",
+        "android_device_lab_duplicate_d2d_payment_transcript",
         "android_device_lab_binding_digest_invalid",
         "Android device-lab production slots must not reuse a device fingerprint",
+        "Android device-lab production slots must not reuse a D2D payment transcript digest",
         "Android device-lab production binding digests must be non-zero lowercase sha256 hex",
         "device_lab.SHA256_HEX_RE.fullmatch(value)",
         'or value == "0" * 64',
@@ -3168,9 +3213,13 @@ TEXT_REQUIREMENTS = {
         "validate_lineage_proof_command",
         "validate_lineage_local_file",
         "_validate_generated_at_utc",
-        "errors.extend(_validate_generated_at_utc(generated_at_utc))",
+        "generated_at_errors = _validate_generated_at_utc(generated_at_utc)",
+        "if not generated_at_errors:",
         "_validate_generated_at_future_skew",
         "_validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
+        "--generated-at-utc must be a non-empty string",
+        "not isinstance(value, (int, float))",
+        "--max-generated-at-future-skew-seconds must be a non-negative integer",
         '    errors.extend(_validate_elapsed_seconds(elapsed_seconds))\n    if errors:\n        return None, errors\n\n    errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))',
         '    scalar_errors.extend(_validate_elapsed_seconds(args.elapsed_seconds))\n    if scalar_errors:\n        for error in scalar_errors:\n            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)\n        return 1\n\n    path_errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))',
         "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
@@ -3371,6 +3420,8 @@ TEXT_REQUIREMENTS = {
         "--out must be named",
         "return lineage_helper._validate_generated_at_utc(value)",
         "return lineage_helper._validate_generated_at_future_skew(",
+        "generated_at_errors = _validate_generated_at_utc(generated_at_utc)",
+        "if not generated_at_errors:",
         '    errors.extend(\n        _validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,\n        )\n    )\n    if errors:\n        return None, errors\n\n    errors.extend(validate_localnet_input_paths(artifact_dir, acceptance_report))',
         '    if scalar_errors:\n        for error in scalar_errors:\n            print(f"[kagemusha-localnet-lifecycle-evidence] error: {error}", file=sys.stderr)\n        return 1\n\n    path_errors.extend(lineage_helper.validate_output_corridor(out_path, artifact_dir))',
         "--max-generated-at-future-skew-seconds",
@@ -3393,6 +3444,239 @@ TEXT_REQUIREMENTS = {
         "readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES",
         "print(\"[kagemusha-localnet-lifecycle-evidence] wrote evidence\")",
     ),
+    "scripts/kagemusha_localnet_lifecycle_acceptance.py": (
+        "Build the Kagemusha 4-peer localnet lifecycle acceptance report",
+        "LOCALNET_ARTIFACT_FLAGS",
+        "LOCALNET_TRUE_FIELDS",
+        'LOCALNET_SOURCE_SCHEMA = "iroha.kagemusha.localnet.lifecycle.source.v1"',
+        "LOCALNET_SOURCE_KINDS",
+        "LOCALNET_SOURCE_BASE_FIELDS",
+        "LOCALNET_SOURCE_KIND_FIELDS",
+        "DEFAULT_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_PATH",
+        "readiness._sha256_file(path, label)",
+        "validate_acceptance_output_path",
+        "--out must not use the release evidence filename",
+        "--out must be named",
+        "corridor_errors = lineage_helper.validate_output_corridor(out_path, artifact_dir)",
+        "if corridor_errors:",
+        'return lineage_helper.validate_output_path(out_path, "--out")',
+        "validate_acceptance_identity",
+        "--run-id must identify a production 4-peer localnet run",
+        "--chain-id must identify a production localnet chain",
+        "--peer-id must be repeated exactly four times with distinct sorted",
+        "validate_source_artifact_path_shapes",
+        'lineage_helper._secret_path_error(str(path), f"{flag} path")',
+        "validate_source_artifact_paths",
+        "shape_errors = validate_source_artifact_path_shapes(",
+        "if shape_errors:",
+        "readiness.validate_lineage_local_file(path, flag)",
+        "validate_source_artifact_file_identities",
+        "source artifact file must be distinct",
+        "validate_source_artifact_documents",
+        "source artifact run_id must match --run-id",
+        "source artifact chain_id must match --chain-id",
+        "source artifact peer_ids must match sorted --peer-id values",
+        "source artifact contains unexpected field",
+        "LOCALNET_SOURCE_STRING_FIELD_MESSAGES",
+        'errors.append(f"{flag} {messages[\'secret\']}")',
+        'errors.append(f"{flag} {messages[\'control\']}")',
+        "def _append_source_hash_errors(",
+        "source artifact {field} must be a non-zero lowercase sha256 hex string",
+        "readiness.device_lab.SHA256_HEX_RE.fullmatch(value)",
+        "source artifact context must not contain secret-looking material",
+        "source artifact event must be a non-empty string",
+        "source artifact event must not contain secret-looking material",
+        "source artifact kind must be",
+        "source artifact tx_hash must be a non-empty string",
+        "source artifact tx_hash must not contain control characters",
+        "source artifact replayed_tx_hash must be a non-empty string",
+        "source artifact rejection must not contain control characters",
+        '_append_json_source_string_errors(errors, document, "event", flag)',
+        '_append_json_source_string_errors(errors, document, "tx_hash", flag)',
+        '_append_source_hash_errors(errors, document, "tx_hash", flag)',
+        '_append_json_source_string_errors(errors, document, "replayed_tx_hash", flag)',
+        '_append_source_hash_errors(errors, document, "replayed_tx_hash", flag)',
+        '_append_json_source_string_errors(errors, document, "rejection", flag)',
+        "source artifact non_empty_target must be a positive JSON integer",
+        "readiness._load_json_artifact(",
+        "build_acceptance_report",
+        '"target": readiness.EXPECTED_LOCALNET_TARGET',
+        '"peer_count": readiness.EXPECTED_LOCALNET_PEER_COUNT',
+        "acceptance[field] = True",
+        "identity_errors = validate_acceptance_identity(",
+        "if identity_errors:",
+        "source_artifact_path_errors = validate_source_artifact_paths(",
+        "if source_artifact_path_errors:",
+        "source_artifact_identity_errors = validate_source_artifact_file_identities(",
+        "if source_artifact_identity_errors:",
+        "source_artifact_document_errors = validate_source_artifact_documents(",
+        "if source_artifact_document_errors:",
+        "acceptance[hash_field] = digest_uri",
+        "localnet_helper.validate_evidence_document(evidence, artifact_dir)",
+        "write_acceptance_report",
+        "lineage_helper.write_evidence(",
+        "max_bytes=localnet_helper.MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES",
+        'parser.add_argument("--run-id", required=True)',
+        'parser.add_argument("--chain-id", required=True)',
+        'parser.add_argument(\n        "--peer-id",\n        action="append",',
+        "Repeat exactly four times in sorted order",
+        "for _hash_field, attr_name, flag in LOCALNET_ARTIFACT_FLAGS:",
+        "parser.add_argument(flag, dest=attr_name, type=Path, required=True)",
+        "validate_acceptance_output_path(args.artifact_dir, args.out)",
+        "artifacts={attr_name: getattr(args, attr_name) for _, attr_name, _ in LOCALNET_ARTIFACT_FLAGS}",
+        "[kagemusha-localnet-lifecycle-acceptance] wrote acceptance report",
+    ),
+    "integration_tests/tests/zk_confidential_localnet.rs": (
+        "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_SOURCE_DIR",
+        "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_RUN_ID",
+        "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_CHAIN_ID",
+        "kagemusha-production-localnet-v1",
+        "iroha.kagemusha.localnet.lifecycle.source.v1",
+        "LOCALNET_LIFECYCLE_SOURCE_ARTIFACTS",
+        "LocalnetLifecycleArtifactRecorder",
+        "localnet_lifecycle_source_peer_id(index, &entry.peer.to_string())",
+        "prepare_localnet_lifecycle_source_dir(root)?",
+        "fn validate_localnet_lifecycle_source_dir_shape(root: &Path) -> Result<()>",
+        "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} must be a canonical local source directory",
+        "fn validate_localnet_lifecycle_source_dir_ancestors(root: &Path) -> Result<()>",
+        "{LOCALNET_LIFECYCLE_SOURCE_DIR_ENV} ancestor must not be a symlink",
+        "fs::set_permissions(root, fs::Permissions::from_mode(0o700))",
+        "write_localnet_lifecycle_source_artifact(&path, json_text.as_bytes())",
+        "fn write_localnet_lifecycle_source_artifact(path: &Path, bytes: &[u8]) -> Result<()>",
+        "OpenOptions::new()",
+        ".create_new(true)",
+        ".set_permissions(fs::Permissions::from_mode(0o600))",
+        "fs::rename(&tmp_path, path)",
+        "fn validate_localnet_lifecycle_release_chain_id(chain_id: &str) -> Result<()>",
+        "fn localnet_lifecycle_release_chain_id_from_env() -> Result<Option<String>>",
+        "fn from_env(network: &sandbox::SerializedNetwork, test_name: &str) -> Result<Self>",
+        "fn record_rejection(",
+        "fn write_artifact<const N: usize>(",
+        "fn submit_transaction_expect_replay_rejection(",
+        "submit_and_wait_non_empty_block_with_tx",
+        "replayed transaction was accepted",
+        "smoke-artifact.json",
+        "restart-replay-rejection-artifact.json",
+        "lifecycle-recursive-append-verify-artifact.json",
+        "localnet_lifecycle_release_chain_id_validation_matches_production_gate",
+        "localnet_lifecycle_source_peer_id_binds_actual_peer_material",
+        "localnet_lifecycle_source_artifact_filenames_are_complete_and_distinct",
+        "localnet_lifecycle_recorder_writes_norito_json_source_artifact",
+        "localnet_lifecycle_recorder_rejects_unsafe_source_dirs_before_write",
+        "localnet_lifecycle_recorder_rejects_symlink_source_dir_before_write",
+    ),
+    "scripts/run_local_swarm.sh": (
+        "pid_matches_local_swarm_peer()",
+        "pid_is_running()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        "write_stop_script()",
+        "preflight_existing_pidfiles()",
+        'grep -F -- "--config $config"',
+        'ps -p "$pid" -o pid=',
+        "Refusing to overwrite live local-swarm peer",
+        "live pid $pid does not match $config",
+        "local-swarm peer $peer_name pid $pid is still running",
+        "To stop safely: cd $BASE && ./stop.sh",
+    ),
+    "scripts/deploy_localnet.sh": (
+        "pid_matches_localnet_peer()",
+        "pid_is_running()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        "stop_existing_localnet()",
+        'grep -F -- "--config $config_path"',
+        'ps -p "$pid" -o pid=',
+        'kill "$pid" 2>/dev/null || true',
+        "Stopping existing Iroha peers in $OUT_DIR with guarded pid ownership checks",
+        "Out-dir $OUT_DIR still has live or mismatched pidfiles; not removing it.",
+        "Refusing to remove existing out-dir while localnet peer",
+        "live pid $pid does not match $config_path",
+    ),
+    "scripts/training_script_2.sh": (
+        "pid_matches_localnet_peer()",
+        "pid_is_running()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        "stop_localnet()",
+        'grep -F -- "--config $config_path"',
+        'ps -p "$pid" -o pid=',
+        'kill "$pid" 2>/dev/null || true',
+        "refusing to remove $run_dir while peer $peer_name pid $pid is still running",
+        "run dir has live or mismatched pidfiles; not regenerating $run_dir",
+        "live pid $pid does not match $config_path",
+        'stop_localnet "$cleanup_run_dir" || true',
+    ),
+    "scripts/run_100tps_profile_localnet.sh": (
+        "pid_is_running()",
+        "wait_for_pid_with_timeout()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'ps -p "$pid" -o pid=',
+        'kill -TERM "$pid" 2>/dev/null || true',
+        "pid ${pid} is still running after TERM; leaving it visible",
+    ),
+    "crates/iroha_kagami/src/localnet.rs": (
+        "fn write_stop_script(stop: &Path) -> Result<()>",
+        "pid_matches_peer()",
+        "pid_is_running()",
+        'pid_is_running \\"$existing_pid\\"',
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'grep -F -- \\"--config $config\\"',
+        'ps -p \\"$pid\\" -o pid=',
+        "live pid $pid does not match $config",
+        "localnet peer $peer_name pid $pid is still running",
+        '!start_contents.contains("kill -0")',
+        '!stop_contents.contains("kill -9 \\"$pid\\"")',
+        '!stop_contents.contains("kill -0")',
+        "start script should not use null-signal pid probes",
+        "stop script should not escalate to SIGKILL",
+        "stop script should not use null-signal pid probes",
+        "stop script should leave still-running owned peers visible",
+    ),
+    "scripts/tests/run_local_swarm_test.py": (
+        "test_stop_guidance_uses_guarded_pid_ownership_checks",
+        'self.assertNotIn("xargs kill", text)',
+        "preflight_existing_pidfiles",
+        "Refusing to overwrite live local-swarm peer",
+        "To stop safely: cd $BASE && ./stop.sh",
+        "pid_matches_peer()",
+        "pid_is_running()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'grep -F -- "--config $config"',
+        'self.assertNotIn("kill -0", text)',
+        'self.assertNotIn(\'kill -9 "$pid"\', stop_body)',
+        "local-swarm peer $peer_name pid $pid is still running",
+    ),
+    "scripts/tests/deploy_localnet_test.py": (
+        "test_force_cleanup_uses_guarded_pid_ownership_checks",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'self.assertNotIn("kill -0", text)',
+        'self.assertNotIn(\'kill -9 "$pid"\', text)',
+        'self.assertNotIn("&& ./stop.sh 2>/dev/null", text)',
+        "stop_existing_localnet()",
+        "Out-dir $OUT_DIR still has live or mismatched pidfiles; not removing it.",
+        "Refusing to remove existing out-dir while localnet peer",
+        "live pid $pid does not match $config_path",
+    ),
+    "scripts/tests/training_script_2_test.py": (
+        "test_stop_localnet_uses_guarded_pid_ownership_checks",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'self.assertNotIn("kill -0", text)',
+        'self.assertNotIn(\'kill -9 "$pid"\', text)',
+        'self.assertNotIn("(cd \\"$run_dir\\" && ./stop.sh)", text)',
+        "stop_localnet()",
+        "refusing to remove $run_dir while peer $peer_name pid $pid is still running",
+        "run dir has live or mismatched pidfiles; not regenerating $run_dir",
+        "live pid $pid does not match $config_path",
+        'stop_localnet "$cleanup_run_dir" || true',
+    ),
+    "scripts/tests/run_100tps_profile_localnet_test.py": (
+        "test_load_wait_uses_ps_liveness_without_sigkill",
+        "pid_is_running()",
+        "wait_for_pid_with_timeout()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'self.assertNotIn("kill -0", text)',
+        'self.assertNotIn("kill -9", text)',
+        'self.assertNotIn("kill -KILL", text)',
+        "pid ${pid} is still running after TERM; leaving it visible",
+    ),
     "scripts/kagemusha_recursive_compact_key_evidence.py": (
         "Build ABI-7 recursive compact key-artifact release evidence JSON",
         "DEFAULT_COMPACT_KEY_COMMAND",
@@ -3400,9 +3684,12 @@ TEXT_REQUIREMENTS = {
         "validate_compact_key_command",
         "validate_lineage_local_file",
         "_validate_generated_at_utc",
-        "errors.extend(_validate_generated_at_utc(generated_at_utc))",
+        "generated_at_errors = _validate_generated_at_utc(generated_at_utc)",
+        "if not generated_at_errors:",
         "_validate_generated_at_future_skew",
         "_validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
+        "--generated-at-utc must be a non-empty string",
+        "--max-generated-at-future-skew-seconds must be a non-negative integer",
         '    errors.extend(readiness.validate_compact_key_command(command))\n    if errors:\n        return None, errors\n\n    errors.extend(validate_artifact_dir_path(artifact_dir))',
         '    scalar_errors.extend(readiness.validate_compact_key_command(args.command))\n    if scalar_errors:\n        for error in scalar_errors:\n            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)\n        return 1\n\n    path_errors.extend(validate_output_corridor(out_path, artifact_dir))',
         "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
@@ -3433,9 +3720,11 @@ TEXT_REQUIREMENTS = {
         "def validate_generator_log_path(",
         "def validate_generator_log_path_shape(generator_log_path: Path) -> list[str]:",
         '    shape_errors = validate_generator_log_path_shape(generator_log_path)\n    if shape_errors:\n        return shape_errors\n    artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
+        '    artifact_dir_errors = validate_artifact_dir_path(artifact_dir)\n    if artifact_dir_errors:\n        return artifact_dir_errors\n    generator_log_ancestor_errors = device_lab.validate_no_symlink_ancestors(',
         '    if generator_log_path.name != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:\n        return [\n            f"--generator-log must be named {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"\n        ]\n    return []',
         '_secret_path_error(str(generator_log_path), "--generator-log")',
         'artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
+        '"--generator-log ancestor directory"',
         "generator_log_parent = generator_log_path.parent.resolve()",
         'readiness._validate_lineage_local_file_for_read(\n        generator_log_path,\n        "recursive compact key generator log",\n    )',
         "--generator-log must live directly under --artifact-dir",
@@ -3448,7 +3737,7 @@ TEXT_REQUIREMENTS = {
         'text = b"".join(chunks).decode("utf-8")',
         "generator_log_path_was_explicit = generator_log_path is not None",
         'generator_log_shape_errors = (\n        validate_generator_log_path_shape(generator_log_path)',
-        "errors.extend(generator_log_shape_errors)\n    errors.extend(_validate_generated_at_utc(generated_at_utc))",
+        "errors.extend(generator_log_shape_errors)\n    generated_at_errors = _validate_generated_at_utc(generated_at_utc)",
         ") = _sha256_text_file_with_size(",
         "readiness.parse_compact_key_generator_log(generator_log_text)",
         "generator_log_sha256",
@@ -3570,11 +3859,16 @@ TEXT_REQUIREMENTS = {
         "EXECUTION_REPORT_SCHEMA",
         "MAX_STAGED_RUN_REPORT_BYTES",
         "MAX_EXECUTION_REPORT_BYTES",
+        "STAGED_RUNNER_TEMP_SUFFIX",
+        ".staged-runner.tmp",
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
         "validate_exit_file_path_shape",
         "exit_path_errors = validate_exit_file_path_shape(args.exit_file)",
+        "def validate_no_staged_runner_temp_outputs(",
+        "contains runner temporary outputs; staged run is incomplete",
+        "validate_no_staged_runner_temp_outputs(",
         "def _set_private_directory_permissions",
         "os.fchmod(dir_fd, 0o700)",
         "stat.S_IMODE(directory_stat.st_mode) != 0o700",
@@ -3605,6 +3899,8 @@ TEXT_REQUIREMENTS = {
         "def _display_exit_marker",
         "device_lab._contains_control_character(marker)",
         "device_lab._display_path(exc.key)",
+        'f"{label} is not strict JSON: non-finite constant "',
+        "device_lab.JSON_NONFINITE_CONSTANT_REDACTION",
         "device_lab._display_path(extra_keys[0])",
         "def _validate_report_command",
         "command must be a non-empty string",
@@ -3679,6 +3975,8 @@ TEXT_REQUIREMENTS = {
         "LINEAGE_KEY_ARTIFACT_COMMANDS",
         "MAX_STAGED_RUN_REPORT_BYTES",
         "MAX_EXECUTION_REPORT_BYTES",
+        "STAGED_RUNNER_TEMP_SUFFIX",
+        ".staged-runner.tmp",
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "CANONICAL_ELAPSED_SECONDS_RE",
@@ -3687,6 +3985,9 @@ TEXT_REQUIREMENTS = {
         "exit_path_errors = validate_exit_file_path_shape(args.exit_file)",
         "validate_elapsed_seconds_file_path_shape",
         "elapsed_path_errors = validate_elapsed_seconds_file_path_shape(",
+        "def validate_no_staged_runner_temp_outputs(",
+        "contains runner temporary outputs; staged run is incomplete",
+        "validate_no_staged_runner_temp_outputs(",
         "def _set_private_directory_permissions",
         "os.fchmod(dir_fd, 0o700)",
         "stat.S_IMODE(directory_stat.st_mode) != 0o700",
@@ -3718,6 +4019,8 @@ TEXT_REQUIREMENTS = {
         "def _parse_canonical_elapsed_seconds_file_text",
         "device_lab._contains_control_character(marker)",
         "device_lab._display_path(exc.key)",
+        'f"{label} is not strict JSON: non-finite constant "',
+        "device_lab.JSON_NONFINITE_CONSTANT_REDACTION",
         "device_lab._display_path(extra_keys[0])",
         "device_lab._display_path(unexpected_profiles[0])",
         "device_lab._display_path(entry_extra[0])",
@@ -3809,6 +4112,7 @@ TEXT_REQUIREMENTS = {
         "LINEAGE_KEY_ARTIFACTS_BY_PROFILE",
         "MAX_EXECUTION_REPORT_BYTES",
         "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
+        "COMMAND_LAUNCH_FAILURE_DETAIL = \"process launch failed\"",
         "def _secret_path_error",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         "path_text != path_text.strip()",
@@ -3821,6 +4125,8 @@ TEXT_REQUIREMENTS = {
         "validate_elapsed_seconds_file_path_shape",
         "elapsed_path_errors = validate_elapsed_seconds_file_path_shape(",
         "device_lab._display_path(exc.key)",
+        'f"{label} is not strict JSON: non-finite constant "',
+        "device_lab.JSON_NONFINITE_CONSTANT_REDACTION",
         "device_lab._display_path(extra_keys[0])",
         "def _validate_report_command",
         "command must be a non-empty string",
@@ -3861,6 +4167,8 @@ TEXT_REQUIREMENTS = {
         "def _unlink_file_if_identity_at(",
         "def _unlink_output_for_replace(",
         "def _cleanup_temp_output(",
+        "def _unlink_temp_output_for_replace(",
+        "def _unlink_replace_temp_outputs(",
         "_file_identity(path_stat) != expected_identity",
         "cleanup_errors = _unlink_file_if_identity_at(",
         "os.unlink(name, dir_fd=parent_fd)",
@@ -3874,6 +4182,7 @@ TEXT_REQUIREMENTS = {
         "os.fchmod(temp_fd, 0o600)",
         "src_dir_fd=parent_fd",
         "_unlink_output_for_replace(path, label)",
+        "_unlink_temp_output_for_replace(path, label)",
         "_verify_written_text_file",
         "return _verify_written_text_file(path, expected_bytes, label)",
         "stat.S_IMODE(expected_stat.st_mode) != 0o600",
@@ -3883,6 +4192,12 @@ TEXT_REQUIREMENTS = {
         "_write_execution_report",
         "_write_run_report",
         "_wrapper_exit_status",
+        "_absolute_repo_root",
+        "Path.cwd() / repo_root",
+        "_child_env_with_repo_binaries",
+        'absolute_repo_root / "target" / "release"',
+        'absolute_repo_root / "target" / "debug"',
+        'popen_kwargs["env"] = child_env',
         "staged run exited with",
         "return _wrapper_exit_status(status)",
         "proof_log_size_bytes",
@@ -3900,6 +4215,8 @@ TEXT_REQUIREMENTS = {
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
         "readiness.validate_lineage_proof_command(",
+        "executable_repo_root=repo_root",
+        "executable_repo_root=args.repo_root",
         "args.staged_artifact_dir.mkdir(mode=0o700",
         "_write_exit_marker",
         "f\"{exit_code}\\n\"",
@@ -3921,6 +4238,7 @@ TEXT_REQUIREMENTS = {
         "MAX_EXECUTION_REPORT_BYTES",
         "MAX_RUN_REPORT_BYTES",
         "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
+        "COMMAND_LAUNCH_FAILURE_DETAIL = \"process launch failed\"",
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
@@ -3935,6 +4253,8 @@ TEXT_REQUIREMENTS = {
         "def _display_exit_marker",
         "device_lab._contains_control_character(marker)",
         "device_lab._display_path(exc.key)",
+        'f"{label} is not strict JSON: non-finite constant "',
+        "device_lab.JSON_NONFINITE_CONSTANT_REDACTION",
         "device_lab._display_path(extra_keys[0])",
         "def _validate_report_command",
         "command must be a non-empty string",
@@ -3975,6 +4295,8 @@ TEXT_REQUIREMENTS = {
         "def _unlink_file_if_identity_at(",
         "def _unlink_output_for_replace(",
         "def _cleanup_temp_output(",
+        "def _unlink_temp_output_for_replace(",
+        "def _unlink_replace_temp_outputs(",
         "_file_identity(path_stat) != expected_identity",
         "cleanup_errors = _unlink_file_if_identity_at(",
         "os.unlink(name, dir_fd=parent_fd)",
@@ -3988,6 +4310,7 @@ TEXT_REQUIREMENTS = {
         "os.fchmod(temp_fd, 0o600)",
         "src_dir_fd=parent_fd",
         "_unlink_output_for_replace(path, label)",
+        "_unlink_temp_output_for_replace(path, label)",
         "_verify_written_text_file",
         "return _verify_written_text_file(path, expected_bytes, label)",
         "stat.S_IMODE(expected_stat.st_mode) != 0o600",
@@ -3996,6 +4319,12 @@ TEXT_REQUIREMENTS = {
         "_write_execution_report",
         "_write_run_report",
         "_wrapper_exit_status",
+        "_absolute_repo_root",
+        "Path.cwd() / repo_root",
+        "_child_env_with_repo_binaries",
+        'absolute_repo_root / "target" / "release"',
+        'absolute_repo_root / "target" / "debug"',
+        'popen_kwargs["env"] = child_env',
         "staged keygen exited with",
         "return _wrapper_exit_status(status)",
         "generator_log_size_bytes",
@@ -4014,6 +4343,9 @@ TEXT_REQUIREMENTS = {
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
         "readiness.validate_compact_key_command(DEFAULT_COMPACT_KEY_COMMAND)",
+        'parser.add_argument("--repo-root", type=Path, default=Path("."))',
+        "readiness.validate_repo_root_path(args.repo_root)",
+        "executable_repo_root=args.repo_root",
         "args.staged_artifact_dir.mkdir(mode=0o700",
         'f"{exit_code}\\n"',
         "staged keygen exit marker",
@@ -4037,8 +4369,15 @@ TEXT_REQUIREMENTS = {
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS",
+        "ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS",
+        "_android_duplicate_binding_slot_values",
+        '"d2d_payment_transcript_sha256",',
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
+        "_android_d2d_payment_transports_by_family_is_shaped",
+        "_android_missing_d2d_payment_transport_pairs_are_shaped",
         "d2d_payment_transport",
         "d2d_payment_transports",
         "d2d_payment_transcripts",
@@ -4208,6 +4547,10 @@ TEXT_REQUIREMENTS = {
         'if not field_ok:\n            blockers.append(\n                _blocker(\n                    "kagemusha_release_bundle_manifest_android_list_shape",',
         "kagemusha_release_summary_android_device_families",
         "Android readiness summary covered_device_families must exactly match the standard matrix",
+        "kagemusha_release_summary_android_duplicate_bindings_present",
+        "Android duplicate-bindings summary must be empty for a production release",
+        "kagemusha_release_bundle_manifest_android_duplicate_bindings_present",
+        "Kagemusha release bundle Android duplicate_bindings must be empty",
         "kagemusha_release_summary_android_signer_sha256",
         "kagemusha_release_summary_android_signer_binding",
         "Android readiness summary trusted signer digests must be unique sorted non-zero lowercase sha256 hex strings",
@@ -4247,6 +4590,12 @@ TEXT_REQUIREMENTS = {
         "kagemusha_release_summary_android_device_families_drift",
         "kagemusha_release_summary_android_duplicate_bindings_drift",
         "kagemusha_release_summary_android_trusted_signer_drift",
+        '"min_signed_at_utc": (\n            "kagemusha_release_summary_android_signed_bounds_drift",',
+        "def _parsed_android_signed_bound(",
+        "min_bound = _parsed_android_signed_bound(android, \"min_signed_at_utc\")",
+        "max_bound = _parsed_android_signed_bound(android, \"max_signed_at_utc\")",
+        "Android signed-evidence summary timestamp must not predate min_signed_at_utc",
+        "Android signed-evidence summary timestamp must not exceed max_signed_at_utc",
         "_read_local_json_text",
         "_validate_local_file_for_read",
         "MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES",
@@ -4259,6 +4608,8 @@ TEXT_REQUIREMENTS = {
         'f"{label} must be no more than {MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES} bytes"',
         "object_pairs_hook=readiness._reject_duplicate_json_object_pairs",
         "parse_constant=readiness._reject_nonfinite_json_constant",
+        'f"{label} is not strict JSON: non-finite constant "',
+        'f"{readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} is not allowed"',
         "_evidence_entry_with_size",
         "_sha256_file",
         "_sha256_file_with_size",
@@ -4430,6 +4781,8 @@ TEXT_REQUIREMENTS = {
         "missing_device_families",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
         "duplicate_bindings",
         "trusted_signer_public_key_sha256",
     ):
@@ -4576,7 +4929,10 @@ TEXT_REQUIREMENTS = {
         "kagemusha_release_summary_android_duplicate_bindings_value_binding",
         "kagemusha_release_summary_android_duplicate_bindings_value_inventory",
         "and slot not in signed_evidence_summary",
-        '''                    if kagemusha.get(raw_field) == value_sha256:
+        '''                    if value_sha256 in _android_duplicate_binding_slot_values(
+                        kagemusha,
+                        raw_field,
+                    ):
                         continue''',
         "duplicate_value_sha256_by_value",
         "if not isinstance(entries, list):",
@@ -4718,6 +5074,10 @@ TEXT_REQUIREMENTS = {
         "test_checked_in_sample_slot_passes_default_validation",
         "test_build_summary_requires_d2d_transcript_map_for_declared_transport_list",
         "test_build_summary_requires_exact_d2d_transcript_map_bindings",
+        "test_build_summary_rejects_reused_d2d_transcript_path",
+        "test_build_summary_rejects_reused_d2d_transcript_digest",
+        "test_d2d_transcript_binding_rejects_reused_digest_directly",
+        "test_d2d_transcript_binding_rejects_primary_binding_reuse_directly",
         "test_build_summary_requires_canonical_d2d_transport_list",
         "test_build_summary_accepts_bound_d2d_transcript_map",
         "test_kagemusha_slot_assembler_builds_signed_production_slot",
@@ -4751,6 +5111,15 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_disruptive_adb_getprop_before_subprocess",
         "test_kagemusha_slot_assembler_adb_getprop_uses_timeout",
         "test_kagemusha_slot_assembler_reports_adb_getprop_timeout",
+        "test_kagemusha_slot_assembler_redacts_adb_getprop_called_process_command",
+        "test_kagemusha_slot_assembler_redacts_adb_getprop_oserror_detail",
+        "test_android_capture_expected_family_preflight_runs_before_build",
+        "test_android_capture_expected_family_preflight_accepts_adb_crlf",
+        "test_android_capture_expected_family_rejects_wrong_device_before_build",
+        "test_android_capture_expected_family_rejects_invalid_value_before_commands",
+        "test_android_capture_expected_family_cli_secret_does_not_leak_before_commands",
+        "test_android_capture_expected_family_redacts_unsafe_getprop_before_build",
+        "test_android_capture_expected_family_rejects_disruptive_getprop_before_runner",
         "test_kagemusha_slot_assembler_rejects_nonpositive_adb_timeout_before_root_classify",
         "test_kagemusha_slot_assembler_rejects_padded_adb_identity",
         "test_kagemusha_slot_assembler_rejects_noncanonical_adb_identity_output",
@@ -4881,6 +5250,8 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_redacts_adb_exception_details",
         "test_kagemusha_android_raw_puller_redacts_non_utf8_tar_adb_stderr",
         "test_kagemusha_android_raw_puller_redacts_non_utf8_latest_slot_adb_stderr",
+        "test_kagemusha_android_raw_puller_redacts_adb_serial_in_latest_stderr",
+        "test_kagemusha_android_raw_puller_redacts_adb_serial_in_tar_exception",
         "test_kagemusha_android_raw_puller_rejects_compressed_tar_stream",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_tar_member_path",
         "test_kagemusha_android_raw_puller_allows_trailing_slash_directory_members",
@@ -4918,8 +5289,13 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_d2d_online_handoff",
         "test_kagemusha_android_raw_puller_rejects_missing_extra_d2d_transcript",
         "test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch",
+        "test_android_capture_strict_json_load_redacts_nonfinite_constants",
+        "test_android_capture_assembler_command_passes_adb_timeout",
         "test_android_capture_runs_full_command_sequence_and_binds_challenge",
         "test_android_capture_rejects_missing_adb_device_before_build",
+        "test_android_capture_classifies_adb_devices_diagnostic_states",
+        "test_android_capture_summarizes_adb_devices_without_serials",
+        "test_android_capture_redacts_adb_serial_in_preflight_output",
         "test_android_capture_redacts_adb_preflight_failure_output_before_build",
         "test_android_capture_rejects_non_device_adb_state_before_build",
         "test_android_capture_redacts_non_device_adb_state_detail_before_build",
@@ -4963,6 +5339,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_wallet_rollback_failure",
         "test_kagemusha_android_raw_puller_rejects_failed_status_ndjson",
         "test_kagemusha_android_raw_puller_rejects_status_ndjson_unexpected_field",
+        "test_kagemusha_android_raw_puller_redacts_status_ndjson_nonfinite_constant",
         "test_kagemusha_android_raw_puller_rejects_unknown_status_ndjson",
         "test_kagemusha_android_raw_puller_requires_status_slot_id",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_status_ndjson",
@@ -5028,6 +5405,7 @@ TEXT_REQUIREMENTS = {
         "test_required_signed_evidence_digest_path_predicate_rejects_root_only_dirs",
         "test_signer_manifest_rewrite_rejects_top_level_listing_failure",
         "test_load_json_rejects_nonfinite_json_constant",
+        "self.assertNotIn(constant, rendered)",
         "test_load_json_rejects_oversized_json_before_parse",
         "test_load_json_rejects_non_utf8_bytes_without_traceback",
         "test_parse_sha256_manifest_rejects_secret_slot_path_directly_before_parse",
@@ -5252,6 +5630,7 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_pending_queue_shape",
         "test_production_metadata_rejects_failed_status_ndjson",
         "test_production_metadata_rejects_status_ndjson_unexpected_field",
+        "test_production_metadata_redacts_status_ndjson_nonfinite_constant",
         "test_production_metadata_rejects_unknown_status_ndjson",
         "test_production_metadata_requires_status_ndjson_slot_id",
         "test_production_metadata_rejects_noncanonical_status_ndjson",
@@ -5283,6 +5662,8 @@ TEXT_REQUIREMENTS = {
         "test_build_summary_normalizes_malformed_kagemusha_report_shape",
         "test_build_summary_ignores_malformed_direct_device_family_values",
         "test_duplicate_matrix_bindings_can_require_complete_signed_evidence",
+        "test_build_summary_reports_duplicate_d2d_transcript_digest",
+        "test_build_summary_reports_duplicate_d2d_transcript_map_digest",
         "test_build_summary_requires_complete_signed_evidence_for_kagemusha_rollup",
         "test_build_summary_preserves_complete_signed_evidence_for_kagemusha_rollup",
         "test_build_summary_requires_trusted_signer_for_kagemusha_rollup",
@@ -5547,6 +5928,7 @@ TEXT_REQUIREMENTS = {
     ),
     "scripts/tests/kagemusha_production_readiness_test.py": (
         "test_complete_signed_android_matrix_passes_rollup",
+        "test_staged_json_loaders_redact_nonfinite_constants",
         "test_staged_path_validators_reject_control_directory_paths_before_metadata",
         "test_staged_path_validators_reject_alias_directory_paths_before_metadata",
         "test_staged_finalizers_reject_exit_file_path_shape_before_directory_metadata",
@@ -5555,6 +5937,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_verifier_witness_profile_matches_data_model_constant",
         "summary[\"lineage_proof_evidence\"][\"generated_at_utc\"]",
         "test_localnet_lifecycle_evidence_accepts_valid_four_peer_run",
+        "test_localnet_lifecycle_evidence_accepts_hash_uri_scheme",
         "test_stale_localnet_lifecycle_evidence_blocks_rollup_section",
         "test_localnet_lifecycle_evidence_rejects_noncanonical_timestamp",
         "test_localnet_lifecycle_evidence_rejects_missing_or_nonstring_timestamp",
@@ -5565,8 +5948,20 @@ TEXT_REQUIREMENTS = {
         "test_localnet_lifecycle_evidence_rejects_unexpected_top_level_field_with_redaction",
         "test_localnet_lifecycle_evidence_rejects_unexpected_acceptance_field_with_redaction",
         "test_localnet_lifecycle_evidence_rejects_adversarial_inputs",
+        "test_localnet_lifecycle_evidence_rejects_malformed_hash_uri_variants",
         "test_localnet_lifecycle_evidence_uses_dedicated_json_size_cap",
         "test_localnet_lifecycle_evidence_rejects_non_production_identity_markers",
+        "test_localnet_lifecycle_acceptance_helper_generates_validator_accepted_report",
+        "test_localnet_lifecycle_acceptance_helper_rejects_duplicate_artifact_digest",
+        "test_localnet_lifecycle_acceptance_helper_rejects_duplicate_source_path_before_hashing",
+        "test_localnet_lifecycle_acceptance_helper_rejects_missing_source_artifact",
+        "test_localnet_lifecycle_acceptance_helper_rejects_output_filename_before_artifacts",
+        "test_localnet_lifecycle_acceptance_helper_rejects_detached_output_before_parent_create",
+        "test_localnet_lifecycle_acceptance_helper_rejects_identity_before_artifacts",
+        "test_localnet_lifecycle_acceptance_helper_rejects_malformed_source_documents",
+        "test_localnet_lifecycle_acceptance_helper_rejects_unsafe_source_document_strings_before_hashing",
+        "test_localnet_lifecycle_acceptance_helper_rejects_source_paths_before_hashing",
+        "test_localnet_lifecycle_acceptance_helper_rejects_source_path_shapes_before_metadata",
         "test_localnet_lifecycle_evidence_helper_generates_validator_accepted_json",
         "test_localnet_lifecycle_evidence_helper_rejects_mainnet_localnet_markers",
         "test_localnet_lifecycle_evidence_helper_defaults_acceptance_report_under_artifact_dir",
@@ -5576,9 +5971,16 @@ TEXT_REQUIREMENTS = {
         "test_localnet_lifecycle_input_validator_rejects_acceptance_report_shape_before_metadata",
         "test_localnet_lifecycle_input_validator_rejects_parent_resolve_failure",
         "test_localnet_lifecycle_input_validator_rejects_artifact_dir_resolve_failure",
+        "test_localnet_lifecycle_input_validator_rejects_symlinked_artifact_dir_before_resolve",
+        "test_localnet_lifecycle_input_validator_rejects_symlinked_acceptance_ancestor_before_resolve",
+        "test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_ancestor_before_report_read",
+        "test_localnet_lifecycle_evidence_helper_rejects_nonstring_generated_at_before_input_metadata",
+        "test_localnet_lifecycle_evidence_helper_rejects_malformed_future_skew_before_input_metadata",
         "test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_report",
         "test_localnet_lifecycle_evidence_helper_rejects_hardlinked_acceptance_report",
         "test_localnet_lifecycle_evidence_helper_rejects_duplicate_hash_report",
+        "test_localnet_lifecycle_evidence_helper_accepts_hash_uri_report",
+        "test_localnet_lifecycle_evidence_helper_rejects_malformed_hash_report",
         "test_localnet_lifecycle_evidence_helper_rejects_duplicate_acceptance_json_keys",
         "test_localnet_lifecycle_evidence_helper_rejects_nonfinite_acceptance_json",
         "test_localnet_lifecycle_evidence_helper_rejects_nonobject_acceptance_json",
@@ -5654,6 +6056,8 @@ TEXT_REQUIREMENTS = {
         "test_android_matrix_redacts_secret_direct_binding_digest",
         "test_android_matrix_redacts_unsafe_direct_duplicate_slots",
         "test_android_matrix_redacts_control_direct_binding_digest_slot",
+        "test_direct_d2d_transport_rollup_rejects_reused_cross_slot_transcript_digest",
+        "test_direct_d2d_transport_rollup_rejects_reused_cross_slot_transcript_map_digest",
         "test_android_signed_evidence_summary_rejects_malformed_direct_values",
         "test_android_signed_evidence_summary_rejects_non_handoff_d2d_path",
         "test_android_signed_evidence_summary_rejects_handoff_root_d2d_path",
@@ -5673,8 +6077,12 @@ TEXT_REQUIREMENTS = {
         "test_multi_transport_d2d_slot_satisfies_transport_rollup",
         "test_direct_d2d_transport_rollup_requires_transcript_map_for_declared_list",
         "test_direct_d2d_transport_rollup_requires_exact_transcript_bindings",
+        "test_direct_d2d_transport_rollup_rejects_reused_transcript_path",
+        "test_direct_d2d_transport_rollup_rejects_reused_transcript_digest",
         "test_direct_d2d_transport_rollup_requires_canonical_transport_list",
         "test_direct_d2d_transport_rollup_accepts_bound_transcript_map",
+        "test_direct_d2d_transport_rollup_rejects_reused_cross_slot_transcript_digest",
+        "test_direct_d2d_transport_rollup_rejects_reused_cross_slot_transcript_map_digest",
         "test_android_rollup_rejects_status_ok_untrusted_signed_evidence_summary_without_admission",
         "test_untrusted_signed_evidence_blocks_rollup",
         "summary[\"android_device_lab\"][\"signed_evidence\"]",
@@ -5851,6 +6259,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_rejects_run_report_zero_elapsed",
         "test_compact_key_staged_finalizer_rejects_execution_report_elapsed_drift",
         "test_compact_key_staged_finalizer_rejects_missing_exit_marker",
+        "test_compact_key_staged_finalizer_rejects_runner_temp_before_exit_marker",
         "test_compact_key_staged_finalizer_rejects_nonzero_exit_marker",
         "test_compact_key_staged_finalizer_rejects_nonzero_marker_before_success_inputs",
         "test_compact_key_staged_finalizer_requires_run_report_on_success_marker",
@@ -5900,8 +6309,12 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_log_install_parent_sync_rolls_back_output",
         "test_compact_key_staged_runner_log_install_reports_rollback_cleanup_failure",
         "test_compact_key_staged_runner_creates_private_staging_outputs",
+        "test_compact_key_staged_runner_replace_removes_stale_temp_log",
         "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
         "test_compact_key_staged_runner_writes_child_output_directly_to_log_file",
+        "test_compact_key_staged_runner_finds_repo_local_iroha_with_empty_path",
+        "test_compact_key_staged_runner_resolves_relative_repo_root_for_child_path",
+        "compact relative iroha app",
         "fsync_fds",
         "stdout_fds",
         "test_compact_key_staged_runner_removes_temp_log_on_spawn_failure",
@@ -5916,6 +6329,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_rejects_execution_log_digest_drift",
         "test_lineage_proof_staged_finalizer_rejects_execution_report_command_exactness",
         "test_lineage_proof_staged_finalizer_rejects_missing_exit_marker",
+        "test_lineage_proof_staged_finalizer_rejects_runner_temp_before_exit_marker",
         "test_lineage_proof_staged_finalizer_rejects_missing_marker_before_elapsed",
         "test_lineage_proof_staged_finalizer_rejects_nonzero_exit_marker",
         "test_lineage_proof_staged_finalizer_rejects_partial_nonzero_stage",
@@ -5971,9 +6385,14 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_log_install_parent_sync_rolls_back_output",
         "test_lineage_proof_staged_runner_log_install_reports_rollback_cleanup_failure",
         "test_lineage_proof_staged_runner_creates_private_staging_outputs",
+        "test_lineage_proof_staged_runner_replace_removes_stale_keygen_temp_log",
         "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
         "test_lineage_proof_staged_runner_writes_child_output_directly_to_log_file",
+        "test_lineage_proof_staged_runner_finds_repo_local_iroha_with_empty_path",
+        "test_lineage_proof_staged_runner_resolves_relative_repo_root_for_child_path",
+        "lineage relative iroha app",
         "test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure",
+        "test_lineage_proof_staged_runner_redacts_key_artifact_spawn_failure",
         "test_lineage_proof_staged_runner_removes_temp_log_on_popen_spawn_failure",
         "test_lineage_proof_staged_runner_removes_temp_log_on_real_popen_spawn_failure",
         "test_lineage_proof_staged_finalizer_rejects_elapsed_seconds_file_conflict",
@@ -5983,6 +6402,8 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_rejects_zero_elapsed_seconds_file",
         "test_lineage_proof_staged_finalizer_redacts_control_elapsed_seconds_file",
         "test_compact_key_evidence_helper_rejects_missing_artifact",
+        "test_compact_key_evidence_helper_rejects_nonstring_generated_at_before_artifacts",
+        "test_compact_key_evidence_helper_rejects_malformed_future_skew_before_artifacts",
         "test_compact_key_evidence_helper_rejects_empty_artifact",
         "test_compact_key_evidence_helper_rejects_artifact_symlink_swap_after_preflight",
         "test_compact_key_evidence_helper_rejects_artifact_regular_file_swap_after_preflight",
@@ -6052,6 +6473,9 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_generator_log_path_rejects_control_artifact_dir_before_resolve",
         "test_compact_key_generator_log_path_rejects_alias_before_metadata",
         "test_compact_key_generator_log_path_rejects_symlink_without_resolving_final_log",
+        "test_compact_key_generator_log_path_rejects_symlinked_artifact_dir_before_resolve",
+        "test_compact_key_generator_log_path_rejects_symlinked_ancestor_before_resolve",
+        "test_compact_key_evidence_helper_rejects_symlinked_generator_log_ancestor_before_artifact_reads",
         "test_missing_lineage_proof_evidence_blocks_rollup_section",
         "test_lineage_proof_evidence_rejects_noncanonical_filename",
         "test_lineage_proof_evidence_rejects_symlinked_evidence_file",
@@ -6110,6 +6534,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_future_dated_android_signed_evidence_summary_slot",
         "test_kagemusha_release_bundle_rejects_future_dated_android_slot_kagemusha_timestamp",
         "test_kagemusha_release_bundle_rejects_android_min_signed_at_summary_drift",
+        "test_kagemusha_release_bundle_rejects_android_max_signed_at_summary_drift",
         "test_release_bundle_relative_path_rejects_control_paths_before_resolve",
         "test_release_bundle_relative_path_rejects_aliases_before_resolve",
         "test_release_bundle_relative_path_rejects_bundle_root_aliases_before_resolve",
@@ -6154,7 +6579,9 @@ TEXT_REQUIREMENTS = {
         'self.assertNotIn("evidence entry blocker must stay hidden", rendered)',
         "test_kagemusha_release_bundle_verify_existing_rejects_duplicate_evidence_paths_without_leak",
         "test_release_bundle_evidence_paths_reject_android_duplicate_paths",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_duplicate_top_level_evidence_path_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_duplicate_evidence_digests_without_leak",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_duplicate_top_level_evidence_digest_without_leak",
         "test_release_bundle_evidence_paths_reject_android_duplicate_digests",
         "test_kagemusha_release_bundle_verify_existing_rejects_empty_evidence_digest_without_leak",
         "test_release_bundle_evidence_paths_reject_android_empty_digest",
@@ -6162,6 +6589,9 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_android_slot_artifact_kind",
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_dynamic_d2d_transcript_artifact",
         "test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_digest_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_size_binding_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_duplicate_path_without_leak",
+        "test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_duplicate_digest_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_unsafe_android_slot_artifact_kind_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_unsafe_android_signed_evidence_slot_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_unsafe_android_slot_artifact_slot_without_leak",
@@ -6176,8 +6606,10 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_lineage_evidence_top_level_path_drift",
         "test_kagemusha_release_bundle_verify_existing_rejects_lineage_evidence_top_level_size_drift",
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_evidence_top_level_path_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_top_level_path_drift_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_path_drift_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_evidence_top_level_digest_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_top_level_binding_drift_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_binding_drift_without_leak",
         "test_kagemusha_release_bundle_verify_existing_rejects_android_evidence_slot_inventory_drift",
         "test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_digest_binding_drift",
@@ -6204,7 +6636,9 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_artifact_section_binding_drift",
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_artifact_section_path_drift",
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_log_section_binding_drift",
+        "self.assertNotIn(compact_generator_log_forged_digest, rendered)",
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_log_section_path_drift",
+        'self.assertNotIn("forged-recursive-compact-key-artifacts-do-not-leak", rendered)',
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_section",
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_section_field",
         "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_section_field",
@@ -6240,6 +6674,8 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_android_field",
         'self.assertNotIn("android manifest blocker must stay hidden", rendered)',
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_android_duplicate_bindings",
+        "test_kagemusha_release_bundle_verify_existing_rejects_named_android_duplicate_binding_inventory",
+        "test_kagemusha_release_bundle_verify_existing_rejects_well_formed_android_duplicate_binding_inventory",
         "test_kagemusha_release_bundle_verify_existing_rejects_malformed_android_duplicate_bindings",
         "test_kagemusha_release_bundle_verify_existing_rejects_forged_android_root",
         "test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_android_duplicate_binding_slots",
@@ -6249,6 +6685,8 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_android_duplicate_binding_summary_drift",
         "test_kagemusha_release_bundle_verify_existing_rejects_android_duplicate_binding_value_mismatch",
         "test_kagemusha_release_bundle_verify_existing_rejects_future_dated_android_signed_evidence_summary_slot",
+        "test_kagemusha_release_bundle_verify_existing_rejects_android_min_signed_at_bound_excluding_slot",
+        "test_kagemusha_release_bundle_verify_existing_rejects_android_max_signed_at_bound_excluding_slot",
         "test_kagemusha_release_bundle_verify_existing_rejects_bad_android_signer_digest",
         "test_kagemusha_release_bundle_verify_existing_rejects_malformed_android_list_without_leak",
         'self.assertNotIn("android manifest list blocker must stay hidden", rendered)',
@@ -6285,7 +6723,12 @@ TEXT_REQUIREMENTS = {
         'self.assertNotIn("d2d transport list blocker must stay hidden", rendered)',
         "test_kagemusha_release_bundle_rejects_noncanonical_d2d_transport_list",
         "test_kagemusha_release_bundle_rejects_reused_d2d_transcript_path",
+        "test_kagemusha_release_bundle_rejects_reused_d2d_transcript_digest",
         "test_release_bundle_android_summary_shape_rejects_reused_d2d_transcript_path",
+        "test_release_bundle_android_summary_shape_rejects_reused_d2d_transcript_digest",
+        "test_release_bundle_android_summary_shape_rejects_primary_d2d_transcript_binding_drift",
+        "test_release_bundle_android_summary_shape_rejects_primary_d2d_path_replay_from_secondary",
+        "test_release_bundle_android_summary_shape_rejects_primary_d2d_digest_replay_from_secondary",
         "test_release_bundle_signed_evidence_summary_shape_rejects_non_handoff_d2d_path",
         "test_release_bundle_android_summary_shape_rejects_non_handoff_primary_d2d_path",
         "test_release_bundle_signed_evidence_summary_shape_rejects_wrong_artifact_roots",
@@ -6360,8 +6803,13 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_android_signed_evidence_summary_path_drift",
         "test_kagemusha_release_bundle_rejects_noncanonical_android_signed_evidence_summary_timestamp",
         "test_kagemusha_release_bundle_rejects_missing_android_duplicate_bindings_summary",
+        "test_kagemusha_release_bundle_rejects_named_android_duplicate_binding_inventory",
+        "test_kagemusha_release_bundle_rejects_well_formed_android_duplicate_binding_inventory",
         "test_kagemusha_release_bundle_rejects_unexpected_android_duplicate_binding_field",
         'self.assertNotIn("duplicate-binding blocker must stay hidden", rendered)',
+        "test_kagemusha_release_bundle_accepts_d2d_duplicate_binding_summary_field",
+        "test_kagemusha_release_bundle_accepts_d2d_duplicate_binding_map_value",
+        "test_kagemusha_release_bundle_duplicate_binding_values_ignore_malformed_d2d_map_digests",
         "test_kagemusha_release_bundle_rejects_unexpected_android_duplicate_binding_entry_field_without_leak",
         'self.assertNotIn("duplicate-binding entry blocker must stay hidden", rendered)',
         "test_kagemusha_release_bundle_rejects_nonlist_android_duplicate_binding_entries_without_leak",
@@ -6547,6 +6995,9 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_sha256_file_rejects_hardlink_directly",
         "test_lineage_proof_sha256_file_rejects_read_failure_without_traceback",
         "test_lineage_proof_evidence_helper_rejects_artifact_symlink_swap_after_preflight",
+        "test_lineage_proof_evidence_helper_rejects_nonstring_generated_at_before_artifacts",
+        "test_lineage_proof_evidence_helper_rejects_malformed_elapsed_before_artifacts",
+        "test_lineage_proof_evidence_helper_rejects_malformed_future_skew_before_artifacts",
         "test_lineage_proof_evidence_helper_rejects_artifact_regular_file_swap_after_preflight",
         "test_lineage_proof_evidence_rejects_artifact_symlink_swap_after_preflight",
         "test_lineage_proof_evidence_helper_rejects_missing_artifact",
@@ -6870,6 +7321,13 @@ EXACT_LINE_REQUIREMENTS = {
         "`recursive-compact-key-evidence.json` filenames and the canonical",
         "`kagemusha-localnet-lifecycle-evidence.json` filename are part of the release",
         "the captured `recursive-compact-key-artifacts.log` stdout line from the",
+        'KAGEMUSHA_LOCALNET_SOURCE_DIR="$PWD/artifacts/kagemusha/localnet-lifecycle-sources"',
+        'IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_SOURCE_DIR="$KAGEMUSHA_LOCALNET_SOURCE_DIR" \\',
+        "IROHA_KAGEMUSHA_LOCALNET_LIFECYCLE_CHAIN_ID=kagemusha-production-localnet-v1 \\",
+        "# identities as peer-N@production-localnet:<peer-id> for the acceptance report.",
+        "  confidential_dual_restart_stress_mid_flow_localnet -- --nocapture",
+        "# validates every source JSON document against the CLI run id, chain id, sorted",
+        '  --smoke-artifact "$KAGEMUSHA_LOCALNET_SOURCE_DIR/smoke-artifact.json" \\',
         "  --out dist/kagemusha-production-release-bundle.json",
         "command with `--verify-existing dist/kagemusha-production-release-bundle.json`.",
     ),
@@ -6949,6 +7407,10 @@ SDK_SELECTOR_REQUIREMENTS = {
 }
 
 FORBIDDEN_SNIPPETS = {
+    "crates/iroha_kagami/src/localnet.rs": (
+        'writeln!(stop_file, "    kill -9 \\"$pid\\"',
+        'writeln!(stop_file, "    kill -KILL \\"$pid\\"',
+    ),
     "scripts/kagemusha_production_readiness.py": (
         '            if not artifact_path.is_file():\n                blockers.append(\n                    blocker(\n                        "lineage_proof_evidence_artifact_missing",\n',
     ),
@@ -6983,15 +7445,28 @@ WORKFLOW_REQUIREMENTS = (
     '"scripts/kagemusha_finalize_lineage_proof_staged_run.py"',
     '"scripts/kagemusha_finalize_recursive_compact_key_staged_run.py"',
     '"scripts/kagemusha_release_bundle.py"',
+    '"scripts/deploy_localnet.sh"',
+    '"scripts/run_local_swarm.sh"',
+    '"scripts/training_script_2.sh"',
+    '"scripts/run_100tps_profile_localnet.sh"',
+    '"crates/iroha_kagami/src/localnet.rs"',
     '"scripts/tests/check_android_device_lab_slot_test.py"',
     '"kotlin/offline-wallet-lab-app/**"',
     '"kotlin/settings.gradle.kts"',
     '"kotlin/gradle/libs.versions.toml"',
     '"kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"',
     '"scripts/tests/kagemusha_production_readiness_test.py"',
+    '"scripts/tests/deploy_localnet_test.py"',
+    '"scripts/tests/run_local_swarm_test.py"',
+    '"scripts/tests/training_script_2_test.py"',
+    '"scripts/tests/run_100tps_profile_localnet_test.py"',
     '"fixtures/android/device_lab/**"',
     "python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py",
     "python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py",
+    "python3 -m unittest discover -s scripts/tests -p deploy_localnet_test.py",
+    "python3 -m unittest discover -s scripts/tests -p run_local_swarm_test.py",
+    "python3 -m unittest discover -s scripts/tests -p training_script_2_test.py",
+    "python3 -m unittest discover -s scripts/tests -p run_100tps_profile_localnet_test.py",
     "ci/check_kagemusha_production_readiness.sh --negative-control-doc-route",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-invalid-json",
@@ -7106,10 +7581,23 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-non-disruptive-commands",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-diagnostic-state-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-deploy-localnet-pid-safety-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-local-swarm-pid-safety-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-training-script-pid-safety-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-100tps-profile-pid-safety-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagami-localnet-stop-script-pid-safety",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-path-component-whitespace",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-signer-input-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-order-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-crlf-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-wrong-device-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-cli-value-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-cli-secret-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-redaction-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-expected-family-nondisruptive-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-published-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-temp-cleanup-identity",
@@ -7118,6 +7606,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-path-root",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-wallet-integrity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-unique-bindings",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-duplicate-bindings",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-production-claim-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-complete-evidence",
@@ -7589,6 +8078,17 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-report-path-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-report-filename",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-report-filename-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-identity-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-path-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-path-shape-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-document-fields",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-document-string-safety",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-document-hash-shape",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-event-marker",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-source-recorder-root-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-source-recorder-private-publish",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-source-identity-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-acceptance-output-corridor-before-parent-create",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-output-corridor-resolve-failure",
@@ -7713,6 +8213,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256",
@@ -7727,6 +8228,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-staged-elapsed-file-path-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-runner-temp-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-runner-temp-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew",
@@ -7813,6 +8316,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-counts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-min-signed-bound-drift-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-max-signed-bound-drift-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-android-min-signed-bound-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-android-max-signed-bound-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-entry-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-entry-shape",
@@ -7826,6 +8333,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-errors-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-present-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-file-counts-shape",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-summary-named-duplicate-binding-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-summary-well-formed-duplicate-binding-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-named-duplicate-binding-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-well-formed-duplicate-binding-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-list-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-entry-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-entry-schema",
@@ -10070,6 +10581,72 @@ if mode == "--negative-control-android-device-lab-capture-adb-state-detail":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-capture-adb-diagnostic-state-test":
+    run_negative_control(
+        "Android capture wrapper ADB diagnostic state classification test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_classifies_adb_devices_diagnostic_states",
+            "test_android_capture_ignores_adb_devices_diagnostic_states",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-local-swarm-pid-safety-test":
+    run_negative_control(
+        "bare-metal local swarm guarded stop-script test coverage",
+        lambda: override_text(
+            "scripts/tests/run_local_swarm_test.py",
+            "test_stop_guidance_uses_guarded_pid_ownership_checks",
+            "test_stop_guidance_allows_raw_pid_kills",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-deploy-localnet-pid-safety-test":
+    run_negative_control(
+        "deploy localnet guarded pid ownership test coverage",
+        lambda: override_text(
+            "scripts/tests/deploy_localnet_test.py",
+            "test_force_cleanup_uses_guarded_pid_ownership_checks",
+            "test_force_cleanup_allows_unguarded_stop_script",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-training-script-pid-safety-test":
+    run_negative_control(
+        "training script guarded pid ownership test coverage",
+        lambda: override_text(
+            "scripts/tests/training_script_2_test.py",
+            "test_stop_localnet_uses_guarded_pid_ownership_checks",
+            "test_stop_localnet_allows_unguarded_stop_script",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-100tps-profile-pid-safety-test":
+    run_negative_control(
+        "100 TPS localnet profiler pid liveness test coverage",
+        lambda: override_text(
+            "scripts/tests/run_100tps_profile_localnet_test.py",
+            "test_load_wait_uses_ps_liveness_without_sigkill",
+            "test_load_wait_allows_null_signal_and_sigkill",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagami-localnet-stop-script-pid-safety":
+    run_negative_control(
+        "Kagami generated localnet stop script PID safety",
+        lambda: override_text(
+            "crates/iroha_kagami/src/localnet.rs",
+            "stop script should not escalate to SIGKILL",
+            "stop script allows SIGKILL escalation",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-capture-path-component-whitespace":
     run_negative_control(
         "Android capture wrapper path component-whitespace preflight",
@@ -10117,6 +10694,83 @@ if mode == "--negative-control-android-device-lab-capture-chain-binding":
             "scripts/kagemusha_android_device_lab_capture.py",
             "attestation result attestation_certificate_chain_sha256 must match",
             "attestation result attestation_certificate_chain_sha256 may differ",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-order-test":
+    run_negative_control(
+        "Android capture expected-family preflight order test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_preflight_runs_before_build",
+            "test_android_capture_expected_family_preflight_runs_after_build",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-crlf-test":
+    run_negative_control(
+        "Android capture expected-family CRLF normalization test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_preflight_accepts_adb_crlf",
+            "test_android_capture_expected_family_preflight_rejects_adb_crlf",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-wrong-device-test":
+    run_negative_control(
+        "Android capture expected-family wrong-device test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_rejects_wrong_device_before_build",
+            "test_android_capture_expected_family_accepts_wrong_device_before_build",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-cli-value-test":
+    run_negative_control(
+        "Android capture expected-family CLI value test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_rejects_invalid_value_before_commands",
+            "test_android_capture_expected_family_accepts_invalid_value_before_commands",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-cli-secret-test":
+    run_negative_control(
+        "Android capture expected-family CLI secret redaction test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_cli_secret_does_not_leak_before_commands",
+            "test_android_capture_expected_family_cli_secret_leaks_before_commands",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-redaction-test":
+    run_negative_control(
+        "Android capture expected-family getprop redaction test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_redacts_unsafe_getprop_before_build",
+            "test_android_capture_expected_family_leaks_unsafe_getprop_before_build",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-expected-family-nondisruptive-test":
+    run_negative_control(
+        "Android capture expected-family getprop non-disruptive test coverage",
+        lambda: override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            "test_android_capture_expected_family_rejects_disruptive_getprop_before_runner",
+            "test_android_capture_expected_family_accepts_disruptive_getprop_before_runner",
         ),
     )
     raise SystemExit(0)
@@ -10209,6 +10863,30 @@ if mode == "--negative-control-android-device-lab-unique-bindings":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-d2d-duplicate-bindings":
+    def mutate_android_d2d_duplicate_bindings() -> None:
+        override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '        "d2d_payment_transcript_sha256",\n    ):\n        seen: dict[str, set[str]] = {}',
+            "    ):\n        seen: dict[str, set[str]] = {}",
+        )
+        override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "Android device-lab production slots must not reuse a D2D payment transcript digest",
+            "Android device-lab production slots may reuse a D2D payment transcript digest",
+        )
+        override_text(
+            "scripts/kagemusha_release_bundle.py",
+            '        "d2d_payment_transcript_sha256",\n    )\n)',
+            "    )\n)",
+        )
+
+    run_negative_control(
+        "Android device-lab D2D duplicate matrix bindings",
+        mutate_android_d2d_duplicate_bindings,
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-production-claim-binding":
     run_negative_control(
         "Android device-lab signed production-claim binding",
@@ -10289,8 +10967,8 @@ if mode == "--negative-control-android-device-lab-duplicate-binding-zero-digest"
         "Android device-lab duplicate-binding zero digest",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '                or value == "0" * 64\n',
-            "",
+            '        and value != "0" * 64\n    ):\n        values.add(value)',
+            '        and True\n    ):\n        values.add(value)',
         ),
     )
     raise SystemExit(0)
@@ -15345,6 +16023,170 @@ if mode == "--negative-control-localnet-lifecycle-acceptance-report-filename-pre
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-localnet-lifecycle-acceptance-identity-preflight":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance identity preflight gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            (
+                "    identity_errors = validate_acceptance_identity(\n"
+                "        run_id=run_id,\n"
+                "        chain_id=chain_id,\n"
+                "        peer_ids=peer_ids,\n"
+                "    )\n"
+                "    if identity_errors:\n"
+                "        return None, identity_errors\n"
+            ),
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-path-preflight":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source-artifact path preflight gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            (
+                "    source_artifact_path_errors = validate_source_artifact_paths(artifacts=artifacts)\n"
+                "    if source_artifact_path_errors:\n"
+                "        return None, source_artifact_path_errors\n"
+            ),
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-path-shape-preflight":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source-artifact shape preflight gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            (
+                "    shape_errors = validate_source_artifact_path_shapes(artifacts=artifacts)\n"
+                "    if shape_errors:\n"
+                "        return shape_errors\n\n"
+            ),
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-document-fields":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source-document field gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            "    if set(document) - expected_fields:\n"
+            "        errors.append(f\"{flag} source artifact contains unexpected field\")\n",
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-document-string-safety":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source-document string safety gate",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+                "    if readiness.device_lab._contains_control_character(value):  # type: ignore[attr-defined]\n"
+                "        errors.append(f\"{flag} {messages['control']}\")\n",
+                "",
+            ),
+            override_text(
+                "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+                "    if readiness.device_lab.SECRET_RE.search(value):  # type: ignore[attr-defined]\n"
+                "        errors.append(f\"{flag} {messages['secret']}\")\n",
+                "",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-document-hash-shape":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source-document hash-shape gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            '        _append_source_hash_errors(errors, document, "tx_hash", flag)\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-event-marker":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source event marker gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            '        _append_json_source_string_errors(errors, document, "event", flag)',
+            "        pass",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-source-recorder-root-preflight":
+    run_negative_control(
+        "Kagemusha localnet lifecycle source recorder root preflight gate",
+        lambda: override_text(
+            "integration_tests/tests/zk_confidential_localnet.rs",
+            "        prepare_localnet_lifecycle_source_dir(root)?;\n",
+            (
+                "        fs::create_dir_all(root).wrap_err_with(|| {\n"
+                "            format!(\"create localnet lifecycle source dir {}\", root.display())\n"
+                "        })?;\n"
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-source-recorder-private-publish":
+    run_negative_control(
+        "Kagemusha localnet lifecycle source recorder private publish gate",
+        lambda: override_text(
+            "integration_tests/tests/zk_confidential_localnet.rs",
+            "        write_localnet_lifecycle_source_artifact(&path, json_text.as_bytes())?;\n",
+            "        fs::write(&path, json_text)?;\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-source-identity-preflight":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance source-artifact identity preflight gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            (
+                "    source_artifact_identity_errors = validate_source_artifact_file_identities(\n"
+                "        artifacts=artifacts\n"
+                "    )\n"
+                "    if source_artifact_identity_errors:\n"
+                "        return None, source_artifact_identity_errors\n"
+            ),
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-acceptance-output-corridor-before-parent-create":
+    run_negative_control(
+        "Kagemusha localnet lifecycle acceptance output corridor before parent-create gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_acceptance.py",
+            (
+                "    corridor_errors = lineage_helper.validate_output_corridor(out_path, artifact_dir)\n"
+                "    if corridor_errors:\n"
+                "        return corridor_errors\n"
+                "    return lineage_helper.validate_output_path(out_path, \"--out\")\n"
+            ),
+            (
+                "    return lineage_helper.validate_output_path(out_path, \"--out\")\n"
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure":
     run_negative_control(
         "Kagemusha localnet lifecycle helper input corridor resolve-failure gate",
@@ -16111,6 +16953,50 @@ if mode == "--negative-control-release-bundle-summary-section-schema":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-android-min-signed-bound-drift-test":
+    run_negative_control(
+        "Kagemusha release bundle Android min signed-bound drift test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_rejects_android_min_signed_at_summary_drift",
+            "test_kagemusha_release_bundle_accepts_android_min_signed_at_summary_drift",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-max-signed-bound-drift-test":
+    run_negative_control(
+        "Kagemusha release bundle Android max signed-bound drift test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_rejects_android_max_signed_at_summary_drift",
+            "test_kagemusha_release_bundle_accepts_android_max_signed_at_summary_drift",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-manifest-android-min-signed-bound-test":
+    run_negative_control(
+        "Kagemusha release bundle manifest Android min signed-bound drift test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_verify_existing_rejects_android_min_signed_at_bound_excluding_slot",
+            "test_kagemusha_release_bundle_verify_existing_accepts_android_min_signed_at_bound_excluding_slot",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-manifest-android-max-signed-bound-test":
+    run_negative_control(
+        "Kagemusha release bundle manifest Android max signed-bound drift test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_verify_existing_rejects_android_max_signed_at_bound_excluding_slot",
+            "test_kagemusha_release_bundle_verify_existing_accepts_android_max_signed_at_bound_excluding_slot",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-android-signed-evidence-summary-schema":
     run_negative_control(
         "Kagemusha release bundle Android signed-evidence summary schema gate",
@@ -16210,6 +17096,50 @@ if mode == "--negative-control-release-bundle-android-slot-file-counts-shape":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-android-summary-named-duplicate-binding-test":
+    run_negative_control(
+        "Kagemusha release bundle Android summary named duplicate-binding test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_rejects_named_android_duplicate_binding_inventory",
+            "test_kagemusha_release_bundle_accepts_named_android_duplicate_binding_inventory",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-summary-well-formed-duplicate-binding-test":
+    run_negative_control(
+        "Kagemusha release bundle Android summary well-formed duplicate-binding test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_rejects_well_formed_android_duplicate_binding_inventory",
+            "test_kagemusha_release_bundle_accepts_well_formed_android_duplicate_binding_inventory",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-manifest-named-duplicate-binding-test":
+    run_negative_control(
+        "Kagemusha release bundle Android manifest named duplicate-binding test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_verify_existing_rejects_named_android_duplicate_binding_inventory",
+            "test_kagemusha_release_bundle_verify_existing_accepts_named_android_duplicate_binding_inventory",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-manifest-well-formed-duplicate-binding-test":
+    run_negative_control(
+        "Kagemusha release bundle Android manifest well-formed duplicate-binding test coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_kagemusha_release_bundle_verify_existing_rejects_well_formed_android_duplicate_binding_inventory",
+            "test_kagemusha_release_bundle_verify_existing_accepts_well_formed_android_duplicate_binding_inventory",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-android-duplicate-binding-list-shape":
     run_negative_control(
         "Kagemusha release bundle Android duplicate-binding list shape",
@@ -16259,7 +17189,10 @@ if mode == "--negative-control-release-bundle-android-duplicate-binding-value-bi
         "Kagemusha release bundle Android duplicate-binding value binding",
         lambda: override_text(
             "scripts/kagemusha_release_bundle.py",
-            '''                    if kagemusha.get(raw_field) == value_sha256:
+            '''                    if value_sha256 in _android_duplicate_binding_slot_values(
+                        kagemusha,
+                        raw_field,
+                    ):
                         continue''',
             '''                    if True:
                         continue''',
@@ -18114,6 +19047,28 @@ if mode == "--negative-control-lineage-proof-finalizer-exit-marker":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-finalizer-runner-temp-test":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer runner-temp regression coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_lineage_proof_staged_finalizer_rejects_runner_temp_before_exit_marker",
+            "test_lineage_proof_staged_finalizer_accepts_runner_temp_before_exit_marker",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-runner-temp-test":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer runner-temp regression coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_compact_key_staged_finalizer_rejects_runner_temp_before_exit_marker",
+            "test_compact_key_staged_finalizer_accepts_runner_temp_before_exit_marker",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-finalizer-timestamp-raw":
     run_negative_control(
         "ABI-7 recursive compact key staged finalizer raw timestamp gate",
@@ -18696,6 +19651,24 @@ if mode == "--negative-control-compact-key-staged-runner-supervisor-output-pipe"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-staged-runner-relative-repo-root-child-path":
+    run_negative_control(
+        "Kagemusha staged runner relative repo-root child PATH",
+        lambda: (
+            override_text_all(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "return repo_root if repo_root.is_absolute() else Path.cwd() / repo_root",
+                "return repo_root",
+            ),
+            override_text_all(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "return repo_root if repo_root.is_absolute() else Path.cwd() / repo_root",
+                "return repo_root",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-staged-runner-heartbeat":
     run_negative_control(
         "Reserved-lineage proof staged runner heartbeat observability",
@@ -19099,18 +20072,18 @@ if mode == "--negative-control-android-device-lab-d2d-transport-matrix":
     def mutate_android_d2d_transport_matrix() -> None:
         override_text(
             "scripts/kagemusha_production_readiness.py",
-            "if missing_transports:",
-            "if False and missing_transports:",
+            "if missing_transports or missing_transport_pairs:",
+            "if False and (missing_transports or missing_transport_pairs):",
         )
         override_text(
             "scripts/check_android_device_lab_slot.py",
-            "if missing_d2d_payment_transports:",
-            "if False and missing_d2d_payment_transports:",
+            "if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:",
+            "if False and (missing_d2d_payment_transports or missing_d2d_payment_transport_pairs):",
         )
         override_text(
             "scripts/kagemusha_release_bundle.py",
-            "if set(artifacts) != set(expected_artifacts):",
-            "if False and set(artifacts) != set(expected_artifacts):",
+            'if list_fields_ok.get("covered_d2d_payment_transports_by_family"):',
+            'if False and list_fields_ok.get("covered_d2d_payment_transports_by_family"):',
         )
 
     run_negative_control(
@@ -19341,8 +20314,8 @@ if mode == "--negative-control-lineage-proof-helper-timestamp-raw":
         "Reserved-lineage proof evidence helper raw timestamp gate",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            "errors.extend(_validate_generated_at_utc(generated_at_utc))",
-            "errors.extend([])",
+            "generated_at_errors = _validate_generated_at_utc(generated_at_utc)",
+            "generated_at_errors = []",
         ),
     )
     raise SystemExit(0)

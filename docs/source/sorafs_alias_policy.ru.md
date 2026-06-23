@@ -292,40 +292,41 @@ Downstream components react as follows:
   `torii_sorafs_alias_cache_bust_total{reason}` counters based on the `reason`
   field to track real-world churn.
 
-## Alias Cache Smoke Job
+## Alias Cache Validation
 
-Release engineering maintains a Buildkite job `ci/sorafs_alias_cache_smoke.yml`
-that validates end-to-end cache behaviour before promoting gateway builds:
+Release engineering validates alias cache behaviour with the committed pin
+registry fixture generator and focused Torii/cache tests before promoting
+gateway builds:
 
-1. **Fixture generation.** Run
-   `cargo run -p sorafs_manifest --example gen_alias_proof_fixture` to produce
-   two `AliasProofBundleV1` fixtures:
-   - `fixtures/alias/docs_main_v1.to` (initial binding).
-   - `fixtures/alias/docs_main_v2.to` (rotated binding with a later registry
-     height).
-   The job stores their BLAKE3 digests to compare against telemetry.
-2. **Gateway bootstrap.** Launch a disposable Torii instance with the fixtures
-   preloaded via the `--alias-fixture-dir` flag. The job captures the SSE stream
-   and WebSocket feed using `scripts/sorafs/alias_stream_tap.py` (headless
-   Python client).
+1. **Fixture refresh.** Run
+   `cargo xtask sorafs-pin-fixtures --out crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json`
+   to rebuild the canonical snapshot. The snapshot includes the signed
+   `AliasProofBundleV1` for `sora/docs`, the approved manifest, and the
+   replication order used by pin registry tests. Store the resulting digest in
+   the release evidence bundle.
+2. **Gateway bootstrap.** Start Torii with the normal `sorafs_alias_cache`
+   policy from `iroha_config`; the alias proof is supplied through the pin
+   registry snapshot or through `sorafs_cli manifest submit --alias-namespace=...
+   --alias-name=... --alias-proof=...` when testing a live registration path.
 3. **TTL verification.**
-   - Assert that the first HTTP fetch returns `Sora-Proof` corresponding to `v1`
-     and that the SSE/WebSocket tap receives a single `mutation` event.
-   - Sleep `alias_refresh_window` seconds, then inject `v2` by calling
-     `torii alias rotate --fixture fixtures/alias/docs_main_v2.to`.
-   - Confirm caches avoid serving stale proof: the smoke client must observe an
-     HTTP `412` until the refreshed bundle is fetched and should log an
-     `alias_proof_refresh_total{result="success"}` increment.
-4. **Negative path checks.** Issue `torii alias revoke docs/main` and verify the
-   next HTTP response is `410 Gone`, the SSE feed reports `reason: "revocation"`,
-   and SDK cache subscribers purge state.
-5. **Report & artifacts.** The job uploads:
-   - SSE/WebSocket transcripts for regression comparisons.
-   - A summary JSON containing observed TTLs, digests, and return codes.
-   - Grafana snapshot links proving that telemetry counters advanced.
+   - Run the Torii alias-cache tests, including
+     `cargo test -p iroha_torii --test sorafs_discovery sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers`
+     and the refresh-window, stale, successor, and governance variants in the
+     same test target.
+   - Confirm `Cache-Control`, `Age`, `Warning`, `sora-proof-status`, `sora-name`,
+     and response JSON `cache_state`/`cache_evaluation` fields match the
+     expected fresh, refresh, hold, or refusal state.
+4. **Negative path checks.** Run
+   `cargo test -p iroha_torii --test sorafs_discovery sorafs_pin_register_rejects_invalid_alias_proof`
+   and keep `cargo test -p sorafs_manifest alias_cache --lib` in the focused
+   validation set so invalid bundles and expired proofs fail before gateway
+   promotion.
+5. **Report & artifacts.** Archive the regenerated snapshot, test logs, response
+   header captures, and telemetry samples for
+   `torii_sorafs_alias_cache_refresh_total{result,reason}` plus
+   `torii_sorafs_alias_cache_age_seconds`.
 
-Failures page the SoraFS gateway on-call and block release promotion until the
-job passes with the regenerated fixtures.
+Failures block release promotion until the fixture and focused tests pass.
 
 ## References
 

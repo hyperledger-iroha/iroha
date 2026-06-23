@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Կառուցեք և ստորագրեք մանիֆեստ
 
 Հատված պլանը, անունները և կառավարման ստորագրությունները փաթեթավորեք մանիֆեստի մեջ՝ օգտագործելով
-`sorafs-manifest-stub`. Ստորև բերված հրամանը ցուցադրում է մեկ ֆայլի ծանրաբեռնվածություն. անցնել
+`sorafs_manifest_stub`. Ստորև բերված հրամանը ցուցադրում է մեկ ֆայլի ծանրաբեռնվածություն. անցնել
 գրացուցակի ուղի` ծառ փաթեթավորելու համար (CLI-ն քայլում է այն բառարանագրորեն):
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

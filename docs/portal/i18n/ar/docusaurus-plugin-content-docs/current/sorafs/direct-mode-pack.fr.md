@@ -45,7 +45,7 @@ Sidebar_label: وضع الحزمة المباشر
 يتضمن الاستعداد للوضع المباشر تغيير الغطاء في المنسق وفي صناديق CLI:- `direct_only_policy_rejects_soranet_only_providers` يضمن أن `TransportPolicy::DirectOnly` يتردد صداه سريعًا عندما لا يقوم كل إعلان مرشح بتحمل مسؤولية les relais SoraNet.[crates/sorafs_orchestrator/src/lib.rs:7238]
 - `direct_only_policy_prefers_direct_transports_when_available` يضمن أن عمليات النقل Torii/QUIC يتم استخدامها عندما تكون متاحة وأن تتابع SoraNet مستبعد من الجلسة.
 - تحليل `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` لضمان محاذاة الوثائق مع المساعدين المساعدين. 【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` تمرين `sorafs_cli fetch --transport-policy=direct-only` على بوابة Torii محاكاة، يوفر اختبار دخان للبيئات المنظمة التي تربط وسائل النقل المباشرة.[crates/sorafs_car/tests/sorafs_cli.rs:2733]
+- `fetch_command_respects_direct_transports` تمرين `sorafs_cli fetch --transport-policy=direct-only` على بوابة Torii محاكاة، يوفر اختبار دخان للبيئات المنظمة التي تربط وسائل النقل المباشرة.[crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733]
 - `scripts/sorafs_direct_mode_smoke.sh` يغلف نفس الأمر مع JSON السياسي واستمرارية لوحة النتائج لأتمتة الطرح.
 
 قم بتنفيذ المجموعة ciblée قبل نشر كل يوم:

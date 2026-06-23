@@ -3,6 +3,7 @@ use crate::{
     asset::AssetDefinitionId,
     offline::{
         KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendLineageWitnessV1,
+        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
         OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem,
     },
     proof::ProofAttachment,
@@ -95,11 +96,29 @@ isi! {
     }
 }
 
+isi! {
+    /// Register a platform-attested Offline note key for trustless issuance.
+    pub struct RegisterOfflineDeviceAttestation {
+        /// Platform attestation registration material.
+        pub registration: OfflineDeviceAttestationRegistration,
+    }
+}
+
+isi! {
+    /// Replace the governed Offline device-attestation verifier policy.
+    pub struct SetOfflineDeviceAttestationPolicy {
+        /// Verifier policy to store on-chain.
+        pub policy: OfflineDeviceAttestationPolicy,
+    }
+}
+
 impl crate::seal::Instruction for IssueOfflineNote {}
 impl crate::seal::Instruction for RedeemOfflineNote {}
 impl crate::seal::Instruction for AuditOfflineNote {}
 impl crate::seal::Instruction for KagemushaTransfer {}
 impl crate::seal::Instruction for RedeemKagemushaRecursive {}
+impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
+impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
 
 impl IssueOfflineNote {
     /// Construct an Offline note issuance instruction.
@@ -213,6 +232,22 @@ impl RedeemKagemushaRecursive {
             lineage_witness,
             change_output,
         }
+    }
+}
+
+impl RegisterOfflineDeviceAttestation {
+    /// Construct an Offline device attestation registration instruction.
+    #[must_use]
+    pub fn new(registration: OfflineDeviceAttestationRegistration) -> Self {
+        Self { registration }
+    }
+}
+
+impl SetOfflineDeviceAttestationPolicy {
+    /// Construct an Offline device attestation policy instruction.
+    #[must_use]
+    pub fn new(policy: OfflineDeviceAttestationPolicy) -> Self {
+        Self { policy }
     }
 }
 
@@ -348,6 +383,46 @@ impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaTransfer {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for RegisterOfflineDeviceAttestation {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let registration = super::decode_aos_canonical_field::<OfflineDeviceAttestationRegistration>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { registration }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for SetOfflineDeviceAttestationPolicy {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let policy = super::decode_aos_canonical_field::<OfflineDeviceAttestationPolicy>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { policy }, offset))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -360,8 +435,9 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         offline::{
-            OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
-            OfflineNoteRecursiveProof,
+            OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
+            OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
+            OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
         },
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
@@ -445,6 +521,64 @@ mod tests {
                 amount: Numeric::new(10, 0),
             }],
             recursive_proof: proof(),
+        }
+    }
+
+    fn attestation_registration() -> OfflineDeviceAttestationRegistration {
+        let account_id = account();
+        let certificate = key_certificate(account_id.clone());
+        let attestation_report = b"offline-attestation-report".to_vec();
+        let evidence = b"offline-attestation-evidence".to_vec();
+        OfflineDeviceAttestationRegistration {
+            version: 1,
+            platform: certificate.platform,
+            key_id: certificate.key_id,
+            device_id: certificate.device_id,
+            account_id,
+            asset_definition_id: Some(asset_id(&account()).definition().clone()),
+            ios_team_id: Some("TEAMID1234".to_owned()),
+            ios_bundle_id: Some("jp.co.soramitsu.iroha.offline".to_owned()),
+            ios_environment: Some("production".to_owned()),
+            android_package_name: None,
+            android_signing_certificate_sha256: None,
+            public_key: certificate.public_key,
+            assertion_scheme: certificate.assertion_scheme,
+            assertion_key_algorithm: certificate.assertion_key_algorithm,
+            assertion_public_key: certificate.assertion_public_key,
+            assertion_usage_count_limit: certificate.assertion_usage_count_limit,
+            one_use: certificate.one_use,
+            challenge_hash: Hash::new(b"offline-attestation-challenge"),
+            attestation_report_hash: Hash::new(&attestation_report),
+            attestation_report,
+            evidence_hash: Hash::new(&evidence),
+            evidence,
+            recent_block_height: 1,
+            recent_block_hash: Hash::new(b"offline-attestation-block"),
+            expires_at_ms: 10_000,
+        }
+    }
+
+    fn attestation_policy() -> OfflineDeviceAttestationPolicy {
+        OfflineDeviceAttestationPolicy {
+            version: 1,
+            trusted_roots: vec![OfflineDeviceAttestationTrustedRoot {
+                platform: "android-keymint".to_owned(),
+                der: vec![0x30, 0x03, 0x02, 0x01, 0x01],
+                not_before_ms: Some(1),
+                not_after_ms: Some(10_000),
+            }],
+            revoked_certificate_sha256: vec![vec![0xA5; 32]],
+            ios_apps: vec![OfflineIosAppAttestationPolicy {
+                team_id: "TEAMID1234".to_owned(),
+                bundle_id: "jp.co.soramitsu.iroha.offline".to_owned(),
+                environment: "production".to_owned(),
+            }],
+            android_apps: vec![OfflineAndroidAppAttestationPolicy {
+                package_name: "jp.co.soramitsu.iroha.offline".to_owned(),
+                signing_certificate_sha256: vec![vec![0xC3; 32]],
+            }],
+            require_ios_app_policy: true,
+            require_android_app_policy: true,
         }
     }
 
@@ -548,6 +682,10 @@ mod tests {
         assert_slice_roundtrip(RedeemOfflineNote::new(redemption()));
         assert_slice_roundtrip(AuditOfflineNote::new(audit()));
         assert_slice_roundtrip(kagemusha_transfer());
+        assert_slice_roundtrip(RegisterOfflineDeviceAttestation::new(
+            attestation_registration(),
+        ));
+        assert_slice_roundtrip(SetOfflineDeviceAttestationPolicy::new(attestation_policy()));
     }
 
     #[test]
@@ -556,12 +694,22 @@ mod tests {
             .register_slice::<IssueOfflineNote>()
             .register_slice::<RedeemOfflineNote>()
             .register_slice::<AuditOfflineNote>()
-            .register_slice::<KagemushaTransfer>();
+            .register_slice::<KagemushaTransfer>()
+            .register_slice::<RegisterOfflineDeviceAttestation>()
+            .register_slice::<SetOfflineDeviceAttestationPolicy>();
 
         assert_registry_decodes(&registry, IssueOfflineNote::new(issue()));
         assert_registry_decodes(&registry, RedeemOfflineNote::new(redemption()));
         assert_registry_decodes(&registry, AuditOfflineNote::new(audit()));
         assert_registry_decodes(&registry, kagemusha_transfer());
+        assert_registry_decodes(
+            &registry,
+            RegisterOfflineDeviceAttestation::new(attestation_registration()),
+        );
+        assert_registry_decodes(
+            &registry,
+            SetOfflineDeviceAttestationPolicy::new(attestation_policy()),
+        );
     }
 
     #[test]

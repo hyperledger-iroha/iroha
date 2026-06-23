@@ -31,7 +31,7 @@ CLI を公開文書としてリリース管理し、lint/test を保証します
 - 救済チケットへのリンク (例、`governance/tickets/SF6-SR-2026.md`) および注記
   セキュリティ エンジニアリングおよびツール ワーキング グループの開発を担当します。
 - 救済策のチェックリストをメモなしで確認します。イテンス・ペンダント・ブロック・オ・リリース。
-- 実行ログをアップロードして利用する準備をします (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- 実行ログをアップロードして利用する準備をします (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   マニフェストのバンドルを順に実行します。
 - `--identity-token-provider` e を含む実行コマンドを確認してください。
   UM `--identity-token-audience=<aud>` は、リリースに関する証拠を明示的に取得します。
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 検証を続行するためのスクリプト作成:
 
 - `cargo fmt --all -- --check` (ワークスペース)
-- `cargo clippy --locked --all-targets` パラ `sorafs_car` (機能 `cli`)、
-  `sorafs_manifest` e `sorafs_chunker`
-- `cargo test --locked --all-targets` パラエッセ メスモス クレート
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Se algum passo falhar, corrija a regressao antes de taguear.ビルドとリリース開発
 ser continuos com main;リリースの枝からチェリーピックを選択することもできます。 ○

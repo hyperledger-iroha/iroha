@@ -49,7 +49,7 @@ A preparação do modo direto agora inclui cobertura tanto no orquestrador quant
 - `direct_only_policy_rejects_soranet_only_providers` garante que `TransportPolicy::DirectOnly` falha rapidamente quando cada anúncio de candidato solo suporta relés SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` certifique-se de que você use transportes Torii/QUIC quando estiver presente e que os relés SoraNet sejam excluídos da sessão.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` analisa `docs/examples/sorafs_direct_mode_policy.json` para garantir que a documentação seja mantida alinhada com os auxiliares de utilidade.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` executa `sorafs_cli fetch --transport-policy=direct-only` contra um gateway Torii simulado, proporcionando uma experiência de humor para ambientes regulados que fijan transporta diretamente.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` executa `sorafs_cli fetch --transport-policy=direct-only` contra um gateway Torii simulado, proporcionando uma experiência de humor para ambientes regulados que fijan transporta diretamente.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` envia o mesmo comando com o JSON de política e a persistência do placar para a automatização do lançamento.
 
 Ejecuta la suite enfocada antes de publicar atualizações:

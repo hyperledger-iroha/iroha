@@ -9,195 +9,131 @@ source_last_modified: "2026-01-03T18:08:01.831044+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: Moderation Appeals & Sortition Panels
-summary: Final specification for SFM-4b covering appeal staking, juror selection, evidence handling, voting, transparency, and rollout.
----
-
 # Moderation Appeals & Sortition Panels
 
-## Goals & Scope
-- Provide a governance-backed moderation system that allows users/operators to appeal compliance actions, with citizen panels selected via verifiable sortition.
-- Implement dynamic appeal staking, secure evidence handling, commit-reveal voting, and immutable receipts.
-- Integrate with gateway compliance (SFM-4) and transparency dashboards while preserving privacy and legal requirements.
+## Current Status
 
-This specification completes **SFM-4b — Moderation appeal & sortition panel tooling**.
+SFM-4b is partially implemented. The repository contains appeal finance helpers,
+moderation reproducibility tooling, honey-audit gateway probes, and reusable
+policy-jury sortition / commit-reveal data structures plus SoraFS-specific
+moderation ballot wrappers and a local `sorafs_node` ballot lifecycle runtime
+exposed through Torii JSON endpoints and the local Governance DAG publisher.
+It does not yet ship the full moderation appeal service, SoraFS juror panel
+engine, secure evidence viewer, durable voting orchestrator, or portal workflow
+described in the original plan.
 
-## Architecture Overview
-| Component | Responsibility | Notes |
-|-----------|----------------|-------|
-| Appeal service (`moderation_appeals`) | Accepts appeals, calculates staking deposits, tracks case lifecycle. | REST/gRPC API, Norito payloads for cases. |
-| Sortition engine (`jury_sorter`) | Builds juror pools using proof-of-personhood credentials and ZK membership proofs; selects panels deterministically. | Runs atop governance identity service. |
-| Evidence viewer (`evidence_portal`) | Secure, watermarking-enabled viewer for jurors; enforces attestation. | Browser app + streaming backend. |
-| Voting backend (`jury_vote`) | Commit-reveal voting with sealed ballots and quorum enforcement; stores votes in governance ledger. | Uses Norito receipts. |
-| Transparency pipeline | Generates weekly ledgers showing appeals, outcomes, deposits, and overrides. | Publishes to Governance DAG + dashboards. |
+## Shipped Foundations
 
-### Case Lifecycle
-1. **Appeal submission**: Appellant submits `ModerationAppealV1` with stake deposit; gateway compliance attaches proof tokens/evidence references.
-2. **Validation**: Appeal service verifies eligibility, deposit, and policy references; assigns `case_id`.
-3. **Panel selection**: Sortition engine selects jurors based on `ModerationCaseProfileV1` (governance-defined). Jurors notified via Torii and email.
-4. **Evidence review**: Jurors access evidence through secure viewer; interactions logged.
-5. **Deliberation & voting**: Jurors submit sealed commits, later reveal votes; quorum checked.
-6. **Outcome publication**: Decision recorded as `ModerationDecisionV1`; refunds/penalties processed; transparency ledger updated.
-7. **Override/Escalation**: Council/executive may override with `ModerationOverrideV1`; logged with justification.
+- `crates/sorafs_orchestrator/src/appeals.rs` implements deterministic appeal
+  quote, settlement, and disbursement calculations.
+- `sorafs_cli appeal quote`, `sorafs_cli appeal settle`, and
+  `sorafs_cli appeal disburse` expose those calculations for operators and
+  treasury evidence bundles.
+- `iroha_data_model::ministry::jury` provides
+  `PolicyJurySortitionV1`, `PolicyJuryBallotCommitV1`, and
+  `PolicyJuryBallotRevealV1` for deterministic policy-jury draws and sealed
+  commit/reveal payload validation.
+- `iroha_data_model::sorafs::moderation` provides
+  `SoraFsModerationBallotContextV1`,
+  `SoraFsModerationBallotCommitV1`,
+  `SoraFsModerationBallotRevealV1`, and `SoraFsModerationVoteChoice` so SoraFS
+  cases can bind case ids, evidence bundle digests, appeal finance versions,
+  panel roster hashes, policy references, and `uphold`/`overturn`/`modify`/
+  `escalate` choices before a runtime service exists.
+- `sorafs_node::ModerationBallotRuntime` is wired through `NodeHandle` as a
+  deterministic local lifecycle store for ballot announcement, eligible-juror
+  commit acceptance, challenge-buffered reveal acceptance, quorum tallying,
+  contested tie detection, and replayable/broadcast local events.
+- Torii exposes local moderation ballot announcement, list/get, commit, reveal,
+  tally, and event backlog endpoints under
+  `/v1/sorafs/moderation/ballots*`. Mutating requests require canonical app
+  authentication, and commit/reveal requests bind the signer to the canonical
+  juror id.
+- `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
+  `sorafs_node::FilesystemGovernancePublisher` publish local moderation ballot
+  announcement, commit-accepted, reveal-accepted, and tally evidence into the
+  local Governance DAG `publish-index.json`, CAR queue, and optional signed
+  runtime DAG.
+- `docs/examples/ministry/policy_jury_roster_example.json` and
+  `docs/examples/ministry/policy_jury_sortition_example.json` provide example
+  inputs for the reusable policy-jury data path.
+- `sorafs_cli moderation validate-repro`,
+  `sorafs_cli moderation validate-corpus`, and
+  `sorafs_cli moderation honey-audit` support moderation reproducibility and
+  gateway enforcement evidence.
 
-## Data Model
-- **Appeal submission**:
-  ```norito
-  struct ModerationAppealV1 {
-      version: u8,
-      case_id: Uuid,
-      appellant: AccountId,
-      related_tokens: Vec<String>,     // proof token IDs
-      policy_reference: String,        // URN
-      case_class: ModerationCaseClass, // takedown | access_suspension | compliance_flag | other
-      description: String,
-      stake_amount_xor: Decimal64,
-      submitted_at: Timestamp,
-      attachments: Vec<EvidenceReferenceV1>, // pointer to evidence storage
-      signature: Signature,
-  }
-  ```
-- **Case profile** (governance-defined):
-  ```norito
-  struct ModerationCaseProfileV1 {
-      case_class: ModerationCaseClass,
-      min_panel_size: u8,
-      max_panel_size: u8,
-      quorum: u8,
-      stake_formula: StakeFormulaV1,
-      eligibility_pool: String,  // reference to PoP group
-      decision_deadline_hours: u16,
-      escalation_policy: EscalationPolicyV1,
-  }
-  ```
-- **Juror credentials**:
-  - Proof-of-personhood credential `PopCredentialV1` (issued via SFM-4b1).
-  - ZK membership proof `JurorProofV1` verifying credential without revealing identity.
-- **Vote process**:
-  - `VoteCommitV1 { case_id, juror_id_hash, commitment_hash, salt, signature }`
-  - `VoteRevealV1 { case_id, juror_id_hash, vote: ModerationVote, salt, justification }`
-  - Votes tallied after reveal phase; failure to reveal triggers slashing of juror bond.
-- **Decision**:
-  ```norito
-  struct ModerationDecisionV1 {
-      case_id: Uuid,
-      outcome: ModerationOutcome, // uphold | overturn | modify | escalate
-      votes_for: u8,
-      votes_against: u8,
-      abstained: u8,
-      decided_at: Timestamp,
-      panel_members: Vec<JurorSummaryV1>,
-      notes: Option<String>,
-      signature: Signature,
-  }
-  ```
-- **Receipts & transparency**:
-  - `ModerationReceiptV1` published per case summarizing decision, stake disposition, and Merkle proofs.
-  - Weekly `ModerationLedgerV1` listing cases, outcomes, appeals pending, overrides.
+## Intended Panel Lifecycle
 
-## Appeal Staking & Economics
-- Stake deposit formula:
-  ```
-  deposit = base_rate[class] * congestion_factor(backlog) * size_multiplier(content_size)
-  ```
-  - `base_rate` defined per class (e.g., takedown 100 XOR, access suspension 200 XOR).
-  - `congestion_factor = 1 + 0.05 * max(0, backlog - target_backlog)` (clamped).
-  - `size_multiplier` scales with evidence size (1.0–2.0).
-- Deposits locked in escrow; refunded if appeal upheld / partially upheld.
-- Penalties:
-  - Frivolous appeals (score < 0.2) forfeit 50% deposit.
-  - No-show jurors lose juror bond (see below).
-- Governance config stored in `moderation_economics.toml`.
+The production service still targets this lifecycle:
 
-## Sortition & Juror Management
-- Juror pool derived from PoP credentials with optional weighting (stake, past reliability).
-- Sortition algorithm:
-  - Uses VRF seeded with case_id + governance randomness to select jurors.
-  - Generates `SortitionProofV1` containing VRF output, membership proof, and panel roster hash.
-- Juror obligations:
-  - Accept/decline participation within 12h. Decline allowed twice per quarter before bond penalty.
-  - Juror bond (e.g., 50 XOR) locked during case; forfeited for no-show or misconduct.
-- Transparency:
-  - Panel roster hashed (pseudonymized) and published; actual identities remain confidential.
-- Tools:
-  - CLI `sorafs moderation jury-accept --case <id>` etc.
-  - Portal displays schedule, evidence, vote deadlines.
+1. Appeal intake validates the appellant, related moderation proof tokens,
+   evidence references, deposit quote, and policy reference.
+2. Sortition selects a moderation panel from a proof-of-personhood snapshot and
+   records the roster hash plus failover plan.
+3. Jurors review evidence through an attested viewer with per-session access
+   logging.
+4. Jurors submit sealed ballot commitments, reveal votes during the reveal
+   window, and satisfy quorum rules.
+5. The decision updates the moderation cache, appeal finance settlement,
+   transparency ledger, and any provider reputation penalties.
 
-## Evidence Handling
-- Evidence stored via secure viewer:
-  - Encrypted at rest, streamed with DRM/watermark overlay containing juror pseudonym, timestamp.
-  - Attestation via WebAuthn; session tokens expire after 15 minutes.
-  - Downloads disabled; copy events logged.
-- Evidence references include `EvidenceReferenceV1 { storage_uri, hash, content_type, size_bytes }`.
-- Access logs appended as `EvidenceAuditEventV1`.
-- Erasure workflow ensures evidence removed when mandated, with signed receipt.
+Only steps that can be represented by the shipped helper crates, CLI commands,
+local `sorafs_node` runtime, and local Torii moderation ballot API are
+available today.
 
-## Voting Workflow
-- Phases:
-  1. `Review` – jurors access evidence.
-  2. `Commit` (12h window) – jurors submit hashed vote.
-  3. `Reveal` (12h window) – reveal actual vote.
-  4. `Tally` – system counts votes, checks quorum.
-- If quorum not met, case escalates to next-tier panel or governance council.
-- Vote options: `uphold`, `overturn`, `modify`, `abstain`.
-- Votes and decisions recorded in Governance DAG for audit.
-- Decisions auto-notify stakeholders (appellant, operator, compliance team).
+## Data Boundaries
 
-## Integration Points
-- Gateway compliance: appeals link to `Sora-Moderation-Token` proof; decision updates compliance cache to unblock content or confirm block.
-- Transparency dashboard: weekly ledger consumes decisions, deposit stats, juror metrics.
-- Reputation engine: providers with repeated upheld appeals (blocking reversed) may incur compliance penalties.
-- AI pre-screen: escalated items feed more training data for models (with privacy guard).
+The shipped `PolicyJury*` types are reusable governance data structures, not a
+complete SoraFS moderation-panel runtime. SoraFS-specific ballot wrappers now
+bind:
 
-## Observability & Alerts
-- Metrics:
-  - `sorafs_moderation_appeals_total{status}`
-  - `sorafs_moderation_backlog_count{class}`
-  - `sorafs_moderation_sortition_duration_seconds`
-  - `sorafs_moderation_vote_participation_ratio`
-  - `sorafs_moderation_stake_locked_xor`
-  - `sorafs_moderation_evidence_access_total{action}`
-- Logs: `moderation_case_event`, `juror_action`, `vote_commit`, `vote_reveal`.
-- Alerts:
-  - Appeal backlog exceeds threshold.
-  - Sortition failure or missing VRF proofs.
-  - Juror participation < quorum risk.
-  - Evidence viewer attestation failures.
-  - Override occurrences (flagged for council review).
+- appeal case identifiers;
+- moderation policy references;
+- proof-token and denylist evidence references;
+- panel roster hashes;
+- settlement manifest version;
+- moderation vote choices;
 
-## Security & Privacy
-- Appeal submissions signed; anti-spam captcha / rate limit per account.
-- Juror identities pseudonymised; real identity accessible to governance under sealed procedure.
-- Evidence viewer uses short-lived URLs, watermarks, and tamper detection.
-- Vote secrecy ensured by commit-reveal; double voting prevented by case-specific salts.
-- Audit logs hashed daily; storage encryption uses per-case keys.
-- Compliance with GDPR: retention policies, erasure receipts, pseudonymisation.
+The local runtime and Torii API now bind panel-size/quorum policy,
+commit/reveal windows, and eligible jurors for deterministic node-local tests.
+The production service still needs durable state that binds:
 
-## Testing & Rollout
-- Unit tests for staking formula, sortition proofs, vote tallying.
-- Integration tests: simulate end-to-end case (submission, sortition, vote, decision).
-- Security tests: attempt replay attacks on votes, tamper with evidence tokens, ensure detection.
-- UX tests with juror sample group; confirm accessibility.
-- Rollout plan:
-  1. Implement services and run closed alpha with test cases.
-  2. Governance approves case profiles and economics config.
-  3. Staging launch with limited class (e.g., content takedown).
-  4. Collect feedback, adjust thresholds.
-  5. Production launch for core classes; expand to other classes after 2 successful cycles.
+- evidence access attestation;
+- decision publication and appeal cache updates.
 
-## Documentation & Tooling
-- Operator guides (`docs/source/sorafs/moderation_operator.md`).
-- Juror handbook (portal page) explaining responsibilities, UI walkthrough.
-- Transparency report integration updated to include appeal outcomes.
-- CLI docs (`docs/source/sorafs_cli.md`) updated with moderation commands.
+Do not document `sorafs moderation jury-accept`,
+`sorafs moderation open-case`, or similar portal commands as shipped until the
+corresponding service and CLI handlers exist.
 
-## Implementation Checklist
-- [x] Define appeal schemas, staking formulas, and governance config.
-- [x] Specify sortition process with PoP credentials and ZK proofs.
-- [x] Document evidence handling safeguards and audit trails.
-- [x] Detail commit-reveal voting, quorum rules, and decision outputs.
-- [x] Capture integration points, observability, security, and privacy requirements.
-- [x] Outline testing plan and staged rollout.
+## Remaining Production Gates
 
-With this specification, moderation, governance, and operations teams have a clear blueprint to implement citizen-panel appeals that balance transparency, reproducibility, and privacy.
+- Implement the moderation appeal intake API and persisted case lifecycle state.
+- Adapt policy-jury sortition to SoraFS moderation cases, PoP snapshots, juror
+  eligibility, no-show failover, and roster privacy requirements.
+- Ship the secure evidence viewer and audit logger described by
+  `docs/source/sorafs_evidence_viewer_plan.md`.
+- Ship the SoraFS commit-reveal voting service described by
+  `docs/source/sorafs_commit_reveal_plan.md`.
+- Connect panel outcomes to gateway compliance caches, appeal finance
+  settlement, transparency publication, and reputation scoring.
+- Promote local Governance DAG moderation event publication into the durable
+  contract-backed and public IPFS/IPNS decision trail.
+- Add end-to-end tests for appeal submission, juror selection, evidence access,
+  commit/reveal voting, decision publication, and settlement.
+
+## Validation
+
+Focused checks for the currently shipped foundations are:
+
+```sh
+cargo test -p sorafs_orchestrator appeal
+cargo test -p iroha_data_model policy_jury
+cargo test -p iroha_data_model sorafs_moderation_ballot
+cargo test -p sorafs_node moderation_ballot
+cargo test -p sorafs_manifest moderation_ballot_event
+cargo test -p iroha_torii moderation_ballot --features app_api
+cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
+```
+
+Run the broader SoraFS moderation and gateway suites when the panel service
+starts mutating runtime state.

@@ -8,6 +8,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::Parser;
@@ -16,8 +17,8 @@ use norito::{
     decode_from_bytes,
     json::{self, Value},
 };
-use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig};
-use sorafs_manifest::{ManifestV1, pin_registry::PinRecordV1};
+use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig, validate_manifest_car_replay};
+use sorafs_manifest::{ManifestV1, ValidationOutcomeV1, pin_registry::PinRecordV1};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -47,26 +48,60 @@ struct Args {
     #[arg(long)]
     json_out: Option<PathBuf>,
 
+    /// Emit a stable ValidationOutcomeV1 manifest/CAR replay result instead of the summary.
+    #[arg(long)]
+    validation_outcome: bool,
+
+    /// Override the ValidationOutcomeV1 generated_at timestamp.
+    #[arg(long)]
+    generated_at: Option<u64>,
+
     /// Suppress stdout output (useful when `--json-out` is set).
     #[arg(long)]
     quiet: bool,
 }
 
 fn main() {
-    if let Err(err) = run() {
-        eprintln!("error: {err:?}");
-        process::exit(1);
+    match run() {
+        Ok(code) => process::exit(code),
+        Err(err) => {
+            eprintln!("error: {err:?}");
+            process::exit(1);
+        }
     }
 }
 
-fn run() -> Result<()> {
+fn run() -> Result<i32> {
     let args = Args::parse();
-    let config_path = args.config.unwrap_or_else(default_config_path);
+    let config_path = args.config.clone().unwrap_or_else(default_config_path);
     let config = TrustlessVerifierConfig::from_file(&config_path)?;
 
     let manifest = load_manifest(&args.manifest)?;
     let car_bytes = fs::read(&args.car)
         .wrap_err_with(|| format!("failed to read CAR `{}`", args.car.display()))?;
+
+    if args.validation_outcome {
+        if args.pin_record.is_some() {
+            return Err(eyre::eyre!(
+                "--validation-outcome emits manifest/CAR replay outcomes; omit --pin-record or use summary mode for pin-record validation"
+            ));
+        }
+        let generated_at = match args.generated_at {
+            Some(generated_at) => generated_at,
+            None => unix_time_now()
+                .wrap_err("failed to derive ValidationOutcomeV1 generated_at timestamp")?,
+        };
+        let outcome = validate_manifest_car_replay(
+            &manifest,
+            &car_bytes,
+            args.manifest.display().to_string(),
+            args.car.display().to_string(),
+            &config,
+            generated_at,
+        );
+        emit_validation_outcome(&args, &outcome)?;
+        return Ok(if outcome.is_ok() { 0 } else { 2 });
+    }
 
     let verifier = TrustlessVerifier::new(config);
     let outcome = verifier
@@ -108,6 +143,17 @@ fn run() -> Result<()> {
         );
     }
 
+    Ok(0)
+}
+
+fn emit_validation_outcome(args: &Args, outcome: &ValidationOutcomeV1) -> Result<()> {
+    let rendered = json::to_string_pretty(outcome).wrap_err("failed to render outcome JSON")?;
+    if let Some(out) = args.json_out.as_ref() {
+        fs::write(out, format!("{rendered}\n"))
+            .wrap_err_with(|| format!("failed to write JSON output `{}`", out.display()))?;
+    } else if !args.quiet {
+        println!("{rendered}");
+    }
     Ok(())
 }
 
@@ -140,4 +186,11 @@ fn load_pin_record(path: &Path) -> Result<PinRecordV1> {
 fn default_config_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../configs/soranet/gateway_m0/gateway_trustless_verifier.toml")
+}
+
+fn unix_time_now() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .wrap_err("system time is before the UNIX epoch")?
+        .as_secs())
 }

@@ -84,7 +84,7 @@ Scoreboard объединяет требования манифеста, объ�
 
 ## Справочник флагов CLI и SDK
 
-`sorafs_cli fetch` (см. `crates/sorafs_car/src/bin/sorafs_cli.rs`) и обёртка
+`sorafs_cli fetch` (см. `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) и обёртка
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) используют
 одну и ту же поверхность конфигурации оркестратора. Используйте следующие флаги
 при сборе evidence или воспроизведении канонических fixtures:

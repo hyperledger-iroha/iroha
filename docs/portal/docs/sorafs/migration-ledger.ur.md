@@ -9,37 +9,37 @@ source_last_modified: "2025-11-09T14:34:44.965608+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: SoraFS مائیگریشن لیجر
-description: ہر مائیگریشن سنگ میل، ذمہ داران اور مطلوبہ فالو اپس کو ٹریک کرنے والا کینونیکل چینج لاگ۔
----
+> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) سے ماخوذ۔
+# SoraFS Migration Ledger
 
-# SoraFS مائیگریشن لیجر
+This ledger mirrors the migration change log captured in the SoraFS
+Architecture RFC. Entries are grouped by milestone and list the effective
+window, impacted teams, and required actions. Updates to the migration plan
+MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
+to keep downstream consumers aligned.
 
-یہ لیجر SoraFS Architecture RFC میں ریکارڈ کردہ مائیگریشن چینج لاگ کی عکاسی کرتا ہے۔ اندراجات
-سنگ میل کے حساب سے گروپ ہوتی ہیں اور effective window، متاثرہ ٹیمیں، اور مطلوبہ actions درج
-کرتی ہیں۔ مائیگریشن پلان میں اپڈیٹس لازمی طور پر اس صفحے اور RFC
-(`docs/source/sorafs_architecture_rfc.md`) دونوں میں تبدیلی کریں تاکہ downstream consumers
-ہم آہنگ رہیں۔
+| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
+|-----------|------------------|----------------|----------------|--------------|--------|
+| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; local tooling exposes explicit expectation flags; staging alias proof evidence is archived outside this repo. | Docs, Storage, Governance | Keep fixtures signed, keep release checklists using `--car-digest`/`--root-cid`, and attach fresh staging alias evidence to rollout tickets. | Local controls implemented; external evidence tracked in governance archive. |
 
-| سنگ میل | موثر مدت | تبدیلی کا خلاصہ | متاثرہ ٹیمیں | ایکشن آئٹمز | حیثیت |
-|---------|----------|-----------------|--------------|-------------|-------|
-| M1 | ہفتے 7–12 | CI deterministic fixtures نافذ کرتا ہے؛ alias proofs staging میں دستیاب ہیں؛ tooling explicit expectation flags دیتا ہے۔ | Docs, Storage, Governance | Fixtures کو signed رکھیں، staging registry میں aliases رجسٹر کریں، release checklists کو `--car-digest/--root-cid` enforcement کے ساتھ اپڈیٹ کریں۔ | ⏳ زیر التوا |
+Governance control plane minutes referencing these milestones live under
+`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
+when notable events occur (e.g., new alias registrations, registry incident
+retrospectives) to provide an auditable paper trail.
 
-گورننس control plane کی minutes جو ان milestones کو حوالہ دیتی ہیں `docs/source/sorafs/` کے تحت
-موجود ہیں۔ ٹیموں کو ہر قطار کے نیچے dated bullet points شامل کرنے چاہئیں جب نمایاں واقعات
-ہوئیں (مثلا نئے alias registrations یا registry incident retrospectives) تاکہ قابلِ آڈٹ
-ریکارڈ فراہم ہو۔
+## Recent Updates
 
-## تازہ ترین اپڈیٹس
-
-- 2025-11-01 — `migration_roadmap.md` کو governance council اور operator lists میں review کے
-  لیے بھیجا گیا؛ اگلی council session میں sign-off کا انتظار ہے (ref:
-  `docs/source/sorafs/council_minutes_2025-10-29.md` follow-up).
-- 2025-11-02 — Pin Registry register ISI اب `sorafs_manifest` helpers کے ذریعے shared chunker/
-  policy validation نافذ کرتا ہے، جس سے on-chain paths Torii checks کے ساتھ aligned رہتے ہیں۔
-- 2026-02-13 — Provider advert rollout phases (R0–R3) لیجر میں شامل کی گئیں اور متعلقہ dashboards
-  اور operator guidance شائع کی گئی
+- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
+  operator lists for review; repository implementation status is now tracked by
+  the dated ledger entries below and external sign-off evidence remains in the
+  governance archive.
+- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
+  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
+  with Torii checks.
+- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
+  published the associated dashboards and operator guidance
   (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2026-06-22 — Refreshed the M1 status to separate implemented local
+  fixture/expectation-flag controls from external staging alias and governance
+  evidence required for live rollout sign-off.

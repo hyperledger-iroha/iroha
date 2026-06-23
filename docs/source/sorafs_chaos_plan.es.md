@@ -9,7 +9,7 @@ source_last_modified: "2025-11-08T02:24:51.340739+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Plan de simulacros de caos y playbook de incidentes de SoraFS (Borrador)
+# Plan de simulacros de caos y playbook de incidentes de SoraFS
 
 ## Escenarios de caos (iniciales)
 

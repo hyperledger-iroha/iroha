@@ -221,7 +221,7 @@ sidebar_label: ስጋት ሞዴል
   የ Torii ውህደት በ I18NI0000058X
   የጣት አሻራ በI18NI0000059X በኩል ይፈትሻል።
 - የPDP/PoTR ዥረት ማስመሰያዎች የሚከናወኑት በማረጋገጫ ዥረት መታጠቂያ በኩል ነው።
-  `crates/sorafs_car/tests/sorafs_cli.rs`፣ የPoR/PDP/PoTR የጥያቄ ፍሰቶችን ይሸፍናል።
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`፣ የPoR/PDP/PoTR የጥያቄ ፍሰቶችን ይሸፍናል።
   እና በስጋት ሞዴል ውስጥ የታነሙ የውድቀት ሁኔታዎች።
 - አቅም እና የጥገና soak ውጤቶች ስር ይኖራሉ
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, ሰፊው ሳለ

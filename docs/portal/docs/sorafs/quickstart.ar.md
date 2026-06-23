@@ -67,11 +67,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. ابنِ ووقّع مانيفست
 
 لفّ خطة الـ chunks والكنى وتواقيع الحوكمة في مانيفست باستخدام
-`sorafs-manifest-stub`. يوضح الأمر أدناه payload لملف واحد؛ مرّر مسار دليل لحزم
+`sorafs_manifest_stub`. يوضح الأمر أدناه payload لملف واحد؛ مرّر مسار دليل لحزم
 شجرة (تسير CLI ترتيبًا معجميًا).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

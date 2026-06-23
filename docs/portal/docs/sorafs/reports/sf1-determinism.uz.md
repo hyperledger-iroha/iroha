@@ -25,7 +25,7 @@ tekshiriladigan izni saqlash uchun jadvaldagi har bir buyruqning natijasi.
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | Barcha testlar o'tadi; `vectors` paritet testi muvaffaqiyatli o'tdi. | Kanonik moslamalarni kompilyatsiya qilish va Rust dasturiga mos kelishini tasdiqlaydi. |
 | 2 | `ci/check_sorafs_fixtures.sh` | Skript 0 dan chiqadi; quyida manifest dayjestlar hisobotlari. | Uskunalar toza qayta tiklanganini va imzolar biriktirilganligini tasdiqlaydi. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` yozuvi registr deskriptoriga (`profile_id=1`) mos keladi. | Ro'yxatga olish kitobi metama'lumotlarining sinxron bo'lishini ta'minlaydi. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` yozuvi registr deskriptoriga (`profile_id=1`) mos keladi. | Ro'yxatga olish kitobi metama'lumotlarining sinxron bo'lishini ta'minlaydi. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneratsiya `--allow-unsigned`siz muvaffaqiyatli amalga oshiriladi; manifest va imzo fayllari o'zgarishsiz. | Bo'lak chegaralari va manifestlar uchun determinizmni isbotlaydi. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript moslamalari va Rust JSON o'rtasida hech qanday farq yo'qligini xabar qiladi. | Ixtiyoriy yordamchi; ish vaqtlari bo'ylab paritetni ta'minlash (Tooling WG tomonidan qo'llab-quvvatlanadigan skript). |
 

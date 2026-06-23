@@ -38,6 +38,8 @@ mod sparse_block_bytes;
 mod sumeragi_collectors;
 #[path = "../sumeragi_doc_sync.rs"]
 mod sumeragi_doc_sync;
+#[path = "../validation_fee_admission.rs"]
+mod validation_fee_admission;
 #[path = "../zk_asset_stark_envelope.rs"]
 mod zk_asset_stark_envelope;
 #[path = "../zk_asset_vk_enforcement.rs"]

@@ -8,44 +8,90 @@ title: SoraFS ゲートウェイ TLS と ECH オペレーターガイド
 summary: SF-5b 証明書自動化の構成、テレメトリ、インシデント対応、ガバナンス要件を解説します。
 ---
 
-# SoraFS ゲートウェイ TLS と ECH オペレーターガイド
+# SoraFS Gateway TLS & ECH Operator Guide
 
-## 範囲
+## Scope
 
-本ガイドは、SF-5b 証明書自動化スタックが有効になっている状態で Torii の SoraFS ゲートウェイを運用する方法をまとめています。従来の計画メモを置き換え、秘密情報の準備、ACME/ECH の設定、テレメトリの読み方、ガバナンス要件の満たし方、認定済みのインシデント対応プレイブックの実行手順といった日常業務に焦点を当てます。
+This guide documents how to operate the Torii SoraFS gateway when the SF-5b
+certificate automation stack is enabled. It replaces the earlier planning
+outline and now focuses on day-to-day operator tasks: provisioning secrets,
+configuring ACME/ECH, understanding telemetry, meeting governance obligations,
+and executing the approved incident playbooks.
 
-ゲートウェイは `iroha_torii::sorafs::gateway` にある自動化コントローラーを含み、バスティオンホストには `cargo xtask sorafs-self-cert` がインストールされていることを前提とします。
+The guidance assumes the gateway includes the automation controller in
+`iroha_torii::sorafs::gateway` and that the repository
+`scripts/sorafs_gateway_self_cert.sh` wrapper is available on the bastion host.
+The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
+`cargo run -p xtask --bin xtask -- ...` when `cargo xtask` is not installed.
 
-## クイックスタートチェックリスト
+## Quick Start Checklist
 
-1. ACME 資格情報と GAR 成果物を KMS や Vault などの `sorafs_gateway_tls/` シークレットストアに格納し、バスティオンホストへ同期してください。
-2. `torii.sorafs_gateway.acme` 設定に DNS-01/TLS-ALPN-01 チャレンジの優先度、ECH の有効化可否、更新しきい値を入力してください。
-3. `sorafs-gateway-acme@<environment>.service` ユニットをデプロイまたは有効化し、自動化コントローラーを常時稼働させてください。
-4. `cargo xtask sorafs-self-cert --check-tls` を実行してベースラインのアテステーションバンドルを取得し、ヘッダーとメトリクスを検証してください。
-5. **テレメトリリファレンス** セクションで定義したメトリクス向けにダッシュボードとアラートを公開し、当番チームを登録してください。
-6. インシデント対応プレイブックを PagerDuty や Notion などのランブックツールに取り込み、**演習頻度とエビデンス** に記載した演習をスケジュールしてください。
+1. Stage ACME credentials and GAR artefacts in the sealed
+   `sorafs_gateway_tls/` secret store (KMS or Vault) and mirror them to the
+   bastion host.
+2. Fill in `torii.sorafs_gateway.acme` configuration with DNS-01 and
+   TLS-ALPN-01 challenge preferences, enable ECH if supported, and set renewal
+   thresholds.
+3. Deploy or enable the `sorafs-gateway-acme@<environment>.service` unit so the
+   automation controller runs continuously.
+4. Run `scripts/sorafs_gateway_self_cert.sh` to capture a baseline attestation
+   bundle and verify headers/metrics.
+5. Publish telemetry dashboards and alerts for the metrics in the **Telemetry
+   Reference** section and subscribe the on-call rotation.
+6. Upload the incident playbooks to your runbook tooling (PagerDuty, Notion) and
+   schedule the drills listed in **Drill Cadence & Evidence**.
 
-## 設定手順
+## Configuration Walkthrough
 
-### 前提条件
+### Prerequisites
 
-| 要件 | 重要な理由 |
+| Requirement | Why it matters |
 |-------------|----------------|
-| `sorafs_gateway_tls/` に保管した ACME アカウント資格情報 (KMS/Vault) | 手動発注、失効、更新トークンの管理に必須。 |
-| 最新の `torii.sorafs_gateway` 設定バンドルのオフラインコピー | `ech_enabled`、ホスト一覧、リトライタイミングを構成管理の待ち時間なく修正できる。 |
-| ガバナンスマニフェスト (`manifest_signatures.json`、GAR エンベロープ) へのアクセス | 証明書フィンガープリントの更新やカノニカルホストのローテーション時に必要。 |
-| バスティオンホスト上の `cargo xtask` ツールチェーン | `sorafs-gateway-attest` / `sorafs-self-cert` を利用した検証に必要。 |
-| プレイブックテンプレートを PagerDuty/Notion に保存 | 本ガイドのチェックリストへワンクリックでアクセスできるようにする。 |
+| ACME account credentials stored in `sorafs_gateway_tls/` sealed secrets (KMS/Vault) | Required for manual orders, revocation, and renewing automation tokens. |
+| Offline copy of the latest `torii.sorafs_gateway` config bundle | Lets operators patch `ech_enabled`, host lists, or retry timing without waiting on config-management pipelines. |
+| Access to governance manifests (`manifest_signatures.json`, GAR envelopes) | Needed when publishing updated certificate fingerprints or rotating canonical host mappings. |
+| Repository checkout with Cargo/xtask access on the bastion host | Provides the self-cert wrapper, `sorafs-gateway-attest`, and `sorafs-gateway-probe` checks used in verification steps. |
+| Playbook template stored in incident tooling (PagerDuty/Notion) | Ensures the checklists in this guide are one click away during an incident. |
 
-### 秘密情報とファイル配置
+### Secrets & File Layout
 
-- ACME アカウント情報は `/etc/iroha/sorafs_gateway_tls/` に `iroha:iroha` 所有・`0600` 権限で配置してください。
-- 手動ローテーションに備え、KMS や Vault の名前空間に暗号化済みバックアップを保持してください。
-- 自動化コントローラーは `/var/lib/sorafs_gateway_tls/automation.json` に状態を保存するため、バックアップ対象に含めてリニューアルのジッターやリトライウィンドウを再起動後も維持してください。
+- Store ACME account material under `/etc/iroha/sorafs_gateway_tls/` with
+  ownership `iroha:iroha` and `0600` permissions.
+- Maintain a sealed backup in your KMS or Vault namespace so manual rotation can
+  recover quickly.
+- The automation controller writes state to
+  `/var/lib/sorafs_gateway_tls/automation.json`; include that path in backups so
+  renewal jitter and retry windows persist across restarts.
+- Generate SAN manifests with `cargo xtask soradns-acme-plan`; the helper
+  derives the canonical wildcard + pretty-host SAN values, recommended ACME
+  challenges, and DNS-01 labels for each alias. Store the output under
+  `fixtures/sorafs_gateway/acme_san/<alias>.san.json` so GAR reviewers and the
+  TLS automation controller share the same evidence bundle:
 
-### Torii 設定
+  ```bash
+  cargo xtask soradns-acme-plan \
+    --name docs.sora \
+    --json-out fixtures/sorafs_gateway/acme_san/docs.sora.san.json
+  ```
 
-Torii の設定バンドル (例: `configs/production.toml`) に以下を追加または更新してください。
+  For Taira Soracloud browser gateway hosts, render the same plan with the Mon
+  pretty suffix so the bind-time order covers the exact public host:
+
+  ```bash
+  cargo xtask soradns-acme-plan \
+    --name solswap-indexer.sora \
+    --pretty-suffix mon.taira.sora.net \
+    --json-out fixtures/sorafs_gateway/acme_san/solswap-indexer.sora.mon.san.json
+  ```
+
+  Reuse the `san` entries when templating manual ACME orders and attach the JSON
+  to DG-3 change tickets so canonical + wildcard pairings do not need to be
+  recomputed.
+
+### Torii Configuration
+
+Add or update the following section in the Torii configuration bundle
+(e.g., `configs/production.toml`):
 
 ```toml
 [torii.sorafs_gateway.acme]
@@ -59,125 +105,272 @@ use_tls_alpn_challenge = true
 ech_enabled = true
 ```
 
-- `dns_provider` は `acme::DnsProvider` に登録された実装へマッピングします。Route53 が同梱されており、追加プロバイダーはゲートウェイの再ビルドなしで拡張できます。
-- `ech_enabled = true` の場合、証明書と同時に ECH 設定を生成します。上流 CDN やクライアントが非対応の場合は `false` に設定します (後述のフォールバック手順参照)。
-- `renewal_threshold_seconds` は新規オーダーを開始するタイミングを制御します。既定値は 30 日ですが、リスクが高い運用では短縮できます。
-- 設定パーサーは `iroha_torii::sorafs::gateway::config` にあり、検証エラーは Torii 起動時にログへ出力されます。
+- `dns_provider` maps to the implementation registered with
+  `acme::DnsProvider`; Route53 ships in-tree, additional providers can be added
+  without recompiling the gateway.
+- `ech_enabled = true` prompts the automation flow to generate ECH configs
+  alongside certificates; set to `false` if the upstream CDN or clients do not
+  support ECH (see the fallback playbook below).
+- `renewal_threshold_seconds` controls when the automation loop triggers a new
+  order; default remains 30 days but can be lowered for high-risk deployments.
+- The configuration parser lives in
+  `iroha_torii::sorafs::gateway::config`, and validation errors surface through
+  the Torii logs during startup.
 
-### 設定リファレンス
+### Configuration Reference
 
-| キー | 既定値 | 本番想定 | コンプライアンス要件 |
-|-----|--------|----------|------------------------|
-| `torii.sorafs_gateway.acme.enabled` | `true` | 演習やインシデント対応時を除き有効化したままにする。 | 無効化した場合は変更ログへインシデント/チケット ID を記録する。 |
-| `torii.sorafs_gateway.acme.directory_url` | Let’s Encrypt v2 | CA を切り替える場合のみ更新する。 | 選定した CA を GAR マニフェストで公開する義務がある。 |
-| `torii.sorafs_gateway.acme.dns_provider` | `route53` | 自動化コントローラーに登録済みのプロバイダー名を指定する。 | プロバイダーの IAM ポリシーを四半期ごとにレビューする。 |
-| `torii.sorafs_gateway.acme.renewal_threshold_seconds` | `2_592_000` (30 日) | リスクプロファイルに合わせて調整するが 14 日未満にはしない。 | 閾値変更にはリスクオーナーの承認が必要。 |
-| `torii.sorafs_gateway.acme.retry_backoff_seconds` | `900` | GAR の復旧 SLA を満たすため 900 以下を維持する。 | 900 を超える設定はガバナンスログに例外として記録する。 |
-| `torii.sorafs_gateway.acme.ech_enabled` | `true` | プレイブックに従ってのみ切り替える。 | 切り替え時は理由と証跡をコンプライアンス台帳へ記録する。 |
-| `torii.sorafs_gateway.acme.telemetry_topic` | `sorafs-tls` | 特別なログルーティングが必要な場合のみ変更する。 | 変更した場合は観測チームに新しいチャンネルと保持ポリシーを登録する。 |
+| Key | Default | Production expectation | Compliance tie-in |
+|-----|---------|------------------------|-------------------|
+| `torii.sorafs_gateway.acme.enabled` | `true` | Leave enabled except during incident drills. | Disabling automation must be captured in the change log with incident/ticket ID. |
+| `torii.sorafs_gateway.acme.directory_url` | Let’s Encrypt v2 | Override only when switching CA environments. | Governance requires publishing the selected CA in GAR manifests. |
+| `torii.sorafs_gateway.acme.dns_provider` | `route53` | Provide a concrete provider name registered with the automation crate. | IAM policy for the provider must be reviewed quarterly. |
+| `torii.sorafs_gateway.acme.renewal_threshold_seconds` | `2_592_000` (30 days) | Tune for risk posture (>=14 days). | Threshold adjustments require risk owner approval. |
+| `torii.sorafs_gateway.acme.retry_backoff_seconds` | `900` | Keep ≤ 900 to satisfy GAR recovery SLAs. | Backoff >900 must include a waiver in the governance log. |
+| `torii.sorafs_gateway.acme.ech_enabled` | `true` | Toggle only when the fallback playbook runs. | Every toggle must be documented with reason/evidence in the compliance tracker. |
+| `torii.sorafs_gateway.acme.telemetry_topic` | `sorafs-tls` | Optional override for log aggregation topic. | If overridden, register the new topic with observability for retention tracking. |
 
-手動で設定を変更する場合は `iroha_config::actual::sorafs_gateway` (または貴社の設定管理システム) を更新し、変更差分をチケットへ添付したうえで、デプロイ後に最新の self-cert バンドルをアップロードしてください。
+When adjusting configuration by hand, stage the change in
+`iroha_config::actual::sorafs_gateway` (or your configuration management
+system), capture the diff in your change-control ticket, and attach a fresh
+self-cert bundle once the new settings deploy.
 
-### 自動化サービス
+### Automation Service
 
-- 自動化バンドルに付属する systemd テンプレートユニットを有効化してください。
+- Enable the systemd template unit that ships with the automation bundle:
 
   ```bash
   systemctl enable --now sorafs-gateway-acme@production.service
   ```
 
-- ログは `sorafs_gateway_tls_automation` ジャーナルターゲットへ出力されます。ログ集約基盤に転送し、環境タグを付けてインシデント調査を迅速化してください。
-- 実装状況: `iroha_torii::sorafs::gateway::acme::AcmeAutomation` が DNS-01/TLS-ALPN-01 チャレンジの決定論的処理、ジッター/バックオフ設定、更新状態の永続化を提供します。
+- Logs stream to the `sorafs_gateway_tls_automation` journal target. Pipe them
+  into your log aggregator and tag them with the environment for faster
+  incident triage.
+- Implementation status: `iroha_torii::sorafs::gateway::acme::AcmeAutomation`
+  provides deterministic DNS-01/TLS-ALPN-01 challenge handling, configurable
+  jitter/backoff, and renewal state persistence.
 
-### 検証とアテステーション
+### Verification & Attestation
 
-1. 設定を適用したら Torii をリロードしてください。
+1. After applying the configuration, reload Torii:
 
    ```bash
    systemctl reload iroha-torii.service
    ```
 
-2. 自己証明ハーネスを実行し、ヘッダー、メトリクス、GAR ポリシー統合を確認してください。
+2. Run the self-cert harness to confirm headers, metrics, and GAR policy
+   integration:
 
    ```bash
-   cargo xtask sorafs-self-cert --check-tls \
+   scripts/sorafs_gateway_self_cert.sh \
+     --signing-key /etc/iroha/sorafs_gateway_tls/gateway_attestor.hex \
+     --signer gateway-ops@operator \
      --gateway https://gateway.example.com \
      --out artifacts/sorafs_gateway_self_cert
    ```
 
-3. 生成されたレポートを GAR エンベロープとともに保管し、トレーサビリティを確保してください。
-4. 実装状況: `iroha_torii::sorafs::gateway::telemetry` が `SORA_TLS_STATE_HEADER`、`Metrics::set_sorafs_tls_state`、`Metrics::record_sorafs_tls_renewal` を公開し、ハーネスから利用されています。
+3. Archive the generated report alongside the GAR envelope for traceability.
+4. Implementation status: `iroha_torii::sorafs::gateway::telemetry` exports the
+   `SORA_TLS_STATE_HEADER`, `Metrics::set_sorafs_tls_state`, and
+   `Metrics::record_sorafs_tls_renewal` helpers consumed by the harness.
 
-## テレメトリリファレンス
+### Header & GAR Probe
 
-| 種別 | 名前 | 説明 | アラート / 対応 |
+Run the deterministic header probe before every rollout (and whenever synthetic
+monitoring trips) to ensure gateways staple the required Sora headers, match GAR
+metadata, and advertise the expected cache/TLS state:
+
+```bash
+cargo xtask sorafs-gateway-probe \
+  --gateway https://gw.example.com/car/bafy... \
+  --gar artifacts/gar/self-cert.gar.jws \
+  --gar-key council-key-1=8b9c...c5 \
+  --header "Accept: application/vnd.ipld.car; dag-scope=full" \
+  --timeout-secs 15
+```
+
+- `--gar` points at the compact GAR JWS. Provide the matching Ed25519 public
+  keys via repeated `--gar-key kid=hex` flags so the probe can verify the JWS.
+- `--gateway` fetches headers live; alternatively use `--headers-file` (with
+  `--host`) to inspect captured dumps from `curl -i`.
+- The probe asserts `Sora-Name`/`Sora-Proof` consistency, GAR host/manifest
+  coverage, `Cache-Control: max-age=600, stale-while-revalidate=120`,
+  `Content-Security-Policy`, `Strict-Transport-Security`, and `X-Sora-TLS-State`.
+- `--report-json <path|->` writes the machine-readable summary consumed by the
+  automation helpers. When targeting stdout the probe prints its human-readable
+  results to stderr so the JSON stream stays parseable.
+- Exits non-zero on mismatch so CI/paging hooks can fail fast. Set
+  the TLS-state header yet.
+
+#### Paging & rollback drill automation
+
+The probe now exposes native hooks for drill logging, JSON summaries, and
+PagerDuty payloads so you can run it directly from CI or ops bastions:
+
+- `--drill-scenario <name>` plus optional `--drill-log`, `--drill-ic`,
+  `--drill-scribe`, `--drill-notes`, and `--drill-link` append a row to
+  `ops/drill-log.md` using the same escaping rules as
+  `scripts/telemetry/log_sorafs_drill.sh`.
+- `--summary-json <path>` emits a structured record (findings, GAR metadata,
+  timestamps) that can be attached to the attestation bundle or drill evidence.
+- `--pagerduty-routing-key <key>` enables PagerDuty integration. Combine it with
+  `--pagerduty-payload <path>` (defaults to
+  `artifacts/sorafs_gateway_probe/pagerduty_event.json`) and, when ready,
+  `--pagerduty-url https://v1/events/ws.pagerduty.com/v1/enqueue` to post the event.
+  Additional flags (`--pagerduty-component`, `--pagerduty-group`,
+  `--pagerduty-link text=url`, `--pagerduty-dedup-key`, etc.) map directly to
+  the Events API payload.
+
+Example drill invocation:
+
+```bash
+cargo xtask sorafs-gateway-probe \
+  --gateway https://gw.example.com/car/bafy... \
+  --gar artifacts/gar/self-cert.gar.jws \
+  --gar-key council-key-1=8b9c...c5 \
+  --drill-scenario tls-renewal \
+  --drill-ic "Automation Harness" \
+  --drill-scribe "Ops Bot" \
+  --drill-notes "Quarterly TLS rotation drill" \
+  --summary-json artifacts/sorafs_gateway_probe/tls_probe.json \
+  --pagerduty-routing-key "$PAGERDUTY_ROUTING_KEY" \
+  --pagerduty-link "Rollback plan=https://git.example.com/sorafs/tls-rotation" \
+  --pagerduty-url https://v1/events/ws.pagerduty.com/v1/enqueue
+```
+
+Failed probes immediately trigger PagerDuty (omit the URL during training if you
+only need the payload) and still exit non-zero so CI can halt. The helper script
+under `scripts/telemetry/run_sorafs_gateway_probe.sh` remains available for
+preconfigured drill bundles, and CI exercises the workflow via
+`ci/check_sorafs_gateway_probe.sh` using the demo fixtures in
+`fixtures/sorafs_gateway/probe_demo/`; reuse that script (or copy its command
+line) when wiring periodic paging drills. The native flags mean most teams can
+call the probe directly without bolting on custom logging or PagerDuty glue.
+
+### Route promotion & rollback plan
+
+Run the new route planner once the release manifest has been built so the
+cutover ticket carries a deterministic `Sora-*` header block and explicit
+rollback metadata. The helper now ships inside the CLI (`iroha app sorafs gateway
+wrapper when you need to automate from CI:
+
+```bash
+iroha app sorafs gateway route-plan \
+  --manifest-json artifacts/sorafs_cli/portal.manifest.json \
+  --hostname docs.sora.link \
+  --alias sora:docs \
+  --route-label docs@2026-03-21 \
+  --release-tag v2026.03.21 \
+  --cutover-window 2026-03-21T15:00Z/2026-03-21T15:30Z \
+  --rollback-manifest-json artifacts/sorafs_cli/portal.manifest.previous.json \
+  --rollback-route-label docs@previous
+```
+
+The command produces a JSON descriptor
+(`artifacts/sorafs_gateway/route_plan.json` by default) plus header templates
+(`gateway.route.headers.txt` and, when `--rollback-manifest-json` is supplied,
+`gateway.route.rollback.headers.txt`). Each plan embeds:
+
+- the resolved `Sora-Content-CID`,
+- the fully rendered `Sora-Name`/`Sora-Proof` headers and CSP/HSTS templates,
+- the canonical `Sora-Route-Binding` string (`host=…;cid=…;generated_at=…;label=…`),
+- optional rollback metadata tying the previous manifest/header block to a
+  human-readable label.
+
+Attach the plan JSON and the header templates to the release ticket alongside
+the DNS cutover descriptor so reviewers can diff the new binding versus the
+recorded rollback state. The descriptor mirrors the `gateway_binding` block used
+by `docs/portal/scripts/sorafs-pin-release.sh`, ensuring the DNS and gateway
+automation pipelines promote identical headers.
+
+## Telemetry Reference
+
+| Surface | Name | Description | Alert / Action |
 |---------|------|-------------|----------------|
-| メトリクス | `sorafs_gateway_tls_cert_expiry_seconds` | 現在の証明書が失効するまでの残り秒数。 | `< 1_209_600` (14 日) でオンコールに通知。 |
-| メトリクス | `sorafs_gateway_tls_renewal_total{result}` | 成功/失敗でラベル付けされた更新試行カウンター。 | 1 時間あたり失敗率が 5% を超えたら調査。 |
-| メトリクス | `sorafs_gateway_tls_ech_enabled` | 現在の ECH 状態を表す 0/1 ゲージ。 | 想定外に `0` になったらアラート。 |
-| メトリクス | `torii_sorafs_gar_violations_total{reason,detail}` | GAR ポリシー違反カウンター。 | ガバナンスへ即時エスカレーションし、ログを添付。 |
-| ヘッダー | `X-Sora-TLS-State` | レスポンスに付与される状態 (例: `ech-enabled;expiry=2025-06-12T12:00:00Z`)。 | 合成監視で確認し、`ech-disabled` や `degraded` が出たら本プレイブックを適用。 |
-| ログ | `journalctl -u sorafs-gateway-acme@*.service` | 更新の痕跡、チャレンジ失敗、手動操作を記録。 | インシデントチケットや演習時に必ず保存。 |
+| Metrics | `sorafs_gateway_tls_cert_expiry_seconds` | Seconds until the active certificate expires. | Page on-call when `< 1_209_600` (14 days).
+| Metrics | `sorafs_gateway_tls_renewal_total{result}` | Renewal attempt counter labelled by `success`/`error`. | Investigate if error rate exceeds 5% in an hour.
+| Metrics | `sorafs_gateway_tls_ech_enabled` | Gauge (`0`/`1`) reflecting current ECH state. | Alert when it drops to `0` unexpectedly.
+| Metrics | `torii_sorafs_gar_violations_total{reason,detail}` | Policy violation counter surfaced from GAR enforcement. | Escalate to governance immediately; attach violation logs.
+| Header | `X-Sora-TLS-State` | Embedded in gateway responses (e.g., `ech-enabled;expiry=2025-06-12T12:00:00Z`). | Monitor synthetically; on `ech-disabled` or `degraded`, follow the playbooks below.
+| Logs | `journalctl -u sorafs-gateway-acme@*.service` | Renewal traces, challenge errors, and manual overrides. | Capture logs with incident tickets and during drills.
 
-Prometheus や OpenTelemetry にメトリクスを公開し、失効・更新トレンド向けダッシュボードを構築してください。`X-Sora-TLS-State` を 1 時間ごとに検証する合成プローブも用意してください。
+Expose the metrics via Prometheus/OpenTelemetry, wire dashboards for expiry and
+renewal trends, and create synthetic probes that verify the
+`X-Sora-TLS-State` header hourly.
 
-### アラート配線
+### Alert Wiring
 
-- **有効期限の猶予:** `sorafs_gateway_tls_cert_expiry_seconds` が 14 日未満になったら警告、7 日未満でクリティカルアラートを発報し、**緊急証明書ローテーション** プレイブックへ誘導します。
-- **更新失敗:** `sorafs_gateway_tls_renewal_total{result="error"}` が 6 時間で 3 回以上増加した場合にインシデントを起票し、自動化ログを添付します。
-- **GAR 違反:** `torii_sorafs_gar_violations_total` のアラートをガバナンス評議会チャンネルへ直接ルーティングし、例外承認やトラフィック切替の判断を迅速化します。
-- **ECH 状態のずれ:** `sorafs_gateway_tls_ech_enabled` が予定外に `1` から `0` へ変化した際は開発者体験チームへ通知し、SDK/運用チームへの周知を行います。
+- **Expiry runway:** Alert when `sorafs_gateway_tls_cert_expiry_seconds` drops
+  below 14 days (warning) and 7 days (critical). Page the gateway on-call and
+  link to the **Emergency Certificate Rotation** playbook.
+- **Renewal failures:** Trigger an incident when
+  `sorafs_gateway_tls_renewal_total{result="error"}` increases more than three
+  times in a six-hour window. Attach automation logs to the ticket.
+- **GAR violations:** Route `torii_sorafs_gar_violations_total` alarms directly
+  to the governance council channel so policy waivers can be granted or traffic
+  can be diverted.
+- **ECH state drift:** Alert the developer experience rotation when
+  `sorafs_gateway_tls_ech_enabled` flips from `1` to `0` outside of a scheduled
+  play; downstream SDKs must be notified to adjust expectations.
 
-## GAR ポリシーフック
+## GAR Policy Hooks
 
-- ゲートウェイのポリシー拒否時は `torii_sorafs_gar_violations_total{policy_reason,policy_detail}` がインクリメントされ、Prometheus/Alertmanager でガバナンス用アラームが自動発火します。
-- Torii は `DataEvent::Sorafs(GarViolation)` を発行し、プロバイダー識別子、拒否理由、レートリミット状況を SSE や Webhook で購読できます。ガバナンスのコンプライアンスパイプラインへ接続してください。
-- リクエストログに `policy_reason`、`policy_detail`、`provider_id_hex` の構造化フィールドが追加され、フォレンジック調査と監査証跡の収集が容易になります。
+- Gateway policy denials increment `torii_sorafs_gar_violations_total{reason,detail}` so Prometheus/Alertmanager can trigger governance-alarm playbooks automatically.
+- Torii now emits `DataEvent::Sorafs(GarViolation)` messages containing provider identifiers, denylist metadata, and rate-limit context. Subscribe via the existing SSE/webhook adapters to feed governance compliance pipelines.
+- Request logs add structured `policy_reason`, `policy_detail`, and `provider_id_hex` fields, simplifying forensic triage and audit evidence collection.
 
-## コンプライアンスとガバナンス
+## Compliance & Governance
 
-運用者は Nexus ガバナンスと整合させるため次の義務を満たす必要があります。
+Operators must satisfy the following obligations to remain in good standing
+with Nexus governance:
 
-- **GAR 整合性:** 更新完了ごとに GAR マニフェストへ新しい証明書フィンガープリントを公開し、オートメーションログ、自己証明バンドル、アテステーションフィンガープリントをガバナンス評議会へ提出する。
-- **ポリシーロギング:** GAR 違反ログを最低 180 日間保管し、四半期ごとのコンプライアンス報告に含める。
-- **アテステーション保管:** `cargo xtask sorafs-self-cert` の出力を `artifacts/sorafs_gateway_tls/<YYYYMMDD>/` に保存し、監査人に閲覧権限を付与する。
-- **設定変更管理:** `torii.sorafs_gateway` の変更を変更管理システムに記録し、`ech_enabled` の切り替えや更新閾値の調整理由を明記する。
-- **演習実施:** 本ガイドで定義した演習を実行し、3 営業日以内に結果を記録する。
+- **GAR alignment:** publish updated certificate fingerprints in GAR manifests
+  whenever a renewal completes. Submit evidence (automation logs, self-cert
+  bundle, attestation fingerprint) to the governance council.
+- **Policy logging:** retain GAR violation logs for at least 180 days and
+  include them in quarterly compliance reports.
+- **Attestation retention:** archive every `scripts/sorafs_gateway_self_cert.sh`
+  output under `artifacts/sorafs_gateway_tls/<YYYYMMDD>/` and grant auditors
+  read-only access.
+- **Config change management:** record `torii.sorafs_gateway` changes in your
+  change-control system, including the reason for toggling `ech_enabled` or
+  adjusting renewal thresholds.
+- **Drill execution:** run the drills defined in this guide and document the
+  results within three business days.
 
-### コンプライアンス証跡チェックリスト
+### Compliance Evidence Checklist
 
-| 義務 | 収集する証跡 | 保持期間 | 担当 |
-|------|---------------|----------|------|
-| GAR 整合性 | 更新後の GAR マニフェスト、署名済みフィンガープリントバンドル、関連チケットへのリンク。 | 3 年 | ガバナンスリエゾン |
-| ポリシーログ | `torii_sorafs_gar_violations_total` のエクスポート、構造化ログ、Alertmanager 通知。 | 180 日 | 観測チーム |
-| アテステーション保管 | `cargo xtask sorafs-self-cert` レポート、TLS ヘッダースナップショット、OpenSSL フィンガープリント。 | 3 年 | ゲートウェイ運用チーム |
-| 変更管理 | `torii.sorafs_gateway` の差分、承認記録、デプロイ時刻。 | 2 年 | 変更管理責任者 |
-| 演習記録 | 演習トラッカーの記録、参加者一覧、フォローアップ課題。 | 2 年 | カオスコーディネーター |
-| ECH 切替イベント | 設定変更ログ、SDK/運用チーム向け署名済み告知、前後のテレメトリスナップショット。 | 2 年 | 開発者体験チーム |
+| Obligation | Evidence to collect | Retention | Owner |
+|------------|--------------------|-----------|-------|
+| GAR alignment | Updated GAR manifest, signed certificate fingerprint bundle, incident/change ticket link. | 3 years | Governance liaison |
+| Policy logging | `torii_sorafs_gar_violations_total` exports, structured log excerpts, Alertmanager notifications. | 180 days | Observability |
+| Attestation retention | Self-cert JSON report, TLS header snapshot, OpenSSL fingerprint output. | 3 years | Gateway operations |
+| Change management | Config diff (`torii.sorafs_gateway`), approval record, deployment timestamp. | 2 years | Change manager |
+| Drill documentation | Drill tracker entry, participant list, follow-up issues. | 2 years | Chaos coordinator |
+| ECH toggle events | Config change log, signed bulletin to SDK/ops mailing list, telemetry snapshot before/after. | 2 years | Developer experience |
 
-## 運用プレイブック
+## Operational Playbooks
 
-### 緊急証明書ローテーション
+### Emergency Certificate Rotation
 
-**発火条件**
-- `sorafs_gateway_tls_cert_expiry_seconds` < 1,209,600 (14 日)。
-- `sorafs_gateway_tls_renewal_total{result="failure"}` が更新ウィンドウ内で 2 回発生。
-- `X-Sora-TLS-State` が `last-error=` を示す、またはクライアントから証明書不一致やハンドシェイク失敗が報告される。
+**Trigger criteria**
+- `sorafs_gateway_tls_cert_expiry_seconds` < 1,209,600 (14 days).
+- `sorafs_gateway_tls_renewal_total{result="failure"}` fires twice within the renewal window.
+- `X-Sora-TLS-State` advertises `last-error=` or clients report certificate mismatch/handshake failures.
 
-**安定化手順**
-1. SoraFS ゲートウェイ TLS オンコールにページを送り、`#sorafs-incident` でインシデントを立ち上げる。
-2. 構成ロールアウトを一時停止し、現在の設定コミットハッシュをインシデントチケットへ記録する。
-3. `torii.sorafs_gateway.acme.enabled = false` と設定し、変更をコミットしてゲートウェイデプロイを再起動し、自動化を停止する。
+**Stabilise**
+1. Page the SoraFS gateway TLS on-call and open an incident in `#sorafs-incident`.
+2. Pause configuration rollouts and record the current config commit in the incident ticket.
+3. Disable automation by setting `torii.sorafs_gateway.acme.enabled = false`, commit the change, and restart the gateway deployment.
 
-**新バンドルの発行とデプロイ**
-1. 監査用の状態を採取する。
+**Issue and deploy replacement bundle**
+1. Capture the current state for auditing:
    ```bash
    curl -sD - https://gateway.example/status \
      | grep -i '^x-sora-tls-state'
    openssl s_client -connect gateway.example:443 -servername gateway.example \
      < /dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
    ```
-2. リポジトリのラッパーを使用して決定的なバンドルを生成します。
+2. Generate a replacement bundle with the repository wrapper (writes PEM files to the pending directory):
    ```bash
    scripts/sorafs-gateway tls renew \
      --host gateway.example \
@@ -186,8 +379,14 @@ Prometheus や OpenTelemetry にメトリクスを公開し、失効・更新ト
      --directory-url https://acme-v02.api.letsencrypt.org/directory \
      --force
    ```
-   `pending` ディレクトリに `fullchain.pem`、`privkey.pem`、`ech.json` が出力されます。
-3. シークレットストアへ配置し、Torii をリロードしてください。
+   The command emits `fullchain.pem`, `privkey.pem`, and `ech.json` under the pending directory.
+   If the systemd automation unit manages renewals in your environment, restart it after running the CLI to resume background polling:
+   ```bash
+   sudo systemctl restart sorafs-gateway-acme@production.service
+   journalctl -fu sorafs-gateway-acme@production.service
+   ```
+   Production ACME clients remain available for validated accounts, but the CLI above provides the deterministic self-signed bundle required for staging drills.
+3. Stage the bundle in secrets and reload Torii:
    ```bash
    install -m 600 /var/lib/sorafs_gateway_tls/pending/fullchain.pem /etc/iroha/sorafs_gateway_tls/fullchain.pem
    install -m 600 /var/lib/sorafs_gateway_tls/pending/privkey.pem  /etc/iroha/sorafs_gateway_tls/privkey.pem
@@ -195,85 +394,95 @@ Prometheus や OpenTelemetry にメトリクスを公開し、失効・更新ト
    systemctl reload iroha-torii.service
    ```
 
-**検証と自動化の復帰**
-1. 自己証明ハーネスを実行してください。
+**Validate and restore automation**
+1. Run the self-cert harness:
    ```bash
    scripts/sorafs_gateway_self_cert.sh \
      --gateway https://gateway.example \
-     --cert /etc/iroha/sorafs_gateway_tls/fullchain.pem \
-     --ech-config /etc/iroha/sorafs_gateway_tls/ech.json \
+     --signing-key /etc/iroha/sorafs_gateway_tls/gateway_attestor.hex \
+     --signer gateway-ops@operator \
      --out artifacts/sorafs_gateway_self_cert
    ```
-2. テレメトリの回復を確認してください。
-   - `sorafs_gateway_tls_cert_expiry_seconds` > 2,592,000 (30 日)。
-   - `sorafs_gateway_tls_renewal_total{result="success"}` が 1 増加。
-   - `X-Sora-TLS-State` が `ech-enabled;expiry=…;renewed-at=…` で `last-error` を含まない。
-3. 新しいフィンガープリント (GAR マニフェスト + アテステーションバンドル) をガバナンス成果物に反映し、インシデントチケットへ添付してください。
-4. `torii.sorafs_gateway.acme.enabled = true` に戻して Torii を再読み込みし、停止していたパイプラインを再開してください。3 営業日以内に事後報告を提出してください。
+2. Confirm telemetry recovered:
+   - `sorafs_gateway_tls_cert_expiry_seconds` > 2,592,000 (30 days).
+   - `sorafs_gateway_tls_renewal_total{result="success"}` increments once.
+   - `X-Sora-TLS-State` reports `ech-enabled;expiry=…;renewed-at=…` with no `last-error`.
+3. Update governance artefacts with the new fingerprint (GAR manifest + attestation bundle) and attach them to the incident ticket.
+4. Re-enable automation by setting `torii.sorafs_gateway.acme.enabled = true` and reloading Torii. Resume paused pipelines and file the post-incident report within three business days.
 
-### ECH フォールバック／縮退モード
+### ECH Fallback / Degraded Mode
 
-CDN やクライアントが ECH を処理できない場合に使用します。
+Use this play when CDNs or clients fail to consume ECH.
 
-1. `sorafs_gateway_tls_ech_enabled == 0`、`GREASE_ECH_MISMATCH` を含む顧客インシデント、またはガバナンスからの指示を検知してください。
-2. ECH を無効化してください。
+1. Detect via `sorafs_gateway_tls_ech_enabled == 0`, customer incidents citing `GREASE_ECH_MISMATCH`, or governance directives.
+2. Disable ECH:
    ```toml
    [torii.sorafs_gateway.acme]
    ech_enabled = false
    ```
-   設定を適用 (または `iroha_cli config apply` を使用) し、Torii を再起動してください。`X-Sora-TLS-State` が `ech-disabled` を示すことを確認してください。
-3. ストレージオペレーター、SDK チーム、ガバナンスに通知し、レビュー期間を共有してください。
-4. ECH 無効化中は `sorafs_gateway_tls_renewal_total{result="failure"}` を監視し、TLS 更新の揺らぎがないか確認してください。
-5. 上流サービスが復旧したら、次のラッパーを使って決定的なバンドルを生成してください。
-   ```bash
-   scripts/sorafs-gateway tls renew \
-     --host gateway.example \
-     --out /var/lib/sorafs_gateway_tls/pending \
-     --account-email tls-ops@example.com \
-     --directory-url https://acme-v02.api.letsencrypt.org/directory \
-     --force
-   ```
-   これにより `pending` ディレクトリに PEM ファイルが出力されます。Torii を更新し、自己証明ハーネスを再実行してから `ech_enabled = true` を戻し、最新テレメトリを共有してください。
+   Apply the config (or use `iroha_cli config apply`), then restart Torii. The `X-Sora-TLS-State` header should now advertise `ech-disabled`.
+3. Broadcast the downgrade to storage operators, SDK teams, and governance, including the expected review window.
+4. Monitor `sorafs_gateway_tls_renewal_total{result="failure"}` for additional TLS churn while ECH remains disabled.
+5. Once upstream services recover, restart the automation service (or invoke your ACME client manually) to produce a fresh bundle with ECH configs, rerun the self-cert harness, toggle `ech_enabled = true`, and share the updated telemetry snippets.
 
-### 秘密鍵侵害時の失効
+### Compromised-Key Revocation
 
-秘密鍵が漏洩した、または CA が誤発行を報告した場合に適用します。
+Apply this playbook when private keys are exposed or the CA reports mis-issuance.
 
-1. 自動化を停止したまま、ストリームトークン署名鍵を運用ハンドブックに従ってローテーションし、資格情報の再利用を防いでください。
-2. 次のコマンドで既存バンドルをアーカイブ付きで失効させてください (ファイルは `revoked/` に移動されます)。
+1. Keep automation disabled and rotate stream-token signing keys per the operations handbook to prevent credential reuse.
+2. Revoke the current bundle with the repository wrapper (archives artifacts under `revoked/`):
    ```bash
    scripts/sorafs-gateway tls revoke \
      --out /var/lib/sorafs_gateway_tls \
      --reason keyCompromise
    ```
-   生成される JSON 監査ファイルおよびアーカイブをインシデント記録に添付してください。
-3. `scripts/sorafs-gateway tls renew --out /var/lib/sorafs_gateway_tls/pending --force` で新しいバンドルを発行し、緊急ローテーションと同じ検証手順に従ってください。
-4. 更新済み GAR エンベロープと `manifest_signatures.json` を公開し、下流ノードが新フィンガープリントを採用できるようにしてください。
-5. インシデント ID、失効日時、対処内容を添えてガバナンス評議会と SDK チームへ通知してください。
+   The command moves `fullchain.pem`, `privkey.pem`, and `ech.json` into a timestamped backup and records an audit JSON file alongside them.
+3. Issue a fresh bundle via `scripts/sorafs-gateway tls renew --out /var/lib/sorafs_gateway_tls/pending --force` (or your production ACME workflow), then follow the validation steps from the rotation playbook.
+4. Publish updated GAR envelopes and `manifest_signatures.json` so downstream nodes adopt the new fingerprint.
+5. Notify the governance council and SDK teams with incident ID, revocation timestamp, and remediation instructions.
 
-## 演習頻度とエビデンス
+## Drill Cadence & Evidence
 
-| 演習 | 頻度 | シナリオ | 成功基準 |
+| Drill | Frequency | Scenario | Success criteria |
 |-------|-----------|----------|------------------|
-| `tls-renewal` | 四半期ごと | ステージング環境で緊急ローテーションを実施 (自動化停止/再開を含む)。 | 15 分未満で完了し、テレメトリが更新され、成果物が保管される。 |
-| `ech-fallback` | 年 2 回 | ECH を 1 時間無効化して復旧。 | 通知が配信され、`X-Sora-TLS-State` が両状態を示し、未解決アラートが残らない。 |
-| `tls-revocation` | 年 1 回 | 秘密鍵侵害を想定し、ステージング証明書を失効。 | 失効が確認され、新バンドルがデプロイされ、GAR が更新される。 |
+| `tls-renewal` | Quarterly | Execute the full rotation playbook in staging (automation off/on). | Renewal completes in < 15 min, telemetry updated, artefacts archived. |
+| `ech-fallback` | Twice yearly | Disable and restore ECH for one hour. | Clients receive bulletins, `X-Sora-TLS-State` reflects both states, zero lingering alerts. |
+| `tls-revocation` | Annually | Simulate key compromise and revoke staging cert. | Revocation confirmed, replacement bundle deployed, GAR update published. |
 
-各演習後の手順:
-- 自動化ログ、Prometheus スナップショット、自己証明出力を `artifacts/sorafs_gateway_tls/<YYYYMMDD>/` に保管してください。
-- `docs/source/sorafs_chaos_plan.md` の演習トラッカーを更新し、参加者、所要時間、観察事項、フォローアップを記録してください。
-- 自動化の不具合はエビデンスを添えて SF-5 または SF-7 のロードマップフォローアップとして登録してください。
+After every drill:
+- Archive automation logs, Prometheus snapshots, and self-cert output in `artifacts/sorafs_gateway_tls/<YYYYMMDD>/`.
+- Update the chaos drill tracker (`docs/source/sorafs_chaos_plan.md`) with drill participants, duration, observations, and follow-up tasks.
+- File any automation regressions as roadmap follow-ups (SF-5, SF-7) with linked evidence.
 
-## トラブルシューティング
+## Troubleshooting
 
-- **自動化ログで DNS-01 失敗が連続する:** 設定した `dns_provider` の IAM 権限を確認し、`dig _acme-challenge.gateway.example.com txt` で TXT レコード伝播を検証する。
-- **`X-Sora-TLS-State` が欠落/不正:** 証明書配置後に Torii をリロードしたか確認し、`Metrics::set_sorafs_tls_state` が成功しているか (Torii ログの warn を確認) をチェックする。
-- **GAR 違反カウンタが増加:** `torii_sorafs_gar_violations_total` の構造化ログを精査し、問題のプロバイダーまたはマニフェストを是正、ガバナンスへ通知した後にトラフィックを再開する。
-- **ECH 無効化後もクライアント失敗が継続:** CDN (Cloudflare/CloudFront) のキャッシュを無効化し、利用者へフォールバックホスト名を共有する。
+- **Automation log shows repeated DNS-01 failures:** verify IAM permissions for
+  the configured `dns_provider` and confirm TXT propagation with
+  `dig _acme-challenge.gateway.example.com txt`.
+- **`X-Sora-TLS-State` missing or malformed:** ensure the Torii service was
+  reloaded after copying certificates and that
+  `Metrics::set_sorafs_tls_state` succeeds (check Torii logs for `warn` level
+  failures).
+- **GAR violation counters increasing:** inspect the structured logs emitted in
+  `torii_sorafs_gar_violations_total`, remediate the offending provider or
+  manifest, and notify governance before re-enabling traffic.
+- **ECH clients still failing after toggle:** confirm caches were invalidated
+  (Cloudflare/CloudFront) and share fallback hostnames with integrators.
 
-## 実装メモ
+## Implementation Notes
 
-- **ACME クライアントライブラリ:** `letsencrypt-rs` を使用し、DNS-01/TLS-ALPN-01 の両チャレンジに対応します。既存の非同期エグゼキューターと統合され、Apache-2.0 で提供されます。
-- **DNS プロバイダー抽象化:** デフォルトで Route53 をサポートします。`DnsProvider` トレイトを通じて Cloudflare や Google Cloud DNS を追加実装でき、コントローラー本体の変更は不要です。`acme.dns_provider = "<provider>"` で設定します。
-- **テレメトリ命名整合:** テレメトリ表に示した名前が観測チームに承認済みであり、時間値は秒単位で公開されます。アップグレード後はダッシュボードのスキーマ変更を確認してください。
-- **自己証明統合:** 証明書更新ごとに TLS 自動化フローが自己証明キットを起動します。`sorafs_gateway_tls_automation.yml` が `cargo xtask sorafs-self-cert --check-tls` を呼び出し、通知前に TLS/ECH の検証を自動化します。
+- **ACME client library:** the deployment uses
+  [`letsencrypt-rs`](https://crates.io/crates/letsencrypt-rs) for both DNS-01 and
+  TLS-ALPN-01 challenges. It integrates with the async executor already present
+  in the gateway and ships under Apache-2.0.
+- **DNS provider abstraction:** Route53 support is available by default. The
+  automation exposes a `DnsProvider` trait so teams can implement Cloudflare or
+  Google Cloud DNS providers without touching the controller. Configure the
+  provider via `acme.dns_provider = "<provider>"`.
+- **Telemetry naming alignment:** Observability approved the metric names in the
+  telemetry table; durations are exposed in seconds. Review dashboards after
+  upgrades to ensure schema changes are reflected.
+- **Self-cert integration:** the TLS automation flow invokes the self-cert kit
+  after each renewal. `sorafs_gateway_tls_automation.yml` calls
+  `scripts/sorafs_gateway_self_cert.sh` before notifying operators, making
+  TLS/ECH validation part of the automated rollout.

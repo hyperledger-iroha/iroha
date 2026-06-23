@@ -82,7 +82,7 @@ Para definições de campos detalhados, veja
 
 ## Referência de sinalizadores CLI e SDK
 
-`sorafs_cli fetch` (veja `crates/sorafs_car/src/bin/sorafs_cli.rs`) e o invólucro
+`sorafs_cli fetch` (veja `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) e o invólucro
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) compartilhando o mesmo
 superfície de configuração do orquestrador. Use as seguintes bandeiras ao longo do
 capture as previsões de implantação ou rejouer les fixtures canonices:

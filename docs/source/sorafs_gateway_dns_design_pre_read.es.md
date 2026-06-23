@@ -9,156 +9,176 @@ source_last_modified: "2025-11-09T01:57:45.496541+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Arranque de diseño de SoraFS Gateway y DNS (2025-03-03) — Pre-read
+# SoraFS Gateway & DNS Design Kickoff (2025-03-03) - Outcome Brief
 
-Este memo enmarca el kickoff de diseño gateway/DNS solicitado en `roadmap.md`.
-Los stakeholders deben revisar el alineamiento de alcance, las barandillas de
-GAR enforcement y las expectativas del harness de conformidad antes de la
-reunión para dedicar la sesión a decisiones y no a sincronizar estados.
+This memo now records the gateway/DNS kickoff outcome requested in
+`roadmap.md`. It stays at the original pre-read path because the agenda,
+attendance tracker, and runbook link here as the canonical briefing bundle.
+Use it as the close-out reference for scope, owners, evidence, and follow-up
+tracks rather than as a request for a future meeting.
 
-## Logística de la reunión
-- **Fecha / hora:** 2025-03-03 @ 16:00 UTC (60 minutos). Ajustar según la
-  disponibilidad final.
-- **Facilitador:** Networking TL (dueño de la agenda).
-- **Participantes esperados:** Networking TLs, Ops leads, reps de Storage Team,
-  Tooling WG, governance liaison, QA Guild (mantenedores del harness), y
-  observadores de Docs/DevRel para playbooks downstream.
-- **Paquete de lectura previa:** Esta nota más los artefactos normativos bajo
-  [Paquete de referencia](#paquete-de-referencia).
-- **Criterios de éxito:** Acuerdo sobre alcance, hand-offs y orden de hitos
-  para iniciar implementación apenas SF-2 salga de revisión de rollout.
+## Kickoff Record
 
-## Objetivos del kickoff
-1. Fijar la visión compartida para el naming determinista de SoraDNS (SF-4) y
-   el servicio trustless de gateway (SF-5), incluyendo secuencia y mapa de owners.
-2. Ratificar el MVP de GAR enforcement para que las violaciones de política
-   sean deterministas y observables en todos los operadores.
-3. Validar el plan de cobertura del harness de conformidad SF-5a y confirmar
-   el resourcing de QA Guild para suites de replay, negativas y de carga.
-4. Capturar el plan de integración para Torii, manifiestos de admisión y
-   runbooks operativos para que Docs/DevRel pueda preparar updates junto a los
-   cambios de código.
+- **Date / time:** 2025-03-03 @ 16:00 UTC (60 minutes), completed.
+- **Facilitator:** Networking TL (agenda owner).
+- **Participants:** Networking TLs, Ops leads, Storage Team reps, Tooling WG,
+  Governance liaison/delegate, QA Guild, Torii Platform, Security Engineering,
+  and Docs/DevRel observers.
+- **Evidence bundle:** See
+  `docs/source/sorafs_gateway_dns_design_runbook.md` section 9 and
+  `docs/source/sorafs_gateway_dns_design_minutes.md`.
+- **Success criteria:** Scope, hand-offs, owner assignments, and milestone
+  ordering were recorded so implementation and operator documentation could
+  proceed from the same evidence set.
 
-## Contexto y dependencias
-- **Inputs upstream:** `sorafs_manifest` provider adverts (SF-2), fixtures de
-  chunker (SF-1b) y tooling de política de admisión (SF-2b/2c) son las fuentes
-  canónicas para política de gateway y naming determinista.
-- **Consumidores downstream:** `sorafs-node`, orquestadores de SDK (SF-6b),
-  tooling de operadores de gateway y el portal Docusaurus (`docs/portal/`) dependen
-  de las decisiones de este kickoff.
-- **Alineación de políticas:** Los manifiestos GAR y sobres de telemetría ya
-  pasan por `sorafs_manifest::gateway` e `iroha_torii` (ver referencias); el
-  kickoff debe decidir cómo la automatización DNS y los despliegues de gateway
-  ingieren esos mismos artefactos sin overrides específicos por operador.
+## Delivered Outcomes
 
-## Snapshot de alcance
+1. Locked the shared approach for deterministic SoraDNS naming (SF-4) and the
+   trustless gateway service (SF-5), including the owner chart in
+   `docs/source/sorafs_gateway_dns_design_attendance.md`.
+2. Ratified GAR enforcement around the shared manifest/gateway evaluator,
+   telemetry, and signed evidence artifacts so policy violations remain
+   deterministic and observable across operators.
+3. Confirmed SF-5a conformance expectations: fixture replay, negative coverage,
+   load evidence, and signed attestation envelopes stay under the gateway
+   conformance plan and CI harness.
+4. Aligned Torii, admission manifests, DNS automation, TLS/ECH automation, and
+   operator runbooks so Docs/DevRel can keep public guidance tied to shipped
+   tooling.
 
-### DNS determinista y naming (SF-4/SF-4a)
-- Derivación canónica de hosts desde manifiestos, incluyendo namespace y labels
-  de capacidades (p. ej., `cid.gateway.sora` vs `anon.gateway.sora`).
-- Cache de pruebas de alias y política TTL (`roadmap.md` SF-4a) para mantener
-  pruebas deterministas y evitar la circulación de sobres GAR obsoletos.
-- Expectativas de automatización DNS: integración ACME DNS-01 para wildcard,
-  registros TXT canónicos con GAR y logging de auditoría para rotación de pruebas.
-- Hooks de governance para agrupar cambios DNS con updates de manifiesto GAR
-  para que la auto-certificación del operador sea reproducible.
+## Context & Dependencies
 
-### Hardening del servicio de gateway (SF-5)
-- Alineación del perfil HTTP trustless (ver `docs/source/sorafs_gateway_profile.md`)
-  que cubre streams CAR, semánticas de rechazo y headers de telemetría.
-- Operación en modo directo para respetar checks de capacidades del manifiesto
-  mientras se incrementan los defaults de SoraNet (ver `docs/source/sorafs_gateway_direct_mode.md`).
-- Rate limiting y hooks de denylist ligados a manifiestos Norito para que governance
-  revise cada decisión de política con artefactos firmados.
-- Baseline de automatización de despliegue (`docs/source/sorafs_gateway_deployment_handbook.md`)
-  para asegurar que cada gateway exponga la misma superficie: métricas
-  `torii_sorafs_gar_violations_total`, telemetría `Sora-TLS-State` y bundles de
-  atestación GAR.
+- **Upstream inputs:** `sorafs_manifest` provider adverts (SF-2), chunker
+  fixtures (SF-1b), and admission policy tooling (SF-2b/2c) remain the
+  canonical data sources for gateway policy and deterministic naming.
+- **Downstream consumers:** `sorafs-node`, SDK orchestrators (SF-6b), gateway
+  operator tooling, and the Docusaurus portal (`docs/portal/`) consume the
+  resulting host plans, GAR artifacts, proof headers, and self-cert bundles.
+- **Policy alignment:** GAR manifests and telemetry envelopes wire through
+  `sorafs_manifest::gateway` and `iroha_torii`; DNS automation and gateway
+  deployments must ingest those artifacts rather than inventing per-operator
+  policy schemas.
 
-## Alcance de GAR enforcement (borrador kickoff)
-Estado actual:
-- Parseo de sobres GAR, verificación de firmas y matching de host canónico están
-  implementados en `crates/sorafs_manifest/src/gateway.rs`.
-- Telemetría y alertas de violaciones GAR viven en
-  `crates/iroha_torii/src/sorafs/api.rs` y `crates/iroha_telemetry/src/metrics.rs`.
-- Documentos de automatización TLS enumeran artefactos GAR y flujos de renovación
-  (`docs/source/sorafs_gateway_tls_automation.md`).
+## Scope Snapshot
 
-Temas a debatir:
-1. **Motor de política en runtime:** definir si los gateways enlazan directo con
-   `sorafs_manifest::gateway::Evaluator` o consumen un cache de política firmado
-   en Norito refrescado vía Torii.
-2. **Superficie de configuración:** confirmar knobs de `iroha_config` que exponen
-   GAR enforcement (patrones de host, fallbacks de admisión, sinks de telemetría) y
-   mapearlos a overrides del operador sin debilitar determinismo.
-3. **Escalamiento de violaciones:** acordar el mínimo de automatización para enrutar
-   alertas `torii_sorafs_gar_violations_total` hacia governance, incluyendo el
-   esquema JSON que operadores adjuntan a tickets de incidentes.
-4. **Artefactos de auditoría:** definir la estructura de archivo para atestaciones
-   GAR (`manifest_signatures.json`, sobre del operador, output de conformidad) para
-   que Docs los incluya en el flujo de auto-certificación.
+### Deterministic DNS & Naming (SF-4/SF-4a)
 
-## Chequeo de alcance del harness de conformidad (SF-5a)
-Plan de implementación de referencia: `docs/source/sorafs_gateway_conformance.md`.
+- Canonical host derivation from manifests, including namespace and capability
+  labels such as `cid.gateway.sora` and `anon.gateway.sora`.
+- Alias proof caching and TTL policy (`roadmap.md` SF-4a) that keeps proofs
+  deterministic and prevents stale GAR envelopes from circulating.
+- DNS automation uses the checked-in `cargo xtask soradns-hosts`,
+  `soradns-gar-template`, `soradns-binding-template`,
+  `soradns-directory-release`, and `soradns-acme-plan` helpers for host
+  patterns, GAR templates, binding headers, directory releases, and ACME SAN
+  evidence.
+- Governance hooks bundle DNS changes with GAR manifest updates so operator
+  self-certification remains reproducible.
 
-Confirmaciones clave para el kickoff:
-- La suite de replay debe gatear _cada_ manifiesto del bundle canónico de fixtures
-  y se invoca via `ci/check_sorafs_gateway_conformance.sh` (ya scriptado).
-- La cobertura negativa incluye chunkers no soportados, pruebas malformadas,
-  mismatches de admisión, intentos de downgrade y escenarios de rechazo GAR; QA
-  Guild confirma ownership de curaduría continua de fixtures.
-- Target del harness de carga: ≥1.000 streams concurrentes (mix de éxito y rechazo)
-  con thresholds deterministas de latencia y telemetría que alimente el output de
-  atestación firmado.
-- Pipeline de atestación: asegurar que el flujo de sobres Norito descrito en
-  `sorafs_gateway_conformance.md` alinea con requisitos de governance y documentar
-  cómo los operadores envían reportes via `sorafs-gateway-cert`.
+### Gateway Service Hardening (SF-5/SF-5b)
 
-## Puntos de decisión para el kickoff
-1. Elegir el stack canónico de automatización DNS (Terraform + RFC2136 signer vs
-   Torii-managed) y definir el proceso de escrow de artefactos GAR/DNS.
-2. Aprobar el enfoque de integración del motor de política GAR y sus superficies
-   de configuración asociadas.
-3. Validar criterios de aceptación del harness, owners de sign-off y entry-points
-   de CI.
-4. Secuenciar hitos: MVP de automatización DNS, enforcement de política en gateway,
-   corrida pública de conformidad, lanzamiento de auto-certificación de operadores.
+- Trustless HTTP profile alignment stays in
+  `docs/source/sorafs_gateway_profile.md`, covering CAR streams, refusal
+  semantics, and telemetry headers.
+- Direct-mode operation follows
+  `docs/source/sorafs_gateway_direct_mode.md` while SoraNet defaults ramp.
+- Rate limiting and denylist hooks remain tied to Norito manifests so
+  governance can review policy decisions with signed artifacts.
+- Deployment automation is documented in
+  `docs/source/sorafs_gateway_deployment_handbook.md` and the TLS/ECH operator
+  guide. SF-5b TLS/ECH automation is no longer a future milestone for this
+  kickoff record; operators use `scripts/sorafs_gateway_self_cert.sh` and
+  `cargo xtask sorafs-gateway-probe` for evidence capture.
 
-## Preguntas abiertas a resolver
-- ¿Requerimos soporte ECH en el MVP o puede quedar tras el hito SF-5b ya entregado
-  en la automatización TLS?
-- ¿Qué telemetría adicional o hooks de governance son necesarios para acceso
-  anónimo / blinded-CID (liga a ítems del roadmap SNNet-2)?
-- ¿Se necesitan más sign-offs legales/compliance para logs de GAR enforcement
-  antes de publicar plantillas de operadores?
-- ¿Qué entornos (devnet, staging, prod) deben adoptar el flujo DNS determinista
-  antes de permitir onboarding al gateway beta?
+## GAR Enforcement Scope
 
-## Paquete de referencia
+Current status:
+
+- GAR envelope parsing, signature verification, and canonical host matching are
+  implemented in `crates/sorafs_manifest/src/gateway.rs`.
+- Telemetry and alerting for GAR violations land in
+  `crates/iroha_torii/src/sorafs/api.rs` and
+  `crates/iroha_telemetry/src/metrics.rs`.
+- TLS automation documents enumerate GAR artifacts, ECH behavior, renewal
+  flows, and fallback procedures in
+  `docs/source/sorafs_gateway_tls_automation.md`.
+
+Resolved decisions:
+
+1. **Runtime policy engine:** gateways use the shared
+   `sorafs_manifest::gateway` policy surface and signed Norito artifacts for
+   hand-off; no separate operator-local policy schema is introduced.
+2. **Configuration surface:** production behavior must come from
+   `iroha_config`/operator config bundles, with GAR host patterns, admission
+   fallbacks, telemetry sinks, and TLS/ECH settings documented in the gateway
+   operator guides.
+3. **Violation escalation:** `torii_sorafs_gar_violations_total` and probe
+   reports are the escalation inputs for governance/on-call routing, with JSON
+   evidence attached to incident tickets.
+4. **Audit artifacts:** self-cert archives include manifest signatures, GAR
+   envelopes, operator metadata, conformance output, TLS/ECH probe reports, and
+   hashes listed in the kickoff evidence bundle.
+
+## Conformance Harness Record (SF-5a)
+
+Reference implementation plan: `docs/source/sorafs_gateway_conformance.md`.
+
+Confirmed harness coverage:
+
+- Replay suites gate canonical fixture manifests through
+  `ci/check_sorafs_gateway_conformance.sh`.
+- Negative coverage includes unsupported chunkers, malformed proofs, admission
+  mismatches, downgrade attempts, and GAR refusal scenarios.
+- Load evidence remains part of the acceptance package, with deterministic
+  latency thresholds and telemetry capture feeding the signed attestation
+  output.
+- Attestation verification is handled by the gateway conformance tooling and
+  the `cargo xtask sorafs-gateway-attest --verify` path.
+
+## Recorded Decisions
+
+1. Use the SoraDNS `xtask` helpers plus signed RAD/directory evidence as the
+   canonical DNS automation baseline.
+2. Keep GAR policy decisions in the shared manifest/gateway evaluator and
+   signed artifacts consumed by Torii and operators.
+3. Treat TLS/ECH as an SF-5b operator-guide concern that is delivered for this
+   kickoff scope, including documented fallback and drill procedures.
+4. Require self-cert, gateway probe, conformance, and telemetry evidence before
+   public operator self-certification.
+
+## Follow-up Tracks
+
+- Anonymous and blinded-CID access still depends on SNNet-2 governance and
+  telemetry decisions.
+- Legal/compliance retention requirements are tracked in the TLS/ECH guide,
+  GAR receipt docs, and governance evidence bundles.
+- Devnet, staging, and production rollout evidence must be appended to
+  `status.md` and the relevant operator runbooks when each environment cuts
+  over.
+- Any conformance or probe failure should be filed against the SF-5a workstream
+  and linked from the attendance/action tracker.
+
+## Reference Package
+
 - `docs/source/sorafs_gateway_profile.md`
 - `docs/source/sorafs_gateway_conformance.md`
 - `docs/source/sorafs_gateway_direct_mode.md`
 - `docs/source/sorafs_gateway_deployment_handbook.md`
 - `docs/source/sorafs_gateway_tls_automation.md`
 - `docs/source/sorafs_gateway_dns_design_runbook.md`
+- `docs/source/sorafs_gateway_dns_design_minutes.md`
 - `crates/sorafs_manifest/src/gateway.rs`
 - `crates/iroha_torii/src/sorafs/api.rs`
 - `crates/iroha_telemetry/src/metrics.rs`
-- `roadmap.md` secciones SF-4/SF-5 y Near-Term Execution (Next 6 Weeks)
+- `roadmap.md` sections SF-4/SF-5 and Near-Term Execution
 
-## Próximas acciones antes de la reunión
-- Circular este pre-read a Networking, Ops, Storage, QA, Governance y Docs;
-  recolectar adiciones de agenda antes del 2025-02-28.
-- Producir un borrador de lista de asistentes e invitación de Slack para el kickoff;
-  confirmar disponibilidad de Ops y leads de automatización DNS.
-- Preparar diagramas anotados (flujo DNS + rutas de política del gateway) para el deck
-  de la reunión; los borradores pueden vivir junto a esta nota en `docs/source/images/`.
-- Recopilar métricas de violaciones GAR en staging (`torii_sorafs_gar_violations_total`)
-  para aterrizar la discusión en el comportamiento actual.
-- Recorrer el ensayo de automatización descrito en
-  `docs/source/sorafs_gateway_dns_design_runbook.md`, archivar los artefactos bajo
-  `artifacts/sorafs_gateway_dns/<run>/` y enlazar el bundle en la invitación para que
-  los participantes inspeccionen evidencia antes de tiempo.
+## Maintained Runbooks & Evidence
 
-Una vez concluya el kickoff, actualizar `status.md` y `roadmap.md` con los hitos
-acordados y asignaciones de owners.
+- Use `docs/source/sorafs_gateway_dns_design_runbook.md` for rehearsal,
+  evidence upload, command reference, and mock-run snapshot details.
+- Keep attendance and owner assignments in
+  `docs/source/sorafs_gateway_dns_design_attendance.md`.
+- Keep close-out decisions in
+  `docs/source/sorafs_gateway_dns_design_minutes.md`.
+- Update this outcome brief only when kickoff decisions or current shipped
+  tooling change; do not reintroduce pre-meeting logistics here.

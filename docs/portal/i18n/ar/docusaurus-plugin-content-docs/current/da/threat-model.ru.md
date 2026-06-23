@@ -228,7 +228,7 @@ commitments, вызывая fetch failures и light-client inconsistencies.
   `crates/iroha_core/src/da/replay_cache.rs` (منطق ذاكرة التخزين المؤقت) والتكامل Torii в
   `crates/iroha_torii/src/da/ingest.rs`، حيث يتم فحص بصمات الأصابع من خلال `/v1/da/ingest`.
 - يتم تنفيذ عمليات محاكاة تدفق PDP/PoTR من خلال أداة إثبات التدفق في
-  `crates/sorafs_car/tests/sorafs_cli.rs`، فتح تدفقات طلب PoR/PDP/PoTR،
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، فتح تدفقات طلب PoR/PDP/PoTR،
   سيناريوهات الفشل من نماذج الألعاب.
 - نتائج نقع القدرة والإصلاح في
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`، Sumeragi مصفوفة النقع в

@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. မန်နီးဖက်စ်တစ်ခုကို တည်ဆောက်ပြီး လက်မှတ်ထိုးပါ။
 
 အတုံးအခဲအစီအစဥ်၊ နာမည်တူနှင့် အုပ်ချုပ်မှုလက်မှတ်များကို ထင်ရှားစွာအသုံးပြု၍ သရုပ်ဖော်ပါ။
-`sorafs-manifest-stub`။ အောက်ပါ command သည် single-file payload ကိုပြသသည်၊ ဖြတ်သန်းပါ။
+`sorafs_manifest_stub`။ အောက်ပါ command သည် single-file payload ကိုပြသသည်၊ ဖြတ်သန်းပါ။
 သစ်ပင်တစ်ပင်ကို ထုပ်ပိုးရန် လမ်းညွှန်လမ်းကြောင်းတစ်ခု (CLI သည် ၎င်းကို အဘိဓာန်အတိုင်း ကျင့်သုံးသည်)။
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

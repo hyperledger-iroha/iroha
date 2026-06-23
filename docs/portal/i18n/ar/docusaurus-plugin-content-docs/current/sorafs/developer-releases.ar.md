@@ -29,7 +29,7 @@ Land CLI والمكتبات، ويضمن كثافة الوبر/الاختبار�
 - أرفق رابط تذكرة المعالجة المركزية (مثل `governance/tickets/SF6-SR-2026.md`) وسجّل
   موافقين على مجموعة عمل أدوات هندسة الأمن.
 - تحقّق من إغلاق قائمة اللوحة الأم في المذكرة؛ النسخة غير المسومة لحظر النسخة.
-- إعداد سجلات السجلات التكافؤ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- إعداد سجلات السجلات التكافؤ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   حزمة المانيفست.
 - تأكد أن أمر التوقيع الذي ستنفذه يشمل `--identity-token-provider` و
   `--identity-token-audience=<aud>` صريحًا حتى يُتصور نطاق Fulcio ضمن دليل النموذج.
@@ -47,9 +47,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
 ينفذ السكربت التحققات التالية:- `cargo fmt --all -- --check` (مساحة العمل)
-- `cargo clippy --locked --all-targets` لحزمة `sorafs_car` (مع الهدف `cli`),
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   و`sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` الحزم نفسها
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 إذا فشل أيٌّ من المتابعة، أصلح السيطرة قبل وضع الوسم. يجب أن تكون بناءات
 الإصدار المفضل بـ الرئيسي؛ لا تفعل ذلك، قم بعمل Cherry-Pick في تصميمات الأقسام.

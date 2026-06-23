@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-02-07
 የመልቀቂያ ጥበብ እንደገና ሊባዛ የሚችል እና ሊመረመር የሚችል ነው።
 
 ፍሰቱ `sorafs_cli` ባለ ሁለትዮሽ (የተሰራው በ
-`--features cli`)፣ የTorii የመጨረሻ ነጥብ ከፒን መዝገብ ፍቃዶች ጋር መድረስ፣ እና
+`sorafs_orchestrator` Cargo target)፣ የTorii የመጨረሻ ነጥብ ከፒን መዝገብ ፍቃዶች ጋር መድረስ፣ እና
 የOIDC ምስክርነቶች ለI18NT0000004X። የረጅም ጊዜ ሚስጥሮችን ያከማቹ (`IROHA_PRIVATE_KEY` ፣
 `SIGSTORE_ID_TOKEN`፣ Torii ማስመሰያዎች) በእርስዎ CI ቮልት ውስጥ; የአካባቢ ሩጫዎች እነሱን ሊያገኙ ይችላሉ።
 ከሼል ኤክስፖርት.

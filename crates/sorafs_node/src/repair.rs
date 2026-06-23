@@ -79,6 +79,18 @@ pub enum RepairStoreError {
     /// Store rejected the update.
     #[error("repair store error: {0}")]
     Other(String),
+    /// Auditor nonce is not greater than the persisted nonce.
+    #[error(
+        "auditor `{auditor_account}` nonce replay rejected: nonce {nonce} is not greater than stored nonce {highest_nonce}"
+    )]
+    AuditorNonceReplay {
+        /// Auditor account whose nonce was replayed.
+        auditor_account: String,
+        /// Submitted nonce.
+        nonce: u64,
+        /// Highest nonce already accepted for this auditor.
+        highest_nonce: u64,
+    },
 }
 
 /// Storage backend for repair tickets and PoR history.
@@ -105,6 +117,11 @@ trait RepairStore: std::fmt::Debug + Send + Sync {
         task: RepairTaskInternal,
     ) -> Result<(), RepairStoreError>;
     fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError>;
+    fn record_auditor_nonce(
+        &self,
+        auditor_account: &str,
+        nonce: u64,
+    ) -> Result<(), RepairStoreError>;
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -114,6 +131,8 @@ struct RepairStoreSnapshot {
     next_audit_sequence: u64,
     tasks: Vec<StoredRepairTask>,
     por_history: Vec<PorHistoryEntry>,
+    #[norito(default)]
+    auditor_nonces: Vec<StoredAuditorNonce>,
 }
 
 impl RepairStoreSnapshot {
@@ -129,6 +148,14 @@ impl RepairStoreSnapshot {
                 .map(StoredRepairTask::from_internal)
                 .collect(),
             por_history: state.por_history.values().cloned().collect(),
+            auditor_nonces: state
+                .auditor_nonces
+                .iter()
+                .map(|(auditor_account, highest_nonce)| StoredAuditorNonce {
+                    auditor_account: auditor_account.clone(),
+                    highest_nonce: *highest_nonce,
+                })
+                .collect(),
         }
     }
 
@@ -149,13 +176,37 @@ impl RepairStoreSnapshot {
         for entry in self.por_history {
             por_history.insert(entry.id, entry);
         }
+        let mut auditor_nonces = BTreeMap::new();
+        for nonce in self.auditor_nonces {
+            if nonce.auditor_account.is_empty() {
+                return Err(RepairStoreError::Other(
+                    "repair store auditor nonce account must not be empty".to_owned(),
+                ));
+            }
+            if auditor_nonces
+                .insert(nonce.auditor_account.clone(), nonce.highest_nonce)
+                .is_some()
+            {
+                return Err(RepairStoreError::Other(format!(
+                    "duplicate repair store auditor nonce entry for `{}`",
+                    nonce.auditor_account
+                )));
+            }
+        }
         Ok(RepairStoreState {
             tasks,
             por_history,
+            auditor_nonces,
             next_por_history_id: self.next_por_history_id,
             next_audit_sequence: self.next_audit_sequence,
         })
     }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct StoredAuditorNonce {
+    auditor_account: String,
+    highest_nonce: u64,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -241,6 +292,7 @@ impl StoredRepairTaskLease {
 struct RepairStoreState {
     tasks: BTreeMap<String, RepairTaskInternal>,
     por_history: BTreeMap<u64, PorHistoryEntry>,
+    auditor_nonces: BTreeMap<String, u64>,
     next_por_history_id: u64,
     next_audit_sequence: u64,
 }
@@ -250,6 +302,7 @@ impl RepairStoreState {
         Self {
             tasks: BTreeMap::new(),
             por_history: BTreeMap::new(),
+            auditor_nonces: BTreeMap::new(),
             next_por_history_id: 1,
             next_audit_sequence: 1,
         }
@@ -413,6 +466,40 @@ impl RepairStore for FileRepairStore {
     fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError> {
         let guard = self.state.read().expect("repair store poisoned");
         Ok(guard.tasks.values().cloned().collect())
+    }
+
+    fn record_auditor_nonce(
+        &self,
+        auditor_account: &str,
+        nonce: u64,
+    ) -> Result<(), RepairStoreError> {
+        if auditor_account.is_empty() {
+            return Err(RepairStoreError::Other(
+                "repair auditor account must not be empty".to_owned(),
+            ));
+        }
+        if nonce == 0 {
+            return Err(RepairStoreError::Other(
+                "repair auditor nonce must be greater than zero".to_owned(),
+            ));
+        }
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let highest_nonce = guard
+            .auditor_nonces
+            .get(auditor_account)
+            .copied()
+            .unwrap_or(0);
+        if nonce <= highest_nonce {
+            return Err(RepairStoreError::AuditorNonceReplay {
+                auditor_account: auditor_account.to_owned(),
+                nonce,
+                highest_nonce,
+            });
+        }
+        guard
+            .auditor_nonces
+            .insert(auditor_account.to_owned(), nonce);
+        self.persist(&guard)
     }
 }
 
@@ -730,6 +817,27 @@ impl RepairManager {
             return Err(err);
         }
         Ok(Some(history_id))
+    }
+
+    /// Record a signed auditor request nonce, rejecting stale or replayed values.
+    pub fn record_auditor_nonce(
+        &self,
+        auditor_account: &str,
+        nonce: u64,
+    ) -> Result<(), RepairSchedulerError> {
+        match self.store.record_auditor_nonce(auditor_account, nonce) {
+            Ok(()) => Ok(()),
+            Err(RepairStoreError::AuditorNonceReplay {
+                auditor_account,
+                nonce,
+                highest_nonce,
+            }) => Err(RepairSchedulerError::AuditorNonceReplay {
+                auditor_account,
+                nonce,
+                highest_nonce,
+            }),
+            Err(err) => Err(RepairSchedulerError::Store(err)),
+        }
     }
 
     /// Enqueue a repair report submitted by an auditor.
@@ -2742,13 +2850,10 @@ fn repair_task_status(state: &RepairTaskStateV1) -> RepairTaskStatusV1 {
 
 fn repair_severity_score(cause: &RepairCauseV1) -> (u8, u64) {
     match cause {
-        RepairCauseV1::PorFailure { failed_samples, .. } => (3, u64::from(*failed_samples)),
-        RepairCauseV1::ReplicaShortfall { missing_chunks } => (2, u64::from(*missing_chunks)),
-        RepairCauseV1::LatencySla {
-            observed_latency_ms,
-            ..
-        } => (1, u64::from(*observed_latency_ms)),
-        RepairCauseV1::Manual { .. } => (0, 0),
+        RepairCauseV1::PorFailure(cause) => (3, u64::from(cause.failed_samples)),
+        RepairCauseV1::ReplicaShortfall(cause) => (2, u64::from(cause.missing_chunks)),
+        RepairCauseV1::LatencySla(cause) => (1, u64::from(cause.observed_latency_ms)),
+        RepairCauseV1::Manual(_) => (0, 0),
     }
 }
 
@@ -2949,6 +3054,18 @@ pub enum RepairSchedulerError {
     DuplicateTicket {
         /// Conflicting ticket identifier.
         ticket_id: String,
+    },
+    /// Signed auditor request nonce was already accepted or is stale.
+    #[error(
+        "auditor `{auditor_account}` nonce replay rejected: nonce {nonce} is not greater than stored nonce {highest_nonce}"
+    )]
+    AuditorNonceReplay {
+        /// Auditor account whose nonce was replayed.
+        auditor_account: String,
+        /// Submitted nonce.
+        nonce: u64,
+        /// Highest nonce already accepted for this auditor.
+        highest_nonce: u64,
     },
     /// Ticket not known to the scheduler.
     #[error("repair ticket `{ticket_id}` not found")]
@@ -3153,6 +3270,7 @@ mod tests {
     use sorafs_manifest::repair::{
         REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_EVIDENCE_VERSION_V1,
         REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1,
+        RepairManualCauseV1, RepairPorFailureCauseV1,
     };
     use std::fs;
     use tempfile::{TempDir, tempdir};
@@ -3173,9 +3291,9 @@ mod tests {
                 manifest_digest,
                 provider_id,
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "test".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -3286,6 +3404,64 @@ mod tests {
             snapshot.por_history[0].manifest_digest,
             verdict.manifest_digest
         );
+    }
+
+    #[test]
+    fn auditor_nonce_replay_rejection_persists() {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = RepairConfig::default().with_default_state_dir(temp_dir.path());
+        let manager = RepairManager::new_with_config(config.clone());
+        let auditor_account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+
+        manager
+            .record_auditor_nonce(auditor_account, 42)
+            .expect("first nonce accepted");
+        let replay = manager
+            .record_auditor_nonce(auditor_account, 42)
+            .expect_err("equal nonce rejected");
+        assert!(matches!(
+            replay,
+            RepairSchedulerError::AuditorNonceReplay {
+                nonce: 42,
+                highest_nonce: 42,
+                ..
+            }
+        ));
+        let stale = manager
+            .record_auditor_nonce(auditor_account, 41)
+            .expect_err("stale nonce rejected");
+        assert!(matches!(
+            stale,
+            RepairSchedulerError::AuditorNonceReplay {
+                nonce: 41,
+                highest_nonce: 42,
+                ..
+            }
+        ));
+
+        let store_path = temp_dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let bytes = fs::read(&store_path).expect("read repair store");
+        let snapshot: RepairStoreSnapshot =
+            norito::decode_from_bytes(&bytes).expect("decode repair store");
+        assert_eq!(snapshot.auditor_nonces.len(), 1);
+        assert_eq!(snapshot.auditor_nonces[0].auditor_account, auditor_account);
+        assert_eq!(snapshot.auditor_nonces[0].highest_nonce, 42);
+
+        let reloaded = RepairManager::new_with_config(config);
+        let persisted_replay = reloaded
+            .record_auditor_nonce(auditor_account, 42)
+            .expect_err("persisted nonce rejects replay after reload");
+        assert!(matches!(
+            persisted_replay,
+            RepairSchedulerError::AuditorNonceReplay {
+                nonce: 42,
+                highest_nonce: 42,
+                ..
+            }
+        ));
+        reloaded
+            .record_auditor_nonce(auditor_account, 43)
+            .expect("higher nonce accepted after reload");
     }
 
     #[test]
@@ -4363,11 +4539,11 @@ mod tests {
 
         let early = report("REP-500", [0x20; 32], provider_c, 1_000);
         let mut severe = report("REP-501", [0x21; 32], provider_b, 2_000);
-        severe.evidence.cause = RepairCauseV1::PorFailure {
+        severe.evidence.cause = RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
             challenge_id: [0xAA; 32],
             failed_samples: 5,
             proof_digest: None,
-        };
+        });
         let later_a = report("REP-502", [0x22; 32], provider_a, 2_000);
         let later_b = report("REP-503", [0x23; 32], provider_a, 2_000);
 

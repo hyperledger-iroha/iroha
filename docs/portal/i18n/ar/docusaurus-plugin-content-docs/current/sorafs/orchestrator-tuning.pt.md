@@ -76,7 +76,7 @@ Sidebar_label: ضبط أو تنفيذ المهمة
 
 ## مرجع العلامات إلى CLI وSDK
 
-`sorafs_cli fetch` (الإصدار `crates/sorafs_car/src/bin/sorafs_cli.rs`) والمجمّع
+`sorafs_cli fetch` (الإصدار `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) والمجمّع
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) مشترك
 نفس سطح تكوين الأوركسترا. استخدم علامات os seguintes ao
 التقاط أدلة الطرح أو إعادة إنتاج التركيبات القانونية:

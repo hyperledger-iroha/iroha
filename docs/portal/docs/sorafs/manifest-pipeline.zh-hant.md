@@ -57,7 +57,7 @@ JSON 包含有序偏移量、長度和塊摘要。堅持
 - 委員會簽名和可選元數據（例如構建 ID）。
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

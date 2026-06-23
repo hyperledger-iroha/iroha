@@ -9,51 +9,56 @@ source_last_modified: "2025-11-20T07:16:03.636926+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Registro de asistencia
+# Attendance Tracker
 
-Reunión: **SoraFS Gateway & DNS Design Kickoff** (2025-03-03 @ 16:00 UTC)
+Meeting: **SoraFS Gateway & DNS Design Kickoff** (2025-03-03 @ 16:00 UTC)
 
-## Resumen de estado
+This tracker is archived. The kickoff completed on 2025-03-03; decisions and
+follow-up ownership are recorded in
+`docs/source/sorafs_gateway_dns_design_minutes.md`.
 
-- Invitaciones enviadas el 2025-02-21 usando `docs/source/sorafs_gateway_dns_design_invite.txt`.
-- Respuestas solicitadas antes del **2025-02-26**; el estado se actualizará conforme lleguen confirmaciones.
-- Todas las confirmaciones se recibieron antes del **2025-02-26** y se registran aquí para que el workstream entre al kickoff con RSVP cerrado.
+## Status Summary
 
-## Registro de respuestas
+- Invitations sent 2025-02-21 using `docs/source/sorafs_gateway_dns_design_invite.txt`.
+- Responses were requested by **2025-02-26** and are closed.
+- All confirmations received by **2025-02-26** and logged here so the workstream enters the kickoff with a closed RSVP list.
 
-| Rol | Contacto | Estado | Notas / Seguimiento |
-|------|---------|--------|---------------------|
-| Networking TL (facilitador) | `networking.tl@soranet` | ✅ Confirmado 2025-02-21 | Dueño de la agenda, abrirá el bridge 10 min antes. |
-| Ops Lead | `ops.lead@soranet` | ✅ Confirmado 2025-02-23 | Cubrirá el runbook de despliegue; pidió el preread deck. |
-| Storage Team Rep | `storage.rep@sorafs` | ✅ Confirmado 2025-02-21 | Traerá el estado actualizado de fixtures de chunker. |
-| Tooling WG Rep | `tooling.wg@sorafs` | ✅ Confirmado 2025-02-21 | Preparando actualizaciones del harness de conformidad. |
-| Governance Liaison | `governance@sora` | ✅ Confirmado (delegado) 2025-02-24 | Delegado `governance.alt@sora`; el titular está OOO. |
-| QA Guild Lead | `qa.guild@sorafs` | ✅ Confirmado 2025-02-21 | Necesita snapshot de telemetría previo a la reunión. |
-| Docs/DevRel Observer | `docs.devrel@sora` | ✅ Confirmado 2025-02-21 | Redactando doc de notas compartidas. |
-| Torii Platform Rep | `torii.platform@soranet` | ✅ Confirmado 2025-02-21 | Recolectando export de métricas GAR. |
-| Security Engineering Observer | `security@soranet` | ✅ Confirmado 2025-02-25 | Slide deck compartido 2025-02-24; asistirá en remoto. |
+## Respondent Log
 
-## Responsables de automatización DNS
+| Role | Contact | Status | Notes / Follow-up |
+|------|---------|--------|-------------------|
+| Networking TL (facilitator) | `networking.tl@soranet` | ✅ Confirmed 2025-02-21 | Owned the agenda and opened the bridge 10 min early. |
+| Ops Lead | `ops.lead@soranet` | ✅ Confirmed 2025-02-23 | Covered rollout runbook; requested preread deck. |
+| Storage Team Rep | `storage.rep@sorafs` | ✅ Confirmed 2025-02-21 | Brought latest chunker fixture status. |
+| Tooling WG Rep | `tooling.wg@sorafs` | ✅ Confirmed 2025-02-21 | Prepared conformance harness updates. |
+| Governance Liaison | `governance@sora` | ✅ Confirmed (delegate) 2025-02-24 | Delegate `governance.alt@sora`; primary remains OOO. |
+| QA Guild Lead | `qa.guild@sorafs` | ✅ Confirmed 2025-02-21 | Received telemetry snapshot ahead of meeting. |
+| Docs/DevRel Observer | `docs.devrel@sora` | ✅ Confirmed 2025-02-21 | Published minutes and outcome brief. |
+| Torii Platform Rep | `torii.platform@soranet` | ✅ Confirmed 2025-02-21 | Collected GAR metrics export. |
+| Security Engineering Observer | `security@soranet` | ✅ Confirmed 2025-02-25 | Slide deck shared 2025-02-24; attending remotely. |
 
-El ítem del roadmap **Decentralized DNS & Gateway** exige nombrar owners de automatización antes del kickoff. La tabla abajo registra alcance, lead responsable y backup para que las tareas de seguimiento mapeen directo a código/activos en el repositorio.
+## DNS Automation Owners
 
-| Alcance | Owner primario | Backup | Responsabilidades |
-|--------|----------------|--------|------------------|
-| Automatización de zonefile SoraDNS y pinning GAR | Ops Lead (`ops.lead@soranet`) | Networking TL (`networking.tl@soranet`) | Mantener la automatización en `tools/soradns-resolver/`, publicar los esqueletos de zonefile firmados documentados en `docs/source/sns/governance_playbook.md` y rotar datos SPKI/GAR antes de cada cutover. |
-| Alias de gateway y metadatos de cutover SoraFS | Tooling WG Rep (`tooling.wg@sorafs`) | Docs/DevRel (`docs.devrel@sora`) | Operar `docs/portal/scripts/sorafs-pin-release.sh` + `docs/portal/scripts/generate-dns-cutover-plan.mjs` (y sus tests en `docs/portal/scripts/__tests__/dns-cutover-plan.test.mjs`), adjuntar los manifiestos generados a `docs/portal/docs/devportal/deploy-guide.md`, y difundir cambios de alias al registro de pines. |
-| Snapshots de telemetría y automatización de rollback | QA Guild Lead (`qa.guild@sorafs`) | Security Engineering (`security@soranet`) | Recolectar métricas GAR (`docs/source/sorafs_gateway_dns_design_gar_telemetry.md`, `docs/source/sorafs_gateway_dns_design_metrics_*.prom`), mantener alertas conectadas al dashboard de kickoff, y ensayar el flujo de rollback junto al observador de seguridad antes de GA. |
+Roadmap item **Decentralized DNS & Gateway** calls for named automation owners ahead of the kickoff. The table below records the scope, accountable lead, and backup so follow-up tasks map directly to code/assets already in the repository.
 
-## Acciones de seguimiento
+| Scope | Primary Owner | Backup | Responsibilities |
+|-------|---------------|--------|------------------|
+| SoraDNS zonefile automation & GAR pinning | Ops Lead (`ops.lead@soranet`) | Networking TL (`networking.tl@soranet`) | Maintain the `tools/soradns-resolver/` automation, publish the signed zonefile skeletons documented in `docs/source/sns/governance_playbook.md`, and rotate SPKI/GAR data before every cutover. |
+| Gateway alias & SoraFS cutover metadata | Tooling WG Rep (`tooling.wg@sorafs`) | Docs/DevRel (`docs.devrel@sora`) | Operate `docs/portal/scripts/sorafs-pin-release.sh` + `docs/portal/scripts/generate-dns-cutover-plan.mjs` (and its tests under `docs/portal/scripts/__tests__/dns-cutover-plan.test.mjs`), attach the generated manifests to `docs/portal/docs/devportal/deploy-guide.md`, and broadcast alias changes to the pin registry. |
+| Telemetry snapshots & rollback automation | QA Guild Lead (`qa.guild@sorafs`) | Security Engineering (`security@soranet`) | Collect and archive GAR metrics (`docs/source/sorafs_gateway_dns_design_gar_telemetry.md`, `docs/source/sorafs_gateway_dns_design_metrics_*.prom`), ensure alert hooks stay wired into the kickoff dashboard, and rehearse the rollback flow alongside the security observer ahead of GA. |
 
-1. **Distribución del deck** — enviar el slide deck final a todos los asistentes antes del 2025-02-27 (Networking TL).
-2. **Brief de delegados** — proveer a la delegación de governance el apéndice de política DNS antes de la sesión (Docs/DevRel).
-3. **Logística de grabación** — Docs/DevRel preparará doc de notas compartidas y checklist de grabación.
-4. **Sync de owners de automatización** — los owners anteriores confirmarán checkpoints del runbook (publicación de zonefile, promoción de alias, muestreo de telemetría) antes del 2025-03-04 para cerrar el kickoff con accountability clara.
-5. **Owner runbook** — el SOP compartido vive en `docs/source/sorafs_gateway_dns_owner_runbook.md`; circularlo con el deck y referenciarlo al seguir el estado de ensayos.
-6. **Confirmación de cierre** — todas las acciones anteriores se completaron y se registraron en `docs/source/sorafs_gateway_dns_design_minutes.md` bajo la entrada de cierre 2025-03-04.
+## Follow-up Actions
 
-## Calendario y artefactos
+1. **Deck distribution** — email final slide deck to all attendees by 2025-02-27 (Networking TL).
+2. **Delegate brief** — governance delegate received the DNS policy appendix during pre-work (Docs/DevRel).
+3. **Session recording logistics** — Docs/DevRel prepared the shared notes doc and recording checklist.
+4. **Automation owner sync** — owners listed above confirmed runbook checkpoints (zonefile publish, alias promotion, telemetry sampling) by 2025-03-04 so the kickoff closed with clear accountability.
+5. **Owner runbook** — The shared SOP now lives in `docs/source/sorafs_gateway_dns_owner_runbook.md`; it was circulated with the kickoff deck and referenced when tracking rehearsal status.
+6. **Close-out confirmation** — All follow-ups above were completed and logged in `docs/source/sorafs_gateway_dns_design_minutes.md` under the 2025-03-04 close-out entry.
 
-- Invitación de calendario enviada el 2025-02-25 vía Google Calendar. Enlace del evento:
-  `https://calendar.google.com/calendar/event?eid=c29yYWZzLWdhdGV3YXktZG5zLTIwMjUwMzAz` (interno SoraNet).
-- Doc de notas compartidas: `docs/source/sorafs_gateway_dns_design_agenda.md` (agregar registro de acciones después de la sesión).
+## Calendar & Artefacts
+
+- Calendar invite dispatched 2025-02-25 via Google Calendar. Event link:
+  `https://calendar.google.com/calendar/event?eid=c29yYWZzLWdhdGV3YXktZG5zLTIwMjUwMzAz` (SoraNet internal).
+- Agenda archive: `docs/source/sorafs_gateway_dns_design_agenda.md`.
+- Minutes and action register: `docs/source/sorafs_gateway_dns_design_minutes.md`.

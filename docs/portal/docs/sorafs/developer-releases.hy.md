@@ -30,7 +30,7 @@ SoraFS երկուական (`sorafs_cli`, `sorafs_fetch`, օգնականներ) �
 - Կցեք վերականգնման տոմսի հղումը (օրինակ՝ `governance/tickets/SF6-SR-2026.md`) և նշեք գրանցումը
   Անվտանգության ճարտարագիտության և Tooling աշխատանքային խմբի հաստատողներ:
 - Ստուգեք, որ հիշողության մեջ առկա վերականգնման ստուգաթերթը փակ է. չլուծված տարրերը արգելափակում են թողարկումը:
-- Պատրաստվեք վերբեռնել հավասարաչափ ամրագոտիների տեղեկամատյանները (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Պատրաստվեք վերբեռնել հավասարաչափ ամրագոտիների տեղեկամատյանները (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   մանիֆեստի փաթեթի կողքին:
 - Հաստատեք ստորագրման հրամանը, որը դուք նախատեսում եք գործարկել, ներառում է և՛ `--identity-token-provider`, և՛ բացահայտ
   `--identity-token-audience=<aud>`, ուստի Fulcio-ի շրջանակը ներառված է թողարկման ապացույցներում:
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Սցենարը կատարում է հետևյալ պնդումները.
 
 - `cargo fmt --all -- --check` (աշխատանքային տարածք)
-- `cargo clippy --locked --all-targets` `sorafs_car`-ի համար (`cli` հատկանիշով),
-  `sorafs_manifest` և `sorafs_chunker`
-- `cargo test --locked --all-targets` նույն արկղերի համար
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Եթե որևէ քայլ ձախողվի, նախքան պիտակելը շտկեք հետընթացը: Թողարկման կառուցումները պետք է լինեն
 շարունակական հիմնականի հետ; մի ընտրեք կեռասի ամրացումներ բացվող ճյուղերում: Դարպասը

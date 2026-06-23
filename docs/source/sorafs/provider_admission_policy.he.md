@@ -8,14 +8,13 @@ source_hash: c9d8898043c9248db9ee6718b8a971f28413bbe0d91a422a1051a0d98d8d2f7c
 source_last_modified: "2026-01-03T18:07:58.376282+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+# SoraFS Provider Admission & Identity Policy (SF-2b)
 
-# SoraFS Provider Admission & Identity Policy (SF-2b Draft)
-
-This note captures the actionable deliverables for **SF-2b**: defining and
-enforcing the admission workflow, identity requirements, and attestation
-payloads for SoraFS storage providers. It expands the high-level process
-outlined in the SoraFS Architecture RFC and breaks the remaining work into
-trackable engineering tasks.
+This note captures the implemented **SF-2b** admission workflow, identity
+requirements, attestation payloads, lifecycle runbooks, and observability
+surface for SoraFS storage providers. It expands the high-level process
+outlined in the SoraFS Architecture RFC and keeps rollout evidence, fixtures,
+and operator commands in one place.
 
 ## Policy Goals
 
@@ -32,15 +31,15 @@ trackable engineering tasks.
 
 | Requirement | Description | Deliverable |
 |-------------|-------------|-------------|
-| Advertisement key provenance | Providers must register an Ed25519 keypair that signs every advert. The admission bundle stores the public key alongside a governance signature. | Extend `ProviderAdmissionProposalV1` schema with `advert_key` (32 bytes) and reference it from the registry (`sorafs_manifest::provider_admission`). |
-| Stake pointer | Admission requires a non-zero `StakePointer` pointing at an active staking pool. | Add validation in `sorafs_manifest::provider_advert::StakePointer::validate()` and surface errors in CLI/tests. |
-| Jurisdiction tags | Providers declare jurisdiction + legal contact. | Extend proposal schema with a `jurisdiction_code` (ISO 3166-1 alpha-2) and optional `contact_uri`. |
-| Endpoint attestation | Each advertised endpoint must be backed by an mTLS or QUIC certificate report. | Define `EndpointAttestationV1` Norito payload and store per endpoint inside the admission bundle. |
+| Advertisement key provenance | Providers must register an Ed25519 keypair that signs every advert. The admission bundle stores the public key alongside a governance signature. | `ProviderAdmissionProposalV1` carries `advert_key` (32 bytes) and the registry verifies it through `sorafs_manifest::provider_admission`. |
+| Stake pointer | Admission requires a non-zero `StakePointer` pointing at an active staking pool. | `sorafs_manifest::provider_advert::StakePointer::validate()` enforces non-zero stake and CLI/tests surface deterministic errors. |
+| Jurisdiction tags | Providers declare jurisdiction + legal contact. | Proposal payloads include `jurisdiction_code` (ISO 3166-1 alpha-2) and optional `contact_uri`. |
+| Endpoint attestation | Each advertised endpoint must be backed by an mTLS or QUIC certificate report. | `EndpointAttestationV1` is stored per endpoint inside the admission bundle. |
 
 ## Admission Workflow
 
 1. **Proposal creation**
-   - CLI: add `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
+   - CLI: run `cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission proposal …`
      producing `ProviderAdmissionProposalV1` + attestation bundle.
    - Validation: ensure required fields, stake > 0, canonical chunker handle in `profile_id`.
 2. **Governance endorsement**
@@ -48,12 +47,12 @@ trackable engineering tasks.
      envelope tooling (`sorafs_manifest::governance` module).
    - Envelope is persisted to `governance/providers/<provider_id>/admission.json`.
 3. **Registry ingestion**
-   - Implement a shared verifier (`sorafs_manifest::provider_admission::validate_envelope`)
-     that Torii/gateways/CLI re-use.
-   - Update Torii admission path to reject adverts whose digest or expiry differs from the envelope.
+   - The shared verifier (`sorafs_manifest::provider_admission::validate_envelope`)
+     is reused by Torii, gateways, and CLI tooling.
+   - Torii rejects adverts whose digest or expiry differs from the envelope.
 4. **Renewal & revocation**
-   - Add `ProviderAdmissionRenewalV1` with optional endpoint/stake updates.
-   - Expose a `--revoke` CLI path that records the revocation reason and pushes a governance event.
+   - `ProviderAdmissionRenewalV1` supports optional endpoint/stake updates.
+   - The `revoke` CLI path records the revocation reason and emits a governance artefact.
 
 ## Implementation Tasks
 
@@ -69,7 +68,7 @@ provide advert bodies directly, or reuse signed adverts, and signature files may
 
 ### CLI Reference
 
-Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`.
+Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission …`.
 
 - `proposal`
   - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -114,9 +113,9 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
 
 #### Scheduled renewal (stake/topology updates)
 1. Build the successor proposal/advert pair with `provider-admission proposal` and `provider-admission sign`, increasing `--retention-epoch` and updating stake/endpoints as required.
-2. Execute  
+2. Execute
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -134,7 +133,7 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
 #### Emergency revocation
 1. Identify the compromised envelope and issue a revocation:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -151,12 +150,12 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
 
 ## Testing & Telemetry
 
-- Add golden fixtures for admission proposals and envelopes under
+- Golden fixtures for admission proposals and envelopes live under
   `fixtures/sorafs_manifest/provider_admission/`.
-- Extend CI (`ci/check_sorafs_fixtures.sh`) to regenerate proposals and verify envelopes.
+- CI (`ci/check_sorafs_fixtures.sh`) regenerates proposals and verifies envelopes.
 - Generated fixtures include `metadata.json` with canonical digests; downstream tests assert
   `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`.
-- Provide integration tests:
+- Integration coverage includes:
   - Torii rejects adverts with missing or expired admission envelopes.
   - CLI round-trips a proposal → envelope → verification.
   - Governance renewal rotates endpoint attestation without changing provider ID.
@@ -164,10 +163,14 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
   - Emit `provider_admission_envelope_{accepted,rejected}` counters in Torii. ✅ `torii_sorafs_admission_total{result,reason}` now surfaces accepted/rejected outcomes.
   - Add expiry warnings to observability dashboards. ✅ `SoraFSProviderAdmissionEnvelopeExpired` fires on stale rejected adverts and `SoraFSProviderAdmissionMissingEnvelope` catches missing renewal distribution.
 
-## Next Steps
+## Operational Maintenance
 
 1. ✅ Finalised the Norito schema changes and landed validation helpers in
    `sorafs_manifest::provider_admission`. No feature flags required.
 2. ✅ CLI workflows (`proposal`, `sign`, `verify`, `renewal`, `revoke`) are documented and exercised via integration tests; keep governance scripts in sync with the runbook.
 3. ✅ Torii admission/discovery ingest the envelopes and expose telemetry counters for acceptance/rejection.
-4. ✅ Provider admission observability is now covered by the Grafana dashboard and Prometheus alert pack under `dashboards/`; keep the alert vectors in sync when new admission reasons are added.
+4. ✅ Provider admission observability is now covered by the Grafana dashboard
+   and Prometheus alert pack under `dashboards/`; keep the alert vectors in
+   sync when new admission reasons are added.
+5. Attach fresh signed admission, renewal, and revocation artefacts to the
+   governance archive for each live provider onboarding or emergency action.

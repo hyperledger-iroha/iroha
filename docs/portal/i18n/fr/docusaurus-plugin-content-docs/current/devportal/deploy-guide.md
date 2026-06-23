@@ -15,7 +15,7 @@ Il couvre la phase build/lint, l'empaquetage SoraFS, la signature de manifestes 
 la promotion d'alias, la verification et les drills de rollback pour que chaque preview et release
 soit reproductible et auditable.
 
-Le flux suppose que vous avez le binaire `sorafs_cli` (compile avec `--features cli`), l'acces a
+Le flux suppose que vous avez le binaire `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), l'acces a
 un endpoint Torii avec des permissions de pin-registry, et des credentials OIDC pour Sigstore.
 Stockez les secrets longue duree (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, tokens Torii) dans
 votre coffre CI; les executions locales peuvent les charger via des exports du shell.
@@ -23,7 +23,7 @@ votre coffre CI; les executions locales peuvent les charger via des exports du s
 ## Prerequis
 
 - Node 18.18+ avec `npm` ou `pnpm`.
-- `sorafs_cli` via `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` via `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL Torii qui expose `/v1/sorafs/*` plus un compte/cle privee d'autorite qui peut soumettre
   des manifestes et des alias.
 - Emmeteur OIDC (GitHub Actions, GitLab, workload identity, etc.) pour emettre un `SIGSTORE_ID_TOKEN`.

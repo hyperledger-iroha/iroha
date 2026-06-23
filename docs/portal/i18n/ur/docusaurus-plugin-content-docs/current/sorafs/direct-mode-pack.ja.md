@@ -55,7 +55,7 @@ Direct-mode readiness اب orchestrator اور CLI crates دونوں میں cove
 - `direct_only_policy_rejects_soranet_only_providers` اس بات کو یقینی بناتا ہے کہ `TransportPolicy::DirectOnly` تیزی سے fail کرے جب ہر candidate advert صرف SoraNet relays support کرتا ہو۔【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` یہ یقینی بناتا ہے کہ Torii/QUIC transports موجود ہوں تو انہی کو استعمال کیا جائے اور SoraNet relays کو session سے خارج رکھا جائے۔【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` parse کرتا ہے تاکہ docs helpers کے ساتھ aligned رہیں۔【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` کو mocked Torii gateway کے خلاف چلتا ہے، جو regulated environments کے لیے smoke test فراہم کرتا ہے جہاں direct transports pin ہوتے ہیں۔【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` کو mocked Torii gateway کے خلاف چلتا ہے، جو regulated environments کے لیے smoke test فراہم کرتا ہے جہاں direct transports pin ہوتے ہیں۔【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` اسی command کو policy JSON اور scoreboard persistence کے ساتھ wrap کرتا ہے تاکہ rollout automation ہو سکے۔
 
 Updates publish کرنے سے پہلے focused suite چلائیں:

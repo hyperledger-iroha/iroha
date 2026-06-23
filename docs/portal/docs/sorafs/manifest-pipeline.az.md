@@ -57,7 +57,7 @@ JSON qeyd etmək üçün `--por-proof-out` və ya `--por-sample-out` olan bayraq
 - Şura imzaları və isteğe bağlı metadata (məsələn, ID-lərin qurulması).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

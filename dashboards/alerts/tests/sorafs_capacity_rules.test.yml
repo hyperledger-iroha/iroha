@@ -107,6 +107,25 @@ tests:
               summary: "Capacity ledger reconciliation drift detected"
   - interval: 1m
     input_series:
+      - series: 'torii_sorafs_egress_drift_ratio{provider="provider-a",source="gateway"}'
+        values: '0.12 0.12 0.12 0.12 0.12 0.12 0.12 0.12 0.12 0.12 0.12 0.12 0.12'
+      - series: 'torii_sorafs_egress_drift_ratio{provider="provider-a",source="orchestrator"}'
+        values: '0.05 0.05 0.05 0.05 0.05 0.05 0.05 0.05 0.05 0.05 0.05 0.05 0.05'
+    alert_rule_test:
+      - alertname: SoraFSEgressCounterDrift
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSEgressCounterDrift
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              provider: provider-a
+              source: gateway
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS egress counter drift detected"
+  - interval: 1m
+    input_series:
       - series: 'sorafs_reserve_ledger_rent_due_xor{label="cycle-a"}'
         values: '10 10 10 10 10 10 10 10 10'
       - series: 'sorafs_reserve_ledger_reserve_shortfall_xor{label="cycle-a"}'

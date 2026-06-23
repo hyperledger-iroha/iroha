@@ -9,57 +9,46 @@ source_last_modified: "2025-11-07T10:28:53.296738+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: "SoraFS 移行ロードマップ"
----
+> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-> 次の文書を基に作成: [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+# SoraFS Migration Roadmap (SF-1)
 
-# SoraFS 移行ロードマップ (SF-1)
+This document operationalises the migration guidance captured in
+`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
+execution-ready milestones, gating criteria, and owner checklists so storage,
+governance, release engineering, and docs teams can coordinate SoraFS-backed
+publication.
 
-この文書は `docs/source/sorafs_architecture_rfc.md` に記載された移行ガイダンスを
-運用可能な形に落とし込む。SF-1 の成果物を実行可能なマイルストーン、ゲート基準、
-担当チェックリストに展開し、storage、governance、DevRel、SDK チームがレガシー
-アーティファクトのホスティングから SoraFS ベースの公開への移行を調整できるようにする。
+The roadmap is intentionally deterministic: every milestone names the required
+artifacts, command invocations, and attestation steps so downstream pipelines
+produce identical outputs and governance retains an auditable trail.
 
-このロードマップは意図的に決定論的である。各マイルストーンは必要なアーティファクト、
-コマンド実行、アテステーション手順を明示し、下流のパイプラインが同一の出力を生成し、
-ガバナンスが監査可能な履歴を保持できるようにする。
+## Milestone Overview
 
-## マイルストーン概要
+| Milestone | Window | Primary Goals | Must Ship | Owners |
+|-----------|--------|---------------|-----------|--------|
+| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and expectation flags locally while rollout tickets carry fresh staging alias evidence. | Fixture verification, council-signed manifests, expectation-flag release checklists, and external alias evidence. | Storage, Governance, SDKs |
 
-| マイルストーン | 期間 | 主な目標 | 必須成果物 | 担当 |
-|---------------|------|----------|-----------|------|
-| **M1 - Deterministic Enforcement** | Weeks 7-12 | 署名済み fixtures を強制し、パイプラインが expectation flags を採用する間に alias proofs を staging する。 | Nightly fixture 検証、評議会署名の manifest、alias registry の staging エントリ。 | Storage, Governance, SDKs |
+Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
+changes to this roadmap MUST update the ledger to keep governance and release
+engineering in sync.
 
-マイルストーンの状態は `docs/source/sorafs/migration_ledger.md` で追跡する。
-このロードマップの変更は必ず台帳を更新し、ガバナンスとリリースエンジニアリングの
-同期を維持すること。
+## Workstreams
 
-## ワークストリーム
+### 2. Deterministic Pinning Adoption
 
-### 1. レガシーデータの再梱包
+| Step | Milestone | Description | Owner(s) | Output |
+|------|-----------|-------------|----------|--------|
+| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
+| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
+| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
+| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. Torii submissions include `manifest_b64` when full `ManifestV1` validation or council-signature enforcement is required. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
+| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
 
-| 手順 | マイルストーン | 説明 | 担当 | 出力 |
-|------|---------------|------|------|------|
-| インベントリとタグ付け | M0 | レガシーバンドルの SHA3-256 digest をエクスポートし、移行台帳に追記 (append-only) する。 | Docs, DevRel | `source_path`, `sha3_digest`, `owner`, `planned_manifest_cid` を含む台帳エントリ。 |
-| 決定論的再構築 | M0-M1 | 各リリースアーティファクトで `sorafs_manifest_stub` を実行し、CAR、manifest、署名 envelope、fetch plan を `artifacts/<team>/<alias>/<timestamp>/` に保存する。 | Docs, CI | リリースごとの再現可能な CAR + manifest bundles。 |
-| 検証ループ | M1 | `sorafs_fetch` を staging gateway に対して再生し、chunk 境界/ダイジェストが fixtures と一致するかを確認する。台帳コメントに pass/fail を記録。 | Governance QA | Staging 検証レポート + drift 用 GitHub issue。 |
-
-### 2. 決定論的 pinning の採用
-
-| 手順 | マイルストーン | 説明 | 担当 | 出力 |
-|------|---------------|------|------|------|
-| Fixture リハーサル | M0 | `fixtures/sorafs_chunker` とローカルの chunk digest を比較する週次 dry-run。`docs/source/sorafs/reports/` にレポートを公開。 | Storage Providers | pass/fail マトリクス付き `determinism-<date>.md`。 |
-| 署名強制 | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` は署名/manifest の逸脱で fail。開発 overrides はガバナンスの waiver を PR に添付。 | Tooling WG | CI ログ、waiver チケットリンク (該当する場合)。 |
-| Expectation flags | M1 | パイプラインは `sorafs_manifest_stub` に明示的な expectations を渡して出力を固定: | Docs CI | expectation flags を参照する更新済みスクリプト (下のコマンド参照)。 |
-| Registry-first pinning | M2 | `sorafs pin propose` と `sorafs pin approve` が manifest 提出をラップし、CLI デフォルトは `--require-registry`。 | Governance Ops | Registry CLI 監査ログ、失敗提案のテレメトリ。 |
-| Observability parity | M3 | Prometheus/Grafana ダッシュボードが registry manifests と chunk インベントリの差分でアラートを出し、ops の on-call に接続。 | Observability | ダッシュボードリンク、アラートルール ID、GameDay 結果。 |
-
-#### 正規の公開コマンド
+#### Canonical publishing command
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
@@ -70,48 +59,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-digest、サイズ、CID の値は、該当アーティファクトの移行台帳エントリに記録された
-期待値へ置き換えること。
+Replace the digest, size, and CID values with the expected references recorded in
+the migration ledger entry for the artifact.
 
-### 3. Alias 移行とコミュニケーション
+### 3. Alias Transition & Communications
 
-| 手順 | マイルストーン | 説明 | 担当 | 出力 |
-|------|---------------|------|------|------|
-| Staging の alias proofs | M1 | Pin Registry の staging 環境で alias claims を登録し、manifests に Merkle proof を付与 (`--alias`)。 | Governance, Docs | manifest 隣の proof bundle + alias 名を記した台帳コメント。 |
-| Proof enforcement | M2 | Gateways は新しい `Sora-Proof` ヘッダがない manifests を拒否し、CI に `sorafs alias verify` を追加して proof を取得する。 | Networking | Gateway 設定パッチ + 検証成功を示す CI 出力。 |
+| Step | Milestone | Description | Owner(s) | Output |
+|------|-----------|-------------|----------|--------|
+| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`) for live rollout tickets. | Governance, Docs | Proof bundle stored next to manifest plus external governance archive link. |
+| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
 
-### 4. コミュニケーションと監査
+### 4. Communication & Audit
 
-- **台帳の規律:** 状態変更 (fixtures drift、registry 提出、alias 有効化) はすべて
-  `docs/source/sorafs/migration_ledger.md` に日付付きで追記すること。
-- **ガバナンス議事録:** Pin Registry 変更や alias ポリシーを承認した council セッションは
-  本ロードマップと台帳の両方を参照すること。
-- **外部コミュニケーション:** DevRel は各マイルストーンでステータス更新 (ブログ +
-  changelog 抜粋) を公開し、決定論的保証と alias タイムラインを強調する。
+- **Ledger discipline:** every state change (fixture drift, registry submission,
+  alias activation) must append a dated note to
+  `docs/source/sorafs/migration_ledger.md`.
+- **Governance minutes:** council sessions approving pin registry changes or
+  alias policies must reference both this roadmap and the ledger.
+- **External comms:** DevRel publishes status updates at each milestone (blog +
+  changelog excerpt) highlighting deterministic guarantees and alias timelines.
 
-## 依存関係とリスク
+## Dependencies & Risks
 
-| 依存関係 | 影響 | 緩和策 |
-|----------|------|--------|
-| Pin Registry コントラクトの可用性 | M2 pin-first rollout を阻害。 | M2 前に replay テスト付きでコントラクトを staging し、回帰が解消するまで envelope fallback を維持。 |
-| 評議会署名鍵 | manifest envelopes と registry 承認に必要。 | 署名セレモニーを `docs/source/sorafs/signing_ceremony.md` に記載し、オーバーラップ付きで鍵をローテーションし台帳に記録。 |
-| SDK リリース・カデンス | クライアントは M3 前に alias proofs に従う必要。 | SDK リリース窓をマイルストーンゲートに揃え、リリーステンプレートに移行チェックリストを追加。 |
+| Dependency | Impact | Mitigation |
+|------------|--------|------------|
+| Pin Registry contract availability | Blocks hosted M2 pin-first rollout evidence. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
+| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
+| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
 
-残余リスクと緩和策は `docs/source/sorafs_architecture_rfc.md` にも反映されているため、
-変更時は相互参照すること。
+Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
+and should be cross-referenced when adjustments are made.
 
-## 終了基準チェックリスト
+## Exit Criteria Checklist
 
-| マイルストーン | 基準 |
-|---------------|------|
-| M1 | - Nightly fixture job が 7 日連続で green。 <br /> - Staging alias proofs が CI で検証済み。 <br /> - ガバナンスが expectation flag ポリシーを承認。 |
+| Milestone | Criteria |
+|-----------|----------|
+| M1 | - `ci/check_sorafs_fixtures.sh` and fixture verification stay green. <br /> - Release checklists use explicit `--car-digest`/`--root-cid` expectations. <br /> - Staging alias proof evidence is attached to the external rollout archive. |
 
-## 変更管理
+## Change Management
 
-1. このファイル **および** `docs/source/sorafs/migration_ledger.md` を更新する PR で
-   調整案を提案する。
-2. PR 説明にガバナンス議事録と CI 証跡をリンクする。
-3. マージ後、storage + DevRel メーリングリストへ概要とオペレーター向けアクションを通知する。
+1. Propose adjustments via PR updating this file **and**
+   `docs/source/sorafs/migration_ledger.md`.
+2. Link supporting governance minutes and CI evidence in the PR description.
+3. On merge, notify storage + DevRel mailing list with summary and expected
+   operator actions.
 
-この手順を守ることで、SoraFS の rollout が決定論的・監査可能・透明であり続け、
-Nexus ローンチに参加するチーム間での整合が保たれる。
+Following this procedure ensures the SoraFS rollout remains deterministic,
+auditable, and transparent across teams participating in the Nexus launch.

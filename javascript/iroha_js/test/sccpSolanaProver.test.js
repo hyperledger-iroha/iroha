@@ -21,6 +21,7 @@ import {
   SCCP_CODEC_TRON_BASE58CHECK,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_EVM_CHAIN_ID,
   SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
@@ -72,6 +73,7 @@ import {
   BscMainnetSccp,
   BscTestnetSccp,
   BscMainnetSccpProver,
+  bscGroth16VerifierKeyHash,
   EvmSccpProver,
   SolanaSccpSourceStateProver,
   SolanaSccpProver,
@@ -887,6 +889,25 @@ const BN254_G2_GENERATOR_WORDS = [
   abiWord(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
   abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
 ];
+const BN254_BASE_FIELD_MODULUS =
+  21888242871839275222246405745257275088696311157297823662689037894645226208583n;
+const BSC_TEST_G1 = Object.freeze(["1", "2"]);
+const BSC_TEST_G1_NEGATED = Object.freeze([
+  "1",
+  (BN254_BASE_FIELD_MODULUS - 2n).toString(),
+]);
+const BSC_TEST_G2 = Object.freeze([
+  "10857046999023057135944570762232829481370756359578518086990519993285655852781",
+  "11559732032986387107991004021392285783925812861821192530917403151452391805634",
+  "8495653923123431417604973247489272438418190587263600148770280649306958101930",
+  "4082367875863433681332203403145435568316851327593401208105741076214120093531",
+]);
+const BSC_TEST_G2_NEGATED = Object.freeze([
+  BSC_TEST_G2[0],
+  BSC_TEST_G2[1],
+  (BN254_BASE_FIELD_MODULUS - BigInt(BSC_TEST_G2[2])).toString(),
+  (BN254_BASE_FIELD_MODULUS - BigInt(BSC_TEST_G2[3])).toString(),
+]);
 const groth16ProofBytes = (words = []) => {
   const out = new Uint8Array(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
   const defaults = [
@@ -1809,6 +1830,18 @@ const NATIVE_EVM_TEST_SDKS = Object.freeze([
 
 const testSha256Hex = (bytes) =>
   `0x${createHash("sha256").update(bytes).digest("hex")}`;
+const canonicalJson = (value) => {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+};
 
 const nativeEvmFixtureBytes = (length, seed) => {
   const out = new Uint8Array(length);
@@ -1860,6 +1893,151 @@ const nativeEvmFixturePublicSignalWords = (seed) =>
     nativeEvmFixtureHex32(seed + index * 11),
   );
 
+const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = Object.freeze([
+  "message_id",
+  "payload_hash",
+  "target_domain",
+  "commitment_root",
+  "finality_height",
+  "finality_block_hash",
+  "source_domain",
+  "statement_hash",
+  "destination_binding_hash",
+]);
+
+const bscGroth16ProofSelfTestAdversarialChecks = () => ({
+  publicSignalMismatch: {
+    attempted: 9,
+    rejected: 9,
+    cases: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.map((name, index) => ({
+      index,
+      name,
+      phase: "wtnsCalculate",
+      rejected: true,
+    })),
+  },
+  nonBooleanValueBit: {
+    attempted: 1,
+    rejected: 1,
+    case: {
+      signalName: "message_id",
+      inputName: "messageIdBits",
+      bitIndex: 0,
+      phase: "wtnsCalculate",
+      rejected: true,
+    },
+  },
+});
+
+const bscNativeEvmVerifierKeyMaterial = (profile) => {
+  const material = {
+    schema: "iroha-sccp-bsc-groth16-verifier-key/v1",
+    routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    bscNetwork: profile.chain === "bsc-mainnet" ? "mainnet" : "testnet",
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    sourceDomain: SCCP_DOMAIN_SORA,
+    targetDomain: SCCP_DOMAIN_BSC,
+    publicInputCount: 9,
+    alpha1: [...BSC_TEST_G1],
+    beta2: [...BSC_TEST_G2],
+    gamma2: [...BSC_TEST_G2_NEGATED],
+    delta2: [...BSC_TEST_G2],
+    ic: Array.from({ length: 10 }, (_, index) =>
+      index === 9 ? BSC_TEST_G1_NEGATED : BSC_TEST_G1,
+    ).flat(),
+  };
+  const verifierKeyHash = bscGroth16VerifierKeyHash(material);
+  return {
+    ...material,
+    expectedVerifierKeyHash: verifierKeyHash,
+    verifierKeyHash,
+  };
+};
+
+const bscGroth16ProofSelfTestBytes = (profile, nativeProverBundle) => {
+  const seedOffset = profile.chain === "bsc-mainnet" ? 160 : 120;
+  const publicSignalWords = Array.from({ length: 9 }, (_, index) =>
+    String(index + 1),
+  );
+  const proof = {
+    pi_a: [...BSC_TEST_G1, "1"],
+    pi_b: [
+      [BSC_TEST_G2[1], BSC_TEST_G2[0]],
+      [BSC_TEST_G2[3], BSC_TEST_G2[2]],
+      ["1", "0"],
+    ],
+    pi_c: [...BSC_TEST_G1, "1"],
+    protocol: "groth16",
+    curve: "bn128",
+  };
+  return nativeEvmFixtureJsonBytes({
+    schema: SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
+    routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    bscNetwork: profile.chain === "bsc-mainnet" ? "mainnet" : "testnet",
+    chain: profile.chain,
+    chainIdHex: `0x${profile.chainId.toString(16)}`,
+    networkIdHex: profile.networkId,
+    circuitProfile: "sccp-bsc-full-message-v1",
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    manifest: {
+      path: "groth16-material.manifest.json",
+      sha256: nativeEvmFixtureHex32(seedOffset + 1),
+      productionReady: true,
+      productionBlockers: [],
+    },
+    artifacts: {
+      circuitSource: {
+        path: "circuit/sccp-bsc-full-message-v1.circom",
+        sha256: nativeEvmFixtureHex32(seedOffset + 2),
+      },
+      r1cs: {
+        path: nativeProverBundle.proofArtifact,
+        sha256: nativeProverBundle.proofArtifactHash,
+      },
+      provingKey: {
+        path: nativeProverBundle.provingKey,
+        sha256: nativeProverBundle.provingKeyHash,
+      },
+      snarkjsVerificationKey: {
+        path: `artifacts/${profile.chain}/snarkjs-verification-key.json`,
+        sha256: nativeEvmFixtureHex32(seedOffset + 3),
+      },
+      bscVerifierKey: {
+        path: nativeProverBundle.verifierKey,
+        sha256: nativeProverBundle.verifierKeyArtifactHash,
+      },
+      witnessWasm: {
+        path: `artifacts/${profile.chain}/witness.wasm`,
+        sha256: nativeEvmFixtureHex32(seedOffset + 4),
+      },
+    },
+    sample: {
+      id: `${profile.chain}-self-test`,
+      publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
+      publicSignalWords,
+    },
+    snarkjs: {
+      binary: "snarkjs",
+      wtnsCalculate: true,
+      groth16Prove: true,
+      groth16Verify: true,
+    },
+    adversarialChecks: bscGroth16ProofSelfTestAdversarialChecks(),
+    witnessHash: nativeEvmFixtureHex32(seedOffset + 5),
+    proofHash: testSha256Hex(testTextEncoder.encode(canonicalJson(proof))),
+    publicSignalsHash: testSha256Hex(
+      testTextEncoder.encode(JSON.stringify(publicSignalWords)),
+    ),
+    proof,
+    publicSignals: publicSignalWords,
+  });
+};
+
 const bscNativeEvmProfile = (network) => {
   if (network === "mainnet") {
     return {
@@ -1901,7 +2079,8 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     "zkey",
     10,
   );
-  const verifierKeyBytes = nativeEvmFixtureBytes(257, 11);
+  const verifierKeyMaterial = bscNativeEvmVerifierKeyMaterial(profile);
+  const verifierKeyBytes = nativeEvmFixtureJsonBytes(verifierKeyMaterial);
   const implementationBytesBySdk = Object.fromEntries(
     NATIVE_EVM_TEST_SDKS.map(([sdk], index) => [
       sdk,
@@ -1911,7 +2090,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
   const proofArtifactHash = testSha256Hex(proofArtifactBytes);
   const provingKeyHash = testSha256Hex(provingKeyBytes);
   const verifierKeyArtifactHash = testSha256Hex(verifierKeyBytes);
-  const verifierKeyHash = nativeEvmFixtureHex32(33);
+  const verifierKeyHash = verifierKeyMaterial.verifierKeyHash;
   const destinationBinding = profile.destinationBinding({ verifierKeyHash });
   assert.equal(
     profile.destinationBindingHash(destinationBinding),
@@ -2000,6 +2179,8 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     destinationBindingHash: destinationBinding.bindingHash,
     crossSdkParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
     nativeProverSelfTestArtifact: `artifacts/${profile.chain}/self-test.json`,
+    groth16ProofSelfTestArtifact:
+      `artifacts/${profile.chain}/groth16-proof-self-test.json`,
     auditHashes: {
       circuit_security_audit: nativeEvmFixtureHex32(81),
       native_implementation_audit: nativeEvmFixtureHex32(82),
@@ -2010,6 +2191,13 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     },
     nativeSdkArtifacts: sdkArtifacts,
   };
+  const groth16ProofSelfTestBytes = bscGroth16ProofSelfTestBytes(
+    profile,
+    nativeProverBundle,
+  );
+  nativeProverBundle.groth16ProofSelfTestHash = testSha256Hex(
+    groth16ProofSelfTestBytes,
+  );
   return {
     profile,
     destinationBinding,
@@ -2019,6 +2207,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     verifierKeyBytes,
     crossSdkParityBytes,
     nativeProverSelfTestBytes,
+    groth16ProofSelfTestBytes,
     implementationBytes: implementationBytesBySdk.javascript,
     sdk: "javascript",
   };
@@ -7361,6 +7550,7 @@ test("BSC high-level facades require route-bound native prover artifacts", async
       verifierKeyBytes: fixture.verifierKeyBytes,
       crossSdkParityBytes: fixture.crossSdkParityBytes,
       nativeProverSelfTestBytes: fixture.nativeProverSelfTestBytes,
+      groth16ProofSelfTestBytes: fixture.groth16ProofSelfTestBytes,
       implementationBytes: fixture.implementationBytes,
       sdk: fixture.sdk,
     };

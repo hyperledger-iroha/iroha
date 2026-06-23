@@ -12,12 +12,12 @@ translation_last_reviewed: 2026-02-07
 
 يقوم هذا القرص بتحويل النقاط الصغيرة إلى البطاقات التالية **DOCS-7** (النشر SoraFS) و **DOCS-8** (دبوس الأتمتة في CI/CD) بشكل عملي إجراءات بوابة المصممين. من خلال تحسين البنية/اللينت، التعبئة SoraFS، نشر البيان من خلال Sigstore، إنتاج الاسم المستعار، التحقق، تم تدريب المدربين على أن تكون كل معاينة وإصدار عبارة عن مؤثرات صوتية وسمعية.
 
-يقترح ذلك أنك الآن ثنائي `sorafs_cli` (مرتبط بـ `--features cli`)، يمكنك الوصول إلى نقطة النهاية Torii باستخدام سجل الدبوس الصحيح و OIDC بيانات رائعة لـ Sigstore. الأسرار الطويلة (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، الرموز المميزة Torii) موجودة في قبو CI؛ يمكن للمنافذ المحلية أن تدعم تصديرها في Shell.
+يقترح ذلك أنك الآن ثنائي `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target)، يمكنك الوصول إلى نقطة النهاية Torii باستخدام سجل الدبوس الصحيح و OIDC بيانات رائعة لـ Sigstore. الأسرار الطويلة (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، الرموز المميزة Torii) موجودة في قبو CI؛ يمكن للمنافذ المحلية أن تدعم تصديرها في Shell.
 
 ## خدمة مسبقة
 
 - العقدة 18.18+ مع `npm` أو `pnpm`.
-- `sorafs_cli` من `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` من `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان URL Torii، الذي يتم الكشف عنه `/v1/sorafs/*`، بالإضافة إلى مفتاح القفل/المفتاح الخاص، الذي يمكن من خلاله إرسال البيانات و الاسم المستعار.
 - مُصدر OIDC (GitHub Actions وGitLab وهوية عبء العمل وما إلى ذلك) للإصدار `SIGSTORE_ID_TOKEN`.
 - اختياريًا: `examples/sorafs_cli_quickstart.sh` للتشغيل الجاف و`docs/source/sorafs_ci_templates.md` لتخطيط سير عمل GitHub/GitLab.

@@ -10,7 +10,7 @@ guidance” by documenting how SoraFS gateways, SDKs, and downstream tooling mus
 detect, surface, and remediate refusal paths that protect trustless delivery.
 The guidance complements the negative test matrix in
 `docs/source/sorafs_gateway_capability_tests.md` and the self-certification kit
-draft captured in `docs/source/sorafs_gateway_self_cert.md`.
+captured in `docs/source/sorafs_gateway_self_cert.md`.
 
 ## Audience & Scope
 
@@ -35,8 +35,8 @@ the telemetry label. Table rows double as the minimum compliance expectation.
 |----|------|--------------|--------------------|---------------------|-----------------|
 | C1 | 406 | `unsupported_chunker` | `unsupported_chunker` | Align chunker handle with SF-1 profile list; refresh manifest alias. | Chunker registry docs, SF-1 deliverables. |
 | C2 | 412 | `manifest_variant_missing` | `manifest_variant_missing`, `alias_stale` | Publish successor manifest or pin alias to requested profile; verify registry snapshot. | Pin registry plan, alias policy. |
-| C3 | 412 | `admission_envelope_mismatch` | `governance_violation`, `alias_stale` | Regenerate admission envelope via Torii; confirm governance signatures. | `docs/source/sorafs/pin_registry_validation_plan.md`. |
-| C4 | 428 | `capability_grease_unsupported` | `capability_refusal` | Reject unknown TLVs unless explicitly allowed; ensure client negotiated supported capabilities. | Capability GREASE RFC draft. |
+| C3 | 412 | `admission_envelope_mismatch` | `governance_violation`, `alias_stale` | Validate the provider admission envelope and manifest council signatures with the current CLI tooling. | `docs/source/sorafs/pin_registry_validation_plan.md`. |
+| C4 | 428 | `capability_grease_unsupported` | `capability_refusal` | Reject unknown TLVs unless explicitly allowed; ensure client negotiated supported capabilities. | Capability GREASE policy. |
 | C5 | 428 | `missing_dag_scope` | `capability_refusal` | Add `Sora-Dag-Scope` header or upgrade client; configure orchestrator defaults. | Chunk-range spec (SF-5d). |
 | C6 | 406 | `unsupported_encoding` | `unsupported_encoding` | Drop `Accept-Encoding` requests or enable compression in manifest policy. | Manifest policy docs. |
 | C7 | 422 | `proof_validation_failed` | `proof_validation_failed` | Verify PoR/PoTR proofs; inspect harness replay output for corrupted chunks. | Replay harness guide. |
@@ -54,14 +54,14 @@ dashboards and alerts remain portable across deployments.
    (`/v1/sorafs/pin/<cid>`). The manifest MUST include a chunker matching the
    request.
 3. If the manifest is missing, publish a successor manifest via
-   `sorafs-manifest submit` and wait for governance approval.
+   `sorafs_cli manifest submit` and wait for governance approval.
 4. Confirm that the gateway cache refreshed within
    `alias_refresh_window` (see `docs/source/sorafs_alias_policy.md`). If the
    cache exceeded `alias_hard_expiry`, evict locally and re-request.
 
 ### Manifest Variant Missing (`C2`)
 
-1. Use `sorafs-manifest inspect` to confirm the requested profile exists.
+1. Use `/v1/sorafs/pin/<cid>` to confirm the requested profile exists.
 2. If the alias already points at a manifest lacking the profile, submit a
    successor manifest and trigger replication orders.
 3. Verify that registries broadcast `alias-proof-updated` SSE events and that
@@ -70,10 +70,9 @@ dashboards and alerts remain portable across deployments.
 
 ### Admission Envelope Mismatch (`C3`)
 
-1. Run `sorafs-manifest attest --cid <cid>` to regenerate an admission envelope.
-2. Check the Norito payload digest matches the manifest CID; mismatches indicate
-   stale governance logs.
-3. Confirm each council signature with `sorafs-manifest verify`, ensuring public
+1. Run `cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission verify --envelope=<envelope.to>` to validate the provider admission envelope. Include `--proposal`, `--advert`, or `--advert-body` sidecars when available so the tool checks the envelope binding.
+2. Run `cargo run -p sorafs_manifest --bin sorafs-validate -- admission --input <envelope.to>` to emit the SF-11 validation report and telemetry evidence.
+3. Confirm manifest council signatures with `sorafs_cli manifest verify-signature`, ensuring public
    keys align with the latest rotation.
 4. If the envelope belongs to a revoked governance epoch, operators must fetch a
    newer snapshot before the gateway accepts the manifest.
@@ -96,7 +95,7 @@ dashboards and alerts remain portable across deployments.
 
 ### Proof Validation Failed (`C7`)
 
-1. Run the replay harness (`cargo test -p integration_tests sorafs_gateway_conformance`)
+1. Run the replay harness (`cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`)
    against the gateway; ensure the negative fixture reproduces the failure.
 2. Inspect the PoR transcript in
    `fixtures/sorafs_gateway/conformance/proofs/*.norito` for tampering.
@@ -148,5 +147,5 @@ Before onboarding a gateway or SDK release, confirm:
   1. Update to this guidance document and the test matrix.
   2. Regenerated fixtures and replay harness coverage.
   3. Governance council approval with signed manifest.
-- Keep roadmap item SF-5c updated when new refusal paths move from draft to
-  production to avoid drift between the docs, tests, and telemetry.
+- Keep roadmap item SF-5c updated when new refusal paths are added or promoted
+  to production to avoid drift between the docs, tests, and telemetry.

@@ -81,7 +81,7 @@ jobs:
 
 ## Тэмдэглэл
 
-- `sorafs_cli` гүйгч дээр бэлэн байх ёстой (жишээ нь, эдгээр алхмуудын өмнө `cargo install --path crates/sorafs_car --features cli`).
+- `sorafs_cli` гүйгч дээр бэлэн байх ёстой (жишээ нь, эдгээр алхмуудын өмнө `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli`).
 - Ажлын урсгал нь тодорхой OIDC үзэгчдийг хангах ёстой (энд `sorafs`); `--identity-token-audience`-г Fulcio бодлогодоо тохируулан тохируулна уу.
 - Хувилбарын шугам нь `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, `artifacts/proof.json` архивуудыг засаглалын хяналтад оруулах ёстой.
 - Тодорхойлогч дээжийн олдворууд `fixtures/sorafs_manifest/ci_sample`-д амьдардаг; Алтан манифест, хэсэгчилсэн төлөвлөгөө эсвэл JSON-г багцлах шаардлагатай үед дамжуулах хоолойг дахин тооцоолохгүйгээр тэдгээрийг тест болгон хуулж аваарай.

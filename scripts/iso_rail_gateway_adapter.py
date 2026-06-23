@@ -524,18 +524,20 @@ def _read_regular_file(
 
 
 def _ensure_input_directory(path: Path, label: str) -> None:
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise AdapterError(f"{label} {path} does not exist") from error
+        raise AdapterError(f"{label} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise AdapterError(f"{label} {path} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
-        raise AdapterError(f"{label} {path} must be a directory")
+        raise AdapterError(f"{label} must be a directory")
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path, *, display_label: str | None = None
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -547,7 +549,8 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise AdapterError(f"{current} must not be a symlink")
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(f"{label} must not be a symlink")
 
 
 def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
@@ -820,58 +823,60 @@ def _ensure_output_directory(path: Path, label: str) -> None:
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path)
+    _reject_symlinked_existing_ancestors(path, display_label=label)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
-            raise AdapterError(f"{label} {path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
-            raise AdapterError(f"{label} {path} must be a directory")
+            raise AdapterError(f"{label} must be a directory")
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
     if stat.S_ISLNK(mode):
-        raise AdapterError(f"{label} {path} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(mode):
-        raise AdapterError(f"{label} {path} must be a directory")
+        raise AdapterError(f"{label} must be a directory")
 
 
-def _ensure_output_file_target(path: Path) -> None:
+def _ensure_output_file_target(path: Path, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else str(path)
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise AdapterError(f"{path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise AdapterError(f"{path} must not be hard-linked")
+            raise AdapterError(f"{label} must not be hard-linked")
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
-            "output path must not point to checked-in ISO fixture artifacts"
+            f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise AdapterError(f"{path.parent} must be a directory") from error
+        raise AdapterError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise AdapterError(f"{path.parent} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise AdapterError(f"{path.parent} must be a directory")
-    _ensure_output_file_target(path)
+        raise AdapterError(f"{label} must be a directory")
+    _ensure_output_file_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path.parent} must not be a symlink") from error
-        raise AdapterError(f"{path.parent} must be a directory") from error
+            raise AdapterError(f"{label} must not be a symlink") from error
+        raise AdapterError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -884,15 +889,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise AdapterError(f"{path} temp file must not be a symlink") from error
+                raise AdapterError(f"{label} temp file must not be a symlink") from error
             raise AdapterError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise AdapterError(f"{path} temp file must be a regular file")
+            raise AdapterError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise AdapterError(f"{path} temp file must not be hard-linked")
+            raise AdapterError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -919,12 +924,22 @@ def _absolute_path_without_resolving_leaf(path: Path) -> Path:
     return path if path.is_absolute() else Path.cwd() / path
 
 
-def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
-    raw = _bounded_read(path, max_bytes) if max_bytes is not None else _read_regular_file(path)
+def _load_json(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> Any:
+    label = display_label if display_label is not None else str(path)
+    raw = (
+        _bounded_read(path, max_bytes, path_label=display_label)
+        if max_bytes is not None
+        else _read_regular_file(path, path_label=display_label)
+    )
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise AdapterError(f"{path} is not UTF-8 JSON") from error
+        raise AdapterError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -932,13 +947,13 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise AdapterError(f"{path} is not valid JSON: {error}") from error
+        raise AdapterError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_json_constant(value: str) -> None:
-    raise AdapterError(f"JSON contains non-finite numeric constant {value}")
+    raise AdapterError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -954,46 +969,52 @@ def _reject_json_surrogates(value: Any) -> None:
             _reject_json_surrogates(item)
 
 
-def _bounded_read(path: Path, max_bytes: int) -> bytes:
+def _bounded_read(
+    path: Path,
+    max_bytes: int,
+    *,
+    path_label: str | None = None,
+) -> bytes:
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
         raise AdapterError("max payload bytes must be a positive integer")
+    display_path = path_label if path_label is not None else str(path)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise AdapterError(f"{path} does not exist") from error
+        raise AdapterError(f"{display_path} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise AdapterError(f"{path} must not be a symlink")
+        raise AdapterError(f"{display_path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
-        raise AdapterError(f"{path} must be a regular file")
+        raise AdapterError(f"{display_path} must be a regular file")
     size = metadata.st_size
     if size <= 0:
-        raise AdapterError(f"{path} is empty")
+        raise AdapterError(f"{display_path} is empty")
     if size > max_bytes:
-        raise AdapterError(f"{path} exceeds {max_bytes} byte payload limit")
+        raise AdapterError(f"{display_path} exceeds {max_bytes} byte payload limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{display_path} must be a regular file")
         size = opened.st_size
         if size <= 0:
-            raise AdapterError(f"{path} is empty")
+            raise AdapterError(f"{display_path} is empty")
         if size > max_bytes:
-            raise AdapterError(f"{path} exceeds {max_bytes} byte payload limit")
+            raise AdapterError(f"{display_path} exceeds {max_bytes} byte payload limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             raw = handle.read(max_bytes + 1)
         if len(raw) > max_bytes:
-            raise AdapterError(f"{path} exceeds {max_bytes} byte payload limit")
+            raise AdapterError(f"{display_path} exceeds {max_bytes} byte payload limit")
         return raw
     except FileNotFoundError as error:
-        raise AdapterError(f"{path} does not exist") from error
+        raise AdapterError(f"{display_path} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path} must not be a symlink") from error
-        raise AdapterError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise AdapterError(f"{display_path} must not be a symlink") from error
+        raise AdapterError(f"cannot open {display_path} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -1008,80 +1029,86 @@ def verify_message_file(
 ) -> GatewayMessage:
     """Verify a gateway XML payload and its sidecar metadata."""
 
+    xml_label = "message XML payload"
+    sidecar_label = "message sidecar"
     _reject_raw_output_path_smuggling(str(xml_path), "message XML path")
     if _path_is_repository_iso_fixture(str(xml_path)):
         raise AdapterError(
-            f"{xml_path} must not point to checked-in ISO XML fixtures"
+            f"{xml_label} must not point to checked-in ISO XML fixtures"
         )
-    _validate_path_argument(str(xml_path.name), f"{xml_path} filename")
+    _validate_path_argument(str(xml_path.name), "message XML filename")
     if xml_path.suffix.lower() != ".xml":
-        raise AdapterError(f"{xml_path} must use a .xml suffix")
+        raise AdapterError("message XML path must use a .xml suffix")
     sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
     _reject_raw_output_path_smuggling(str(sidecar_path), "message sidecar path")
-    sidecar = _load_json(sidecar_path, max_bytes=MAX_SIDECAR_JSON_BYTES)
+    sidecar = _load_json(
+        sidecar_path,
+        max_bytes=MAX_SIDECAR_JSON_BYTES,
+        display_label=sidecar_label,
+    )
     if not isinstance(sidecar, dict):
-        raise AdapterError(f"{sidecar_path} must contain a JSON object")
-    _reject_unknown_keys(sidecar, SIDECAR_KEYS, str(sidecar_path))
-    _check_no_secret_material(sidecar, str(sidecar_path))
+        raise AdapterError(f"{sidecar_label} must contain a JSON object")
+    _reject_unknown_keys(sidecar, SIDECAR_KEYS, sidecar_label)
+    _check_no_secret_material(sidecar, sidecar_label)
 
-    payload = _bounded_read(xml_path, max_payload_bytes)
+    payload = _bounded_read(xml_path, max_payload_bytes, path_label=xml_label)
     actual_sha256 = sha256_hex(payload)
     expected_sha256 = sidecar.get("payload_sha256")
     if isinstance(expected_sha256, str):
         _reject_secret_looking_identifier(
             expected_sha256,
-            f"{sidecar_path} payload_sha256",
+            f"{sidecar_label} payload_sha256",
         )
     if not _is_lower_hex_sha256(expected_sha256):
-        raise AdapterError(f"{sidecar_path} payload_sha256 must be lowercase SHA-256 hex")
+        raise AdapterError(f"{sidecar_label} payload_sha256 must be lowercase SHA-256 hex")
     if _is_all_zero_sha256(expected_sha256):
-        raise AdapterError(f"{sidecar_path} payload_sha256 must not be all zero")
+        raise AdapterError(f"{sidecar_label} payload_sha256 must not be all zero")
     if expected_sha256 != actual_sha256:
-        raise AdapterError(f"{xml_path} payload_sha256 mismatch")
+        raise AdapterError(f"{xml_label} payload_sha256 mismatch")
 
     message_type = sidecar.get("message_type")
     if isinstance(message_type, str):
         _reject_non_ascii_identifier(
             message_type,
-            f"{sidecar_path} message_type",
+            f"{sidecar_label} message_type",
         )
         _reject_secret_looking_identifier(
             message_type,
-            f"{sidecar_path} message_type",
+            f"{sidecar_label} message_type",
         )
     if not isinstance(message_type, str) or MESSAGE_TYPE_RE.fullmatch(message_type) is None:
-        raise AdapterError(f"{sidecar_path} message_type must be lowercase ISO family id")
+        raise AdapterError(f"{sidecar_label} message_type must be lowercase ISO family id")
     if message_type not in ENDPOINTS:
-        raise AdapterError(f"{sidecar_path} has unsupported message_type")
+        raise AdapterError(f"{sidecar_label} has unsupported message_type")
     if message_type in LEGACY_MESSAGE_TYPES and not allow_legacy_colr007:
         raise AdapterError(
-            f"{sidecar_path} uses legacy message_type; "
+            f"{sidecar_label} uses legacy message_type; "
             "use colr.012 for production collateral substitution confirmations"
         )
 
     profile_present = "profile" in sidecar
     if not profile_present:
         if not allow_default_profile:
-            raise AdapterError(f"{sidecar_path} must specify profile for live rail submission")
+            raise AdapterError(f"{sidecar_label} must specify profile for live rail submission")
         profile = None
     else:
         profile = sidecar.get("profile")
     if profile_present and (not isinstance(profile, str) or not profile.strip()):
-        raise AdapterError(f"{sidecar_path} profile must be a non-empty string")
+        raise AdapterError(f"{sidecar_label} profile must be a non-empty string")
     if isinstance(profile, str):
         if _contains_control_character(profile):
-            raise AdapterError(f"{sidecar_path} profile must not contain control characters")
+            raise AdapterError(f"{sidecar_label} profile must not contain control characters")
         if profile != profile.strip():
             raise AdapterError(
-                f"{sidecar_path} profile must not have surrounding whitespace"
+                f"{sidecar_label} profile must not have surrounding whitespace"
             )
         if any(ch.isspace() for ch in profile):
-            raise AdapterError(f"{sidecar_path} profile must not contain whitespace")
+            raise AdapterError(f"{sidecar_label} profile must not contain whitespace")
         if PROFILE_ID_RE.fullmatch(profile) is None:
             raise AdapterError(
-                f"{sidecar_path} profile must be a canonical lowercase profile id"
+                f"{sidecar_label} profile must be a canonical lowercase profile id"
             )
-        _reject_secret_looking_identifier(profile, f"{sidecar_path} profile")
+        _reject_secret_looking_identifier(profile, f"{sidecar_label} profile")
 
     rail_message_id_present = "rail_message_id" in sidecar
     rail_message_id = None
@@ -1090,24 +1117,24 @@ def verify_message_file(
     if rail_message_id_present and (
         not isinstance(rail_message_id, str) or not rail_message_id.strip()
     ):
-        raise AdapterError(f"{sidecar_path} rail_message_id must be a non-empty string")
+        raise AdapterError(f"{sidecar_label} rail_message_id must be a non-empty string")
     if isinstance(rail_message_id, str):
         if _contains_control_character(rail_message_id):
             raise AdapterError(
-                f"{sidecar_path} rail_message_id must not contain control characters"
+                f"{sidecar_label} rail_message_id must not contain control characters"
             )
         if rail_message_id != rail_message_id.strip():
             raise AdapterError(
-                f"{sidecar_path} rail_message_id must not have surrounding whitespace"
+                f"{sidecar_label} rail_message_id must not have surrounding whitespace"
             )
         if any(ch.isspace() for ch in rail_message_id):
             raise AdapterError(
-                f"{sidecar_path} rail_message_id must not contain whitespace"
+                f"{sidecar_label} rail_message_id must not contain whitespace"
             )
-        _validate_rail_message_id(rail_message_id, f"{sidecar_path} rail_message_id")
+        _validate_rail_message_id(rail_message_id, f"{sidecar_label} rail_message_id")
         _reject_secret_looking_identifier(
             rail_message_id,
-            f"{sidecar_path} rail_message_id",
+            f"{sidecar_label} rail_message_id",
         )
 
     return GatewayMessage(
@@ -1121,16 +1148,17 @@ def verify_message_file(
     )
 
 
-def discover_messages(inbox_dir: Path) -> list[Path]:
+def discover_messages(inbox_dir: Path, *, display_label: str | None = None) -> list[Path]:
     """Return inbound XML paths in deterministic order."""
 
+    label = display_label or "inbox_dir"
     if not inbox_dir.is_dir():
-        raise AdapterError(f"{inbox_dir} is not a directory")
+        raise AdapterError(f"{label} is not a directory")
     messages = sorted(path for path in inbox_dir.iterdir() if path.suffix.lower() == ".xml")
     if not messages:
-        raise AdapterError(f"{inbox_dir} has no *.xml gateway messages")
+        raise AdapterError(f"{label} has no *.xml gateway messages")
     for path in messages:
-        _validate_path_argument(str(path.name), f"{path} filename")
+        _validate_path_argument(str(path.name), f"{label} filename")
     return messages
 
 
@@ -1182,13 +1210,13 @@ def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     _ensure_input_directory(inbox_dir, "inbox_dir")
     inbox_root = inbox_dir.resolve()
     if message is None:
-        return discover_messages(inbox_dir)
+        return discover_messages(inbox_dir, display_label="inbox_dir")
     _validate_path_argument(message, "--message path")
     raw_message = Path(message).expanduser()
     message_path = raw_message if raw_message.is_absolute() else inbox_dir / raw_message
     resolved_parent = message_path.parent.resolve()
     if not resolved_parent.is_relative_to(inbox_root):
-        raise AdapterError(f"--message path {message} must stay under --inbox-dir {inbox_root}")
+        raise AdapterError("--message path must stay under --inbox-dir")
     return [resolved_parent / message_path.name]
 
 
@@ -1687,7 +1715,11 @@ def write_receipt(receipt_dir: Path, message: GatewayMessage, result: SubmitResu
     _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt = receipt_value(message, result, endpoint_url)
     path = receipt_output_path(receipt_dir, message)
-    _write_text_output(path, json.dumps(receipt, indent=2) + "\n")
+    _write_text_output(
+        path,
+        json.dumps(receipt, indent=2) + "\n",
+        display_label="receipt output",
+    )
     return path
 
 
@@ -1800,8 +1832,11 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     _ensure_output_directory(receipt_dir, "receipt_dir")
-    for message in messages:
-        _ensure_output_file_target(receipt_output_path(receipt_dir, message))
+    for offset, message in enumerate(messages):
+        _ensure_output_file_target(
+            receipt_output_path(receipt_dir, message),
+            display_label=f"receipt_output[{offset}]",
+        )
 
     failures = 0
     receipts: list[str] = []

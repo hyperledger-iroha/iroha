@@ -15,7 +15,8 @@ title: "SoraFS Migration Roadmap"
 This document operationalises the migration guidance captured in
 `docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
 execution-ready milestones, gating criteria, and owner checklists so storage,
-artifact hosting to SoraFS-backed publication.
+governance, release engineering, and docs teams can coordinate SoraFS-backed
+publication.
 
 The roadmap is intentionally deterministic: every milestone names the required
 artifacts, command invocations, and attestation steps so downstream pipelines
@@ -25,7 +26,7 @@ produce identical outputs and governance retains an auditable trail.
 
 | Milestone | Window | Primary Goals | Must Ship | Owners |
 |-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
+| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and expectation flags locally while rollout tickets carry fresh staging alias evidence. | Fixture verification, council-signed manifests, expectation-flag release checklists, and external alias evidence. | Storage, Governance, SDKs |
 
 Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
 changes to this roadmap MUST update the ledger to keep governance and release
@@ -46,7 +47,7 @@ engineering in sync.
 #### Canonical publishing command
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
@@ -64,7 +65,7 @@ the migration ledger entry for the artifact.
 
 | Step | Milestone | Description | Owner(s) | Output |
 |------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
+| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`) for live rollout tickets. | Governance, Docs | Proof bundle stored next to manifest plus external governance archive link. |
 | Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
 
 ### 4. Communication & Audit
@@ -81,7 +82,7 @@ the migration ledger entry for the artifact.
 
 | Dependency | Impact | Mitigation |
 |------------|--------|------------|
-| Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
+| Pin Registry contract availability | Blocks hosted M2 pin-first rollout evidence. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
 | Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
 | SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
 
@@ -92,7 +93,7 @@ and should be cross-referenced when adjustments are made.
 
 | Milestone | Criteria |
 |-----------|----------|
-| M1 | - Nightly fixture job green for seven consecutive days. <br> - Staging alias proofs verified in CI. <br> - Governance ratifies expectation flag policy. |
+| M1 | - `ci/check_sorafs_fixtures.sh` and fixture verification stay green. <br> - Release checklists use explicit `--car-digest`/`--root-cid` expectations. <br> - Staging alias proof evidence is attached to the external rollout archive. |
 
 ## Change Management
 

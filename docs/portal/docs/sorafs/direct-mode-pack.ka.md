@@ -49,7 +49,7 @@ SoraNet სქემები რჩება ნაგულისხმევ 
 - `direct_only_policy_rejects_soranet_only_providers` იძლევა გარანტიას, რომ `TransportPolicy::DirectOnly` სწრაფად ჩავარდება, როდესაც ყველა კანდიდატის რეკლამა მხარს უჭერს მხოლოდ SoraNet რელეებს.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` უზრუნველყოფს Torii/QUIC ტრანსპორტირების გამოყენებას, როდესაც არსებობს და რომ SoraNet რელეები გამოირიცხება სესიიდან.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` აანალიზებს `docs/examples/sorafs_direct_mode_policy.json`-ს, რათა უზრუნველყოს დოკუმენტაციის შესაბამისობა დამხმარე პროგრამებთან.
-- `fetch_command_respects_direct_transports` ვარჯიშობს `sorafs_cli fetch --transport-policy=direct-only` დამცინავი Torii კარიბჭის წინააღმდეგ, რაც უზრუნველყოფს კვამლის ტესტს რეგულირებულ გარემოში, რომელიც პირდაპირ ტრანსპორტირებას ახდენს.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` ვარჯიშობს `sorafs_cli fetch --transport-policy=direct-only` დამცინავი Torii კარიბჭის წინააღმდეგ, რაც უზრუნველყოფს კვამლის ტესტს რეგულირებულ გარემოში, რომელიც პირდაპირ ტრანსპორტირებას ახდენს.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` ერთსა და იმავე ბრძანებას ახვევს JSON პოლიტიკას და მდგრადობის დაფაზე გაშვების ავტომატიზაციისთვის.
 
 გაუშვით ფოკუსირებული კომპლექტი განახლებების გამოქვეყნებამდე:

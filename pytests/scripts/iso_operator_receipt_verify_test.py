@@ -1486,6 +1486,58 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn("must not be a symlink", stderr)
 
+    def test_receipt_input_path_diagnostics_do_not_echo_path(self):
+        payloads = (
+            ("malformed-json", b"{", "is not valid JSON"),
+            ("non-utf8-json", b"\xff", "is not UTF-8 JSON"),
+            ("not-object", b"[]", "must contain a JSON object"),
+            ("bad-version", b'{"version":true}\n', "unsupported receipt version"),
+        )
+        for name, payload, expected in payloads:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden_dir = root / f"local-receipt-input-leak-{name}"
+                    hidden_dir.mkdir()
+                    receipt = hidden_dir / "operator.receipt.json"
+                    receipt.write_bytes(payload)
+
+                    rc, stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertIn("receipt[0]", stderr)
+                    self.assertNotIn(str(receipt), stderr)
+                    self.assertNotIn(hidden_dir.name, stderr)
+
+    def test_receipt_input_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "receipt-target"
+            target_dir.mkdir()
+            target = target_dir / "operator.receipt.json"
+            target.write_text("{}\n", encoding="utf-8")
+            hidden_link = root / "local-receipt-input-leak-ancestor"
+            try:
+                hidden_link.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            receipt = hidden_link / target.name
+
+            rc, stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+            self.assertIn("receipt[0]", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(hidden_link.name, stderr)
+
     def test_non_regular_receipt_dirs_are_rejected_before_discovery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1505,12 +1557,40 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ]
             for path, message in cases:
                 with self.subTest(path=path.name):
-                    rc, _stdout, stderr = run_verify(
+                    rc, stdout, stderr = run_verify(
                         ["--receipt-dir", str(path), "--allow-insecure-http"]
                     )
 
                     self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("receipt_dir[0]", stderr)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(str(path), stderr)
+                    self.assertNotIn(path.name, stderr)
+
+    def test_receipt_dir_discovery_path_diagnostics_do_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            missing_dir = root / "missing-receipts"
+            empty_dir = root / "empty-receipts"
+            empty_dir.mkdir()
+
+            cases = (
+                (missing_dir, "does not exist"),
+                (empty_dir, "has no *.receipt.json files"),
+            )
+            for path, message in cases:
+                with self.subTest(path=path.name):
+                    rc, stdout, stderr = run_verify(
+                        ["--receipt-dir", str(path), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("receipt_dir[0]", stderr)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(str(path), stderr)
+                    self.assertNotIn(path.name, stderr)
 
     def test_symlinked_receipt_dir_ancestor_is_rejected_before_discovery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1530,7 +1610,10 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
+            self.assertIn("receipt_dir[0]", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt_dir), stderr)
+            self.assertNotIn(ancestor.name, stderr)
 
     def test_receipt_cli_paths_reject_raw_smuggling_before_discovery(self):
         cases = (
@@ -1652,7 +1735,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_boolean_receipt_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1690,6 +1774,26 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("exceeds 64 byte JSON limit", stderr)
+
+    def test_oversized_receipt_input_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden_dir = root / "local-receipt-input-leak-oversized"
+            hidden_dir.mkdir()
+            receipt = hidden_dir / "operator.receipt.json"
+            receipt.write_bytes(oversized_json_bytes(64))
+
+            with patched_verifier_constant("MAX_RECEIPT_JSON_BYTES", 64):
+                rc, stdout, stderr = run_verify(
+                    ["--receipt", str(receipt), "--allow-insecure-http"]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("exceeds 64 byte JSON limit", stderr)
+            self.assertIn("receipt[0]", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(hidden_dir.name, stderr)
 
     def test_unknown_receipt_fields_are_rejected_even_with_valid_digest(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -1751,6 +1855,69 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("endpoint_sha256 does not match endpoint", stderr)
+
+    def test_insecure_endpoint_policy_diagnostic_does_not_echo_receipt_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-receipt-endpoint"
+            inbox = root / hidden
+            inbox.mkdir()
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+            rc, stdout, stderr = run_verify(["--receipt", str(receipt)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt[0] uses insecure HTTP URL", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(hidden, stderr)
+
+    def test_status_metadata_diagnostic_does_not_echo_receipt_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-receipt-status"
+            inbox = root / hidden
+            inbox.mkdir()
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(receipt, lambda body: body.update({"status_code": True}))
+
+            rc, stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt[0] status_code must be null or an HTTP status integer", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_rail_receipt_required_strings_must_not_require_trimming(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2461,6 +2628,50 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
 
+    def test_source_payload_mismatch_does_not_echo_xml_path(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, _sidecar = rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            hidden = "hidden-operator-source-path"
+            hidden_dir = inbox / hidden
+            hidden_dir.mkdir()
+            hidden_xml = hidden_dir / xml_path.name
+            hidden_xml.write_bytes(rail_test.SAMPLE_XML + b" changed")
+            hidden_sidecar = hidden_xml.with_suffix(hidden_xml.suffix + ".json")
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "xml_path": str(hidden_xml),
+                        "sidecar_path": str(hidden_sidecar),
+                    }
+                ),
+            )
+
+            rc, stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("payload_sha256 does not match source XML", stderr)
+            self.assertNotIn(str(hidden_xml), stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_oversized_rail_source_xml_is_rejected_when_required(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -2495,6 +2706,155 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("byte payload limit", stderr)
+
+    def test_missing_rail_source_paths_do_not_echo_paths(self):
+        def missing_sidecar(receipt, hidden_xml, hidden_sidecar, original_sidecar):
+            del original_sidecar
+            hidden_xml.write_bytes(rail_test.SAMPLE_XML)
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "xml_path": str(hidden_xml),
+                        "sidecar_path": str(hidden_sidecar),
+                    }
+                ),
+            )
+
+        def missing_xml(receipt, hidden_xml, hidden_sidecar, original_sidecar):
+            del hidden_xml
+            hidden_sidecar.write_bytes(original_sidecar)
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "xml_path": str(hidden_sidecar.with_suffix("")),
+                        "sidecar_path": str(hidden_sidecar),
+                    }
+                ),
+            )
+
+        cases = (
+            ("missing-sidecar", missing_sidecar, "references missing sidecar_path"),
+            ("missing-xml", missing_xml, "references missing xml_path"),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_inbox:
+                inbox = Path(raw_inbox)
+                xml_path, _sidecar = rail_test.write_message(inbox)
+                sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+                with rail_test.capture_server() as (base_url, _requests):
+                    self.assertEqual(
+                        rail_test.run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )[0],
+                        0,
+                    )
+                receipt = next((inbox / "receipts").glob("*.receipt.json"))
+                hidden = f"hidden-operator-missing-source-{name}"
+                hidden_dir = inbox / hidden
+                hidden_dir.mkdir()
+                hidden_xml = hidden_dir / "rail-status.xml"
+                hidden_sidecar = hidden_xml.with_suffix(hidden_xml.suffix + ".json")
+
+                mutate(receipt, hidden_xml, hidden_sidecar, sidecar_path.read_bytes())
+
+                rc, stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                    ]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(str(hidden_dir), stderr)
+                self.assertNotIn(hidden, stderr)
+
+    def test_malformed_rail_source_paths_do_not_echo_paths(self):
+        def malformed_sidecar(hidden_xml, hidden_sidecar, original_sidecar):
+            del original_sidecar
+            hidden_xml.write_bytes(rail_test.SAMPLE_XML)
+            hidden_sidecar.write_text("{not-json\n", encoding="utf-8")
+            return "is not valid JSON", None
+
+        def oversized_xml(hidden_xml, hidden_sidecar, original_sidecar):
+            hidden_xml.write_bytes(rail_test.SAMPLE_XML)
+            hidden_sidecar.write_bytes(original_sidecar)
+            return "byte payload limit", len(rail_test.SAMPLE_XML) - 1
+
+        cases = (
+            ("malformed-sidecar", malformed_sidecar),
+            ("oversized-xml", oversized_xml),
+        )
+        for name, arrange in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_inbox:
+                inbox = Path(raw_inbox)
+                xml_path, _sidecar = rail_test.write_message(inbox)
+                sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+                with rail_test.capture_server() as (base_url, _requests):
+                    self.assertEqual(
+                        rail_test.run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )[0],
+                        0,
+                    )
+                receipt = next((inbox / "receipts").glob("*.receipt.json"))
+                hidden = f"hidden-operator-malformed-source-{name}"
+                hidden_dir = inbox / hidden
+                hidden_dir.mkdir()
+                hidden_xml = hidden_dir / "rail-status.xml"
+                hidden_sidecar = hidden_xml.with_suffix(hidden_xml.suffix + ".json")
+                expected, max_xml_bytes = arrange(
+                    hidden_xml,
+                    hidden_sidecar,
+                    sidecar_path.read_bytes(),
+                )
+                rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {
+                            "xml_path": str(hidden_xml),
+                            "sidecar_path": str(hidden_sidecar),
+                        }
+                    ),
+                )
+
+                patch_context = (
+                    patched_verifier_constant("MAX_RAIL_XML_BYTES", max_xml_bytes)
+                    if max_xml_bytes is not None
+                    else contextlib.nullcontext()
+                )
+                with patch_context:
+                    rc, stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(str(hidden_dir), stderr)
+                self.assertNotIn(hidden, stderr)
 
     def test_source_sidecar_mismatches_are_rejected_when_required(self):
         def replace_with_symlink(path, target):
@@ -4041,6 +4401,288 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertIn(expected, stderr)
                     if name == "duplicate_embedded_record":
                         self.assertNotIn("msg-1", stderr)
+                    if name == "symlinked_latest_anchor":
+                        self.assertNotIn(str(latest), stderr)
+                    if name == "symlinked_digest_peer":
+                        self.assertNotIn(str(digest_anchor), stderr)
+                    if name == "exported_index_mismatch":
+                        self.assertNotIn(str(index_file), stderr)
+
+    def test_malformed_notary_source_paths_do_not_echo_paths(self):
+        def malformed_anchor(root, hidden):
+            export_dir = root / hidden
+            store_dir = root / "store"
+            export_dir.mkdir()
+            audit_test.write_export(
+                export_dir,
+                store_dir=store_dir,
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            copied_receipt = root / "malformed-anchor.receipt.json"
+            copied_receipt.write_bytes(receipt.read_bytes())
+            latest = export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["unexpected_anchor_secret_path_field"] = True
+            latest.write_text(json.dumps(anchor, indent=2) + "\n", encoding="utf-8")
+            return copied_receipt, latest, "contains unknown keys"
+
+        def malformed_anchor_json(root, hidden):
+            receipt, latest, _expected = malformed_anchor(root, hidden)
+            latest.write_text("{not-json\n", encoding="utf-8")
+            return receipt, latest, "is not valid JSON"
+
+        def malformed_record(root, hidden):
+            export_dir = root / "export"
+            store_dir = root / hidden
+            export_dir.mkdir()
+            audit_test.write_export(
+                export_dir,
+                store_dir=store_dir,
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            record_source = next(
+                (store_dir / audit_test.ADAPTER.RECORDS_DIR).glob("*.json")
+            )
+            record = json.loads(record_source.read_text(encoding="utf-8"))
+            record["version"] = True
+            record_source.write_text(
+                json.dumps(record, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            return receipt, record_source, "has unsupported persisted record version"
+
+        def malformed_record_json(root, hidden):
+            receipt, record_source, _expected = malformed_record(root, hidden)
+            record_source.write_text("{not-json\n", encoding="utf-8")
+            return receipt, record_source, "is not valid JSON"
+
+        cases = (
+            ("malformed-anchor", malformed_anchor),
+            ("malformed-anchor-json", malformed_anchor_json),
+            ("malformed-record", malformed_record),
+            ("malformed-record-json", malformed_record_json),
+        )
+        for name, arrange in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                hidden = f"hidden-notary-source-{name}"
+                receipt, source_path, expected = arrange(root, hidden)
+
+                rc, stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                    ]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn(str(source_path), stderr)
+
+    def test_missing_notary_source_paths_do_not_echo_paths(self):
+        def write_notary_receipt(root, *, hidden_name, hidden_export, hidden_store):
+            export_dir = root / (hidden_name if hidden_export else "export")
+            store_dir = root / (hidden_name if hidden_store else "store")
+            export_dir.mkdir()
+            _index, _anchor, _digest_anchor = audit_test.write_export(
+                export_dir,
+                store_dir=store_dir,
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            return receipt, export_dir, store_dir
+
+        def missing_anchor(root, hidden):
+            receipt, _export_dir, _store_dir = write_notary_receipt(
+                root,
+                hidden_name=hidden,
+                hidden_export=False,
+                hidden_store=False,
+            )
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {"anchor_path": str(root / hidden / audit_test.ADAPTER.LATEST_ANCHOR_FILE)}
+                ),
+            )
+            return receipt, "references missing anchor_path"
+
+        def missing_index(root, hidden):
+            receipt, export_dir, _store_dir = write_notary_receipt(
+                root,
+                hidden_name=hidden,
+                hidden_export=True,
+                hidden_store=False,
+            )
+            copied_receipt = root / "missing-index.receipt.json"
+            copied_receipt.write_bytes(receipt.read_bytes())
+            (export_dir / audit_test.ADAPTER.INDEX_FILE).unlink()
+            return copied_receipt, "references missing audit index"
+
+        def missing_digest_peer(root, hidden):
+            receipt, export_dir, _store_dir = write_notary_receipt(
+                root,
+                hidden_name=hidden,
+                hidden_export=True,
+                hidden_store=False,
+            )
+            copied_receipt = root / "missing-digest-peer.receipt.json"
+            copied_receipt.write_bytes(receipt.read_bytes())
+            next((export_dir / audit_test.ADAPTER.ANCHOR_DIR).glob("*.notary.json")).unlink()
+            return copied_receipt, "latest anchor has no digest-addressed peer"
+
+        def missing_record(root, hidden):
+            receipt, _export_dir, store_dir = write_notary_receipt(
+                root,
+                hidden_name=hidden,
+                hidden_export=False,
+                hidden_store=True,
+            )
+            record_dir = store_dir / audit_test.ADAPTER.RECORDS_DIR
+            next(record_dir.glob("*.json")).unlink()
+            return receipt, "references missing audit record"
+
+        cases = (
+            ("missing-anchor", missing_anchor),
+            ("missing-index", missing_index),
+            ("missing-digest-peer", missing_digest_peer),
+            ("missing-record", missing_record),
+        )
+        for name, arrange in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                hidden = f"hidden-notary-source-{name}"
+                receipt, expected = arrange(root, hidden)
+
+                rc, stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                    ]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+
+    def test_notary_store_dir_symlink_ancestor_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            hidden = "hidden-notary-store-link"
+            target_store = root / "store-target"
+            target_store.mkdir()
+            store_link = root / hidden
+            try:
+                store_link.symlink_to(target_store, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            export_dir.mkdir()
+            target_store_child = target_store / "store"
+            target_store_child.mkdir()
+            _index, _anchor, digest_anchor = audit_test.write_export(
+                export_dir,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            latest = export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["store_dir"] = str(store_link / "store")
+            anchor = audit_test.with_digest(
+                anchor,
+                audit_test.ADAPTER.ANCHOR_DIGEST_FIELD,
+            )
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            digest_anchor.write_text(anchor_text, encoding="utf-8")
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ]
+                    }
+                ),
+            )
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--require-source-files",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("receipt[0] anchor source.audit_index.store_dir", stderr)
+            self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(store_link), stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_missing_notary_anchor_path_must_keep_digest_addressed_shape(self):
         with tempfile.TemporaryDirectory() as raw_root:

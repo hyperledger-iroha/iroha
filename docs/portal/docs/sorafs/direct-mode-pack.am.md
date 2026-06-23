@@ -49,7 +49,7 @@ translator: machine-google-reviewed
 - `direct_only_policy_rejects_soranet_only_providers` ዋስትና ይሰጣል `TransportPolicy::DirectOnly` እያንዳንዱ እጩ ማስታወቂያ የሶራኔት ሪሌይስን ብቻ የሚደግፍ ሲሆን በፍጥነት እንደሚወድቅ ዋስትና ይሰጣል።
 - `direct_only_policy_prefers_direct_transports_when_available` Torii/QUIC ማጓጓዣዎች በሚኖሩበት ጊዜ ጥቅም ላይ እንደሚውሉ እና የሶራኔት ማስተላለፊያዎች ከክፍለ-ጊዜው እንደሚገለሉ ያረጋግጣል።【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` ሰነዱ ከረዳት መገልገያዎች ጋር የተጣጣመ መቆየቱን ለማረጋገጥ Xን ይተነትናል።
-- `fetch_command_respects_direct_transports` ልምምዶች `sorafs_cli fetch --transport-policy=direct-only` በተሳለቀበት I18NT0000009X መግቢያ በር ላይ፣ ቀጥተኛ መጓጓዣዎችን ለሚሰካ ቁጥጥር ለሚደረግባቸው አካባቢዎች የጭስ ምርመራ ያቀርባል።【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` ልምምዶች `sorafs_cli fetch --transport-policy=direct-only` በተሳለቀበት I18NT0000009X መግቢያ በር ላይ፣ ቀጥተኛ መጓጓዣዎችን ለሚሰካ ቁጥጥር ለሚደረግባቸው አካባቢዎች የጭስ ምርመራ ያቀርባል።【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` ተመሳሳይ ትዕዛዝ ከፖሊሲው JSON እና የውጤት ሰሌዳ ጽናት ጋር ለመልቀቅ አውቶማቲክ ይጠቀልላል።
 
 ዝማኔዎችን ከማተምዎ በፊት ትኩረት የተደረገበትን ስብስብ ያሂዱ፡

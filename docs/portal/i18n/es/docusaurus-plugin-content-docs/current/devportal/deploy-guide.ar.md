@@ -12,10 +12,10 @@ translation_last_reviewed: 2026-02-07
 
 Utilice el conector **DOCS-7** (SoraFS) y **DOCS-8** (pin para CI/CD) y **DOCS-8** لبوابة المطورين. Primero use build/lint, use SoraFS y use Sigstore, y luego use build/lint. وتمارين التراجع بحيث تكون كل معاينة واصدار قابلة لاعادة الانتاج وقابلة للتدقيق.
 
-Utilice el punto final `sorafs_cli` (en lugar de `--features cli`) y el punto final Torii. registro-PIN, y están disponibles OIDC y Sigstore. خزّن الاسرار طويلة العمر (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, رموز Torii) في خزينة CI؛ También hay exportaciones de shell.
+Utilice el punto final `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target) y el punto final Torii. registro-PIN, y están disponibles OIDC y Sigstore. خزّن الاسرار طويلة العمر (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, رموز Torii) في خزينة CI؛ También hay exportaciones de shell.
 
 ## المتطلبات المسبقة- Nodo 18.18 entre `npm` y `pnpm`.
-- `sorafs_cli` de `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` de `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان Torii يكشف `/v1/sorafs/*` مع حساب/مفتاح خاص بسلطة يمكنها ارسال المانيفست والاسماء المستعارة.
 - مُصدِر OIDC (GitHub Actions, GitLab, identidad de carga de trabajo, الخ) لاصدار `SIGSTORE_ID_TOKEN`.
 - Contenido: `examples/sorafs_cli_quickstart.sh` flujos de trabajo de flujo de trabajo y `docs/source/sorafs_ci_templates.md` de flujos de trabajo en GitHub/GitLab.

@@ -22,12 +22,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 このプレイブックは、ロードマップの **DOCS-7**（SoraFS 公開）と **DOCS-8**（CI/CD ピン自動化）を、開発者ポータルの実行手順に落とし込みます。build/lint フェーズ、SoraFS パッケージ化、Sigstore 署名、エイリアス昇格、検証、ロールバック訓練を含め、すべてのプレビューとリリースを再現可能かつ監査可能にします。
 
-このフローは `sorafs_cli` バイナリ（`--features cli` でビルド済み）、ピンレジストリ権限を持つ Torii エンドポイントへのアクセス、Sigstore 用 OIDC 認証情報がある前提です。長期秘密情報（`IROHA_PRIVATE_KEY`、`SIGSTORE_ID_TOKEN`、Torii トークン）は CI のボールトに保管し、ローカル実行ではシェルの export で読み込んでください。
+このフローは `sorafs_cli` バイナリ（`sorafs_orchestrator` Cargo target でビルド済み）、ピンレジストリ権限を持つ Torii エンドポイントへのアクセス、Sigstore 用 OIDC 認証情報がある前提です。長期秘密情報（`IROHA_PRIVATE_KEY`、`SIGSTORE_ID_TOKEN`、Torii トークン）は CI のボールトに保管し、ローカル実行ではシェルの export で読み込んでください。
 
 ## 前提条件
 
 - Node 18.18 以上（`npm` または `pnpm`）
-- `cargo run -p sorafs_car --features cli --bin sorafs_cli` で取得した `sorafs_cli`
+- `cargo run -p sorafs_orchestrator --bin sorafs_cli` で取得した `sorafs_cli`
 - `/v1/sorafs/*` を公開する Torii URL と、マニフェスト/エイリアスを送信できる権限アカウント/秘密鍵
 - `SIGSTORE_ID_TOKEN` を発行できる OIDC 発行元（GitHub Actions、GitLab、Workload Identity など）
 - 任意: dry run 用 `examples/sorafs_cli_quickstart.sh`、GitHub/GitLab ワークフローの雛形 `docs/source/sorafs_ci_templates.md`

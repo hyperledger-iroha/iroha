@@ -30,7 +30,7 @@ Avant d'utiliser la porte de déverrouillage technique, vous devez examiner l'ex
 - Sélectionnez le ticket de remédiation (par exemple, `governance/tickets/SF6-SR-2026.md`) et supprimez-le.
   approuver le groupe de travail sur l'ingénierie de sécurité et l'outillage.
 - Vérifiez la liste de contrôle de remédiation dans mon mémoire ; незакрытые пункты bloкируют реLIS.
-- Подготовьте загрузку логов harnais de parité (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Подготовьте загрузку логов harnais de parité (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   вместе с bundle manifeste.
 - Assurez-vous que la commande soit en mesure de planifier votre achat, en cliquant sur `--identity-token-provider`, et
   явный `--identity-token-audience=<aud>`, чтобы scope Fulcio был зафиксирован в релизных preuves.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Le script contient les preuves suivantes :
 
 - `cargo fmt --all -- --check` (espace de travail)
-- `cargo clippy --locked --all-targets` pour `sorafs_car` (avec fonctionnalité `cli`),
-  `sorafs_manifest` et `sorafs_chunker`
-- `cargo test --locked --all-targets` pour ces caisses
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Si vous êtes prêt à le faire, utilisez la régression pour le marquage. Relisnye сборки должны
 идти непрерывно от principal; ne tardez pas à choisir les correctifs dans les versions de sortie. Porte

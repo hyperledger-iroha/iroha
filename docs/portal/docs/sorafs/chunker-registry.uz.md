@@ -57,7 +57,7 @@ noma'lum identifikatorlar paydo bo'ladi. Registr nizomi qoidalari kanonik tutqic
 Ro'yxatga olish kitobini asboblardan tekshirish uchun CLI yordamchisini ishga tushiring:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -123,7 +123,7 @@ $ yuk tashish -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar
 Manifest stub bir xil ma'lumotlarni aks ettiradi, bu quvur liniyalarida `--chunker-profile-id` tanlovini skript qilishda qulaydir. Ikkala do'kon CLI ham kanonik tutqich shaklini (`--profile=sorafs.sf1@1.0.0`) qabul qiladi, shuning uchun yaratish skriptlari qattiq kodlangan raqamli identifikatorlardan qochishi mumkin:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

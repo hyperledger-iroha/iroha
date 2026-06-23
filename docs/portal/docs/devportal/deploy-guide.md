@@ -14,7 +14,7 @@ signing, alias promotion, verification, and rollback drills so every preview and
 release artefact is reproducible and auditable.
 
 The flow assumes you have the `sorafs_cli` binary (built with
-`--features cli`), access to a Torii endpoint with pin-registry permissions, and
+`sorafs_orchestrator` Cargo target), access to a Torii endpoint with pin-registry permissions, and
 OIDC credentials for Sigstore. Store long-lived secrets (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii tokens) in your CI vault; local runs can source them
 from shell exports.
@@ -22,7 +22,7 @@ from shell exports.
 ## Prerequisites
 
 - Node 18.18+ with `npm` or `pnpm`.
-- `sorafs_cli` from `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` from `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - Torii URL that exposes `/v1/sorafs/*` plus an authority account/private key
   that can submit manifests and aliases.
 - OIDC issuer (GitHub Actions, GitLab, workload identity, etc.) to mint a

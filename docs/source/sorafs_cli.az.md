@@ -13,8 +13,7 @@ summary: Developer-facing entry point for packaging payloads and emitting chunk 
 
 # SoraFS CLI
 
-The `sorafs_cli` binary (built from the `sorafs_car` crate with the `cli`
-feature) now bundles the full SoraFS packaging workflow instead of scattering
+The `sorafs_cli` binary (built from the `sorafs_orchestrator` crate) now bundles the full SoraFS packaging workflow instead of scattering
 helpers across ad-hoc utilities. Core subcommands include:
 
 _Looking for an end-to-end walkthrough?_ The quickstart at
@@ -65,14 +64,14 @@ label, and guard cache key so downstream automation can record the change or tri
 actions (for example, notifying browser extensions about the updated mode).
 
 ```bash
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   car pack \
   --input fixtures/payload.bin \
   --car-out artifacts/payload.car \
   --plan-out artifacts/chunk_plan.json \
   --summary-out artifacts/car_summary.json
 
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest build \
   --summary artifacts/car_summary.json \
   --manifest-out artifacts/manifest.to \
@@ -83,7 +82,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 
 # Option 1: provide an explicit token (environment, file, or inline)
 export SIGSTORE_ID_TOKEN=$(oidc-client fetch-token)
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest sign \
   --manifest artifacts/manifest.to \
   --bundle-out artifacts/manifest.bundle.json \
@@ -92,14 +91,14 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 
 # Option 2: rely on the default SIGSTORE_ID_TOKEN fallback
 SIGSTORE_ID_TOKEN=$(oidc-client fetch-token) \
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest sign \
   --manifest artifacts/manifest.to \
   --bundle-out artifacts/manifest.bundle.json \
   --signature-out artifacts/manifest.sig
 
 # Option 3: run inside GitHub Actions with `permissions: id-token: write`
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest sign \
   --manifest artifacts/manifest.to \
   --bundle-out artifacts/manifest.bundle.json \
@@ -188,14 +187,14 @@ pipelines that exercise these flows end-to-end.
 ## Verify signature bundles
 
 ```bash
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest verify-signature \
   --manifest artifacts/manifest.to \
   --bundle artifacts/manifest.bundle.json \
   --summary artifacts/car_summary.json \
   --expect-token-hash 77c3...
 
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest verify-signature \
   --manifest artifacts/manifest.to \
   --signature artifacts/manifest.sig \
@@ -215,7 +214,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 ## Compile Kotodama bytecode
 
 ```bash
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   norito build \
   --source contracts/register_domain.ko \
   --bytecode-out artifacts/register_domain.to \
@@ -229,7 +228,7 @@ digest so downstream tooling can pin compiler outputs in CI.
 ## Submit manifests to Torii
 
 ```bash
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \
   --manifest artifacts/manifest.to \
   --chunk-plan artifacts/chunk_plan.json \
@@ -256,7 +255,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 ## Verify CAR responses
 
 ```bash
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   proof verify \
   --manifest artifacts/manifest.to \
   --car artifacts/payload.car \
@@ -269,7 +268,7 @@ and CAR digests so CI pipelines can pin the proof bundle before hitting Torii.
 ## Stream PoR proofs
 
 ```bash
-cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
+cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   proof stream \
   --manifest artifacts/manifest.to \
   --torii-url https://torii.local \
@@ -695,11 +694,13 @@ slashing events, and VRF anomalies), while `--format=json` emits the canonical
 
 ## Roadmap
 
-Remaining CLI work focuses on governance integration and distribution polish:
+The local CLI command set now covers manifest scaffolding, governance proposal
+export, keyless manifest signature bundles, bundle verification, gateway fetch
+authorization, PoR trigger/export/report flows, and PoTR proof streaming.
+Remaining CLI work is release distribution and live-network governance evidence
+collection:
 
-- Norito manifest scaffolding, council signature injection, and bundle
-  verification integration with governance tooling.
-- Gateway token tooling and PoTR streaming harnesses that reuse the new proof
-  reports.
-- Packaging and release automation so the CLI ships via Homebrew, npm, and
-  crates.io alongside reproducible artefacts.
+- Publish signed, reproducible release artefacts for the CLI and document the
+  install path for Homebrew, npm, and crates.io consumers.
+- Capture live governance proposal and council-signature runbooks once the
+  production deployment publishes its operator signing process.

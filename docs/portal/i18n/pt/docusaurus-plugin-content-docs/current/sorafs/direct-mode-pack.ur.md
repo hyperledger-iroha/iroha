@@ -48,7 +48,7 @@ Botões de aplicação do lado do gateway `docs/examples/sorafs_gateway_direct_m
 - `direct_only_policy_rejects_soranet_only_providers` اس بات کو یقینی بناتا ہے کہ `TransportPolicy::DirectOnly` تیزی سے falhar کرے جب ہر anúncio candidato صرف Suporte a relés SoraNet کرتا ہو۔【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` یہ یقینی بناتا ہے کہ Torii/QUIC transports موجود ہوں تو انہی کو استعمال کیا جائے اور SoraNet relés کو sessão سے خارج رکھا جائے۔【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` analisar کرتا ہے تاکہ auxiliares de documentos کے ساتھ alinhados رہیں۔【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` کو mocked Torii gateway کے خلاف چلتا ہے, جو ambientes regulamentados کے لیے teste de fumaça فراہم کرتا ہے جہاں pino de transporte direto ہوتے ہیں۔【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` کو mocked Torii gateway کے خلاف چلتا ہے, جو ambientes regulamentados کے لیے teste de fumaça فراہم کرتا ہے جہاں pino de transporte direto ہوتے ہیں۔【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` comando کو política JSON اور persistência do placar کے ساتھ wrap کرتا ہے تاکہ automação de implementação ہو سکے۔
 
 Atualizações publicadas کرنے سے پہلے suíte focada چلائیں:

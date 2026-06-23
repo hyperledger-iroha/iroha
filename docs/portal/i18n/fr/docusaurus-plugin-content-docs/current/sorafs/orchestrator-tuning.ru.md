@@ -81,7 +81,7 @@ Produit précédent :1. **Ajoutez les meilleurs télémètres.** Choisissez l'i
 
 ## Paramètres des drapeaux CLI et SDK
 
-`sorafs_cli fetch` (см. `crates/sorafs_car/src/bin/sorafs_cli.rs`) et carte
+`sorafs_cli fetch` (см. `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) et carte
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) utilisé
 Maintenant et votre opérateur de configuration est compétent. Utiliser les drapeaux suivants
 при сборе évidence ou воспроизведении канонических luminaires:

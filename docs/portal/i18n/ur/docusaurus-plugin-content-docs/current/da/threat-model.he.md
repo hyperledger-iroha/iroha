@@ -245,7 +245,7 @@ malicious providers کو whitelist کرتا ہے، یا alerts suppress کرتا
   `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے fingerprint
   checks thread کرتا ہے۔
 - PDP/PoTR streaming simulations proof-stream harness کے ذریعے چلتی ہیں:
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ PoR/PDP/PoTR request flows اور
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ یہ PoR/PDP/PoTR request flows اور
   failure scenarios cover کرتا ہے جو threat model میں بیان ہیں۔
 - Capacity اور repair soak کے نتائج `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   میں ہیں، جبکہ Sumeragi soak matrix `docs/source/sumeragi_soak_matrix.md` میں ہے

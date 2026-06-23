@@ -85,7 +85,7 @@ translator: machine-google-reviewed
 
 ## cargo_bin_exe_taikai_car (ٹیسٹ: 1)
 
-- ٹیسٹ: کریٹس/sorafs_car/tests/sorafs_cli.rs: 48 - `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- ٹیسٹ: کریٹس/sorafs_orchestrator/tests/sorafs_cli.rs: 48 - `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## cargo_bin_name (prod: 3)
 

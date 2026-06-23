@@ -1809,8 +1809,22 @@ function isTrustedSetupVerifierBackendLabel(value) {
 
 function isDeveloperOnlyVerifierBackendLabel(value) {
   const backend = String(value).trim().toLowerCase();
-  const embedded = ["debug", "mock", "fixture", "dev"];
-  const exact = new Set(["test", "dummy", "fake", "stub", "sample", "placeholder"]);
+  const compact = compactPrivacyBackendLabel(backend);
+  const compactFragments = [
+    "notforproduction",
+    "notproduction",
+    "notproductionready",
+    "notready",
+    "replacebeforeproduction",
+    "replacebeforemainnet",
+    "draftonly",
+  ];
+  if (compactFragments.some((fragment) => compact.includes(fragment))) {
+    return true;
+  }
+
+  const embedded = ["debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace"];
+  const exact = new Set(["test", "dummy", "fake", "stub", "sample", "placeholder", "todo", "draft"]);
   const isDeveloperOnlyRun = (run) => embedded.some((token) => run.includes(token)) || exact.has(run);
   let letterRun = "";
   for (const token of backend.split(/[^a-z0-9]+/u).filter(Boolean)) {

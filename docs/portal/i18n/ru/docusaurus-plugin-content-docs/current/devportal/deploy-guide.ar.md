@@ -12,12 +12,12 @@ translation_last_reviewed: 2026-02-07
 
 Для подключения к **DOCS-7** (номер SoraFS) и **DOCS-8** (контактный разъем) (для CI/CD) в режиме онлайн. Для сборки/очистки выполните SoraFS, установите флажок Sigstore, проверьте В 2007 году он был назначен президентом США Джоном Стоуном и его коллегой по работе. Если вы хотите, чтобы это произошло, вы можете сделать это.
 
-Он был создан в Лос-Анджелесе `sorafs_cli` (название `--features cli`), а также Конечная точка Torii находится в контактном реестре, а OIDC находится рядом с Sigstore. Установите флажок (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, Torii) в CI; Компания «Лордовская фабрика» экспортирует свою оболочку.
+Он был создан в Лос-Анджелесе `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), а также Конечная точка Torii находится в контактном реестре, а OIDC находится рядом с Sigstore. Установите флажок (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, Torii) в CI; Компания «Лордовская фабрика» экспортирует свою оболочку.
 
 ## المتطلبات المسبقة
 
 - Узел 18.18 находится рядом с `npm` и `pnpm`.
-- `sorafs_cli` вместо `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` вместо `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان Torii на `/v1/sorafs/*` в разделе "Программа/выбор" Будьте готовы к исчезновению.
 - مُصدِر OIDC (GitHub Actions, GitLab, идентификатор рабочей нагрузки, код) لاصدار `SIGSTORE_ID_TOKEN`.
 — Добавлено: `examples/sorafs_cli_quickstart.sh` для настройки рабочих процессов и `docs/source/sorafs_ci_templates.md` для рабочих процессов на GitHub/GitLab.

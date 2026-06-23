@@ -12,10 +12,10 @@ translation_last_reviewed: 2026-02-07
 
 Este bloque de almacenamiento permite colocar puntos en tarjetas **DOCS-7** (publicación SoraFS) y **DOCS-8** (pin automático en CI/CD) en Procedimiento práctico para el portal разработчиков. En el caso de build/lint, se utiliza SoraFS, se pueden configurar archivos Sigstore, otros productos, proveedores y тренировки отката, чтобы каждый vista previa y lanzamiento были воспроизводимыми и аудируемыми.
 
-Este es un archivo predeterminado que está binario `sorafs_cli` (combinado con `--features cli`), descarga el punto final Torii con un registro pin completo y OIDC está conectado a Sigstore. Todos los secretos (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, tokens Torii) se encuentran en la bóveda de CI; Los archivos locales se pueden exportar en Shell.
+Este es un archivo predeterminado que está binario `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), descarga el punto final Torii con un registro pin completo y OIDC está conectado a Sigstore. Todos los secretos (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, tokens Torii) se encuentran en la bóveda de CI; Los archivos locales se pueden exportar en Shell.
 
 ## Предварительные условия- Nodo 18.18+ con `npm` o `pnpm`.
-- `sorafs_cli` y `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` y `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL Torii, introduzca el código `/v1/sorafs/*`, haga clic más o haga clic en el botón izquierdo del ratón y muestre los manifiestos. алиасы.
 - Emisor OIDC (GitHub Actions, GitLab, identidad de carga de trabajo y т. п.) para el usuario `SIGSTORE_ID_TOKEN`.
 - Opcional: `examples/sorafs_cli_quickstart.sh` para ejecución en seco y `docs/source/sorafs_ci_templates.md` para flujos de trabajo de GitHub/GitLab.

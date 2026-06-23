@@ -205,7 +205,7 @@ zərərli provayderləri ağ siyahıya salır və ya xəbərdarlıqları dayand�
   `crates/iroha_torii/src/da/ingest.rs`-də Torii inteqrasiyası,
   `/v1/da/ingest` vasitəsilə barmaq izi yoxlanılır.
 - PDP/PoTR axın simulyasiyaları proof-stream qoşqu vasitəsilə həyata keçirilir
-  `crates/sorafs_car/tests/sorafs_cli.rs`, PoR/PDP/PoTR sorğu axınlarını əhatə edir
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, PoR/PDP/PoTR sorğu axınlarını əhatə edir
   və təhlükə modelində canlandırılan uğursuzluq ssenariləri.
 - Tutum və təmir altında yaşamaq nəticələri islatmaq
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, daha geniş olsa da

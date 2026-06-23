@@ -58,7 +58,7 @@ manifest は `ChunkingProfileV1` を介してプロファイルをシリアラ�
 ツールからレジストリを確認するには、次の helper CLI を実行します:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -106,7 +106,7 @@ JSON を書き出す CLI フラグ (`--json-out`, `--por-json-out`, `--por-proof
 特定の PoR 証人を確認するには、chunk/segment/leaf のインデックスを指定し、必要に応じて証明をディスクに保存します:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -118,7 +118,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ブロックを出力し、新しい既定プロファイルを昇格する際に `chunker_registry_data.rs` へ貼り付けられます:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -130,7 +130,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 （CLI は証人が計算済みルートと一致したとき `"por_proof_verified": true` を追加します）:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -139,7 +139,7 @@ CLI は決定的な順序（`splitmix64` seed）を保証し、要求が利用�
 自動的に切り詰めます:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -150,7 +150,7 @@ manifest stub は同じデータを反映しており、パイプラインで `-
 ハードコードする必要がありません:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

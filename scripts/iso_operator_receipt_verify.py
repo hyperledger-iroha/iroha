@@ -445,7 +445,11 @@ def _reject_all_zero_sha256(value: str, label: str) -> None:
         raise ReceiptError(f"{label} must not be all zero")
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -457,7 +461,8 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise ReceiptError(f"{current} must not be a symlink")
+            label = display_label if display_label is not None else str(current)
+            raise ReceiptError(f"{label} must not be a symlink")
 
 
 def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
@@ -601,51 +606,64 @@ def _read_regular_file(
     *,
     max_bytes: int | None = None,
     limit_label: str = "input",
+    display_label: str | None = None,
 ) -> bytes:
+    label = display_label if display_label is not None else str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise ReceiptError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise ReceiptError(f"{path} does not exist") from error
+        raise ReceiptError(f"{label} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise ReceiptError(f"{path} must not be a symlink")
+        raise ReceiptError(f"{label} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
-        raise ReceiptError(f"{path} must be a regular file")
+        raise ReceiptError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise ReceiptError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+        raise ReceiptError(f"{label} exceeds {max_bytes} byte {limit_label} limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise ReceiptError(f"{path} must be a regular file")
+            raise ReceiptError(f"{label} must be a regular file")
         if max_bytes is not None and opened.st_size > max_bytes:
-            raise ReceiptError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+            raise ReceiptError(f"{label} exceeds {max_bytes} byte {limit_label} limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise ReceiptError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+            raise ReceiptError(f"{label} exceeds {max_bytes} byte {limit_label} limit")
         return raw
     except FileNotFoundError as error:
-        raise ReceiptError(f"{path} does not exist") from error
+        raise ReceiptError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise ReceiptError(f"{path} must not be a symlink") from error
-        raise ReceiptError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise ReceiptError(f"{label} must not be a symlink") from error
+        raise ReceiptError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
 
 
-def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
-    raw = _read_regular_file(path, max_bytes=max_bytes, limit_label="JSON")
+def _load_json(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> Any:
+    label = display_label if display_label is not None else str(path)
+    raw = _read_regular_file(
+        path,
+        max_bytes=max_bytes,
+        limit_label="JSON",
+        display_label=display_label,
+    )
     try:
         value = json.loads(
             raw.decode("utf-8"),
@@ -653,9 +671,9 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
             parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError as error:
-        raise ReceiptError(f"{path} is not UTF-8 JSON") from error
+        raise ReceiptError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
-        raise ReceiptError(f"{path} is not valid JSON: {error}") from error
+        raise ReceiptError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -764,7 +782,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise ReceiptError(f"JSON contains non-finite numeric constant {value}")
+    raise ReceiptError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -1265,7 +1283,11 @@ def _verify_persisted_record_source(
     path: Path,
     label: str,
 ) -> None:
-    value = _load_json(path, max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES)
+    value = _load_json(
+        path,
+        max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES,
+        display_label=label,
+    )
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must contain a JSON object")
     _require_exact_keys(value, PERSISTED_RECORD_KEYS, label)
@@ -1396,86 +1418,86 @@ def _require_https(url: str, *, allow_insecure_http: bool, label: str) -> None:
     _reject_template_canary_url_host(parsed, url_label)
 
 
-def _check_status(receipt: dict[str, Any], path: Path, *, allow_failed: bool) -> None:
+def _check_status(receipt: dict[str, Any], label: str, *, allow_failed: bool) -> None:
     ok = receipt.get("ok")
     status_code = receipt.get("status_code")
     if not isinstance(ok, bool):
-        raise ReceiptError(f"{path} ok must be boolean")
+        raise ReceiptError(f"{label} ok must be boolean")
     if status_code is not None and (
         isinstance(status_code, bool)
         or not isinstance(status_code, int)
         or status_code < 100
         or status_code > 599
     ):
-        raise ReceiptError(f"{path} status_code must be null or an HTTP status integer")
+        raise ReceiptError(f"{label} status_code must be null or an HTTP status integer")
     success = isinstance(status_code, int) and 200 <= status_code <= 299
     if ok != success:
-        raise ReceiptError(f"{path} ok does not match status_code success state")
+        raise ReceiptError(f"{label} ok does not match status_code success state")
     if not allow_failed and not success:
-        raise ReceiptError(f"{path} is not a successful 2xx receipt")
+        raise ReceiptError(f"{label} is not a successful 2xx receipt")
 
 
-def _check_timestamp(receipt: dict[str, Any], key: str, path: Path) -> None:
-    value = _require_clean_string(receipt.get(key), f"{path} {key}")
+def _check_timestamp(receipt: dict[str, Any], key: str, label: str) -> None:
+    value = _require_clean_string(receipt.get(key), f"{label} {key}")
     try:
         parsed = dt.datetime.fromisoformat(value)
     except ValueError as error:
-        raise ReceiptError(f"{path} {key} is not a valid ISO timestamp") from error
+        raise ReceiptError(f"{label} {key} is not a valid ISO timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ReceiptError(f"{path} {key} must include a timezone offset")
+        raise ReceiptError(f"{label} {key} must include a timezone offset")
 
 
-def _check_endpoint_digest(receipt: dict[str, Any], path: Path, endpoint: str) -> None:
+def _check_endpoint_digest(receipt: dict[str, Any], label: str, endpoint: str) -> None:
     endpoint_sha256 = receipt.get("endpoint_sha256")
     if not _is_lower_hex_sha256(endpoint_sha256):
-        raise ReceiptError(f"{path} has invalid endpoint_sha256")
+        raise ReceiptError(f"{label} has invalid endpoint_sha256")
     actual = sha256_hex(endpoint.encode("utf-8"))
     if endpoint_sha256 != actual:
-        raise ReceiptError(f"{path} endpoint_sha256 does not match endpoint")
+        raise ReceiptError(f"{label} endpoint_sha256 does not match endpoint")
 
 
-def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
+def _check_response_metadata(receipt: dict[str, Any], label: str) -> None:
     status_code = receipt.get("status_code")
     has_http_response = isinstance(status_code, int) and not isinstance(status_code, bool)
     response_body_sha256 = receipt.get("response_body_sha256")
     response_body_preview = receipt.get("response_body_preview")
     if response_body_sha256 is None:
         if has_http_response:
-            raise ReceiptError(f"{path} response_body_sha256 must be recorded for HTTP response")
+            raise ReceiptError(f"{label} response_body_sha256 must be recorded for HTTP response")
         if response_body_preview is not None:
-            raise ReceiptError(f"{path} response_body_preview requires response_body_sha256")
+            raise ReceiptError(f"{label} response_body_preview requires response_body_sha256")
     else:
         if not has_http_response:
-            raise ReceiptError(f"{path} response_body_sha256 requires HTTP status_code")
+            raise ReceiptError(f"{label} response_body_sha256 requires HTTP status_code")
         if not _is_lower_hex_sha256(response_body_sha256):
-            raise ReceiptError(f"{path} has invalid response_body_sha256")
-        _reject_all_zero_sha256(response_body_sha256, f"{path} response_body_sha256")
+            raise ReceiptError(f"{label} has invalid response_body_sha256")
+        _reject_all_zero_sha256(response_body_sha256, f"{label} response_body_sha256")
         if not isinstance(response_body_preview, str):
-            raise ReceiptError(f"{path} response_body_preview must be a string")
+            raise ReceiptError(f"{label} response_body_preview must be a string")
         if len(response_body_preview) > 4096:
-            raise ReceiptError(f"{path} response_body_preview exceeds 4096 characters")
+            raise ReceiptError(f"{label} response_body_preview exceeds 4096 characters")
         if _contains_unsafe_preview_control(response_body_preview):
             raise ReceiptError(
-                f"{path} response_body_preview contains unsafe control characters"
+                f"{label} response_body_preview contains unsafe control characters"
             )
         if _response_preview_looks_secret(response_body_preview):
-            raise ReceiptError(f"{path} response_body_preview contains secret-looking material")
+            raise ReceiptError(f"{label} response_body_preview contains secret-looking material")
         if receipt.get("ok") and response_body_preview == REDACTED_RESPONSE_PREVIEW:
             raise ReceiptError(
-                f"{path} successful receipt must not carry redacted response_body_preview"
+                f"{label} successful receipt must not carry redacted response_body_preview"
             )
 
     error = receipt.get("error")
     if error is not None:
-        error = _normalize_optional_string(error, f"{path} error")
+        error = _normalize_optional_string(error, f"{label} error")
         if _contains_unsafe_preview_control(error):
-            raise ReceiptError(f"{path} error contains unsafe control characters")
+            raise ReceiptError(f"{label} error contains unsafe control characters")
         if _response_preview_looks_secret(error):
-            raise ReceiptError(f"{path} error contains secret-looking material")
+            raise ReceiptError(f"{label} error contains secret-looking material")
     if receipt.get("ok") and error is not None:
-        raise ReceiptError(f"{path} successful receipt must not record error")
+        raise ReceiptError(f"{label} successful receipt must not record error")
     if receipt.get("ok") is False and error is None:
-        raise ReceiptError(f"{path} failed receipt must record error")
+        raise ReceiptError(f"{label} failed receipt must record error")
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
@@ -1572,16 +1594,22 @@ def _verify_audit_index_source(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
-def _ensure_input_directory(path: Path, label: str) -> None:
-    _reject_symlinked_existing_ancestors(path.parent)
+def _ensure_input_directory(
+    path: Path,
+    label: str,
+    *,
+    display_path: bool = True,
+) -> None:
+    display = f"{label} {path}" if display_path else label
+    _reject_symlinked_existing_ancestors(path.parent, display_label=display)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise ReceiptError(f"{label} {path} does not exist") from error
+        raise ReceiptError(f"{display} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise ReceiptError(f"{label} {path} must not be a symlink")
+        raise ReceiptError(f"{display} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
-        raise ReceiptError(f"{label} {path} must be a directory")
+        raise ReceiptError(f"{display} must be a directory")
 
 
 def _record_store_dir(anchor: dict[str, Any], label: str) -> Path | None:
@@ -1607,29 +1635,31 @@ def _verify_persisted_record_sources(
         return
     if not store_dir.exists():
         if require_source_files:
-            raise ReceiptError(f"{label}.store_dir {store_dir} does not exist")
+            raise ReceiptError(f"{label}.store_dir does not exist")
         return
-    _ensure_input_directory(store_dir, f"{label}.store_dir")
+    _ensure_input_directory(store_dir, f"{label}.store_dir", display_path=False)
     messages_dir = store_dir / RECORDS_DIR
     if not messages_dir.exists():
         if require_source_files:
-            raise ReceiptError(
-                f"{label}.store_dir/{RECORDS_DIR} {messages_dir} does not exist"
-            )
+            raise ReceiptError(f"{label}.store_dir/{RECORDS_DIR} does not exist")
         return
-    _ensure_input_directory(messages_dir, f"{label}.store_dir/{RECORDS_DIR}")
+    _ensure_input_directory(
+        messages_dir,
+        f"{label}.store_dir/{RECORDS_DIR}",
+        display_path=False,
+    )
     for offset, record in enumerate(records):
         if not isinstance(record, dict):
             raise ReceiptError(f"{label}.records[{offset}] must be an object")
         record_path = messages_dir / record["filename"]
         if not record_path.exists():
             if require_source_files:
-                raise ReceiptError(f"{label} references missing audit record {record_path}")
+                raise ReceiptError(f"{label} references missing audit record")
             continue
         _verify_persisted_record_source(
             record,
             record_path,
-            f"{record_path}",
+            f"{label}.records[{offset}].source",
         )
 
 
@@ -1637,7 +1667,7 @@ def _anchor_export_dir_for_convention(
     anchor_path: Path,
     *,
     index_sha256: str,
-    receipt_path: Path,
+    receipt_label: str,
 ) -> Path:
     if anchor_path.name == LATEST_ANCHOR_FILE:
         return anchor_path.parent
@@ -1645,11 +1675,11 @@ def _anchor_export_dir_for_convention(
         expected_name = f"{index_sha256}.notary.json"
         if anchor_path.name != expected_name:
             raise ReceiptError(
-                f"{receipt_path} anchor_path filename must be digest-addressed as {expected_name}"
+                f"{receipt_label} anchor_path filename must be digest-addressed as {expected_name}"
             )
         return anchor_path.parent.parent
     raise ReceiptError(
-        f"{receipt_path} anchor_path must be {LATEST_ANCHOR_FILE} or {ANCHOR_DIR}/<index_sha256>.notary.json"
+        f"{receipt_label} anchor_path must be {LATEST_ANCHOR_FILE} or {ANCHOR_DIR}/<index_sha256>.notary.json"
     )
 
 
@@ -1658,29 +1688,33 @@ def _verify_anchor_path_peers(
     export_dir: Path,
     *,
     index_sha256: str,
-    receipt_path: Path,
+    receipt_label: str,
     require_source_files: bool,
 ) -> None:
     if anchor_path.name != LATEST_ANCHOR_FILE:
         return
     digest_anchor = export_dir / ANCHOR_DIR / f"{index_sha256}.notary.json"
     if digest_anchor.exists():
+        if digest_anchor.is_symlink():
+            raise ReceiptError(
+                f"{receipt_label} digest-addressed anchor peer must not be a symlink"
+            )
         if _read_regular_file(
             digest_anchor,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
             limit_label="JSON",
+            display_label=f"{receipt_label} digest-addressed anchor peer",
         ) != _read_regular_file(
             anchor_path,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
             limit_label="JSON",
+            display_label=f"{receipt_label} latest anchor",
         ):
             raise ReceiptError(
-                f"{receipt_path} latest anchor differs from digest-addressed peer"
+                f"{receipt_label} latest anchor differs from digest-addressed peer"
             )
     elif require_source_files:
-        raise ReceiptError(
-            f"{receipt_path} latest anchor has no digest-addressed peer {digest_anchor}"
-        )
+        raise ReceiptError(f"{receipt_label} latest anchor has no digest-addressed peer")
 
 
 def _verify_anchor_source(
@@ -1688,104 +1722,116 @@ def _verify_anchor_source(
     path: Path,
     *,
     require_source_files: bool,
+    display_label: str | None = None,
 ) -> tuple[str | None, str | None]:
+    label = display_label or str(path)
+    anchor_label = f"{label} anchor source"
+    exported_index_label = f"{label} exported audit index"
     anchor_sha256 = receipt.get(ANCHOR_DIGEST_FIELD)
     index_sha256 = receipt.get(INDEX_DIGEST_FIELD)
     if not _is_lower_hex_sha256(anchor_sha256):
-        raise ReceiptError(f"{path} has invalid anchor_sha256")
+        raise ReceiptError(f"{label} has invalid anchor_sha256")
     if not _is_lower_hex_sha256(index_sha256):
-        raise ReceiptError(f"{path} has invalid index_sha256")
-    _reject_all_zero_sha256(anchor_sha256, f"{path} anchor_sha256")
-    _reject_all_zero_sha256(index_sha256, f"{path} index_sha256")
+        raise ReceiptError(f"{label} has invalid index_sha256")
+    _reject_all_zero_sha256(anchor_sha256, f"{label} anchor_sha256")
+    _reject_all_zero_sha256(index_sha256, f"{label} index_sha256")
     record_count = receipt.get("record_count")
     if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
-        raise ReceiptError(f"{path} record_count must be a non-negative integer")
+        raise ReceiptError(f"{label} record_count must be a non-negative integer")
     if require_source_files and record_count == 0:
         raise ReceiptError(
-            f"{path} record_count must be positive when source files are required"
+            f"{label} record_count must be positive when source files are required"
         )
 
     anchor_path_raw = _require_clean_path_string(
         receipt.get("anchor_path"),
-        f"{path} anchor_path",
+        f"{label} anchor_path",
     )
     if _path_is_repository_iso_fixture(anchor_path_raw):
         raise ReceiptError(
-            f"{path} anchor_path must not point to checked-in ISO fixture artifacts"
+            f"{label} anchor_path must not point to checked-in ISO fixture artifacts"
         )
     anchor_path = Path(anchor_path_raw)
     export_dir = _anchor_export_dir_for_convention(
         anchor_path,
         index_sha256=index_sha256,
-        receipt_path=path,
+        receipt_label=label,
     )
     if anchor_path.is_symlink():
-        raise ReceiptError(f"{anchor_path} must not be a symlink")
+        raise ReceiptError(f"{label} anchor_path must not be a symlink")
     if not anchor_path.exists():
         if require_source_files:
-            raise ReceiptError(f"{path} references missing anchor_path {anchor_path}")
+            raise ReceiptError(f"{label} references missing anchor_path")
         return (None, None)
 
-    anchor = _load_json(anchor_path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
+    anchor = _load_json(
+        anchor_path,
+        max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+        display_label=anchor_label,
+    )
     if not isinstance(anchor, dict):
-        raise ReceiptError(f"{anchor_path} must contain a JSON object")
-    _reject_unknown_keys(anchor, ANCHOR_KEYS, str(anchor_path))
+        raise ReceiptError(f"{anchor_label} must contain a JSON object")
+    _reject_unknown_keys(anchor, ANCHOR_KEYS, anchor_label)
     version = anchor.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != ANCHOR_VERSION:
-        raise ReceiptError(f"{anchor_path} has unsupported anchor version")
+        raise ReceiptError(f"{anchor_label} has unsupported anchor version")
     if (
-        require_digest_matches(anchor, ANCHOR_DIGEST_FIELD, str(anchor_path))
+        require_digest_matches(anchor, ANCHOR_DIGEST_FIELD, anchor_label)
         != anchor_sha256
     ):
-        raise ReceiptError(f"{path} anchor_sha256 does not match source anchor")
+        raise ReceiptError(f"{label} anchor_sha256 does not match source anchor")
     if anchor.get(INDEX_DIGEST_FIELD) != index_sha256:
-        raise ReceiptError(f"{path} index_sha256 does not match source anchor")
+        raise ReceiptError(f"{label} index_sha256 does not match source anchor")
     anchor_record_count = anchor.get("record_count")
     if (
         isinstance(anchor_record_count, bool)
         or not isinstance(anchor_record_count, int)
         or anchor_record_count < 0
     ):
-        raise ReceiptError(f"{anchor_path} record_count must be a non-negative integer")
+        raise ReceiptError(f"{anchor_label} record_count must be a non-negative integer")
     if anchor_record_count != record_count:
-        raise ReceiptError(f"{path} record_count does not match source anchor")
+        raise ReceiptError(f"{label} record_count does not match source anchor")
     audit_index = _verify_audit_index_source(
         anchor.get("audit_index"),
-        f"{anchor_path}.audit_index",
+        f"{anchor_label}.audit_index",
     )
     if audit_index.get(INDEX_DIGEST_FIELD) != index_sha256:
-        raise ReceiptError(f"{path} index_sha256 does not match embedded audit index")
+        raise ReceiptError(f"{label} index_sha256 does not match embedded audit index")
     if audit_index.get("record_count") != record_count:
-        raise ReceiptError(f"{path} record_count does not match embedded audit index")
-    store_dir = _record_store_dir(anchor, str(anchor_path))
+        raise ReceiptError(f"{label} record_count does not match embedded audit index")
+    store_dir = _record_store_dir(anchor, anchor_label)
     if store_dir is not None and _path_is_repository_iso_fixture(str(store_dir)):
         raise ReceiptError(
-            f"{anchor_path}.store_dir must not point to checked-in ISO fixture artifacts"
+            f"{anchor_label}.store_dir must not point to checked-in ISO fixture artifacts"
         )
     _verify_persisted_record_sources(
         audit_index,
         store_dir,
-        str(anchor_path),
+        f"{anchor_label}.audit_index",
         require_source_files=require_source_files,
     )
     _verify_anchor_path_peers(
         anchor_path,
         export_dir,
         index_sha256=index_sha256,
-        receipt_path=path,
+        receipt_label=label,
         require_source_files=require_source_files,
     )
     index_file = export_dir / INDEX_FILE
     index_path = str(index_file) if index_file.exists() else None
     if index_file.exists():
         exported_index = _verify_audit_index_source(
-            _load_json(index_file, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES),
-            str(index_file),
+            _load_json(
+                index_file,
+                max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+                display_label=exported_index_label,
+            ),
+            exported_index_label,
         )
         if exported_index != audit_index:
-            raise ReceiptError(f"{path} embedded audit index differs from {index_file}")
+            raise ReceiptError(f"{label} embedded audit index differs from exported audit index")
     elif require_source_files:
-        raise ReceiptError(f"{path} references missing audit index {index_file}")
+        raise ReceiptError(f"{label} references missing audit index")
     return (str(store_dir) if store_dir is not None else None, index_path)
 
 
@@ -1894,7 +1940,7 @@ def _normalize_sidecar_rail_message_id(sidecar: dict[str, Any], label: str) -> s
 
 
 def _verify_rail_sidecar(
-    path: Path,
+    receipt_label: str,
     sidecar_path: Path,
     *,
     payload_sha256: str,
@@ -1902,33 +1948,38 @@ def _verify_rail_sidecar(
     profile: str | None,
     rail_message_id: str | None,
 ) -> None:
-    sidecar = _load_json(sidecar_path, max_bytes=MAX_RAIL_SIDECAR_JSON_BYTES)
+    sidecar_label = f"{receipt_label} source sidecar"
+    sidecar = _load_json(
+        sidecar_path,
+        max_bytes=MAX_RAIL_SIDECAR_JSON_BYTES,
+        display_label=sidecar_label,
+    )
     if not isinstance(sidecar, dict):
-        raise ReceiptError(f"{sidecar_path} must contain a JSON object")
-    _reject_unknown_keys(sidecar, RAIL_SIDECAR_KEYS, str(sidecar_path))
+        raise ReceiptError(f"{sidecar_label} must contain a JSON object")
+    _reject_unknown_keys(sidecar, RAIL_SIDECAR_KEYS, sidecar_label)
     if sidecar.get("payload_sha256") != payload_sha256:
-        raise ReceiptError(f"{path} payload_sha256 does not match source sidecar")
+        raise ReceiptError(f"{receipt_label} payload_sha256 does not match source sidecar")
     sidecar_message_type = sidecar.get("message_type")
     if isinstance(sidecar_message_type, str):
         _reject_non_ascii_identifier(
             sidecar_message_type,
-            f"{sidecar_path} message_type",
+            f"{sidecar_label} message_type",
         )
         _reject_secret_looking_identifier(
             sidecar_message_type,
-            f"{sidecar_path} message_type",
+            f"{sidecar_label} message_type",
         )
     if sidecar_message_type != message_type:
-        raise ReceiptError(f"{path} message_type does not match source sidecar")
-    sidecar_profile = _normalize_sidecar_profile(sidecar, f"{sidecar_path} profile")
+        raise ReceiptError(f"{receipt_label} message_type does not match source sidecar")
+    sidecar_profile = _normalize_sidecar_profile(sidecar, f"{sidecar_label} profile")
     if sidecar_profile != profile:
-        raise ReceiptError(f"{path} profile does not match source sidecar")
+        raise ReceiptError(f"{receipt_label} profile does not match source sidecar")
     sidecar_rail_message_id = _normalize_sidecar_rail_message_id(
         sidecar,
-        f"{sidecar_path} rail_message_id",
+        f"{sidecar_label} rail_message_id",
     )
     if sidecar_rail_message_id != rail_message_id:
-        raise ReceiptError(f"{path} rail_message_id does not match source sidecar")
+        raise ReceiptError(f"{receipt_label} rail_message_id does not match source sidecar")
 
 
 def _verify_rail_source(
@@ -1938,54 +1989,56 @@ def _verify_rail_source(
     require_source_files: bool,
     allow_legacy_colr007: bool,
     allow_default_profile: bool,
+    display_label: str | None = None,
 ) -> None:
+    label = display_label or "receipt"
     payload_sha256 = receipt.get("payload_sha256")
     if not _is_lower_hex_sha256(payload_sha256):
-        raise ReceiptError(f"{path} has invalid payload_sha256")
-    _reject_all_zero_sha256(payload_sha256, f"{path} payload_sha256")
-    message_type = _require_clean_string(receipt.get("message_type"), f"{path} message_type")
-    _reject_non_ascii_identifier(message_type, f"{path} message_type")
-    _reject_secret_looking_identifier(message_type, f"{path} message_type")
+        raise ReceiptError(f"{label} has invalid payload_sha256")
+    _reject_all_zero_sha256(payload_sha256, f"{label} payload_sha256")
+    message_type = _require_clean_string(receipt.get("message_type"), f"{label} message_type")
+    _reject_non_ascii_identifier(message_type, f"{label} message_type")
+    _reject_secret_looking_identifier(message_type, f"{label} message_type")
     if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
-        raise ReceiptError(f"{path} message_type must be lowercase ISO family id")
+        raise ReceiptError(f"{label} message_type must be lowercase ISO family id")
     if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
-        raise ReceiptError(f"{path} has unsupported rail message_type")
+        raise ReceiptError(f"{label} has unsupported rail message_type")
     if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
         raise ReceiptError(
-            f"{path} uses legacy rail message_type; "
+            f"{label} uses legacy rail message_type; "
             "production evidence must use colr.012"
         )
     if "profile" not in receipt:
-        raise ReceiptError(f"{path} profile must be recorded")
-    profile = _normalize_profile(receipt["profile"], f"{path} profile")
+        raise ReceiptError(f"{label} profile must be recorded")
+    profile = _normalize_profile(receipt["profile"], f"{label} profile")
     if profile is None and not allow_default_profile:
-        raise ReceiptError(f"{path} omitted rail profile")
+        raise ReceiptError(f"{label} omitted rail profile")
     if "rail_message_id" not in receipt:
-        raise ReceiptError(f"{path} rail_message_id must be recorded")
+        raise ReceiptError(f"{label} rail_message_id must be recorded")
     rail_message_id = _normalize_rail_message_id(
         receipt["rail_message_id"],
-        f"{path} rail_message_id",
+        f"{label} rail_message_id",
     )
 
-    xml_path_raw = _require_clean_path_string(receipt.get("xml_path"), f"{path} xml_path")
+    xml_path_raw = _require_clean_path_string(receipt.get("xml_path"), f"{label} xml_path")
     xml_path = Path(xml_path_raw)
     sidecar_path_raw = _require_clean_path_string(
         receipt.get("sidecar_path"),
-        f"{path} sidecar_path",
+        f"{label} sidecar_path",
     )
     sidecar_path = Path(sidecar_path_raw)
     if xml_path.suffix != ".xml":
-        raise ReceiptError(f"{path} xml_path must point to a .xml file")
+        raise ReceiptError(f"{label} xml_path must point to a .xml file")
     if _path_is_repository_iso_fixture(xml_path_raw):
         raise ReceiptError(
-            f"{path} xml_path must not point to checked-in ISO XML fixtures"
+            f"{label} xml_path must not point to checked-in ISO XML fixtures"
         )
     expected_sidecar = xml_path.with_suffix(xml_path.suffix + ".json")
     if sidecar_path.resolve() != expected_sidecar.resolve():
-        raise ReceiptError(f"{path} sidecar_path must match xml_path sidecar")
+        raise ReceiptError(f"{label} sidecar_path must match xml_path sidecar")
     if sidecar_path.exists():
         _verify_rail_sidecar(
-            path,
+            label,
             sidecar_path,
             payload_sha256=payload_sha256,
             message_type=message_type,
@@ -1993,10 +2046,10 @@ def _verify_rail_source(
             rail_message_id=rail_message_id,
         )
     elif require_source_files:
-        raise ReceiptError(f"{path} references missing sidecar_path {sidecar_path}")
+        raise ReceiptError(f"{label} references missing sidecar_path")
     if not xml_path.exists():
         if require_source_files:
-            raise ReceiptError(f"{path} references missing xml_path {xml_path}")
+            raise ReceiptError(f"{label} references missing xml_path")
         return
 
     actual = sha256_hex(
@@ -2004,10 +2057,11 @@ def _verify_rail_source(
             xml_path,
             max_bytes=MAX_RAIL_XML_BYTES,
             limit_label="payload",
+            display_label=f"{label} source XML",
         )
     )
     if actual != payload_sha256:
-        raise ReceiptError(f"{path} payload_sha256 does not match source XML {xml_path}")
+        raise ReceiptError(f"{label} payload_sha256 does not match source XML")
 
 
 def verify_receipt_file(
@@ -2018,80 +2072,89 @@ def verify_receipt_file(
     allow_legacy_colr007: bool,
     allow_default_profile: bool,
     require_source_files: bool,
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify one operator receipt and return its parsed JSON object."""
 
-    receipt = _load_json(path, max_bytes=MAX_RECEIPT_JSON_BYTES)
+    label = display_label or "receipt"
+    receipt = _load_json(
+        path,
+        max_bytes=MAX_RECEIPT_JSON_BYTES,
+        display_label=label,
+    )
     if not isinstance(receipt, dict):
-        raise ReceiptError(f"{path} must contain a JSON object")
-    _check_no_secret_material(receipt, path)
+        raise ReceiptError(f"{label} must contain a JSON object")
+    _check_no_secret_material(receipt, label)
     version = receipt.get("version")
     if (
         isinstance(version, bool)
         or not isinstance(version, int)
         or version != RECEIPT_VERSION
     ):
-        raise ReceiptError(f"{path} has unsupported receipt version")
+        raise ReceiptError(f"{label} has unsupported receipt version")
     kind = receipt.get("receipt_kind")
     if isinstance(kind, str):
-        _reject_non_ascii_identifier(kind, f"{path} receipt_kind")
-        _reject_secret_looking_identifier(kind, f"{path} receipt_kind")
+        _reject_non_ascii_identifier(kind, f"{label} receipt_kind")
+        _reject_secret_looking_identifier(kind, f"{label} receipt_kind")
     if kind not in SUPPORTED_KINDS:
-        raise ReceiptError(f"{path} has unsupported receipt_kind")
-    _reject_unknown_keys(receipt, RECEIPT_KEYS_BY_KIND[kind], str(path))
-    require_digest_matches(receipt, RECEIPT_DIGEST_FIELD, str(path))
-    _check_status(receipt, path, allow_failed=allow_failed)
-    _check_response_metadata(receipt, path)
+        raise ReceiptError(f"{label} has unsupported receipt_kind")
+    _reject_unknown_keys(receipt, RECEIPT_KEYS_BY_KIND[kind], label)
+    require_digest_matches(receipt, RECEIPT_DIGEST_FIELD, label)
+    _check_status(receipt, label, allow_failed=allow_failed)
+    _check_response_metadata(receipt, label)
 
     if kind == "iso-audit-notary":
-        _check_timestamp(receipt, "published_at", path)
-        endpoint = _require_clean_string(receipt.get("endpoint"), f"{path} endpoint")
-        _require_https(endpoint, allow_insecure_http=allow_insecure_http, label=str(path))
-        _check_endpoint_digest(receipt, path, endpoint)
+        _check_timestamp(receipt, "published_at", label)
+        endpoint = _require_clean_string(receipt.get("endpoint"), f"{label} endpoint")
+        _require_https(endpoint, allow_insecure_http=allow_insecure_http, label=label)
+        _check_endpoint_digest(receipt, label, endpoint)
         verified_store_dir, verified_index_path = _verify_anchor_source(
             receipt,
             path,
             require_source_files=require_source_files,
+            display_label=label,
         )
         receipt["_verified_store_dir"] = verified_store_dir
         receipt["_verified_index_path"] = verified_index_path
     elif kind == "iso-rail-gateway":
-        _check_timestamp(receipt, "submitted_at", path)
+        _check_timestamp(receipt, "submitted_at", label)
         endpoint_url = _require_clean_string(
             receipt.get("endpoint_url"),
-            f"{path} endpoint_url",
+            f"{label} endpoint_url",
         )
-        _require_https(endpoint_url, allow_insecure_http=allow_insecure_http, label=str(path))
-        _check_endpoint_digest(receipt, path, endpoint_url)
+        _require_https(endpoint_url, allow_insecure_http=allow_insecure_http, label=label)
+        _check_endpoint_digest(receipt, label, endpoint_url)
         _verify_rail_source(
             receipt,
             path,
             require_source_files=require_source_files,
             allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
+            display_label=label,
         )
     else:  # pragma: no cover - guarded above, kept explicit for future kinds.
-        raise ReceiptError(f"{path} has unsupported receipt_kind")
+        raise ReceiptError(f"{label} has unsupported receipt_kind")
 
     return receipt
 
 
-def discover_receipts(receipt_dir: Path) -> list[Path]:
+def discover_receipts(receipt_dir: Path, *, display_label: str | None = None) -> list[Path]:
     """Return receipt files in deterministic order."""
 
-    _reject_repository_iso_fixture_path(receipt_dir, "receipt_dir")
-    _reject_symlinked_existing_ancestors(receipt_dir.parent)
+    label = display_label or "receipt_dir"
+    _reject_repository_iso_fixture_path(receipt_dir, label)
+    _reject_symlinked_existing_ancestors(receipt_dir.parent, display_label=label)
     try:
         metadata = receipt_dir.lstat()
     except FileNotFoundError as error:
-        raise ReceiptError(f"{receipt_dir} does not exist") from error
+        raise ReceiptError(f"{label} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise ReceiptError(f"{receipt_dir} must not be a symlink")
+        raise ReceiptError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
-        raise ReceiptError(f"{receipt_dir} is not a directory")
+        raise ReceiptError(f"{label} is not a directory")
     receipts = sorted(receipt_dir.glob("*.receipt.json"))
     if not receipts:
-        raise ReceiptError(f"{receipt_dir} has no *.receipt.json files")
+        raise ReceiptError(f"{label} has no *.receipt.json files")
     return receipts
 
 
@@ -2184,8 +2247,8 @@ def run(args: argparse.Namespace) -> int:
     for offset, receipt_dir in enumerate(args.receipt_dir):
         _reject_repository_iso_fixture_path(receipt_dir, f"receipt_dir[{offset}]")
     paths = list(args.receipt)
-    for receipt_dir in args.receipt_dir:
-        paths.extend(discover_receipts(receipt_dir))
+    for offset, receipt_dir in enumerate(args.receipt_dir):
+        paths.extend(discover_receipts(receipt_dir, display_label=f"receipt_dir[{offset}]"))
     if not paths:
         raise ReceiptError("provide at least one --receipt or --receipt-dir")
     _reject_duplicate_paths(paths)
@@ -2201,6 +2264,7 @@ def run(args: argparse.Namespace) -> int:
             allow_legacy_colr007=args.allow_legacy_colr007,
             allow_default_profile=args.allow_default_profile,
             require_source_files=args.require_source_files,
+            display_label=f"receipt[{offset}]",
         )
         receipt_digest = receipt[RECEIPT_DIGEST_FIELD]
         if receipt_digest in seen_receipt_digests:

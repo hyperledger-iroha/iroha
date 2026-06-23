@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-22
 
 <!-- 日本語訳: docs/source/sorafs_chunk_range_smoketest.md -->
 
-# SoraFS チャンク範囲スモークテスト計画（ドラフト）
+# SoraFS チャンク範囲スモークテスト計画
 
 ## 目的
 
@@ -105,32 +105,28 @@ nonce: 4c1f8e9d97c84d61b9d3c8c5
 - 平均レイテンシ < 50 ms（ホットキャッシュ想定。環境に応じて調整）
 - 証明失敗 = 0
 
-## CI 統合
+## 現在の重点検証
 
-- Buildkite ステップ `ci/sorafs-chunk-range-smoketest` を追加し、デプロイ直後に CLI をステージング
-  ゲートウェイへ実行する。`docs/source/sorafs_ci_templates.md` の共有テンプレートを参照し、
-  パイプラインシークレット（`SORA_FS_GATEWAY_URL`, `SORA_FS_STREAM_TOKEN`）で
-  マニフェスト／トークンのフィクスチャを渡す。
-- CLI の JSON 出力をアーカイブしてビルドサマリーへ添付し、再実行せずに
-  レイテンシ／スループットを確認できるようにする。
-- `docs/source/sorafs_gateway_*`、`crates/sorafs_*`、`ci/sorafs_*` を触る PR では
-  ステップをマージゲートにする。
+- ローカルゲートウェイの範囲取得経路（`Range` 解析、`dag-scope=block`、ストリームトークンヘッダー、クォータ、レート制限、`X-Sora-Chunk-Range`）は `cargo test -p sorafs_node --test gateway` で確認する。
+- fixture-backed gateway conformance の範囲検証（アライン済み範囲、ミスアライン範囲の拒否、multi-range レスポンス解析）は `cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture` で確認する。
+- オーケストレーターまたは provider advert を変更した場合は、`cargo test -p sorafs_car --bin sorafs_fetch` か、狭い `cargo test -p sorafs_car --bin sorafs_fetch ensure_range_capability` を実行し、`chunk_range_fetch` capability 検証を保つ。
+- デプロイ証跡として `iroha app sorafs fetch --json-out <path>` のレポートを保存する。この checkout には committed Buildkite merge gate はないため、配線時は `docs/source/sorafs_ci_templates.md` をテンプレートとして使う。
 
 ## コールドキャッシュのしきい値
 
 - コールドキャッシュ（初回実行やキャッシュフラッシュ）の場合は、レイテンシのガードを
   `avg_latency_ms < 150`、`p95_latency_ms < 250` に緩める。証明失敗の許容値は 0 のまま。
-- CLI に `--profile cold` を追加し、レポートにプロファイルラベルを含める。
+- `--profile=cold` を渡し、レポートに `cache_profile` と `cache_state` のラベルを含める。
   CI ジョブは適切な閾値セットを選択できるようにする。
-- JSON アーティファクトにキャッシュ状態（`"cache_state": "cold"`）を記録する。
+- JSON アーティファクトにキャッシュ状態（`"cache_state": "cold"`）が記録されることを確認する。
 
 ## マルチゲートウェイ・シナリオ
 
-- オーケストレーター MVP が入ったら、マニフェストが広告するプロバイダ一覧
-  （`manifest.providers[]`）を順に検証するよう拡張する。
-  オーケストレーターの重み付きスケジューラを使い、各ゲートウェイから取得した際の
+- マルチゲートウェイ検証では、広告済みゲートウェイごとに 1 つのプロバイダエントリ
+  （`manifest.providers[]`）を渡す。オーケストレーターの fetch 経路は、
+  繰り返し指定されたプロバイダエントリ間で既にスケジュールし、各ゲートウェイの
   レイテンシ／失敗メトリクスを記録する。
 - すべてのゲートウェイ結果を統合した JSON レポートを生成し、
-  ゲートウェイごとの成功サマリーと共に出力する。CI ワークフローでは、
+  ゲートウェイごとの成功サマリーと共に出力する。デプロイ CI ジョブを配線する場合は、
   どれか 1 つでも成功率の閾値を下回った場合に失敗扱いとし、
   それぞれのレイテンシ劣化も明示する。

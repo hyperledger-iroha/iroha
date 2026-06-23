@@ -57,7 +57,7 @@ naməlum identifikatorlar görünür. Reyestr nizamnamə qaydaları kanonik tuta
 Reyestrini alətlərdən yoxlamaq üçün CLI köməkçisini işə salın:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -123,7 +123,7 @@ $ yük qaçışı -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs
 Manifest stub eyni məlumatları əks etdirir, bu da boru kəmərlərində `--chunker-profile-id` seçimini skript edərkən əlverişlidir. Hər iki yığın mağazası CLI-ləri həm də kanonik tutacaq formasını (`--profile=sorafs.sf1@1.0.0`) qəbul edir, beləliklə qurmaq skriptləri sərt kodlaşdırılan rəqəmli ID-lərdən qaça bilər:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

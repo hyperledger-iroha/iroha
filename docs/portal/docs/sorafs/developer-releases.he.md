@@ -30,7 +30,7 @@ summary: הריצו את שער השחרור של CLI/SDK, החילו מדיני
 - צרפו את קישור כרטיס הרמדייישן (למשל `governance/tickets/SF6-SR-2026.md`) וציינו
   את המאשרים מ-Security Engineering ומ-Tooling Working Group.
 - ודאו שהצ'קליסט במזכר סגור; פריטים לא פתורים חוסמים את השחרור.
-- היערכו להעלאת לוגים של harness parity (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- היערכו להעלאת לוגים של harness parity (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   יחד עם bundle ה-manifest.
 - ודאו שפקודת החתימה שאתם מתכננים להריץ כוללת גם `--identity-token-provider` וגם
   `--identity-token-audience=<aud>` מפורש כדי ללכוד את תחום Fulcio בעדויות השחרור.
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 הסקריפט מבצע את הבדיקות הבאות:
 
 - `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` עבור `sorafs_car` (עם feature `cli`),
-  `sorafs_manifest` ו-`sorafs_chunker`
-- `cargo test --locked --all-targets` עבור אותם crates
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 אם שלב כלשהו נכשל, תקנו את הרגרסיה לפני tagging. Builds של שחרור חייבים
 להיות רציפים עם main; אל תבצעו cherry-pick לתיקונים בענפי release. השער גם

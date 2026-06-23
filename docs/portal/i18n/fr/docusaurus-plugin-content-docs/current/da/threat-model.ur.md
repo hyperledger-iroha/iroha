@@ -212,7 +212,7 @@ fournisseurs malveillants et liste blanche et alertes supprimées
   `crates/iroha_torii/src/da/ingest.rs` pour `/v1/da/ingest` avec empreinte digitale
   vérifie le fil کرتا ہے۔
 - Faisceau de preuve de flux de simulations de streaming PDP/PoTR
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ Flux de requêtes PoR/PDP/PoTR ici
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ یہ Flux de requêtes PoR/PDP/PoTR ici
   les scénarios de défaillance couvrent le modèle de menace et le modèle de menace
 - Capacité de trempage de réparation pour `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   Matrice de trempage Sumeragi `docs/source/sumeragi_soak_matrix.md`

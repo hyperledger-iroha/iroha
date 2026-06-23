@@ -1,0 +1,19 @@
+{
+  "deadline_ms": 90000,
+  "gateway_signature": null,
+  "latency_ms": 42000,
+  "manifest_digest_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "note": "fixture retrieval completed",
+  "provider_id_hex": "1010101010101010101010101010101010101010101010101010101010101010",
+  "provider_signature": null,
+  "range_end": 1048575,
+  "range_start": 0,
+  "recorded_at_ms": 1700000042100,
+  "request_id_hex": "44444444444444444444444444444444",
+  "requested_at_ms": 1700000000000,
+  "responded_at_ms": 1700000042000,
+  "status": "success",
+  "tier": "hot",
+  "trace_id_hex": "33333333333333333333333333333333",
+  "version": 1
+}

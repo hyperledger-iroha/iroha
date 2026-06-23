@@ -156,10 +156,8 @@ following instructions:
    - Expected settlement remains `9 333 333 333 nano-XOR`; collateral is still computed from the
      full monthly rate, not the health-adjusted fee.
 
-## Operational Follow-up
+## Operational Reconciliation
 
-Egress accounting is live for capacity telemetry: storage workers, orchestrators, and gateways
-should populate the `egress_bytes` counter with logical bytes served for the pricing window.
-Follow-up work focuses on reconciling gateway/orchestrator byte counters, surfacing drift in
-operator dashboards, and documenting which source is authoritative when multiple delivery paths
-serve the same manifest.
+Egress billing is authoritative from `RecordCapacityTelemetry.egress_bytes`: it is charged through the pricing schedule, recorded in the capacity fee ledger, folded into expected settlement, and debited from provider credit. Telemetry submitters may also include optional `gateway_egress_bytes` and `orchestrator_egress_bytes` counters for the same pricing window. Torii records those as reconciliation-only metrics (`torii_sorafs_egress_bytes{source="gateway|orchestrator"}`) and computes `torii_sorafs_egress_drift_ratio` against the billing bytes.
+
+Operator dashboards in `dashboards/grafana/sorafs_capacity_health.json` show billing, gateway, and orchestrator byte counters plus drift. Alert `SoraFSEgressCounterDrift` fires when a gateway or orchestrator source stays more than 10% away from billing for 10 minutes. Resolve drift by aligning the gateway/orchestrator export window with the signed capacity telemetry before approving settlement; do not override settlement from observer counters alone.

@@ -77,7 +77,7 @@ _`python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inv
 
 ## CARGO_BIN_EXE_sorafs_cli (စမ်းသပ်မှု- 1)
 
-- စမ်းသပ်မှု- သေတ္တာ/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- စမ်းသပ်မှု- သေတ္တာ/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_fetch (စမ်းသပ်မှု- 1)
 
@@ -85,7 +85,7 @@ _`python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inv
 
 ## CARGO_BIN_EXE_taikai_car (စမ်းသပ်မှု- 1)
 
-- စမ်းသပ်မှု- သေတ္တာ/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- စမ်းသပ်မှု- သေတ္တာ/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## CARGO_BIN_NAME (ထုတ်ကုန်- 3)
 

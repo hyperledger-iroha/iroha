@@ -169,7 +169,8 @@ pub mod transaction;
 pub mod transactions;
 /// Trigger definitions and scheduling utilities.
 pub mod trigger;
-/// Validation failure diagnostics surfaced to clients.
+/// Validation-fee policy and transaction metadata bindings.
+pub mod validation_fee;
 /// Permission tokens and helpers related to validators.
 pub mod validator;
 /// Verification helper traits and host bindings.

@@ -249,7 +249,7 @@ Nexus e artefatos de الحكم المتعافي sob falhas bizantinas، de rede
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`، الذي يقوم بالتحقق من
   بصمة الإصبع عبر `/v1/da/ingest`.
 - كما يتم محاكاة دفق PDP/PoTR من خلال البث التجريبي
-  em `crates/sorafs_car/tests/sorafs_cli.rs`، تدفقات كوبريندو المطلوبة
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، تدفقات كوبريندو المطلوبة
   PoR/PDP/PoTR وسيناريوهات الرسوم المتحركة ليست نموذجًا أمريكيًا.
 - نتائج السعة والإصلاح تنقع في الحياة
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` أثناء نقع المصفوفة

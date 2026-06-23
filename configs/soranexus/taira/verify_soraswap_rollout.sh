@@ -19,7 +19,7 @@ RUN_RELEASE_CHECKLIST=0
 ALLOW_TESTNET_MUTATIONS=0
 SKIP_MCP_CHECK=0
 SKIP_SORAFS_CHECK=0
-SKIP_ROUTER_REGRESSION=0
+SKIP_LOCAL_REGRESSIONS=0
 SKIP_NESTED_CALL=0
 SKIP_TRADER_APP_API_CHECK=0
 
@@ -36,12 +36,13 @@ Usage: verify_soraswap_rollout.sh --public-root URL --write-config PATH
                                   [--allow-testnet-mutations]
                                   [--skip-mcp-check]
                                   [--skip-sorafs-check]
+                                  [--skip-local-regressions]
                                   [--skip-router-regression]
                                   [--skip-nested-call]
                                   [--skip-trader-app-api-check]
 
 Run the post-upgrade public-Taira validation chain in the canonical order:
-  1. local `iroha_core` router regression for SoraSwap universal deploy routing
+  1. local `iroha_core` regressions for SoraSwap universal deploy routing and three-hop nested transfers
   2. `check_mcp_rollout.sh` on the chosen public node
   3. `check_sorafs_rollout.sh` on the chosen public node
   4. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
@@ -129,8 +130,8 @@ while [[ $# -gt 0 ]]; do
       SKIP_SORAFS_CHECK=1
       shift
       ;;
-    --skip-router-regression)
-      SKIP_ROUTER_REGRESSION=1
+    --skip-local-regressions|--skip-router-regression)
+      SKIP_LOCAL_REGRESSIONS=1
       shift
       ;;
     --skip-nested-call)
@@ -159,6 +160,18 @@ if [[ $RUN_RELEASE_CHECKLIST -eq 1 ]]; then
 fi
 if [[ $RUN_SMOKE -eq 1 ]]; then
   RUN_DEPLOY=1
+fi
+
+if [[ $SKIP_LOCAL_REGRESSIONS -eq 1 \
+  && $SKIP_MCP_CHECK -eq 1 \
+  && $SKIP_SORAFS_CHECK -eq 1 \
+  && $SKIP_TRADER_APP_API_CHECK -eq 1 \
+  && $SKIP_NESTED_CALL -eq 1 \
+  && $RUN_DEPLOY -ne 1 \
+  && $RUN_SMOKE -ne 1 \
+  && $RUN_RELEASE_CHECKLIST -ne 1 ]]; then
+  echo "no SoraSwap rollout verification steps selected; remove at least one --skip-* flag or enable --run-deploy, --run-smoke, or --run-release-checklist" >&2
+  exit 1
 fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
@@ -207,15 +220,16 @@ run_step() {
   "$@"
 }
 
-run_router_regression() {
+run_local_soraswap_regressions() {
   if [[ ! -f "${IROHA_ROOT}/Cargo.toml" ]]; then
-    echo "router regression requires a full iroha source checkout at ${IROHA_ROOT}" >&2
-    echo "rerun from the source checkout, or pass --skip-router-regression only after validating this exact runtime bundle elsewhere" >&2
+    echo "SoraSwap local regressions require a full iroha source checkout at ${IROHA_ROOT}" >&2
+    echo "rerun from the source checkout, or pass --skip-local-regressions only after validating this exact runtime bundle elsewhere" >&2
     exit 1
   fi
   (
     cd "$IROHA_ROOT"
     cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
+    cargo test -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib
   )
 }
 
@@ -297,8 +311,8 @@ PY
   rm -f "$probe_body"
 }
 
-if [[ $SKIP_ROUTER_REGRESSION -ne 1 ]]; then
-  run_step "Iroha SoraSwap deploy-route router regression" run_router_regression
+if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
+  run_step "Iroha SoraSwap local runtime regressions" run_local_soraswap_regressions
 fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 ]]; then

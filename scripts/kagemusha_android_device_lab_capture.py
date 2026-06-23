@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_android_device_lab_slot as slot_assembler  # noqa: E402
 import kagemusha_pull_android_device_lab_raw_slot as raw_puller  # noqa: E402
 
 
@@ -28,6 +29,8 @@ MAX_CAPTURE_JSON_BYTES = device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
 MAX_CAPTURE_CHALLENGE_BYTES = 4096
 MAX_CAPTURE_SIGNING_KEY_BYTES = 64 * 1024
 MAX_ADB_PREFLIGHT_OUTPUT_CHARS = 240
+ADB_SERIAL_REDACTION = "<redacted-adb-serial>"
+ADB_DEVICES_NO_VISIBLE_ROWS = "no_visible_devices"
 DISRUPTIVE_EXECUTABLE_NAMES = frozenset(("kill", "pkill", "killall"))
 DISRUPTIVE_COMMAND_TOKENS = frozenset(("kill-server", "reconnect", "disconnect"))
 DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
@@ -64,8 +67,22 @@ def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
-def _safe_command_display(command: Sequence[str]) -> str:
-    rendered = " ".join(command)
+def _safe_command_display(
+    command: Sequence[str],
+    *,
+    redact_tokens: Sequence[str] = (),
+) -> str:
+    tokens = [str(token) for token in command]
+    display_tokens = list(tokens)
+    for index, token in enumerate(display_tokens[:-1]):
+        if token == "-s":
+            display_tokens[index + 1] = ADB_SERIAL_REDACTION
+    for token in redact_tokens:
+        if token:
+            display_tokens = [
+                item.replace(token, ADB_SERIAL_REDACTION) for item in display_tokens
+            ]
+    rendered = " ".join(display_tokens)
     if device_lab.SECRET_RE.search(rendered):
         return "<redacted-command>"
     if device_lab._contains_control_character(rendered):
@@ -558,8 +575,11 @@ def _strict_json_load(path: Path, label: str) -> tuple[dict[str, Any] | None, li
         )
     except device_lab.DuplicateJsonKeyError as exc:
         return None, [f"{label} contains duplicate JSON object key {device_lab._display_path(exc.key)}"]
-    except device_lab.NonFiniteJsonConstantError as exc:
-        return None, [f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed"]
+    except device_lab.NonFiniteJsonConstantError:
+        return None, [
+            f"{label} is not strict JSON: non-finite constant "
+            f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION} is not allowed"
+        ]
     except json.JSONDecodeError:
         return None, [f"{label} is not valid JSON"]
     if not isinstance(payload, dict):
@@ -721,7 +741,15 @@ def _adb_devices_command(args: argparse.Namespace) -> list[str]:
     return [args.adb, "devices", "-l"]
 
 
-def _safe_adb_state_display(value: object) -> str:
+def _adb_getprop_command(args: argparse.Namespace, prop: str) -> list[str]:
+    return [args.adb, "-s", args.serial, "shell", "getprop", prop]
+
+
+def _safe_adb_state_display(
+    value: object,
+    *,
+    redact_tokens: Sequence[str] = (),
+) -> str:
     if isinstance(value, bytes):
         try:
             value = value.decode("utf-8")
@@ -736,12 +764,19 @@ def _safe_adb_state_display(value: object) -> str:
         return "<redacted-state>"
     if device_lab._contains_control_character(state):
         return "<unsafe-state>"
+    for token in redact_tokens:
+        if token:
+            state = state.replace(token, ADB_SERIAL_REDACTION)
     if len(state) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
         return f"{state[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
     return state
 
 
-def _safe_adb_message_display(value: object) -> str:
+def _safe_adb_message_display(
+    value: object,
+    *,
+    redact_tokens: Sequence[str] = (),
+) -> str:
     if isinstance(value, bytes):
         try:
             value = value.decode("utf-8")
@@ -756,6 +791,9 @@ def _safe_adb_message_display(value: object) -> str:
         return "<redacted-output>"
     if device_lab._contains_control_character(message):
         return "<unsafe-output>"
+    for token in redact_tokens:
+        if token:
+            message = message.replace(token, ADB_SERIAL_REDACTION)
     if len(message) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
         return f"{message[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
     return message
@@ -769,22 +807,47 @@ def _safe_adb_devices_output_display(value: object) -> str:
             return "<non-utf8-output>"
     if not isinstance(value, str):
         return "<missing-output>"
-    message = " ".join(value.strip().split())
-    if not message:
+    if not value.strip():
         return "<empty-output>"
-    if device_lab.SECRET_RE.search(message):
-        return "<redacted-output>"
-    if device_lab._contains_control_character(message):
-        return "<unsafe-output>"
-    if len(message) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
-        return f"{message[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
-    return message
+    state_counts: dict[str, int] = {}
+    row_count = 0
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line or line == "List of devices attached" or line.startswith("* daemon"):
+            continue
+        fields = line.split()
+        if len(fields) < 2:
+            state = "malformed"
+        elif fields[1] == "no" and len(fields) > 2 and fields[2] == "permissions":
+            state = "no_permissions"
+        else:
+            candidate = fields[1]
+            state = (
+                candidate
+                if candidate and all(char.isalnum() or char in "_-" for char in candidate)
+                else "other"
+            )
+        row_count += 1
+        state_counts[state] = state_counts.get(state, 0) + 1
+    if row_count == 0:
+        return ADB_DEVICES_NO_VISIBLE_ROWS
+    state_summary = ", ".join(
+        f"{state}={state_counts[state]}" for state in sorted(state_counts)
+    )
+    return f"rows={row_count}; states={state_summary}"
 
 
-def _safe_adb_failure_detail(result: subprocess.CompletedProcess[Any]) -> str:
+def _safe_adb_failure_detail(
+    result: subprocess.CompletedProcess[Any],
+    *,
+    redact_tokens: Sequence[str] = (),
+) -> str:
     parts: list[str] = []
     for label in ("stderr", "stdout"):
-        rendered = _safe_adb_message_display(getattr(result, label, None))
+        rendered = _safe_adb_message_display(
+            getattr(result, label, None),
+            redact_tokens=redact_tokens,
+        )
         if rendered not in ("<missing-output>", "<empty-output>"):
             parts.append(f"{label}={rendered}")
     return "; ".join(parts)
@@ -821,7 +884,7 @@ def _run_adb_devices_diagnostic(
             f"{label} failed with exit code {result.returncode}: "
             f"{_safe_command_display(command)}"
         )
-        detail = _safe_adb_failure_detail(result)
+        detail = _safe_adb_failure_detail(result, redact_tokens=(args.serial,))
         if detail:
             message = f"{message} ({detail})"
         return message
@@ -859,20 +922,130 @@ def _run_adb_visibility_preflight(
             f"{label} failed with exit code {result.returncode}: "
             f"{_safe_command_display(command)}"
         )
-        detail = _safe_adb_failure_detail(result)
+        detail = _safe_adb_failure_detail(result, redact_tokens=(args.serial,))
         if detail:
             message = f"{message} ({detail})"
         diagnostic = _run_adb_devices_diagnostic(args, env=env, runner=runner)
         if diagnostic:
             message = f"{message}; {diagnostic}"
         return [message]
-    state = _safe_adb_state_display(getattr(result, "stdout", None))
+    state = _safe_adb_state_display(
+        getattr(result, "stdout", None),
+        redact_tokens=(args.serial,),
+    )
     if state != "device":
         message = f"{label} must report state device, got {state}"
-        detail = _safe_adb_failure_detail(result)
+        detail = _safe_adb_failure_detail(result, redact_tokens=(args.serial,))
         if detail:
             message = f"{message} ({detail})"
         return [message]
+    return []
+
+
+def _read_adb_identity_property(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+    prop: str,
+    key: str,
+) -> tuple[str | None, list[str]]:
+    label = f"ADB expected device family preflight getprop {prop}"
+    command = _adb_getprop_command(args, prop)
+    errors = _command_disruption_errors(command, label)
+    if errors:
+        return None, errors
+    try:
+        result = runner(
+            command,
+            cwd=str(args.repo_root),
+            env=env,
+            timeout=args.adb_timeout_seconds,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return None, [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+    except OSError:
+        return None, [f"{label} could not be started"]
+    if result.returncode != 0:
+        message = (
+            f"{label} failed with exit code {result.returncode}: "
+            f"{_safe_command_display(command)}"
+        )
+        detail = _safe_adb_failure_detail(result, redact_tokens=(args.serial,))
+        if detail:
+            message = f"{message} ({detail})"
+        return None, [message]
+    stdout = getattr(result, "stdout", None)
+    if isinstance(stdout, bytes):
+        try:
+            stdout = stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            return None, [f"{label} returned non-UTF-8 output"]
+    if not isinstance(stdout, str):
+        return None, [f"{label} output is missing"]
+    if stdout.count("\n") != 1 or not stdout.endswith("\n"):
+        rendered = _safe_adb_message_display(stdout, redact_tokens=(args.serial,))
+        return None, [
+            f"{label} output must be exactly one LF-terminated value "
+            f"(stdout={rendered})"
+        ]
+    value = stdout[:-1]
+    if value.endswith("\r"):
+        value = value[:-1]
+    if not value:
+        return None, [f"{key} could not be determined"]
+    if value != value.strip():
+        return None, [f"{key} must not contain surrounding whitespace"]
+    if device_lab._contains_control_character(value):
+        return None, [f"{key} must not contain control characters"]
+    if device_lab.SECRET_RE.search(value):
+        return None, [f"{key} must not contain secret-looking material"]
+    return value, []
+
+
+def _run_expected_device_family_preflight(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> list[str]:
+    expected_family = args.expected_device_family
+    if expected_family is None:
+        return []
+    model, model_errors = _read_adb_identity_property(
+        args,
+        env=env,
+        runner=runner,
+        prop="ro.product.model",
+        key="device_model",
+    )
+    if model_errors:
+        return model_errors
+    codename, codename_errors = _read_adb_identity_property(
+        args,
+        env=env,
+        runner=runner,
+        prop="ro.product.device",
+        key="device_codename",
+    )
+    if codename_errors:
+        return codename_errors
+    inferred_family = slot_assembler.infer_device_family(model, codename)
+    if inferred_family != expected_family:
+        details = {
+            "model": _safe_adb_message_display(model, redact_tokens=(args.serial,)),
+            "codename": _safe_adb_message_display(codename, redact_tokens=(args.serial,)),
+            "inferred": inferred_family or "<unrecognized-standard-family>",
+        }
+        return [
+            "ADB expected device family preflight expected "
+            f"{expected_family}, got {details['inferred']} "
+            f"(model={details['model']}; codename={details['codename']})"
+        ]
     return []
 
 
@@ -950,6 +1123,8 @@ def _assemble_command(
         args.adb,
         "--serial",
         args.serial,
+        "--adb-timeout-seconds",
+        str(args.adb_timeout_seconds),
         "--attestation-result",
         str(slot_path / "attestation" / "result.json"),
         "--attestation-harness-result",
@@ -1031,6 +1206,14 @@ def _validate_preflight(args: argparse.Namespace) -> list[str]:
         (args.signer_key_id, "signer key id"),
     ):
         errors.extend(_validate_cli_string(value, label))
+    if args.expected_device_family is not None:
+        errors.extend(
+            _validate_cli_string(args.expected_device_family, "--expected-device-family")
+        )
+        if args.expected_device_family not in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+            errors.append(
+                "--expected-device-family must be one of the standard Kagemusha families"
+            )
     for value, label in (
         (args.java_home, "JAVA_HOME"),
         (args.android_home, "ANDROID_HOME"),
@@ -1297,6 +1480,10 @@ def capture_device_lab_slot(
     if errors:
         return 1, None, errors
 
+    errors = _run_expected_device_family_preflight(args, env=env, runner=runner)
+    if errors:
+        return 1, None, errors
+
     if not args.skip_build_install:
         errors = _run_step(
             label="Android lab app build/install",
@@ -1418,6 +1605,8 @@ def capture_device_lab_slot(
         "physical_device_attestation": True,
         "standard_matrix_required": bool(args.require_standard_matrix),
     }
+    if args.expected_device_family is not None:
+        summary["expected_device_family"] = args.expected_device_family
     if args.capture_summary_out is not None:
         summary_errors = write_capture_summary(args.capture_summary_out, summary)
         if summary_errors:
@@ -1442,6 +1631,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--android-home")
     parser.add_argument("--android-sdk-root")
     parser.add_argument("--run-as-package", default=DEFAULT_APP_PACKAGE_NAME)
+    parser.add_argument(
+        "--expected-device-family",
+        help=(
+            "Optional standard Kagemusha family expected for the attached serial; "
+            "checked before build/install/instrumentation."
+        ),
+    )
     parser.add_argument("--device-lab-root", default=raw_puller.DEFAULT_DEVICE_LAB_DEVICE_ROOT)
     parser.add_argument("--instrumentation-runner", default=DEFAULT_INSTRUMENTATION_RUNNER)
     parser.add_argument("--raw-root", type=Path, required=True)

@@ -134,7 +134,7 @@ telemetria TLS y GAR existente.
    `cargo xtask sorafs-gateway-attest` y archivan el bundle firmado junto al
    output de metricas de su plano de telemetria.
 
-## Acciones pendientes
+## Acciones completadas
 
 - [x] Regenerar los fixtures canonicos y publicar los digests arriba. ✅
 - [x] Adjuntar el sobre de manifiesto firmado para la version `1.0.0` usando la

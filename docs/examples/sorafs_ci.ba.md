@@ -81,7 +81,7 @@ jobs:
 
 ## Иҫкәрмәләр
 
-- `sorafs_cli` йүгерселә булырға тейеш (мәҫәлән, был аҙымдарға тиклем `cargo install --path crates/sorafs_car --features cli`).
+- `sorafs_cli` йүгерселә булырға тейеш (мәҫәлән, был аҙымдарға тиклем `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli`).
 - Эш ағымы асыҡ OIDC аудиторияһын тәьмин итергә тейеш (бында I18NI0000007X); `--identity-token-audience` көйләү һеҙҙең Fulcio сәйәсәтенә тап килергә.
 - Релиз торбаһы `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, һәм I18NI000000011X идара итеү тикшерелеүе өсөн архив тейеш.
 - Детерминистик өлгө артефакттары I18NI000000012X-та йәшәй; уларҙы күсерергә һынауҙар ҡасан һеҙгә кәрәк алтын манифест, өлөшө пландары, йәки өйөм JSON торба үткәрмәйенсә.

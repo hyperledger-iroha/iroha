@@ -44,6 +44,7 @@ EXECUTION_REPORT_FILENAME = "recursive-compact-key-execution.json"
 EXECUTION_REPORT_SCHEMA = "iroha.kagemusha.recursive_compact_key_execution.v1"
 MAX_STAGED_RUN_REPORT_BYTES = 16 * 1024
 MAX_EXECUTION_REPORT_BYTES = 16 * 1024
+STAGED_RUNNER_TEMP_SUFFIX = ".staged-runner.tmp"
 CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
 SECRET_EXIT_MARKER_REDACTION = "<redacted-secret-marker>"
 
@@ -146,6 +147,21 @@ def validate_exit_file_path_shape(path: Path) -> list[str]:
     secret_error = _secret_path_error(path, "--exit-file")
     if secret_error is not None:
         return [secret_error]
+    return []
+
+
+def validate_no_staged_runner_temp_outputs(
+    staged_artifact_dir: Path,
+    label: str,
+) -> list[str]:
+    """Reject incomplete staged runs that still have runner-owned temp files."""
+
+    try:
+        entries = list(staged_artifact_dir.iterdir())
+    except OSError:
+        return [f"{label} could not be listed"]
+    if any(entry.name.endswith(STAGED_RUNNER_TEMP_SUFFIX) for entry in entries):
+        return [f"{label} contains runner temporary outputs; staged run is incomplete"]
     return []
 
 
@@ -641,8 +657,11 @@ def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]
     except device_lab.DuplicateJsonKeyError as exc:
         key = device_lab._display_path(exc.key)
         return None, [f"{label} contains duplicate JSON object key {key}"]
-    except device_lab.NonFiniteJsonConstantError as exc:
-        return None, [f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed"]
+    except device_lab.NonFiniteJsonConstantError:
+        return None, [
+            f"{label} is not strict JSON: non-finite constant "
+            f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION} is not allowed"
+        ]
     except json.JSONDecodeError:
         return None, [f"{label} is not valid JSON"]
 
@@ -1221,6 +1240,13 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
         return 1, None, exit_path_errors
     errors.extend(validate_directory_path(args.staged_artifact_dir, "--staged-artifact-dir", must_exist=True))
     errors.extend(validate_directory_path(args.artifact_dir, "--artifact-dir", must_exist=False))
+    if not errors:
+        temp_errors = validate_no_staged_runner_temp_outputs(
+            args.staged_artifact_dir,
+            "staged recursive compact key artifact directory",
+        )
+        if temp_errors:
+            return 1, None, temp_errors
     exit_code_text, exit_errors = validate_exit_marker(args.exit_file)
     errors.extend(exit_errors)
     if exit_errors:

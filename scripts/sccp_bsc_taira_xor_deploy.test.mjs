@@ -72,6 +72,10 @@ const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
 const HASH_88 = `0x${"88".repeat(32)}`;
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
+const TRUSTED_SETUP_TRANSCRIPT_SCHEMA =
+  "iroha-sccp-bsc-trusted-setup-transcript/v1";
+const REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA =
+  "iroha-sccp-bsc-reproducible-build-transcript/v1";
 const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = [
   "message_id",
   "payload_hash",
@@ -83,6 +87,29 @@ const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = [
   "statement_hash",
   "destination_binding_hash",
 ];
+const groth16ProofSelfTestAdversarialChecks = () => ({
+  publicSignalMismatch: {
+    attempted: 9,
+    rejected: 9,
+    cases: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.map((name, index) => ({
+      index,
+      name,
+      phase: "wtnsCalculate",
+      rejected: true,
+    })),
+  },
+  nonBooleanValueBit: {
+    attempted: 1,
+    rejected: 1,
+    case: {
+      signalName: "message_id",
+      inputName: "messageIdBits",
+      bitIndex: 0,
+      phase: "wtnsCalculate",
+      rejected: true,
+    },
+  },
+});
 const SOURCE_EVENT_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_55}`;
 const ROUTE_CANARY_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_77}`;
 const MAINNET_SOURCE_EVENT_EXPLORER_URL = `https://bscscan.com/tx/${HASH_55}`;
@@ -360,7 +387,7 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
     proof_artifact_hash: proofArtifactHash,
     proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     proving_key_hash: provingKeyHash,
-    verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
+    verifier_key: "artifacts/bsc-testnet/verifier-key.json",
     verifier_key_hash: destinationRollout.verifierKeyHash,
     verifier_key_artifact_hash: HASH_88,
     destination_binding_hash: destinationRollout.destinationBindingHash,
@@ -370,6 +397,11 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
     cross_sdk_parity_artifact: "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
+    groth16_proof_self_test_artifact:
+      "artifacts/bsc-testnet/groth16-proof-self-test.json",
+    groth16_proof_self_test_hash: fixtureHash(
+      "route groth16 proof self-test",
+    ),
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
     ).map(([sdk, implementation], index) => ({
@@ -452,12 +484,20 @@ const readyReadback = (overrides = {}) => ({
 
 const verifierMaterial = (overrides = {}) => {
   const material = {
+    schema: "iroha-sccp-bsc-groth16-verifier-key/v1",
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    chain: "bsc-testnet",
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    protocol: "groth16",
+    curve: "bn254",
     alpha1: VALID_G1_POINTS[0],
     beta2: SMOKE_FIXTURE_G2,
     gamma2: SMOKE_FIXTURE_G2,
     delta2: SMOKE_FIXTURE_G2,
     ic: VALID_IC,
     proofFamily: "stark-fri-v1",
+    publicInputCount: 9,
     networkId: BSC_TESTNET_NETWORK_ID_HEX,
     sourceDomain: 0,
     targetDomain: 2,
@@ -811,26 +851,99 @@ async function writeNativeProverFixtureFiles({
   await writeArtifact("cross-sdk-parity.json", parityBytes);
   await writeArtifact("native-prover-self-test.json", selfTestBytes);
   const sdkImplementationPaths = {};
+  const sdkImplementationArtifacts = {};
   for (const sdk of Object.keys(
     SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   )) {
     const relativePath = `${sdk}-implementation.bin`;
     sdkImplementationPaths[sdk] = relativePath;
-    await writeArtifact(
-      relativePath,
+    const implementationBytes =
       artifactByteOverrides[`${sdk}Implementation`] ??
-        artifactByteOverrides[sdk] ??
-        bytesFor(`${sdk}-implementation`, 2048),
-    );
+      artifactByteOverrides[sdk] ??
+      bytesFor(`${sdk}-implementation`, 2048);
+    await writeArtifact(relativePath, implementationBytes);
+    sdkImplementationArtifacts[sdk] = {
+      sdk,
+      implementation:
+        SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1[sdk],
+      path: relativePath,
+      sha256: sha256Hex(implementationBytes),
+      sizeBytes: implementationBytes.length,
+      forbiddenWasmReferences: 0,
+      forbiddenRemoteReferences: 0,
+    };
   }
   for (const name of [
     "circuit-security-audit.bin",
-    "native-implementation-audit.bin",
     "reproducible-build-attestation.bin",
-    "no-wasm-no-remote-scan.bin",
   ]) {
     await writeArtifact(name, bytesFor(name, 2048));
   }
+  const noWasmNoRemoteScan = {
+    schema: "iroha-sccp-bsc-native-evm-no-wasm-no-remote-scan/v1",
+    generatedAt: "2026-06-22T00:00:00.000Z",
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    bscNetwork: "testnet",
+    chain: "bsc-testnet",
+    chainIdHex: "0x61",
+    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    domain: SCCP_DOMAIN_BSC,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofFamily: "stark-fri-v1",
+    noWasm: true,
+    remoteProverRequired: false,
+    browserImplementation: "pure-typescript",
+    scanResult: "pass",
+    forbiddenWasmReferences: 0,
+    forbiddenRemoteReferences: 0,
+    inspectedSdkArtifacts: Object.keys(sdkImplementationArtifacts)
+      .sort()
+      .map((sdk) => sdkImplementationArtifacts[sdk]),
+  };
+  noWasmNoRemoteScan.scanHash = sha256Hex(
+    Buffer.from(
+      canonicalJson({
+        schema: noWasmNoRemoteScan.schema,
+        routeId: noWasmNoRemoteScan.routeId,
+        assetKey: noWasmNoRemoteScan.assetKey,
+        bscNetwork: noWasmNoRemoteScan.bscNetwork,
+        chain: noWasmNoRemoteScan.chain,
+        chainIdHex: noWasmNoRemoteScan.chainIdHex,
+        networkIdHex: noWasmNoRemoteScan.networkIdHex,
+        domain: noWasmNoRemoteScan.domain,
+        proofBackend: noWasmNoRemoteScan.proofBackend,
+        proofFamily: noWasmNoRemoteScan.proofFamily,
+        noWasm: noWasmNoRemoteScan.noWasm,
+        remoteProverRequired: noWasmNoRemoteScan.remoteProverRequired,
+        browserImplementation: noWasmNoRemoteScan.browserImplementation,
+        scanResult: noWasmNoRemoteScan.scanResult,
+        forbiddenWasmReferences: noWasmNoRemoteScan.forbiddenWasmReferences,
+        forbiddenRemoteReferences:
+          noWasmNoRemoteScan.forbiddenRemoteReferences,
+        inspectedSdkArtifacts: noWasmNoRemoteScan.inspectedSdkArtifacts,
+      }),
+      "utf8",
+    ),
+  );
+  await writeArtifact(
+    "no-wasm-no-remote-scan.json",
+    Buffer.from(`${JSON.stringify(noWasmNoRemoteScan, null, 2)}\n`, "utf8"),
+  );
+  await writeArtifact(
+    "source-parity-attestation.json",
+    Buffer.from(
+      `${JSON.stringify(
+        await buildBscNativeEvmSourceParityAttestation({
+          "bsc-network": "testnet",
+          generatedAt: "2026-06-22T00:00:00.000Z",
+        }),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    ),
+  );
   const {
     destinationRollout: routeDestinationRolloutOverrides,
     destinationBinding: routeDestinationBindingOverrides,
@@ -863,6 +976,9 @@ async function writeNativeProverFixtureFiles({
     verifierKeyHash,
     verifierKeyArtifactHash,
     destinationBindingHash,
+    powersOfTauHash: fixtureHash("native prover fixture powers of tau"),
+    trustedSetupTranscriptHash: null,
+    reproducibleBuildTranscriptHash: null,
     sdkImplementationPaths,
     options: {
       "route-manifest": routeManifestPath,
@@ -877,13 +993,67 @@ async function writeNativeProverFixtureFiles({
       "kotlin-implementation": sdkImplementationPaths.kotlin,
       "java-android-implementation": sdkImplementationPaths["java-android"],
       "dotnet-implementation": sdkImplementationPaths.dotnet,
-      "audit-circuit-security": "circuit-security-audit.bin",
-      "audit-native-implementation": "native-implementation-audit.bin",
-      "audit-reproducible-build": "reproducible-build-attestation.bin",
-      "audit-no-wasm-no-remote-scan": "no-wasm-no-remote-scan.bin",
+      "audit-circuit-security": "circuit-security-attestation.json",
+      "audit-native-implementation": "source-parity-attestation.json",
+      "audit-reproducible-build": "reproducible-build-attestation.json",
+      "audit-no-wasm-no-remote-scan": "no-wasm-no-remote-scan.json",
       "trusted-attestation-signer": TRUSTED_ATTESTATION_SIGNER_FINGERPRINTS.join(","),
     },
   };
+  const trustedSetupTranscriptBytes = Buffer.from(
+    `${JSON.stringify(
+      {
+        schema: TRUSTED_SETUP_TRANSCRIPT_SCHEMA,
+        contributors: ["ceremony-contributor-a", "ceremony-contributor-b"],
+        localSingleContributor: false,
+        toxicWasteDestroyed: true,
+        ceremonyResult: "pass",
+        phase1: {
+          snarkjsPowersOfTauVerify: {
+            completed: true,
+          },
+        },
+        phase2: {
+          snarkjsZkeyVerify: "ZKey Ok!",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  const reproducibleBuildTranscriptBytes = Buffer.from(
+    `${JSON.stringify(
+      {
+        schema: REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA,
+        independentRebuilders: [
+          "independent-rebuilder-a",
+          "independent-rebuilder-b",
+        ],
+        reproducible: true,
+        r1csInfoSource: "snarkjs-cli",
+        r1csPublicInputCount: 9,
+        r1csConstraintCount: 8192,
+        zkeyVerify: true,
+        zkeyVerifyResult: "ZKey Ok!",
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(artifactRoot, "trusted-setup-transcript.json"),
+    trustedSetupTranscriptBytes,
+  );
+  await writeFile(
+    join(artifactRoot, "reproducible-build-transcript.json"),
+    reproducibleBuildTranscriptBytes,
+  );
+  fixture.trustedSetupTranscriptHash = sha256Hex(trustedSetupTranscriptBytes);
+  fixture.reproducibleBuildTranscriptHash = sha256Hex(
+    reproducibleBuildTranscriptBytes,
+  );
   await writeNativeGroth16AttestationFiles(fixture);
   await writeFile(
     join(artifactRoot, "groth16-material.json"),
@@ -922,7 +1092,108 @@ async function writeNativeProverFixtureFiles({
       2,
     )}\n`,
   );
+  const groth16ProofSelfTestPublicSignals = Array.from({ length: 9 }, (_, index) =>
+    String(index + 1),
+  );
+  const groth16ProofSelfTestProof = {
+    pi_a: ["1", "2", "1"],
+    pi_b: [
+      ["1", "2"],
+      ["3", "4"],
+      ["1", "0"],
+    ],
+    pi_c: ["1", "2", "1"],
+    protocol: "groth16",
+    curve: "bn128",
+  };
+  const groth16ProofSelfTestBytes = Buffer.from(
+    `${JSON.stringify(
+      {
+        schema: "iroha-sccp-bsc-groth16-proof-self-test/v1",
+        routeId: "taira_bsc_xor",
+        assetKey: "xor",
+        bscNetwork: "testnet",
+        chain: "bsc-testnet",
+        chainIdHex: "0x61",
+        networkIdHex:
+          "0x0000000000000000000000000000000000000000000000000000000000000061",
+        circuitProfile: "sccp-bsc-full-message-v1",
+        proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+        proofFamily: "stark-fri-v1",
+        manifest: {
+          path: "groth16-material.json",
+          sha256: materialManifestHash,
+          productionReady: true,
+          productionBlockers: [],
+        },
+        artifacts: {
+          r1cs: {
+            path: "proof-artifact.r1cs",
+            sha256: proofArtifactHash,
+          },
+          provingKey: {
+            path: "proving-key.zkey",
+            sha256: provingKeyHash,
+          },
+          bscVerifierKey: {
+            path: "verifier-key.json",
+            sha256: verifierKeyArtifactHash,
+          },
+          snarkjsVerificationKey: {
+            path: "snarkjs-verification-key.json",
+            sha256: HASH_33,
+          },
+          circuitSource: {
+            path: "circuit.circom",
+            sha256: fixture.circuitSourceHash ?? HASH_88,
+          },
+          witnessWasm: {
+            path: "circuit.wasm",
+            sha256: fixtureHash("native prover fixture proof self-test witness wasm"),
+          },
+        },
+        sample: {
+          publicSignalNames: [
+            "message_id",
+            "payload_hash",
+            "target_domain",
+            "commitment_root",
+            "finality_height",
+            "finality_block_hash",
+            "source_domain",
+            "statement_hash",
+            "destination_binding_hash",
+          ],
+          publicSignalWords: groth16ProofSelfTestPublicSignals,
+        },
+        publicSignals: groth16ProofSelfTestPublicSignals,
+        snarkjs: {
+          wtnsCalculate: true,
+          groth16Prove: true,
+          groth16Verify: true,
+        },
+        adversarialChecks: groth16ProofSelfTestAdversarialChecks(),
+        witnessHash: fixtureHash("native prover fixture proof self-test witness"),
+        proofHash: sha256Hex(
+          Buffer.from(canonicalJson(groth16ProofSelfTestProof), "utf8"),
+        ),
+        publicSignalsHash: sha256Hex(
+          Buffer.from(canonicalJson(groth16ProofSelfTestPublicSignals), "utf8"),
+        ),
+        proof: groth16ProofSelfTestProof,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(artifactRoot, "groth16-proof-self-test.json"),
+    groth16ProofSelfTestBytes,
+  );
+  fixture.groth16ProofSelfTestHash = sha256Hex(groth16ProofSelfTestBytes);
   fixture.options["groth16-material-manifest"] = "groth16-material.json";
+  fixture.options["groth16-proof-self-test"] = "groth16-proof-self-test.json";
   return fixture;
 }
 
@@ -967,18 +1238,30 @@ function nativeGroth16MaterialManifest(fixture, overrides = {}) {
     productionReady: true,
     productionBlockers: [],
     verifierKeyHash: fixture.verifierKeyHash,
-    artifacts: {
-      circuitSource: { sha256: fixture.circuitSourceHash ?? HASH_88 },
-      r1cs: { sha256: fixture.proofArtifactHash },
-      provingKey: { sha256: fixture.provingKeyHash },
+      artifacts: {
+        circuitSource: { sha256: fixture.circuitSourceHash ?? HASH_88 },
+        r1cs: { sha256: fixture.proofArtifactHash },
+      powersOfTau: { sha256: fixture.powersOfTauHash },
+        provingKey: { sha256: fixture.provingKeyHash },
       snarkjsVerificationKey: { sha256: HASH_33 },
       bscVerifierKey: { sha256: fixture.verifierKeyArtifactHash },
+      trustedSetupTranscript: {
+        path: "trusted-setup-transcript.json",
+        sha256: fixture.trustedSetupTranscriptHash,
+      },
+      reproducibleBuildTranscript: {
+        path: "reproducible-build-transcript.json",
+        sha256: fixture.reproducibleBuildTranscriptHash,
+      },
     },
     selfChecks: {
       snarkjs: {
         r1csInfo: true,
+        r1csInfoSource: "snarkjs-cli",
         r1csPublicInputCount: 9,
         r1csConstraintCount: 8192,
+        zkeyVerify: true,
+        zkeyVerifyResult: "ZKey Ok!",
         zkeyVerificationKeyExport: true,
         verifierKeyHashMatches: true,
         exportedVerifierKeyHash: fixture.verifierKeyHash,
@@ -1044,12 +1327,15 @@ function nativeGroth16AttestationRecord({
     chain: "bsc-testnet",
     chainIdHex: "0x61",
     networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    proofBackend: "evm-groth16-bn254-v1",
+    proofFamily: "stark-fri-v1",
     circuitProfile: "sccp-bsc-full-message-v1",
     publicInputCount: 9,
     publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
     verifierKeyHash: fixture.verifierKeyHash,
     circuitSourceSha256: fixture.circuitSourceHash ?? HASH_88,
     r1csSha256: fixture.proofArtifactHash,
+    powersOfTauSha256: fixture.powersOfTauHash,
     provingKeySha256: fixture.provingKeyHash,
     snarkjsVerificationKeySha256: HASH_33,
     bscVerifierKeySha256: fixture.verifierKeyArtifactHash,
@@ -1103,7 +1389,7 @@ async function writeNativeGroth16AttestationFiles(fixture, overrides = {}) {
         localSingleContributor: false,
         minimumContributors: 3,
         toxicWasteDestroyed: true,
-        contributionTranscriptSha256: fixtureHash("bsc trusted setup transcript"),
+        contributionTranscriptSha256: fixture.trustedSetupTranscriptHash,
       },
     ],
     [
@@ -1113,7 +1399,16 @@ async function writeNativeGroth16AttestationFiles(fixture, overrides = {}) {
       {
         reproducible: true,
         independentRebuilders: 2,
-        buildTranscriptSha256: fixtureHash("bsc reproducible build transcript"),
+        buildTranscriptSha256: fixture.reproducibleBuildTranscriptHash,
+        toolchainSha256: fixtureHash("bsc reproducible toolchain"),
+        r1csInfoSource: "snarkjs-cli",
+        r1csPublicInputCount: 9,
+        r1csConstraintCount: 8192,
+        zkeyVerify: true,
+        zkeyVerifyResult: "ZKey Ok!",
+        zkeyVerificationKeyExport: true,
+        verifierKeyHashMatches: true,
+        exportedVerifierKeyHash: fixture.verifierKeyHash,
       },
     ],
   ];
@@ -2642,13 +2937,12 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
     () =>
       normalizeVerifierMaterial({
         ...verifierMaterial(),
-        verifierKeyHash: HASH_22,
         alpha1: [0],
       }),
     /2 uint256/u,
   );
   assert.throws(
-    () => normalizeVerifierMaterial(verifierMaterial({ alpha1: [1, 3] })),
+    () => normalizeVerifierMaterial(verifierMaterial({ alpha1: ["1", "3"] })),
     /BN254 G1 curve/u,
   );
   assert.throws(
@@ -2690,9 +2984,27 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
   assert.throws(
     () =>
       normalizeVerifierMaterial(
-        verifierMaterial({ ic: [0, 0, ...VALID_IC.slice(2)] }),
+        verifierMaterial({ ic: ["0", "0", ...VALID_IC.slice(2)] }),
       ),
     /point at infinity/u,
+  );
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({
+          alpha1: [`0${VALID_G1_POINTS[0][0]}`, VALID_G1_POINTS[0][1]],
+        }),
+      ),
+    /alpha1\[0\] must be a canonical decimal BN254 field word/u,
+  );
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({
+          beta2: [`0x${"01".padStart(64, "0")}`, ...SMOKE_FIXTURE_G2.slice(1)],
+        }),
+      ),
+    /beta2\[0\] must be a canonical decimal BN254 field word/u,
   );
 });
 
@@ -2701,7 +3013,7 @@ test("BSC verifier material normalization ignores inherited verifier fields", ()
 
   assert.throws(
     () => normalizeVerifierMaterial(inheritedMaterial),
-    /expectedVerifierKeyHash/u,
+    /publicInputCount/u,
   );
   assert.equal(
     isSmokeFixtureGroth16VerifierMaterial(
@@ -3698,7 +4010,7 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
       buildBscTairaXorRouteConfigToml(
         productionReadyRouteManifest({
           bundleOverrides: {
-            verifier_key: "artifacts/bsc-testnet/proof-artifact.r1cs",
+            verifier_key: "artifacts/bsc-testnet/cross-sdk-parity.json",
           },
         }),
       ),
@@ -3752,6 +4064,7 @@ test("BSC source-parity attestation hashes SDK local-admission surfaces", async 
     attestation.proofBackend,
     SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   );
+  assert.equal(attestation.proofFamily, "stark-fri-v1");
   assert.deepEqual(attestation.requiredMarkers, [
     "BSC_TESTNET_NATIVE_EVM_LOCAL_ADMISSION_BUILDER",
     "BSC_TESTNET_LOCAL_ADMISSION_METADATA",
@@ -3796,6 +4109,7 @@ test("BSC mainnet source-parity attestation hashes mainnet SDK local-admission s
     attestation.proofBackend,
     SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   );
+  assert.equal(attestation.proofFamily, "stark-fri-v1");
   assert.deepEqual(attestation.requiredMarkers, [
     "BSC_MAINNET_NATIVE_EVM_LOCAL_ADMISSION_BUILDER",
     "BSC_MAINNET_LOCAL_ADMISSION_METADATA",
@@ -3936,6 +4250,18 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     ),
   );
   assert.equal(
+    result.bundle.groth16_proof_self_test_artifact,
+    "groth16-proof-self-test.json",
+  );
+  assert.equal(
+    result.bundle.groth16_proof_self_test_hash,
+    sha256Hex(
+      await readFile(
+        join(fixture.artifactRoot, "groth16-proof-self-test.json"),
+      ),
+    ),
+  );
+  assert.equal(
     result.attachedRouteManifest.destinationRollout.nativeEvmProverBundle
       .proof_artifact_hash,
     fixture.proofArtifactHash,
@@ -4057,6 +4383,179 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
       manifestPath,
       `${JSON.stringify(
         nativeGroth16MaterialManifest(fixture, {
+          artifacts: {
+            r1cs: {
+              path: "fixture-full.r1cs",
+              sha256: fixture.proofArtifactHash,
+            },
+          },
+          attestations: {
+            semanticSccpCircuit: {
+              ...fixture.groth16Attestations.semanticSccpCircuit,
+              path: "fixture-semantic-attestation.json",
+            },
+          },
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest is not production-ready: .*artifacts\.r1cs\.path must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material.*attestations\.semanticSccpCircuit\.path must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    );
+
+    const fixtureLabelTranscriptFixture = await writeNativeProverFixtureFiles();
+    const fixtureLabelManifestPath = join(
+      fixtureLabelTranscriptFixture.artifactRoot,
+      "groth16-material.json",
+    );
+    const fixtureLabelSetupTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: "iroha-sccp-bsc-trusted-setup-transcript/test-fixture",
+          contributors: ["ceremony-contributor-a", "ceremony-contributor-b"],
+          localSingleContributor: false,
+          toxicWasteDestroyed: true,
+          ceremonyResult: "pass",
+          phase1: {
+            snarkjsPowersOfTauVerify: {
+              completed: true,
+            },
+          },
+          phase2: {
+            snarkjsZkeyVerify: "ZKey Ok!",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const fixtureLabelReproducibleTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: "iroha-sccp-bsc-reproducible-build-transcript/test-fixture",
+          independentRebuilders: [
+            "independent-rebuilder-a",
+            "independent-rebuilder-b",
+          ],
+          reproducible: true,
+          r1csInfoSource: "snarkjs-cli",
+          r1csPublicInputCount: 9,
+          r1csConstraintCount: 8192,
+          zkeyVerify: true,
+          zkeyVerifyResult: "ZKey Ok!",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(fixtureLabelTranscriptFixture.artifactRoot, "trusted-setup-transcript.json"),
+      fixtureLabelSetupTranscript,
+    );
+    await writeFile(
+      join(
+        fixtureLabelTranscriptFixture.artifactRoot,
+        "reproducible-build-transcript.json",
+      ),
+      fixtureLabelReproducibleTranscript,
+    );
+    fixtureLabelTranscriptFixture.trustedSetupTranscriptHash = sha256Hex(
+      fixtureLabelSetupTranscript,
+    );
+    fixtureLabelTranscriptFixture.reproducibleBuildTranscriptHash = sha256Hex(
+      fixtureLabelReproducibleTranscript,
+    );
+    await writeNativeGroth16AttestationFiles(fixtureLabelTranscriptFixture, {
+      circuitSecurity: {
+        auditReportId: "fixture-security-audit",
+      },
+    });
+    await writeFile(
+      fixtureLabelManifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixtureLabelTranscriptFixture),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixtureLabelTranscriptFixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest transcripts are not production-ready: .*trusted setup transcript\.schema must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material.*reproducible build transcript\.schema must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    );
+
+    const fixtureLabelAttestationFixture = await writeNativeProverFixtureFiles();
+    const fixtureLabelAttestationManifestPath = join(
+      fixtureLabelAttestationFixture.artifactRoot,
+      "groth16-material.json",
+    );
+    await writeNativeGroth16AttestationFiles(fixtureLabelAttestationFixture, {
+      circuitSecurity: {
+        auditReportId: "fixture-security-audit",
+      },
+    });
+    await writeFile(
+      fixtureLabelAttestationManifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixtureLabelAttestationFixture),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixtureLabelAttestationFixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*circuit security attestation\.auditReportId must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    );
+
+    const shadowAttestationFixture = await writeNativeProverFixtureFiles();
+    const shadowAttestationManifestPath = join(
+      shadowAttestationFixture.artifactRoot,
+      "groth16-material.json",
+    );
+    await writeNativeGroth16AttestationFiles(shadowAttestationFixture, {
+      semanticSccpCircuit: {
+        semanticShadowDecision: true,
+      },
+      reproducibleBuild: {
+        verifier_key_hash_alias: shadowAttestationFixture.verifierKeyHash,
+      },
+    });
+    await writeFile(
+      shadowAttestationManifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(shadowAttestationFixture),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...shadowAttestationFixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation contains unknown field: semanticShadowDecision.*reproducible build attestation contains unknown field: verifier_key_hash_alias/u,
+    );
+
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixture, {
           productionReady: false,
           productionBlockers: ["semantic attestation missing"],
           artifacts: {
@@ -4082,6 +4581,7 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
         nativeGroth16MaterialManifest(fixture, {
           selfChecks: {
             snarkjs: {
+              r1csInfoSource: "manual-inspection",
               r1csPublicInputCount: 8,
               r1csConstraintCount: 128,
               verifierKeyHashMatches: false,
@@ -4099,7 +4599,7 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
           ...fixture.options,
           "groth16-material-manifest": "groth16-material.json",
         }),
-      /Groth16 material manifest is not production-ready: .*public input count must be 9.*constraint count must be at least 4096.*exported verifier hash must match.*exported verifier key hash must match route verifier key/u,
+      /Groth16 material manifest is not production-ready: .*R1CS info source must be one of snarkjs-cli, binary-header-fallback.*public input count must be 9.*constraint count must be at least 4096.*exported verifier hash must match.*exported verifier key hash must match route verifier key/u,
     );
 
     await writeFile(
@@ -4128,6 +4628,206 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
       /Groth16 material manifest is not production-ready: .*unresolved placeholders.*derive public signals with Keccak.*constrain all 9 public signals.*bind all 9 Solidity signal labels/u,
     );
 
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixture, {
+          artifacts: {
+            trustedSetupTranscript: undefined,
+            reproducibleBuildTranscript: undefined,
+          },
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest is not production-ready: .*trusted setup transcript sha256 is required.*reproducible build transcript sha256 is required/u,
+    );
+
+    const badSetupTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: "iroha-sccp-bsc-trusted-setup-transcript/test-fixture",
+          contributors: ["local-candidate"],
+          localSingleContributor: true,
+          toxicWasteDestroyed: false,
+          ceremonyResult: "candidate-only",
+          phase1: {
+            snarkjsPowersOfTauVerify: {
+              completed: false,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const badReproducibleTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: "iroha-sccp-bsc-reproducible-build-transcript/test-fixture",
+          independentRebuilders: ["local-candidate"],
+          reproducible: false,
+          r1csInfoSource: "manual-inspection",
+          r1csPublicInputCount: 8,
+          r1csConstraintCount: 128,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(fixture.artifactRoot, "trusted-setup-transcript.json"),
+      badSetupTranscript,
+    );
+    await writeFile(
+      join(fixture.artifactRoot, "reproducible-build-transcript.json"),
+      badReproducibleTranscript,
+    );
+    fixture.trustedSetupTranscriptHash = sha256Hex(badSetupTranscript);
+    fixture.reproducibleBuildTranscriptHash = sha256Hex(
+      badReproducibleTranscript,
+    );
+    await writeNativeGroth16AttestationFiles(fixture);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest transcripts are not production-ready: .*trusted setup transcript contributors must record at least 2.*trusted setup transcript localSingleContributor must be false.*trusted setup transcript snarkjsPowersOfTauVerify\.completed must be true.*reproducible build transcript independentRebuilders must record at least 2.*reproducible build transcript r1csInfoSource must be snarkjs-cli/u,
+    );
+    const duplicateSetupTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: "iroha-sccp-bsc-trusted-setup-transcript/test-fixture",
+          contributors: ["fixture-contributor-a", "fixture-contributor-a"],
+          localSingleContributor: false,
+          toxicWasteDestroyed: true,
+          ceremonyResult: "pass",
+          phase1: {
+            snarkjsPowersOfTauVerify: {
+              completed: true,
+            },
+          },
+          phase2: {
+            snarkjsZkeyVerify: "ZKey Ok!",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const duplicateReproducibleTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: "iroha-sccp-bsc-reproducible-build-transcript/test-fixture",
+          independentRebuilders: ["fixture-rebuilder-a", "fixture-rebuilder-a"],
+          reproducible: true,
+          r1csInfoSource: "snarkjs-cli",
+          r1csPublicInputCount: 9,
+          r1csConstraintCount: 8192,
+          zkeyVerify: true,
+          zkeyVerifyResult: "ZKey Ok!",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(fixture.artifactRoot, "trusted-setup-transcript.json"),
+      duplicateSetupTranscript,
+    );
+    await writeFile(
+      join(fixture.artifactRoot, "reproducible-build-transcript.json"),
+      duplicateReproducibleTranscript,
+    );
+    fixture.trustedSetupTranscriptHash = sha256Hex(duplicateSetupTranscript);
+    fixture.reproducibleBuildTranscriptHash = sha256Hex(
+      duplicateReproducibleTranscript,
+    );
+    await writeNativeGroth16AttestationFiles(fixture);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest transcripts are not production-ready: .*trusted setup transcript contributors must record at least 2.*reproducible build transcript independentRebuilders must record at least 2/u,
+    );
+    const restoredSetupTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: TRUSTED_SETUP_TRANSCRIPT_SCHEMA,
+          contributors: ["ceremony-contributor-a", "ceremony-contributor-b"],
+          localSingleContributor: false,
+          toxicWasteDestroyed: true,
+          ceremonyResult: "pass",
+          phase1: {
+            snarkjsPowersOfTauVerify: {
+              completed: true,
+            },
+          },
+          phase2: {
+            snarkjsZkeyVerify: "ZKey Ok!",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const restoredReproducibleTranscript = Buffer.from(
+      `${JSON.stringify(
+        {
+          schema: REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA,
+          independentRebuilders: [
+            "independent-rebuilder-a",
+            "independent-rebuilder-b",
+          ],
+          reproducible: true,
+          r1csInfoSource: "snarkjs-cli",
+          r1csPublicInputCount: 9,
+          r1csConstraintCount: 8192,
+          zkeyVerify: true,
+          zkeyVerifyResult: "ZKey Ok!",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(fixture.artifactRoot, "trusted-setup-transcript.json"),
+      restoredSetupTranscript,
+    );
+    await writeFile(
+      join(fixture.artifactRoot, "reproducible-build-transcript.json"),
+      restoredReproducibleTranscript,
+    );
+    fixture.trustedSetupTranscriptHash = sha256Hex(restoredSetupTranscript);
+    fixture.reproducibleBuildTranscriptHash = sha256Hex(
+      restoredReproducibleTranscript,
+    );
+
     await writeNativeGroth16AttestationFiles(fixture, {
       semanticSccpCircuit: {
         chainIdHex: "0x38",
@@ -4147,6 +4847,150 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
           "groth16-material-manifest": "groth16-material.json",
         }),
       /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation chainIdHex must be 0x61.*reproducible build attestation circuitSourceSha256 must match/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture, {
+      trustedSetup: {
+        contributionTranscriptSha256: HASH_11,
+      },
+      reproducibleBuild: {
+        buildTranscriptSha256: HASH_22,
+      },
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*trusted setup attestation contributionTranscriptSha256 must match.*reproducible build attestation buildTranscriptSha256 must match/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture, {
+      semanticSccpCircuit: {
+        proofBackend: "fixture-replayed-backend",
+        fullSccpMessageSemantics: false,
+        negativeCaseCoverage: false,
+      },
+      circuitSecurity: {
+        proofFamily: "fixture-proof-family",
+        auditResult: "fail",
+        highFindings: 1,
+        approved: false,
+      },
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      (error) => {
+        assert.match(
+          error.message,
+          /Groth16 material manifest attestations are not production-ready/u,
+        );
+        assert.match(
+          error.message,
+          /semantic SCCP circuit attestation proofBackend must be evm-groth16-bn254-v1/u,
+        );
+        assert.match(
+          error.message,
+          /semantic SCCP circuit attestation fullSccpMessageSemantics must be true/u,
+        );
+        assert.match(
+          error.message,
+          /semantic SCCP circuit attestation negativeCaseCoverage must be true/u,
+        );
+        assert.match(
+          error.message,
+          /circuit security attestation proofFamily must be stark-fri-v1/u,
+        );
+        assert.match(
+          error.message,
+          /circuit security attestation auditResult must be pass/u,
+        );
+        assert.match(
+          error.message,
+          /circuit security attestation approved must be true/u,
+        );
+        assert.match(
+          error.message,
+          /circuit security attestation highFindings must be 0/u,
+        );
+        return true;
+      },
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture, {
+      reproducibleBuild: {
+        r1csInfoSource: "unreviewed-local-script",
+        r1csPublicInputCount: 8,
+        r1csConstraintCount: 128,
+        zkeyVerify: false,
+        zkeyVerifyResult: "failed",
+        zkeyVerificationKeyExport: false,
+        verifierKeyHashMatches: false,
+        exportedVerifierKeyHash: HASH_22,
+      },
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      (error) => {
+        assert.match(
+          error.message,
+          /Groth16 material manifest attestations are not production-ready/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation r1csInfoSource must be snarkjs-cli/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation r1csPublicInputCount must be 9/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation r1csConstraintCount must be 8192/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation zkeyVerify must be true/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation zkeyVerifyResult must be ZKey Ok!/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation zkeyVerificationKeyExport must be true/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation verifierKeyHashMatches must be true/u,
+        );
+        assert.match(
+          error.message,
+          /reproducible build attestation exportedVerifierKeyHash must match/u,
+        );
+        return true;
+      },
     );
 
     await writeNativeGroth16AttestationFiles(fixture, {
@@ -4276,6 +5120,429 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
           "groth16-material-manifest": "groth16-material.json",
         }),
       /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation signature signerFingerprint is not trusted/u,
+    );
+  } finally {
+    await rm(fixture.workDir, { recursive: true, force: true });
+  }
+});
+
+test("BSC native-prover-bundle validates bound Groth16 proof self-test reports", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const proofSelfTestPath = join(
+    fixture.artifactRoot,
+    "groth16-proof-self-test.json",
+  );
+  try {
+    const {
+      "groth16-proof-self-test": _proofSelfTest,
+      ...missingProofSelfTestOptions
+    } = fixture.options;
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(missingProofSelfTestOptions),
+      /native-prover-bundle requires --groth16-proof-self-test/u,
+    );
+
+    const baseline = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
+    const shadowReport = {
+      ...baseline,
+      operatorDecision: "accept",
+      manifest: {
+        ...baseline.manifest,
+        shadowReady: true,
+      },
+      artifacts: {
+        ...baseline.artifacts,
+        r1cs: {
+          ...baseline.artifacts.r1cs,
+          shadowHash: baseline.artifacts.r1cs.sha256,
+        },
+      },
+      sample: {
+        ...baseline.sample,
+        sampleShadowDecision: true,
+      },
+      snarkjs: {
+        ...baseline.snarkjs,
+        remoteProver: true,
+      },
+      adversarialChecks: {
+        ...baseline.adversarialChecks,
+        publicSignalMismatch: {
+          ...baseline.adversarialChecks.publicSignalMismatch,
+          shadowCoverage: true,
+        },
+      },
+      proof: {
+        ...baseline.proof,
+        transcriptHint: "operator-shadow-proof",
+      },
+    };
+    shadowReport.proofHash = sha256Hex(
+      Buffer.from(canonicalJson(shadowReport.proof), "utf8"),
+    );
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(shadowReport, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test report is not production-ready: .*Groth16 proof self-test report contains unknown field: operatorDecision.*Groth16 proof self-test manifest contains unknown field: shadowReady.*Groth16 proof self-test R1CS artifact contains unknown field: shadowHash.*Groth16 proof self-test sample contains unknown field: sampleShadowDecision.*Groth16 proof self-test snarkjs contains unknown field: remoteProver.*Groth16 proof self-test adversarialChecks\.publicSignalMismatch contains unknown field: shadowCoverage.*Groth16 proof self-test proof contains unknown field: transcriptHint/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          route_id: baseline.routeId,
+          public_signals: baseline.publicSignals,
+          manifest: {
+            ...baseline.manifest,
+            manifestSha256: baseline.manifest.sha256,
+          },
+          artifacts: {
+            ...baseline.artifacts,
+            proving_key: baseline.artifacts.provingKey,
+            r1cs: {
+              ...baseline.artifacts.r1cs,
+              artifactHash: baseline.artifacts.r1cs.sha256,
+            },
+          },
+          sample: {
+            ...baseline.sample,
+            public_signal_words: baseline.sample.publicSignalWords,
+          },
+          adversarial_checks: baseline.adversarialChecks,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /Groth16 proof self-test report routeId must not use multiple aliases: routeId, route_id/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test report publicSignals must not use multiple aliases: publicSignals, public_signals/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test manifest sha256 must not use multiple aliases: sha256, manifestSha256/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test artifacts provingKey must not use multiple aliases: provingKey, proving_key/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test R1CS artifact sha256 must not use multiple aliases: sha256, artifactHash/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test sample publicSignalWords must not use multiple aliases: publicSignalWords, public_signal_words/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test report adversarialChecks must not use multiple aliases: adversarialChecks, adversarial_checks/u,
+        );
+        return true;
+      },
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          manifest: {
+            ...baseline.manifest,
+            sha256: HASH_11,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test manifest sha256 must match signed material manifest/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          artifacts: {
+            ...baseline.artifacts,
+            r1cs: {
+              ...baseline.artifacts.r1cs,
+              sha256: HASH_22,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test R1CS hash must match proof artifact/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          artifacts: {
+            ...baseline.artifacts,
+            circuitSource: {
+              ...baseline.artifacts.circuitSource,
+              sha256: HASH_22,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test circuit source hash must match signed material manifest/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          artifacts: {
+            ...baseline.artifacts,
+            snarkjsVerificationKey: {
+              ...baseline.artifacts.snarkjsVerificationKey,
+              sha256: HASH_22,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test SnarkJS verification key hash must match signed material manifest/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          artifacts: {
+            ...baseline.artifacts,
+            witnessWasm: {
+              ...baseline.artifacts.witnessWasm,
+              sha256: fixture.proofArtifactHash,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test witness WASM hash must be role-separated from R1CS proof artifact hash/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          snarkjs: {
+            ...baseline.snarkjs,
+            groth16Verify: false,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test snarkjs\.groth16Verify must be true/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          adversarialChecks: {
+            ...baseline.adversarialChecks,
+            publicSignalMismatch: {
+              ...baseline.adversarialChecks.publicSignalMismatch,
+              rejected: 8,
+              cases: baseline.adversarialChecks.publicSignalMismatch.cases.slice(
+                0,
+                8,
+              ),
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test adversarial publicSignalMismatch\.rejected must be 9.*publicSignalMismatch\.cases must contain 9 entries/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          publicSignals: ["01", ...baseline.publicSignals.slice(1)],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test publicSignals\[0\] must be a canonical decimal BN254 field word/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          sample: {
+            ...baseline.sample,
+            publicSignalWords: [
+              "9",
+              ...baseline.sample.publicSignalWords.slice(1),
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test publicSignals must match sample\.publicSignalWords/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          publicSignalsHash: HASH_22,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test publicSignalsHash must match publicSignals/u,
+    );
+
+    const malformedProofReport = {
+      ...baseline,
+      proof: {
+        pi_a: ["1", "2"],
+        pi_b: [["01", "2"], ["3"], ["4", "5"]],
+        pi_c: ["1", "2", "01"],
+        protocol: "plonk",
+        curve: "bn254",
+      },
+    };
+    malformedProofReport.proofHash = sha256Hex(
+      Buffer.from(canonicalJson(malformedProofReport.proof), "utf8"),
+    );
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(malformedProofReport, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /Groth16 proof self-test proof\.protocol must be groth16/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test proof\.curve must be bn128/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test proof\.pi_a must contain 3 canonical decimal BN254 field words/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test proof\.pi_b\[0\]\[0\] must be a canonical decimal BN254 field word/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test proof\.pi_b\[1\] must contain 2 canonical decimal BN254 field words/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test proof\.pi_c\[2\] must be a canonical decimal BN254 field word/u,
+        );
+        return true;
+      },
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          proofHash: HASH_22,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test proofHash must match proof/u,
+    );
+
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        {
+          ...baseline,
+          manifest: {
+            ...baseline.manifest,
+            productionReady: false,
+            productionBlockers: ["missing ceremony"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      /Groth16 proof self-test manifest\.productionReady must be true.*productionBlockers must be an empty array/u,
     );
   } finally {
     await rm(fixture.workDir, { recursive: true, force: true });
@@ -4528,6 +5795,173 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       }),
     /auditHashes\.native_implementation_audit looks like placeholder audit hash: repeated 1-byte pattern/u,
   );
+  await writeFile(
+    join(fixture.artifactRoot, "native-implementation-audit.bin"),
+    Buffer.from("opaque native implementation audit blob", "utf8"),
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "audit-native-implementation": "native-implementation-audit.bin",
+      }),
+    /auditHashes\.native_implementation_audit source parity attestation must be valid duplicate-free JSON/u,
+  );
+  await writeFile(
+    join(fixture.artifactRoot, "opaque-no-wasm-no-remote-scan.bin"),
+    Buffer.from("opaque no-wasm/no-remote scan blob", "utf8"),
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "audit-no-wasm-no-remote-scan": "opaque-no-wasm-no-remote-scan.bin",
+      }),
+    /auditHashes\.no_wasm_no_remote_scan must be valid duplicate-free JSON/u,
+  );
+  const noWasmRemoteDrift = await writeNativeProverFixtureFiles();
+  const noWasmRemotePath = join(
+    noWasmRemoteDrift.artifactRoot,
+    "no-wasm-no-remote-scan.json",
+  );
+  const noWasmRemote = JSON.parse(await readFile(noWasmRemotePath, "utf8"));
+  noWasmRemote.remoteProverRequired = true;
+  noWasmRemote.forbiddenRemoteReferences = 1;
+  await writeFile(
+    noWasmRemotePath,
+    `${JSON.stringify(noWasmRemote, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(noWasmRemoteDrift.options),
+    /no_wasm_no_remote_scan remoteProverRequired must be false.*no_wasm_no_remote_scan forbiddenRemoteReferences must be 0/u,
+  );
+  const noWasmSdkDrift = await writeNativeProverFixtureFiles();
+  const noWasmSdkPath = join(
+    noWasmSdkDrift.artifactRoot,
+    "no-wasm-no-remote-scan.json",
+  );
+  const noWasmSdk = JSON.parse(await readFile(noWasmSdkPath, "utf8"));
+  noWasmSdk.inspectedSdkArtifacts[0].sha256 = HASH_22;
+  await writeFile(noWasmSdkPath, `${JSON.stringify(noWasmSdk, null, 2)}\n`);
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(noWasmSdkDrift.options),
+    /no_wasm_no_remote_scan .* sha256 must match native SDK artifact/u,
+  );
+  const noWasmMissingSdk = await writeNativeProverFixtureFiles();
+  const noWasmMissingPath = join(
+    noWasmMissingSdk.artifactRoot,
+    "no-wasm-no-remote-scan.json",
+  );
+  const noWasmMissing = JSON.parse(await readFile(noWasmMissingPath, "utf8"));
+  noWasmMissing.inspectedSdkArtifacts = noWasmMissing.inspectedSdkArtifacts.filter(
+    (entry) => entry.sdk !== "dotnet",
+  );
+  await writeFile(
+    noWasmMissingPath,
+    `${JSON.stringify(noWasmMissing, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(noWasmMissingSdk.options),
+    /no_wasm_no_remote_scan inspectedSdkArtifacts must cover every required SDK/u,
+  );
+  const noWasmShadowFields = await writeNativeProverFixtureFiles();
+  const noWasmShadowPath = join(
+    noWasmShadowFields.artifactRoot,
+    "no-wasm-no-remote-scan.json",
+  );
+  const noWasmShadow = JSON.parse(await readFile(noWasmShadowPath, "utf8"));
+  noWasmShadow.remote_prover_required = true;
+  noWasmShadow.inspectedSdkArtifacts[0].sha256_alias = HASH_33;
+  await writeFile(
+    noWasmShadowPath,
+    `${JSON.stringify(noWasmShadow, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(noWasmShadowFields.options),
+    /no_wasm_no_remote_scan contains unknown field: remote_prover_required.*no_wasm_no_remote_scan inspectedSdkArtifacts\[0\] contains unknown field: sha256_alias/u,
+  );
+  const noWasmHashDrift = await writeNativeProverFixtureFiles();
+  const noWasmHashPath = join(
+    noWasmHashDrift.artifactRoot,
+    "no-wasm-no-remote-scan.json",
+  );
+  const noWasmHash = JSON.parse(await readFile(noWasmHashPath, "utf8"));
+  noWasmHash.scanHash = HASH_44;
+  await writeFile(noWasmHashPath, `${JSON.stringify(noWasmHash, null, 2)}\n`);
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(noWasmHashDrift.options),
+    /no_wasm_no_remote_scan scanHash must match scan payload/u,
+  );
+  const sourceParityFamilyDrift = await writeNativeProverFixtureFiles();
+  const sourceParityFamilyPath = join(
+    sourceParityFamilyDrift.artifactRoot,
+    "source-parity-attestation.json",
+  );
+  const sourceParityFamily = JSON.parse(
+    await readFile(sourceParityFamilyPath, "utf8"),
+  );
+  sourceParityFamily.proofFamily = "fixture-proof-family";
+  await writeFile(
+    sourceParityFamilyPath,
+    `${JSON.stringify(sourceParityFamily, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(sourceParityFamilyDrift.options),
+    /source parity attestation proofFamily must be stark-fri-v1/u,
+  );
+  const sourceParityTreeDrift = await writeNativeProverFixtureFiles();
+  const sourceParityTreePath = join(
+    sourceParityTreeDrift.artifactRoot,
+    "source-parity-attestation.json",
+  );
+  const sourceParityTree = JSON.parse(
+    await readFile(sourceParityTreePath, "utf8"),
+  );
+  sourceParityTree.sourceTreeHash = HASH_22;
+  await writeFile(
+    sourceParityTreePath,
+    `${JSON.stringify(sourceParityTree, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(sourceParityTreeDrift.options),
+    /source parity attestation sourceTreeHash must match source parity payload/u,
+  );
+  const sourceParityMarkerDrift = await writeNativeProverFixtureFiles();
+  const sourceParityMarkerPath = join(
+    sourceParityMarkerDrift.artifactRoot,
+    "source-parity-attestation.json",
+  );
+  const sourceParityMarker = JSON.parse(
+    await readFile(sourceParityMarkerPath, "utf8"),
+  );
+  sourceParityMarker.sdks.javascript.files[0].markers = [];
+  await writeFile(
+    sourceParityMarkerPath,
+    `${JSON.stringify(sourceParityMarker, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(sourceParityMarkerDrift.options),
+    /source parity attestation javascript .* markers must match source parity spec/u,
+  );
+  const sourceParityShadowFields = await writeNativeProverFixtureFiles();
+  const sourceParityShadowPath = join(
+    sourceParityShadowFields.artifactRoot,
+    "source-parity-attestation.json",
+  );
+  const sourceParityShadow = JSON.parse(
+    await readFile(sourceParityShadowPath, "utf8"),
+  );
+  sourceParityShadow.proof_family = "fixture-shadow-proof-family";
+  sourceParityShadow.sdks.javascript.implementation_hash = HASH_22;
+  sourceParityShadow.sdks.javascript.files[0].sha256_alias = HASH_33;
+  await writeFile(
+    sourceParityShadowPath,
+    `${JSON.stringify(sourceParityShadow, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(sourceParityShadowFields.options),
+    /source parity attestation contains unknown field: proof_family.*source parity attestation javascript contains unknown field: implementation_hash.*source parity attestation javascript files\[0\] contains unknown field: sha256_alias/u,
+  );
   await assert.rejects(
     () =>
       buildBscNativeEvmProverBundleFromArtifacts({
@@ -4538,6 +5972,33 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         ).join("")}`,
       }),
     /auditHashes\.reproducible_build_attestation looks like placeholder audit hash: arithmetic byte sequence with step 1/u,
+  );
+  const circuitAuditDrift = await writeNativeProverFixtureFiles();
+  await writeFile(
+    join(circuitAuditDrift.artifactRoot, "other-circuit-security-audit.json"),
+    Buffer.from(
+      `${JSON.stringify({ schema: "not-the-signed-circuit-security-attestation" }, null, 2)}\n`,
+      "utf8",
+    ),
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...circuitAuditDrift.options,
+        "audit-circuit-security": "other-circuit-security-audit.json",
+      }),
+    /auditHashes\.circuit_security_audit must match Groth16 material manifest circuit security attestation sha256/u,
+  );
+  const reproducibleAuditDrift = await writeNativeProverFixtureFiles();
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...reproducibleAuditDrift.options,
+        "audit-reproducible-build": sha256Hex(
+          Buffer.from("wrong reproducible build attestation", "utf8"),
+        ),
+      }),
+    /auditHashes\.reproducible_build_attestation must match Groth16 material manifest reproducible build attestation sha256/u,
   );
   await assert.rejects(
     () =>
@@ -6229,6 +7690,25 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   const deploy = await main(["deploy", "--help"]);
   assert.match(deploy.help, /deploy --bsc-network testnet\|mainnet/u);
   assert.match(deploy.help, /environment variable at runtime/u);
+
+  const groth16Material = await main(["groth16-material", "help"]);
+  assert.match(
+    groth16Material.help,
+    /groth16-material materialize .*--trusted-setup-transcript <json> --reproducible-build-transcript <json>/u,
+  );
+  assert.match(
+    groth16Material.help,
+    /groth16-material materialize .*--ptau <powersOfTau28_hez_final_22\.ptau>/u,
+  );
+  assert.match(groth16Material.help, /groth16-material attestation-request/u);
+  assert.match(groth16Material.help, /groth16-material sign-attestation/u);
+  assert.match(groth16Material.help, /groth16-material attestation-status/u);
+  assert.match(groth16Material.help, /groth16-material proof-self-test/u);
+  assert.match(groth16Material.help, /groth16-material finalize-attestations/u);
+  assert.doesNotMatch(
+    groth16Material.help,
+    /groth16-material materialize .*--semantic-attestation .*--trusted-attestation-signer/u,
+  );
 });
 
 test("BSC deployment helper rejects duplicate CLI options before operator inputs", async () => {
@@ -6244,6 +7724,19 @@ test("BSC deployment helper rejects duplicate CLI options before operator inputs
         "missing.r1cs",
       ]),
     /Duplicate option: --route-manifest/u,
+  );
+});
+
+test("BSC deployment helper rejects signed Groth16 materialize through proxy", async () => {
+  await assert.rejects(
+    () =>
+      main([
+        "groth16-material",
+        "materialize",
+        "--semantic-attestation",
+        "semantic-sccp-circuit-attestation.json",
+      ]),
+    /materialize no longer accepts signed attestation inputs.*--semantic-attestation.*attestation-request.*finalize-attestations/u,
   );
 });
 
@@ -6270,6 +7763,14 @@ test("BSC production requirements expose network-specific public handoff inputs"
   assert.match(
     testnet.commands.nativeProverBundle,
     /--audit-native-implementation source-parity-attestation\.json/u,
+  );
+  assert.match(
+    testnet.commands.groth16ProofSelfTest,
+    /groth16-material proof-self-test --manifest <production-ready-groth16-material\.manifest\.json> --witness-wasm <production-circuit\.wasm> --out <proof-self-test\.json>/u,
+  );
+  assert.match(
+    testnet.commands.nativeProverBundle,
+    /--groth16-proof-self-test <relative-groth16-proof-self-test\.json>/u,
   );
   for (const required of [
     "--evidence artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json",
@@ -6310,6 +7811,8 @@ test("BSC production requirements expose network-specific public handoff inputs"
           "offline-full-toml-evidence",
           "burn-record-proof-artifact",
           "burn-record-proving-key",
+          "groth16-powers-of-tau",
+          "groth16-proof-self-test-report",
           "cross-sdk-parity-report",
           "source-parity-attestation",
           "audit-no-wasm-no-remote-scan",
@@ -6327,6 +7830,8 @@ test("BSC production requirements expose network-specific public handoff inputs"
       "offline-full-toml-evidence",
       "burn-record-proof-artifact",
       "burn-record-proving-key",
+      "groth16-powers-of-tau",
+      "groth16-proof-self-test-report",
       "cross-sdk-parity-report",
       "source-parity-attestation",
       "audit-no-wasm-no-remote-scan",
@@ -6383,6 +7888,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
   for (const required of [
     "--route-manifest artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
     "--groth16-material-manifest <relative-groth16-material-manifest.json>",
+    "--groth16-proof-self-test <relative-groth16-proof-self-test.json>",
     "--out artifacts/sccp-bsc/bsc-mainnet-native-evm-prover-bundle.json",
     "--attach-route-manifest-out artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
   ]) {
@@ -6430,7 +7936,7 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(result.wrote, out);
     assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(result.bscNetwork, "mainnet");
-    assert.equal(result.inputCount, 31);
+    assert.equal(result.inputCount, 38);
     assert.deepEqual(result.requiredReports, [
       "route-preflight",
       "peer-config-audit",
@@ -6445,7 +7951,59 @@ test("BSC production requirements command writes public artifact without deploye
     assert.match(written.commands.deploy, /--confirm-mainnet true/u);
     assert.match(
       written.commands.groth16Material,
+      /--ptau <powersOfTau28_hez_final_22\.ptau>/u,
+    );
+    assert.match(
+      written.commands.groth16Material,
+      /--trusted-setup-transcript <trusted-setup-transcript\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16Material,
+      /--reproducible-build-transcript <reproducible-build-transcript\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16Material,
+      /\[--circuit-source <production-full-message\.circom>\]/u,
+    );
+    assert.doesNotMatch(
+      written.commands.groth16Material,
+      /--semantic-attestation|--trusted-attestation-signer/u,
+    );
+    assert.match(
+      written.commands.groth16AttestationRequest,
+      /groth16-material attestation-request --manifest <candidate-groth16-material\.manifest\.json> --toolchain-sha256 <0x\.\.\.> --out <attestation-request\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16SignAttestation,
+      /groth16-material sign-attestation --request <attestation-request\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16SignAttestation,
+      /--role semanticSccpCircuit\|circuitSecurity\|trustedSetup\|reproducibleBuild/u,
+    );
+    assert.match(
+      written.commands.groth16AttestationStatus,
+      /groth16-material attestation-status --request <attestation-request\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16AttestationStatus,
+      /--trusted-attestation-signer <0x\.\.\.>/u,
+    );
+    assert.match(
+      written.commands.groth16ProofSelfTest,
+      /groth16-material proof-self-test --manifest <production-ready-groth16-material\.manifest\.json> --witness-wasm <production-circuit\.wasm> --out <proof-self-test\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16FinalizeAttestations,
+      /groth16-material finalize-attestations --request <attestation-request\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16FinalizeAttestations,
       /--semantic-attestation <semantic-sccp-circuit-attestation\.json>/u,
+    );
+    assert.match(
+      written.commands.groth16FinalizeAttestations,
+      /--trusted-attestation-signer <0x\.\.\.>/u,
     );
     assert.match(
       JSON.stringify(written.inputs),
@@ -6455,10 +8013,34 @@ test("BSC production requirements command writes public artifact without deploye
       JSON.stringify(written.inputs),
       /trusted-setup-ceremony-attestation/u,
     );
+    assert.match(JSON.stringify(written.inputs), /trusted-setup-transcript/u);
+    assert.match(JSON.stringify(written.inputs), /groth16-powers-of-tau/u);
+    assert.match(
+      JSON.stringify(written.inputs),
+      /Powers-of-Tau transcript passed to SnarkJS zkey verification/u,
+    );
+    assert.match(
+      JSON.stringify(written.inputs),
+      /reproducible-build-transcript/u,
+    );
+    assert.match(
+      JSON.stringify(written.inputs),
+      /candidate-groth16-material-manifest/u,
+    );
+    assert.match(
+      JSON.stringify(written.inputs),
+      /groth16-attestation-request-package/u,
+    );
+    assert.match(JSON.stringify(written.inputs), /signed-groth16-role-attestations/u);
+    assert.match(JSON.stringify(written.inputs), /groth16-proof-self-test-report/u);
     assert.match(JSON.stringify(written.inputs), /groth16-material-manifest/u);
     assert.match(
       written.commands.nativeProverBundle,
       /--groth16-material-manifest <relative-groth16-material-manifest\.json>/u,
+    );
+    assert.match(
+      written.commands.nativeProverBundle,
+      /--groth16-proof-self-test <relative-groth16-proof-self-test\.json>/u,
     );
     assert.doesNotMatch(
       JSON.stringify(written),

@@ -54,10 +54,14 @@ correspond to a current missing fixture/schema-only gap or, with
 also read the embedded default rail profile catalog
 from `crates/iroha_core/src/iso_bridge/profiles.rs` with `--profile-catalog` and
 record which concrete advertised message versions are backed by checked-in XSD
-fixtures. Summaries bind the manifest SHA-256, each schema and fixture SHA-256,
-per-schema source provenance, audited blocked-source provenance, and, when a
-profile catalog is supplied, both the profile source-file SHA-256 and embedded
-catalog JSON SHA-256. The `profile_catalog` key is always recorded; it is
+fixtures. Version-2 summaries also include a unique
+`missing_profile_schema_message_ids` gap index with the per-message profile
+version count and whether the message definition has reviewed missing-schema,
+schema-only, or blocked-source evidence. Summaries bind the manifest SHA-256,
+each schema and fixture SHA-256, per-schema source provenance, audited
+blocked-source provenance, and, when a profile catalog is supplied, both the
+profile source-file SHA-256 and embedded catalog JSON SHA-256. The
+`profile_catalog` key is always recorded; it is
 `null` only when no profile catalog was checked, and readiness requires that
 explicit state plus the manifest path to remain present. Profile catalog
 checks fail closed on
@@ -72,7 +76,9 @@ profile-advertised concrete message versions without schema-backed fixtures, and
 `--validate-xml-schema` validates every schema-backed XML fixture against its
 checked-in XSD. The schema-backed strict modes still fail until the remaining
 profile-advertised payment, securities, and collateral official XSD packages are
-checked in. Remaining blockers include restricted public candidates for
+checked in. The current checked-in manifest/profile pair reports 24
+per-profile missing versions across 10 unique message definitions. Remaining
+blockers include restricted public candidates for
 `pacs.002.001.12`, `pacs.008.001.10`, and `pacs.009.001.10`, plus unavailable
 redistributable securities and collateral lifecycle packages such as
 `sese.023.001.11`, `sese.024.001.10`, `sese.025.001.11`, and

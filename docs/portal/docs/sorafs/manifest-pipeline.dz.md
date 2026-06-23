@@ -57,7 +57,7 @@ I18NI000000020X གིས་ ཅནཀ་མེ་ཊ་ཌེ་ཊ་འདི
 - ཚོགས་སྡེ་མིང་རྟགས་དང་ གདམ་ཁ་ཅན་གྱི་ མེ་ཊ་ཌེ་ཊ་ (དཔེར་ན་ ID བཟོ་བསྐྲུན་)།
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

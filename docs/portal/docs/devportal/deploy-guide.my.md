@@ -23,7 +23,7 @@ translator: machine-google-reviewed
 ထုတ်ဝေမှုအနုပညာသည် ပြန်လည်ထုတ်လုပ်၍ စစ်ဆေးနိုင်သည်။
 
 flow သည် သင့်တွင် `sorafs_cli` binary (ဖြင့်တည်ဆောက်ထားသည်
-`--features cli`)၊ pin-registry ခွင့်ပြုချက်ဖြင့် Torii အဆုံးမှတ်သို့ ဝင်ရောက်ကြည့်ရှုခြင်း၊
+`sorafs_orchestrator` Cargo target)၊ pin-registry ခွင့်ပြုချက်ဖြင့် Torii အဆုံးမှတ်သို့ ဝင်ရောက်ကြည့်ရှုခြင်း၊
 OIDC အထောက်အထားများ Sigstore။ သက်တမ်းရှည်လျှို့ဝှက်ချက်များကို သိမ်းဆည်းပါ (`IROHA_PRIVATE_KEY`၊
 သင်၏ CI ခန်းရှိ `SIGSTORE_ID_TOKEN`၊ Torii တိုကင်များ) ဒေသတွင်း လည်ပတ်မှုများသည် ၎င်းတို့ကို ရင်းမြစ်ပေးနိုင်သည်။
 ခွံတင်ပို့မှုမှ
@@ -31,7 +31,7 @@ OIDC အထောက်အထားများ Sigstore။ သက်တမ်�
 ## လိုအပ်ချက်များ
 
 - `npm` သို့မဟုတ် `pnpm` ပါသော Node 18.18+။
-- `sorafs_cli` မှ `cargo run -p sorafs_car --features cli --bin sorafs_cli`။
+- `sorafs_cli` မှ `cargo run -p sorafs_orchestrator --bin sorafs_cli`။
 - Torii URL နှင့် `/v1/sorafs/*` နှင့် အခွင့်အာဏာအကောင့်/ပုဂ္ဂလိကသော့ကို ဖော်ထုတ်ပေးသည်
   ၎င်းသည် manifests နှင့် aliases များကိုတင်ပြနိုင်သည်။
 - OIDC ထုတ်ပေးသူ (GitHub လုပ်ဆောင်ချက်များ၊ GitLab၊ အလုပ်ဝန်အထောက်အထား စသည်ဖြင့်)

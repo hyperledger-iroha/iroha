@@ -20,6 +20,8 @@ pub struct StorageConfig {
     metering_smoothing: MeteringSmoothingConfig,
     stream_token_signing_key_path: Option<PathBuf>,
     governance_dir: Option<PathBuf>,
+    governance_dag_publisher_peer_id: Option<String>,
+    governance_dag_signing_key_path: Option<PathBuf>,
     penalty: PenaltySettings,
 }
 
@@ -96,6 +98,18 @@ impl StorageConfig {
         self.governance_dir.as_ref()
     }
 
+    /// Optional publisher peer identifier for signed runtime Governance DAG blocks.
+    #[must_use]
+    pub fn governance_dag_publisher_peer_id(&self) -> Option<&String> {
+        self.governance_dag_publisher_peer_id.as_ref()
+    }
+
+    /// Optional Ed25519 signing-key path for signed runtime Governance DAG blocks.
+    #[must_use]
+    pub fn governance_dag_signing_key_path(&self) -> Option<&PathBuf> {
+        self.governance_dag_signing_key_path.as_ref()
+    }
+
     /// Penalty policy applied to PoR failures.
     #[must_use]
     pub fn penalty(&self) -> &PenaltySettings {
@@ -141,6 +155,8 @@ impl StorageConfig {
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             governance_dir: storage.governance_dag_dir.clone(),
+            governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
+            governance_dag_signing_key_path: storage.governance_dag_signing_key_path.clone(),
             penalty: PenaltySettings::from_policy(penalty),
         }
     }
@@ -239,6 +255,20 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn governance_dir<P: Into<Option<PathBuf>>>(mut self, dir: P) -> Self {
         self.inner.governance_dir = dir.into();
+        self
+    }
+
+    /// Override the signed runtime Governance DAG publisher peer identifier.
+    #[must_use]
+    pub fn governance_dag_publisher_peer_id<S: Into<Option<String>>>(mut self, peer_id: S) -> Self {
+        self.inner.governance_dag_publisher_peer_id = peer_id.into();
+        self
+    }
+
+    /// Override the signed runtime Governance DAG signing key path.
+    #[must_use]
+    pub fn governance_dag_signing_key_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.governance_dag_signing_key_path = path;
         self
     }
 
@@ -799,6 +829,8 @@ mod tests {
             backoff_initial_secs: 7,
             backoff_max_secs: 120,
             default_slash_penalty_nano: 5_000,
+            auditor_rate_per_sec: std::num::NonZeroU32::new(5),
+            auditor_burst: std::num::NonZeroU32::new(10),
         };
 
         let policy = actual::RepairEscalationPolicyV1 {
