@@ -30,7 +30,7 @@ artefaktlar:
 - Təmir biletinin linkini əlavə edin (məsələn, `governance/tickets/SF6-SR-2026.md`) və qeydiyyatı qeyd edin
   Təhlükəsizlik Mühəndisliyi və Alət İşçi Qrupundan təsdiqləyicilər.
 - Memodakı remediasiya yoxlama siyahısının bağlandığını yoxlayın; həll olunmamış maddələr buraxılışa mane olur.
-- Paritet qoşqu qeydlərini yükləməyə hazırlaşın (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Paritet qoşqu qeydlərini yükləməyə hazırlaşın (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   manifest paketinin yanında.
 - İşlətməyi planlaşdırdığınız imza əmrini təsdiqləyin həm `--identity-token-provider`, həm də açıq-aşkar
   `--identity-token-audience=<aud>` beləliklə, Fulcio əhatə dairəsi buraxılış sübutunda tutulur.
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Skript aşağıdakı iddiaları yerinə yetirir:
 
 - `cargo fmt --all -- --check` (iş sahəsi)
-- `sorafs_car` üçün `cargo clippy --locked --all-targets` (`cli` xüsusiyyəti ilə),
-  `sorafs_manifest` və `sorafs_chunker`
-- Eyni qutular üçün `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Hər hansı bir addım uğursuz olarsa, etiketləmədən əvvəl reqressiyanı düzəldin. Buraxılış quruluşları olmalıdır
 əsas ilə davamlı; buraxılış budaqlarına düzəlişləri albalı seçməyin. Qapı

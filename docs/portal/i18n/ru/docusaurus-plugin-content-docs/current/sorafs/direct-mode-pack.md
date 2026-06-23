@@ -43,7 +43,7 @@ Fallback применяется к staging и регулируемым прод-
 - `direct_only_policy_rejects_soranet_only_providers` гарантирует, что `TransportPolicy::DirectOnly` быстро падает, когда каждый кандидат advert поддерживает только реле SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` гарантирует использование Torii/QUIC, когда они доступны, и исключение реле SoraNet из сессии.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` парсит `docs/examples/sorafs_direct_mode_policy.json`, чтобы документация оставалась согласованной с утилитами-хелперами.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` запускает `sorafs_cli fetch --transport-policy=direct-only` против мокнутого Torii gateway, предоставляя smoke-тест для регулируемых сред, фиксирующих прямые транспорты.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` запускает `sorafs_cli fetch --transport-policy=direct-only` против мокнутого Torii gateway, предоставляя smoke-тест для регулируемых сред, фиксирующих прямые транспорты.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` оборачивает ту же команду JSON-политикой и сохранением scoreboard для автоматизации rollout.
 
 Запускайте сфокусированный набор тестов перед публикацией обновлений:

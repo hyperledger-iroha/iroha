@@ -19,7 +19,7 @@ Sidebar_label: إيصالات CLI
 هذه الصفحة espelha `docs/source/sorafs/developer/cli.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-السطح الموحد `sorafs_cli` (الصندوق المخصص `sorafs_car` مع `cli` المجهز) يعرض كل ما هو ضروري لإعداد العناصر من SoraFS. استخدم كتاب الطبخ هذا لتوجيهه إلى مشتركات سير العمل؛ اجمع بين خط أنابيب البيانات ودفاتر التشغيل التي يقوم بها orquestrador للسياق التشغيلي.
+السطح الموحد `sorafs_cli` (provided by the `sorafs_orchestrator` crate) يعرض كل ما هو ضروري لإعداد العناصر من SoraFS. استخدم كتاب الطبخ هذا لتوجيهه إلى مشتركات سير العمل؛ اجمع بين خط أنابيب البيانات ودفاتر التشغيل التي يقوم بها orquestrador للسياق التشغيلي.
 
 ## حمولات إمباكوتار
 

@@ -16,7 +16,7 @@ Cubre la fase de build/lint, el empaquetado SoraFS, la Firma de Manificos con Si
 продвижение псевдонима, проверка и инструкции по откату для предварительного просмотра и выпуска данных
 Морская воспроизводимость и проверяемость.
 
-Эль-флухо предполагает, что связан бинарный файл `sorafs_cli` (создан с `--features cli`), доступ к
+Эль-флухо предполагает, что связан бинарный файл `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), доступ к
 Конечная точка Torii с разрешениями на регистрацию контактов и учетными данными OIDC для Sigstore. Секреты гвардии
 большая жизнь (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, токены Torii) в хранилище CI; лас
 Местные выбросы могут быть загружены после экспорта оболочки.
@@ -24,7 +24,7 @@ Cubre la fase de build/lint, el empaquetado SoraFS, la Firma de Manificos con Si
 ## Предварительные условия
 
 - Узел 18.18+ с `npm` или `pnpm`.
-- `sorafs_cli` от `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` от `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL-адрес Torii, который экспонирует `/v1/sorafs/*`, является приватной учетной записью/клавишой авторизации, которую можно передать манифесту и псевдониму.
 — Emisor OIDC (GitHub Actions, GitLab, удостоверение рабочей нагрузки и т. д.) для эмитирования `SIGSTORE_ID_TOKEN`.
 - Необязательно: `examples/sorafs_cli_quickstart.sh` для пробных прогонов и `docs/source/sorafs_ci_templates.md` для формирования рабочих процессов GitHub/GitLab.

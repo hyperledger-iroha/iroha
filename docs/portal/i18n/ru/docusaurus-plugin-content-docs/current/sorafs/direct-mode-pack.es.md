@@ -49,7 +49,7 @@ Sidebar_label: Пакет прямого режима
 - `direct_only_policy_rejects_soranet_only_providers` гарантирует, что `TransportPolicy::DirectOnly` упадет быстро, когда будет объявлено только о доступе к SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` подтверждает, что используется транспорт Torii/QUIC, когда он представляет собой и какие ресурсы SoraNet исключаются из сеанса.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` анализ `docs/examples/sorafs_direct_mode_policy.json`, чтобы гарантировать, что документация будет сохранена с помощью помощников utilidad.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` сообщает `sorafs_cli fetch --transport-policy=direct-only` против шлюза Torii, симулируя, пропорциональное отслеживание людей для регулируемых перевозок по стране Directos.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` сообщает `sorafs_cli fetch --transport-policy=direct-only` против шлюза Torii, симулируя, пропорциональное отслеживание людей для регулируемых перевозок по стране Directos.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` заключает в себе команду с политическим JSON и постоянство табло для автоматизации развертывания.
 
 Перед публикацией выполните следующие действия:

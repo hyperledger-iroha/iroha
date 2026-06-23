@@ -1,0 +1,48 @@
+groups:
+  - name: sorafs-reputation
+    interval: 1m
+    rules:
+      - alert: SoraFSReputationIngestLagHigh
+        expr: sorafs_reputation_ingest_lag_seconds > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS reputation ingest lag is high"
+          description: |
+            The latest accepted reputation snapshot was generated more than
+            15 minutes before Torii accepted it. Check the deployed reputation
+            publisher, Governance DAG ingest, and snapshot upload pipeline.
+      - alert: SoraFSReputationSnapshotStale
+        expr: time() - sorafs_reputation_snapshot_generated_at_unix > 604800
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS reputation snapshot is stale"
+          description: |
+            Torii has not accepted a fresh SoraFS reputation snapshot for more
+            than 7 days. Pause reputation-sensitive routing or incentive
+            decisions until the publisher catches up.
+      - alert: SoraFSReputationLowScoreProviders
+        expr: sorafs_reputation_low_score_providers > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS reputation low-score providers present"
+          description: |
+            One or more providers in the latest reputation snapshot are below
+            the low-score threshold. Review the reputation dashboard and decide
+            whether routing, order limits, or reserve workflows need action.
+      - alert: SoraFSReputationLowScoreCrossing
+        expr: increase(sorafs_reputation_threshold_crossings_total{level="low_score"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS reputation provider crossed into low score"
+          description: |
+            At least one provider crossed into the low-score state in the last
+            15 minutes. Compare the previous and current reputation snapshots
+            before applying operator interventions.

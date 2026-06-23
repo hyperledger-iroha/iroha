@@ -61,7 +61,7 @@ primeira entrada em `profile_aliases`, seguida por quaisquer aliases alternativo
 Para inspecionar o registro a partir do tooling, execute o CLI helper:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -112,7 +112,7 @@ Para inspecionar um testemunho PoR especifico, forneca indices de chunk/segmento
 persista a prova no disco:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -124,7 +124,7 @@ Use `--promote-profile=<handle>` para emitir um bloco JSON de metadados (incluin
 registrados) que pode ser colado em `chunker_registry_data.rs` ao promover um novo perfil padrao:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -137,7 +137,7 @@ Para validar uma prova existente contra um payload, passe o caminho via
 corresponde a raiz calculada):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -146,7 +146,7 @@ O CLI garante ordenacao deterministica (seeded com `splitmix64`) e truncara auto
 a requisicao exceder as folhas disponiveis:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -156,7 +156,7 @@ O manifest stub espelha os mesmos dados, o que e conveniente ao automatizar a se
 (`--profile=sorafs.sf1@1.0.0`) para que scripts de build evitem hard-codear IDs numericos:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

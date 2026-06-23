@@ -66,12 +66,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 
 ## 3. manifest بنائیں اور سائن کریں
 
-chunk plan، aliases، اور governance signatures کو `sorafs-manifest-stub` کے ذریعے
+chunk plan، aliases، اور governance signatures کو `sorafs_manifest_stub` کے ذریعے
 manifest میں لپیٹیں۔ نیچے دی گئی کمانڈ single-file payload دکھاتی ہے؛ درخت پیک کرنے
 کے لیے directory path دیں (CLI اسے lexicographic ترتیب میں چلتا ہے)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

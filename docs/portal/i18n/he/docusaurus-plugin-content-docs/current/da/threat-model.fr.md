@@ -247,7 +247,7 @@ noeuds d'obtenir les chunks מקצה לאתגרים אחרים PDP/PoTR.
   cache) et l'integration Torii ב-`crates/iroha_torii/src/da/ingest.rs`, qui thread
   les checks de טביעת אצבע דרך `/v1/da/ingest`.
 - סימולציות של הזרמת תרגילי PDP/PoTR באמצעות זרימת הוכחה לרתמה
-  dans `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de requete
+  dans `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, couvrant les flux de requete
   PoR/PDP/PoTR ושאר תרחישי כישלון אנימות במודלים של איומים.
 - תוצאות קיבולת ותיקון להשרות חיים חיים
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, tandis que la matrice de

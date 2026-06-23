@@ -9,83 +9,100 @@ source_last_modified: "2025-12-05T17:03:20.752641+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Plan de pruebas de carga para el gateway SoraFS
+# SoraFS Gateway Load Testing Plan
 
-El harness de carga determinista ya se distribuye junto con la suite de replay. Ejecuta los
-adaptadores de gateway basados en fixtures bajo ≥1.000 solicitudes concurrentes y registra
-percentiles de latencia junto con desgloses de rechazos/errores. El harness vive en
-`integration_tests/src/sorafs_gateway_conformance.rs` (`run_deterministic_load_test`) y se
-habilita mediante la regresión `sorafs_gateway_deterministic_load_harness`. CI lo invoca con
-`cargo test -p integration_tests sorafs_gateway_conformance`.
+The deterministic load harness ships with the gateway conformance replay suite.
+It does not open a live HTTP/3 gateway or sleep through a wall-clock soak test;
+instead, it replays canonical fixture-backed adapters through
+`HarnessContext::new()`. The default `LoadProfile` schedules 1,000 streams over a
+60-second profile window and records total requests, elapsed time, and P50/P95/P99
+latency per scenario.
 
-Los operadores pueden reutilizar el JSON emitido por `SuiteReport::to_json_value()` (ver
-`ci/check_sorafs_gateway_conformance.sh`) para recolectar reportes de pruebas de carga firmados
-para gobernanza.
+The harness lives in `integration_tests/src/sorafs_gateway_conformance.rs`
+(`run_deterministic_load_test`) and is gated by the
+`sorafs_gateway_deterministic_load_harness` regression. CI invokes it through
+`ci/check_sorafs_gateway_conformance.sh`, which runs:
 
-Las secciones siguientes capturan mejoras pendientes y la matriz de escenarios usada por el harness.
+```bash
+cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture
+```
 
-## Objetivos
+Operators can reuse the JSON emitted by `SuiteReport::to_json_value()` and sign it
+with the gateway attestation helpers when collecting governance evidence.
 
-1. Sostener ≥1.000 streams de rango concurrentes mientras se validan pruebas y rechazos.
-2. Medir latencia de cola (P95, P99) para escenarios de caché caliente y caché fría.
-3. Inyectar corrupción controlada (alteración de chunks, mismatch de pruebas) y afirmar rechazo y logging determinista.
-4. Producir reportes de pruebas de carga firmados consumibles por operadores y gobernanza.
+## Objectives
 
-## Desglose de trabajo (borrador)
+1. Keep the local conformance load profile deterministic and fixture-backed.
+2. Validate success, byte-range, corruption, admission, rate-limit, and denylist
+   outcomes without relying on live network timing.
+3. Emit JSON reports and signed attestation envelopes that operators can archive
+   for governance review.
+4. Use live staging rigs only for hardware SLO evidence, not for the local
+   regression contract.
 
-| Tarea | Responsable(s) | Notas |
-|------|-----------------|-------|
-| Implementar pool determinista de workers | QA Guild / Tooling WG | Reutilizar ejecutor basado en Tokio; soportar RNG con semilla para orden de solicitudes reproducible. |
-| Integrar fixtures de replay | QA Guild | Streamear fixtures CAR canónicos, pruebas PoR y casos negativos. |
-| Recolectar métricas | Observabilidad | Capturar histogramas de latencia, conteos de rechazo, throughput, CPU/memoria. |
-| Inyección de fallos | QA Guild | Voltear bits en payload, alterar nodos de prueba, omitir headers requeridos. |
-| Reporting | Tooling WG | Emitir reportes JSON/CSV con estadísticas y artefactos de fallos. |
+## Current Coverage
 
-## Matriz de escenarios
+| Area | Status | Notes |
+|------|--------|-------|
+| Deterministic load scheduler | Implemented | `LoadProfile` and `DeterministicLoadGenerator` produce reproducible waves from the configured stream count and duration. |
+| Fixture replay | Implemented | The suite covers full CAR replay, aligned and multi-range byte replay, unsupported chunkers, missing headers, corrupted proofs, corrupted CAR payloads, provider admission failures, rate limits, GAR denylist refusals, and capability-refusal fixtures. |
+| Metrics report | Implemented | `LoadTestReport` records total requests, elapsed time, per-scenario success/refusal/error counts, and P50/P95/P99 latency. |
+| Signed evidence | Implemented | `generate_attestation`, `verify_attestation_envelope`, and `cargo xtask sorafs-gateway-attest --verify` cover signed report validation. |
+| Live staging load evidence | Rollout evidence | Capture against deployed gateways once the operator selects hardware, cache state, and duration. |
+| HTTP/3 gateway load coverage | Transport follow-up | No committed SoraFS HTTP/3 gateway endpoint is present in this checkout; add HTTP/3 scenarios only after the gateway exposes that transport. |
 
-| ID | Descripción | Carga | Resultado esperado |
-|----|-------------|-------|-------------------|
-| L1 | Streaming de rango con caché caliente | 1.000 concurrentes, corrida de 10 minutos | P95 < 120 ms, P99 < 250 ms, cero fallos de prueba |
-| L2 | Bootstrap completo de CAR en caché fría | 250 concurrentes | P95 < 500 ms, validación de pruebas exitosa |
-| L3 | Inyección de corrupción | 1% de solicitudes alteradas | Todas las respuestas corruptas rechazadas (422) |
-| L4 | Desajuste de admisión | 5% solicitudes sin sobre de manifiesto | Rechazo 428 con telemetría registrada |
-| L5 | Simulacro de rate-limit GAR | Burst más allá del límite configurado | 429 con motivo `rate_limited` |
-| L6 | Intento de downgrade de headers | 2% solicitudes sin headers de trustless | Gateway devuelve 428 `required_headers_missing`, telemetría etiquetada |
+## Scenario Matrix
 
-## Métricas y telemetría
+| ID | Description | Load inclusion | Expected outcome |
+|----|-------------|----------------|------------------|
+| A1 | Full CAR replay | Suite replay | 200 success |
+| A2 | Aligned byte-range replay | Default load cycle | 206 success |
+| A3 | Misaligned byte-range refusal | Default load cycle | 416 refusal |
+| A4 | Multi-range byte replay | Default load cycle | 206 success |
+| B1 | Unsupported chunker handle | Suite replay | 406 refusal |
+| B2 | Missing required SoraFS headers | Suite replay | 428 refusal |
+| B3 | Corrupted PoR proof | Suite replay | 422 refusal |
+| B4 | Corrupted CAR payload | Default load cycle | 422 refusal |
+| B5 | Provider not admitted | Default load cycle | 412 refusal |
+| B6 | Gateway rate limit | Default load cycle | 429 refusal |
+| C* | Capability-refusal fixtures | Suite replay | Fixture-declared refusal |
+| D1 | GAR denylist refusal | Suite replay | 451 refusal |
 
-Los gateways deben exponer métricas Prometheus (vía `/metrics`) o logs JSON para:
+## Metrics & Telemetry
 
-- `sorafs_gateway_latency_ms_bucket{scenario}` — Histogramas de latencia por escenario.
-- `sorafs_gateway_refusals_total{reason}` — Conteos de rechazo por motivo (unsupported_chunker, proof_verification_failed, etc.).
-- `sorafs_gateway_bytes_total` — Total de bytes servidos por prueba.
-- `sorafs_gateway_concurrency_active` — Gauge de concurrencia.
+The local harness JSON contains:
 
-El harness de carga debe emitir:
+- `load_profile.concurrent_streams` and `load_profile.max_duration_seconds`.
+- `load_report.total_requests` and `load_report.elapsed_seconds`.
+- Per-scenario `total`, `success`, `refusal`, `error`, `p50_ms`, `p95_ms`, and
+  `p99_ms` fields.
+- Replay scenario status, outcome, and canonical refusal payloads.
 
-- Throughput por segundo.
-- Percentiles de latencia (P50, P95, P99, max).
-- Resúmenes de fallos (motivo, conteo, primer timestamp).
-- Contadores de verificación de pruebas (aceptadas vs rechazadas).
-- Conteos de enforcement de admisión (sobre faltante, sobre expirado).
+Live gateways should additionally expose Prometheus metrics or JSON logs for:
 
-## Cobertura de inyección de fallos
+- `sorafs_gateway_latency_ms_bucket{scenario}` per-scenario latency histograms.
+- `sorafs_gateway_refusals_total{reason}` refusal counts by reason.
+- `sorafs_gateway_bytes_total` total bytes served per run.
+- `sorafs_gateway_concurrency_active` active request gauge.
 
-- **Corrupción de pruebas:** Bit-flip en muestras dentro de pruebas PoR; garantizar 422 y log del fallo.
-- **Downgrade de headers:** Omitir headers trustless requeridos (p. ej., `X-SoraFS-Nonce`), esperar 428.
-- **Desajuste de admisión:** Omitir el sobre del manifiesto o enviar sobres expirados, esperar 428.
-- **Límite GAR:** Exceder caps configurados de tasa/egreso para disparar 429 con etiquetado de telemetría.
+## Failure Injection Coverage
 
-## Decisiones pendientes
+- **Proof corruption:** B3 mutates PoR proof material and expects a 422 refusal.
+- **Payload corruption:** B4 mutates CAR payload bytes and expects a 422 refusal.
+- **Header downgrade:** B2 omits required trustless headers and expects 428.
+- **Admission mismatch:** B5 exercises provider admission refusal and expects 412.
+- **Rate limiting:** B6 exceeds configured gateway limits and expects 429.
+- **GAR denylist:** D1 verifies policy denial and expects 451.
+- **Capability refusal:** C* fixtures pin additional deterministic refusal payloads.
 
-- Objetivo final de concurrencia para caché fría (requiere sizing de hardware).
-- Si exigir cobertura HTTP/3 en la primera iteración.
-- Integración con runners internos de CI (GitHub Actions vs rigs dedicados).
-- Checks de salud post-run automatizados (p. ej., verificar que no queden warnings de expiración de admisión).
+## Remaining Rollout Work
 
-## Próximos pasos
-
-1. Finalizar la lista de fixtures y rangos de chunks para runs de caché caliente/fría.
-2. Extender el worker pool para cubrir gateways HTTP/3 cuando el transporte llegue.
-3. Validar en gateway de staging interno y registrar métricas baseline.
-4. Iterar sobre la estrategia de inyección de fallos antes de abrir a operadores.
+1. Archive signed local conformance reports from `ci/check_sorafs_gateway_conformance.sh`
+   for release candidates.
+2. Run a live staging load rig with the same fixture bundle and record hardware,
+   cache state, duration, and gateway version alongside the signed report.
+3. Add a live-target adapter if operators need the integration test to exercise a
+   deployed gateway instead of the fixture-backed adapter.
+4. Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed HTTP/3
+   endpoint and configuration surface.
+5. Record cold-cache SLO baselines after the staging hardware profile is chosen.

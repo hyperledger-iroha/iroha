@@ -1161,6 +1161,14 @@ pub mod sorafs {
         pub fn governance_dir() -> Option<PathBuf> {
             None
         }
+        /// Default Governance DAG publisher peer identifier.
+        pub fn governance_publisher_peer_id() -> Option<String> {
+            None
+        }
+        /// Default Governance DAG Ed25519 signing-key path.
+        pub fn governance_signing_key_path() -> Option<PathBuf> {
+            None
+        }
 
         /// Stream token issuance defaults.
         pub mod tokens {
@@ -1209,6 +1217,10 @@ pub mod sorafs {
         pub const BACKOFF_MAX_SECS: u64 = 60;
         /// Default slash penalty for scheduler-generated repair proposals (nano-XOR).
         pub const DEFAULT_SLASH_PENALTY_NANO: u128 = 1_000_000_000;
+        /// Per-auditor signed report/slash request rate (tokens/sec). `None` disables.
+        pub const AUDITOR_RATE_PER_SEC: Option<u32> = Some(4);
+        /// Per-auditor signed report/slash request burst (tokens). `None` disables.
+        pub const AUDITOR_BURST: Option<u32> = Some(16);
     }
 
     /// Defaults for the SoraFS GC scheduler configuration.

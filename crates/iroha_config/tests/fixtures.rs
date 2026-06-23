@@ -886,6 +886,8 @@ fn minimal_config_snapshot() {
                         default_requests_per_minute: 120,
                     },
                     governance_dag_dir: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_signing_key_path: None,
                     pin: SorafsStoragePin {
                         require_token: false,
                         tokens: {},
@@ -907,6 +909,8 @@ fn minimal_config_snapshot() {
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
                     default_slash_penalty_nano: 1000000000,
+                    auditor_rate_per_sec: 4,
+                    auditor_burst: 16,
                 },
                 sorafs_gc: SorafsGc {
                     enabled: false,

@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-02-07
 - استخدم تذكرة المعالجة (على سبيل المثال، `governance/tickets/SF6-SR-2026.md`) ثم قم بالإلغاء
   الموافقة المسبقة عن علم من مجموعة عمل الهندسة والأدوات الأمنية.
 - التحقق من أن القائمة المرجعية للإصلاح موجودة في المذكرة؛ النقاط غير الدقيقة تحجب النتيجة.
-- قم بتمديد حزام التكافؤ بشعار التأمين (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- قم بتمديد حزام التكافؤ بشعار التأمين (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   احصل على بيان الحزمة.
 - تابع ما هو الأمر الذي ستخطط له، بما في ذلك و`--identity-token-provider`، و
   `--identity-token-audience=<aud>`، تم إثبات نطاق فولسيو في الأدلة الحقيقية.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 يستخدم البرنامج النصي الاختبارات التالية:
 
 - `cargo fmt --all -- --check` (مساحة العمل)
-- `cargo clippy --locked --all-targets` إلى `sorafs_car` (مع الميزة `cli`)،
-  `sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` لهذه الصناديق
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 إذا حدث أي شيء، قم بإجراء التراجع في وضع العلامات. أحذية رياضية موثوقة
 edits غير مقيد من الرئيسي؛ لا تقم بتأخير إصلاحات اختيار الكرز في الإصدار. البوابة أيضا

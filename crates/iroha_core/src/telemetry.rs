@@ -6406,6 +6406,48 @@ impl Telemetry {
         }
     }
 
+    /// Record `SoraFS` egress counters and observer drift for `provider`.
+    pub fn record_sorafs_egress_reconciliation(
+        &self,
+        provider: &str,
+        billing_bytes: u64,
+        gateway_bytes: Option<u64>,
+        orchestrator_bytes: Option<u64>,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_sorafs_egress_reconciliation(
+                provider,
+                billing_bytes,
+                gateway_bytes,
+                orchestrator_bytes,
+            );
+        }
+    }
+
+    /// Record the latest accepted `SoraFS` reputation snapshot metrics.
+    pub fn record_sorafs_reputation_snapshot(
+        &self,
+        generated_at_unix: u64,
+        observed_at_unix: u64,
+        provider_scores: &[(&str, u16, bool)],
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_sorafs_reputation_snapshot(
+                generated_at_unix,
+                observed_at_unix,
+                provider_scores,
+            );
+        }
+    }
+
+    /// Set the `SoraFS` orderbook API error ratio for a routed endpoint.
+    pub fn set_sorafs_orderbook_api_error_ratio(&self, route: &str, ratio: f64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .set_sorafs_orderbook_api_error_ratio(route, ratio);
+        }
+    }
+
     /// Increment the `SoraFS` dispute counter for the provided result label.
     pub fn inc_sorafs_disputes(&self, result: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -7455,6 +7497,19 @@ impl Telemetry {
             .record_sorafs_por_ingestion_failures(provider, manifest, failures_total);
     }
 
+    /// Record a `PoR` scheduler challenge.
+    #[cfg(feature = "telemetry")]
+    pub fn record_sorafs_por_scheduler_challenge(&self, forced: bool, duplicate_samples: usize) {
+        self.metrics
+            .record_sorafs_por_scheduler_challenge(forced, duplicate_samples);
+    }
+
+    /// Record a failed `PoR` scheduler run.
+    #[cfg(feature = "telemetry")]
+    pub fn record_sorafs_por_scheduler_failure(&self) {
+        self.metrics.record_sorafs_por_scheduler_failure();
+    }
+
     /// Record aggregate `SoraFS` registry statistics exposed by Torii.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::too_many_arguments)]
@@ -7869,6 +7924,14 @@ impl Telemetry {
         _failures_total: u64,
     ) {
     }
+
+    #[cfg(not(feature = "telemetry"))]
+    /// No-op when telemetry is disabled.
+    pub fn record_sorafs_por_scheduler_challenge(&self, _forced: bool, _duplicate_samples: usize) {}
+
+    #[cfg(not(feature = "telemetry"))]
+    /// No-op when telemetry is disabled.
+    pub fn record_sorafs_por_scheduler_failure(&self) {}
 
     #[cfg(not(feature = "telemetry"))]
     /// No-op when telemetry is disabled.
@@ -9578,6 +9641,33 @@ mod tests {
         );
 
         assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_sorafs_orderbook_api_error_ratio_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let route = "/v1/sorafs/orderbook/orders";
+
+        telemetry.set_sorafs_orderbook_api_error_ratio(route, 0.25);
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_api_error_ratio
+                .with_label_values(&[route])
+                .get(),
+            0.25
+        );
+
+        telemetry.disable();
+        telemetry.set_sorafs_orderbook_api_error_ratio(route, 0.75);
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_api_error_ratio
+                .with_label_values(&[route])
+                .get(),
+            0.25
+        );
     }
 
     #[test]

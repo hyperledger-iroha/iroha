@@ -143,14 +143,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def create_complete_matrix(root: Path, signer: dict[str, Path | str]) -> None:
     transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
     for index, family in enumerate(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
-        slot_transports = transports if index == 0 else None
         slot_helpers.create_slot(
             root,
             f"slot-{index}",
             family,
             signer,
             d2d_payment_transport=transports[index % len(transports)],
-            d2d_payment_transports=slot_transports,
+            d2d_payment_transports=transports,
         )
 
 
@@ -6486,10 +6485,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             slot = next(
                 entry
                 for entry in summary["android_device_lab"]["slots"]
-                if "d2d_payment_transports" not in entry["kagemusha"]
+                if entry.get("status") == "ok"
             )
             kagemusha = slot["kagemusha"]
             primary_transport = kagemusha["d2d_payment_transport"]
+            kagemusha.pop("d2d_payment_transports", None)
             extra_transport = next(
                 transport
                 for transport in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
@@ -19853,9 +19853,65 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary["android_device_lab"]["missing_d2d_payment_transports"],
             [],
         )
-        self.assertNotIn(
+        self.assertIn(
             "android_device_lab_d2d_transport_matrix_missing",
             {item["code"] for item in summary["blockers"]},
+        )
+        self.assertGreater(
+            len(summary["android_device_lab"]["missing_d2d_payment_transport_pairs"]),
+            0,
+        )
+
+    def test_aggregate_d2d_transport_coverage_without_family_pairs_blocks_rollup(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = slot_helpers.create_test_signer(Path(temp) / "keys")
+            lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[index % len(transports)],
+                )
+            trusted, errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+                [signer["public_key"]]
+            )
+            self.assertEqual(errors, [])
+
+            summary = readiness.build_summary(
+                repo_root=REPO_ROOT,
+                device_lab_root=root.resolve(),
+                lineage_proof_evidence_path=lineage_evidence.resolve(),
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(
+            summary["android_device_lab"]["covered_device_families"],
+            sorted(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertEqual(
+            summary["android_device_lab"]["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transports"],
+            [],
+        )
+        self.assertIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+        self.assertGreater(
+            len(summary["android_device_lab"]["missing_d2d_payment_transport_pairs"]),
+            0,
         )
 
     def test_direct_d2d_transport_rollup_requires_transcript_map_for_declared_list(
@@ -20170,10 +20226,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
         )
         self.assertEqual(summary["missing_d2d_payment_transports"], [])
-        self.assertNotIn(
+        self.assertIn(
             "android_device_lab_d2d_transport_matrix_missing",
             {item["code"] for item in summary["blockers"]},
         )
+        self.assertGreater(len(summary["missing_d2d_payment_transport_pairs"]), 0)
 
     def test_direct_d2d_transport_rollup_rejects_reused_cross_slot_transcript_digest(
         self,

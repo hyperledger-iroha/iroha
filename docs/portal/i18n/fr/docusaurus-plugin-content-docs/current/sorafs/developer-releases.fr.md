@@ -29,7 +29,7 @@ revue sécurité :- Téléchargez le mémo de revue sécurité SF-6 le plus réc
 - Joignez le lien du ticket de remédiation (par ex. `governance/tickets/SF6-SR-2026.md`) et notez
   les approbateurs de Security Engineering et du Tooling Working Group.
 - Vérifiez que la checklist de remédiation du mémo est clôturée ; les éléments non résolus bloquent la version.
-- Préparer l'upload des logs du harnais de parité (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Préparer l'upload des logs du harnais de parité (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   avec le bundle de manifeste.
 - Confirmez que la commande de signature que vous comptez exécuter inclut à la fois `--identity-token-provider` et
   un `--identity-token-audience=<aud>` explicite pour capturer le scope Fulcio dans les preuves de release.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Le script effectue les assertions suivantes :
 
 - `cargo fmt --all -- --check` (espace de travail)
-- `cargo clippy --locked --all-targets` pour `sorafs_car` (avec la fonctionnalité `cli`),
-  `sorafs_manifest` et `sorafs_chunker`
-- `cargo test --locked --all-targets` pour ces mêmes caissesSi une étape échoue, corrigez la régression avant de tagger. Les builds de release
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 doivent être continus avec main ; ne cerise-pickez pas de correctifs dans des branches
 libération. Le portail vérifie également que les drapeaux de signature sans clé (`--identity-token-issuer`,
 `--identity-token-audience`) sont fournis lorsque requis ; police les arguments manquants

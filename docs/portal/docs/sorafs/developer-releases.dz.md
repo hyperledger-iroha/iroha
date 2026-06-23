@@ -48,7 +48,7 @@ I18NF0000004X
 ཡིག་ཆ་འདི་གིས་ འོག་གི་བདེན་བཤད་ཚུ་འབདཝ་ཨིན།
 
 - `cargo fmt --all -- --check` (ལས་ཀ)
-- `cargo clippy --locked --all-targets` `sorafs_car` (I18NI000000024X ཁྱད་རྣམ་དང་བཅས་)
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   I18NI0000025X, དང་ I18NI0000026X
 - I18NI000000027X དེ་བཟུམ་མའི་ ཀེརེསི་ཚུ་གི་དོན་ལུ་ཨིན།
 

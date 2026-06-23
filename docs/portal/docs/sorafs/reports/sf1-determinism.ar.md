@@ -27,7 +27,7 @@ summary: قائمة تحقق و digests متوقعة للتحقق من ملف ch
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | تنجح جميع الاختبارات؛ ينجح اختبار parity `vectors`. | يؤكد أن fixtures القياسية تُبنى وتطابق تنفيذ Rust. |
 | 2 | `ci/check_sorafs_fixtures.sh` | يخرج السكربت بـ 0؛ ويبلغ digests للـ manifest أدناه. | يتحقق من أن fixtures تُعاد توليدها بشكل نظيف وأن التواقيع تبقى مرفقة. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | الإدخال الخاص بـ `sorafs.sf1@1.0.0` يطابق واصف registry (`profile_id=1`). | يضمن بقاء metadata الخاصة بالregistry متزامنة. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | الإدخال الخاص بـ `sorafs.sf1@1.0.0` يطابق واصف registry (`profile_id=1`). | يضمن بقاء metadata الخاصة بالregistry متزامنة. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | تنجح إعادة التوليد دون `--allow-unsigned`; ملفات manifest والتوقيع لا تتغير. | يقدم دليلا على الحتمية لحدود chunk و manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | يبلغ عدم وجود diff بين fixtures TypeScript و Rust JSON. | helper اختياري؛ تأكد من parity عبر runtimes (السكربت يديره Tooling WG). |
 

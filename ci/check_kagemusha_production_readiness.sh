@@ -900,7 +900,11 @@ TEXT_REQUIREMENTS = {
         "required_d2d_payment_transports",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
-        "if missing_d2d_payment_transports:",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
+        "def _summary_release_d2d_payment_transport_coverage_by_family",
+        "def _missing_summary_release_d2d_payment_transport_pairs",
+        "if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:",
         "D2D_PAYMENT_TRANSCRIPTS_FIELD",
         "validate_d2d_payment_transcripts_binding",
         "def _safe_relative_path_is_child_of",
@@ -2471,7 +2475,11 @@ TEXT_REQUIREMENTS = {
         "d2d_payment_transcripts",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
-        "if missing_transports:",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
+        "def _android_d2d_payment_transport_coverage_by_family",
+        "def _missing_android_d2d_payment_transport_pairs",
+        "if missing_transports or missing_transport_pairs:",
         "android_device_lab_d2d_transport_matrix_missing",
         "MAX_ABI6_MANIFEST_JSON_BYTES",
         "MAX_ABI7_FIXTURE_JSON_BYTES",
@@ -3596,6 +3604,14 @@ TEXT_REQUIREMENTS = {
         "live pid $pid does not match $config_path",
         'stop_localnet "$cleanup_run_dir" || true',
     ),
+    "scripts/run_100tps_profile_localnet.sh": (
+        "pid_is_running()",
+        "wait_for_pid_with_timeout()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'ps -p "$pid" -o pid=',
+        'kill -TERM "$pid" 2>/dev/null || true',
+        "pid ${pid} is still running after TERM; leaving it visible",
+    ),
     "crates/iroha_kagami/src/localnet.rs": (
         "fn write_stop_script(stop: &Path) -> Result<()>",
         "pid_matches_peer()",
@@ -3650,6 +3666,16 @@ TEXT_REQUIREMENTS = {
         "run dir has live or mismatched pidfiles; not regenerating $run_dir",
         "live pid $pid does not match $config_path",
         'stop_localnet "$cleanup_run_dir" || true',
+    ),
+    "scripts/tests/run_100tps_profile_localnet_test.py": (
+        "test_load_wait_uses_ps_liveness_without_sigkill",
+        "pid_is_running()",
+        "wait_for_pid_with_timeout()",
+        "command -v ps >/dev/null 2>&1 || return 0",
+        'self.assertNotIn("kill -0", text)',
+        'self.assertNotIn("kill -9", text)',
+        'self.assertNotIn("kill -KILL", text)',
+        "pid ${pid} is still running after TERM; leaving it visible",
     ),
     "scripts/kagemusha_recursive_compact_key_evidence.py": (
         "Build ABI-7 recursive compact key-artifact release evidence JSON",
@@ -4348,6 +4374,10 @@ TEXT_REQUIREMENTS = {
         '"d2d_payment_transcript_sha256",',
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
+        "_android_d2d_payment_transports_by_family_is_shaped",
+        "_android_missing_d2d_payment_transport_pairs_are_shaped",
         "d2d_payment_transport",
         "d2d_payment_transports",
         "d2d_payment_transcripts",
@@ -4751,6 +4781,8 @@ TEXT_REQUIREMENTS = {
         "missing_device_families",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
         "duplicate_bindings",
         "trusted_signer_public_key_sha256",
     ):
@@ -7416,6 +7448,7 @@ WORKFLOW_REQUIREMENTS = (
     '"scripts/deploy_localnet.sh"',
     '"scripts/run_local_swarm.sh"',
     '"scripts/training_script_2.sh"',
+    '"scripts/run_100tps_profile_localnet.sh"',
     '"crates/iroha_kagami/src/localnet.rs"',
     '"scripts/tests/check_android_device_lab_slot_test.py"',
     '"kotlin/offline-wallet-lab-app/**"',
@@ -7426,12 +7459,14 @@ WORKFLOW_REQUIREMENTS = (
     '"scripts/tests/deploy_localnet_test.py"',
     '"scripts/tests/run_local_swarm_test.py"',
     '"scripts/tests/training_script_2_test.py"',
+    '"scripts/tests/run_100tps_profile_localnet_test.py"',
     '"fixtures/android/device_lab/**"',
     "python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py",
     "python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py",
     "python3 -m unittest discover -s scripts/tests -p deploy_localnet_test.py",
     "python3 -m unittest discover -s scripts/tests -p run_local_swarm_test.py",
     "python3 -m unittest discover -s scripts/tests -p training_script_2_test.py",
+    "python3 -m unittest discover -s scripts/tests -p run_100tps_profile_localnet_test.py",
     "ci/check_kagemusha_production_readiness.sh --negative-control-doc-route",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-invalid-json",
@@ -7550,6 +7585,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-deploy-localnet-pid-safety-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-local-swarm-pid-safety-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-training-script-pid-safety-test",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-100tps-profile-pid-safety-test",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagami-localnet-stop-script-pid-safety",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-path-component-whitespace",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-signer-input-preflight",
@@ -10585,6 +10621,17 @@ if mode == "--negative-control-training-script-pid-safety-test":
             "scripts/tests/training_script_2_test.py",
             "test_stop_localnet_uses_guarded_pid_ownership_checks",
             "test_stop_localnet_allows_unguarded_stop_script",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-100tps-profile-pid-safety-test":
+    run_negative_control(
+        "100 TPS localnet profiler pid liveness test coverage",
+        lambda: override_text(
+            "scripts/tests/run_100tps_profile_localnet_test.py",
+            "test_load_wait_uses_ps_liveness_without_sigkill",
+            "test_load_wait_allows_null_signal_and_sigkill",
         ),
     )
     raise SystemExit(0)
@@ -20025,18 +20072,18 @@ if mode == "--negative-control-android-device-lab-d2d-transport-matrix":
     def mutate_android_d2d_transport_matrix() -> None:
         override_text(
             "scripts/kagemusha_production_readiness.py",
-            "if missing_transports:",
-            "if False and missing_transports:",
+            "if missing_transports or missing_transport_pairs:",
+            "if False and (missing_transports or missing_transport_pairs):",
         )
         override_text(
             "scripts/check_android_device_lab_slot.py",
-            "if missing_d2d_payment_transports:",
-            "if False and missing_d2d_payment_transports:",
+            "if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:",
+            "if False and (missing_d2d_payment_transports or missing_d2d_payment_transport_pairs):",
         )
         override_text(
             "scripts/kagemusha_release_bundle.py",
-            "if set(artifacts) != set(expected_artifacts):",
-            "if False and set(artifacts) != set(expected_artifacts):",
+            'if list_fields_ok.get("covered_d2d_payment_transports_by_family"):',
+            'if False and list_fields_ok.get("covered_d2d_payment_transports_by_family"):',
         )
 
     run_negative_control(

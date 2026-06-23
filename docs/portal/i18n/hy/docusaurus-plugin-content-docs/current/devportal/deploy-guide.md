@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-02-07
 թողարկման արտեֆակտը վերարտադրելի է և ստուգելի:
 
 Հոսքը ենթադրում է, որ դուք ունեք `sorafs_cli` երկուական (կառուցված
-`--features cli`), մուտք դեպի Torii վերջնակետ՝ pin-registry թույլտվություններով, և
+`sorafs_orchestrator` Cargo target), մուտք դեպի Torii վերջնակետ՝ pin-registry թույլտվություններով, և
 OIDC հավատարմագրեր Sigstore-ի համար: Պահպանեք երկարակյաց գաղտնիքները (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii նշաններ) ձեր CI պահոցում; տեղական վազքերը կարող են դրանք աղբյուր լինել
 կեղևի արտահանումից։
@@ -29,7 +29,7 @@ OIDC հավատարմագրեր Sigstore-ի համար: Պահպանեք երկ�
 ## Նախադրյալներ
 
 - Հանգույց 18.18+ `npm` կամ `pnpm` հետ:
-- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli`-ից:
+- `sorafs_cli` `cargo run -p sorafs_orchestrator --bin sorafs_cli`-ից:
 - Torii URL, որը բացահայտում է `/v1/sorafs/*`, գումարած հեղինակային հաշիվ/մասնավոր բանալի
   որոնք կարող են ներկայացնել մանիֆեստներ և կեղծանուններ:
 - OIDC թողարկող (GitHub Actions, GitLab, աշխատանքային բեռի նույնականացում և այլն)

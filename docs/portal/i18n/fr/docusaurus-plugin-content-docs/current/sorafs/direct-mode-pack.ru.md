@@ -44,7 +44,7 @@ Les paramètres de configuration de la passerelle de stockage sont indiqués dan
 La procédure à suivre doit inclure l'achat par l'opérateur, ainsi que par les touches CLI :- `direct_only_policy_rejects_soranet_only_providers` garantit que `TransportPolicy::DirectOnly` est en charge, lorsque l'annonce du candidat prend en charge ce rôle. SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` garantit l'utilisation de Torii/QUIC, ainsi que le téléchargement et l'utilisation de SoraNet. sessions.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` parsite `docs/examples/sorafs_direct_mode_policy.json`, pour que la documentation soit disponible avec утилитами-хелперами.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` a mis en place un `sorafs_cli fetch --transport-policy=direct-only` pour le moteur de passerelle Torii, un test de fumée préalable pour un câblage régulier, des spécifications прямые транспорты.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` a mis en place un `sorafs_cli fetch --transport-policy=direct-only` pour le moteur de passerelle Torii, un test de fumée préalable pour un câblage régulier, des spécifications прямые транспорты.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` utilise votre tableau de bord de configuration et de synchronisation JSON pour le déploiement automatique.
 
 Veuillez consulter les tests avant la publication :

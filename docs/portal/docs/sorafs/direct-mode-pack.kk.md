@@ -49,7 +49,7 @@ SoraNet тізбектері SoraFS үшін әдепкі тасымалдау �
 - `direct_only_policy_rejects_soranet_only_providers` әрбір үміткердің жарнамасы тек SoraNet релелерін қолдаған кезде `TransportPolicy::DirectOnly` жылдам істемейтініне кепілдік береді.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` бар болған кезде Torii/QUIC тасымалдауларының пайдаланылуын және SoraNet релелерінің сеанстан шығарылуын қамтамасыз етеді.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` құжаттаманың көмекші утилиталармен сәйкес келуін қамтамасыз ету үшін `docs/examples/sorafs_direct_mode_policy.json` талдайды.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_poli.jcy.j
-- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` мысқылдаған Torii шлюзіне қарсы жаттығулар жасайды, бұл тікелей тасымалдауларды бекітетін реттелетін орталар үшін түтін сынағы.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` мысқылдаған Torii шлюзіне қарсы жаттығулар жасайды, бұл тікелей тасымалдауларды бекітетін реттелетін орталар үшін түтін сынағы.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` бірдей пәрменді JSON саясатымен және шығаруды автоматтандыруға арналған таблоның тұрақтылығымен қосады.
 
 Жаңартуларды жарияламас бұрын фокусталған жинақты іске қосыңыз:

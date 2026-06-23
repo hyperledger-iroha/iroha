@@ -8,72 +8,76 @@ source_hash: f1f8de6c5ff283479cd76dc60afbdc4bc142596f3e48c52472d2a943ec805b0d
 source_last_modified: "2025-11-22T10:14:00.146215+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
+---
+title: SoraFS Gateway & DNS Kickoff Runbook
+summary: Roles, automation drills, and evidence requirements for the 2025-03 gateway/DNS design session (roadmap Decentralized DNS & Gateway workstream).
+---
 
-# 1. Propósito y alcance
+# 1. Purpose & Scope
 
-Este runbook convierte el requisito de “owner runbooks + ensayo de automatización”
-de `roadmap.md` (entrada Decentralized DNS & Gateway bajo **Near-Term Execution**)
-en pasos accionables. Conecta los entregables SF‑4 (DNS determinista) y SF‑5
-(hardening de gateway) al describir cómo Networking, Ops, QA y Docs ensayan la
-pila de automatización antes del kickoff del 2025‑03‑03.
+This runbook turns the “owner runbooks + automation rehearsal” requirement from
+`roadmap.md` (Decentralized DNS & Gateway entry under **Near-Term Execution**) into
+actionable steps. It binds the SF‑4 (deterministic DNS) and SF‑5 (gateway
+hardening) deliverables by describing how the Networking, Ops, QA, and Docs
+teams rehearse the automation stack ahead of the 2025‑03‑03 kickoff.
 
-- **Qué cubre:** derivación determinista de hosts, releases del directorio SoraDNS,
-  probes de automatización TLS/GAR, ejecución del harness de conformidad, captura
-  de telemetría y empaquetado de evidencia.
-- **Qué no cubre:** respuesta a incidentes en producción (ver
-  `docs/source/sorafs_gateway_operator_playbook.md`) ni cambios posteriores al
-  kickoff en el roadmap (se rastrean en `roadmap.md` y `status.md`).
+- **What it covers:** deterministic host derivation, SoraDNS directory releases,
+  TLS/GAR automation probes, conformance harness execution, telemetry capture,
+  and evidence packaging.
+- **What it does not cover:** production incident response (see
+  `docs/source/sorafs_gateway_operator_playbook.md`) or post-kickoff roadmap
+  changes (tracked directly in `roadmap.md` and `status.md`).
 
-# 2. Matriz de owners y roles
+# 2. Owner & Role Matrix
 
-| Workstream | Responsabilidades | Primario / Backup | Artefactos requeridos |
-|------------|------------------|------------------|------------------------|
-| Networking TL (stack DNS) | Mantener plan determinista de hosts, ejecutar releases del directorio RAD, dueño de inputs de telemetría del resolver. | networking@sora | `artifacts/soradns_directory/<timestamp>/`, diff de `docs/source/soradns/deterministic_hosts.md`, metadata de release RAD. |
-| Ops Automation Lead (gateway) | Ejecutar drills de automatización TLS/ECH/GAR, operar `sorafs-gateway-probe`, gestionar hooks de PagerDuty. | ops@sorafs / sre@sora | `artifacts/sorafs_gateway_probe/<timestamp>/`, JSON de probe, `ops/drill-log.md` actualizado. |
-| QA Guild & Tooling WG | Correr `ci/check_sorafs_gateway_conformance.sh`, curar fixtures y archivar bundles Norito de auto-cert. | qa.guild@sorafs / tooling@sora | `artifacts/sorafs_gateway_conformance/<timestamp>/`, `artifacts/sorafs_gateway_attest/<timestamp>/`. |
-| Docs / DevRel | Capturar actas, actualizar archivos `docs/source/sorafs_gateway_dns_design_*`, publicar resumen de evidencia en el portal. | docs@sora / devrel@sora | Pre-read actualizado, changelog del runbook, apéndice de telemetría, registro de acciones de la agenda. |
+| Workstream | Responsibilities | Primary / Backup | Required Artefacts |
+|------------|------------------|------------------|--------------------|
+| Networking TL (DNS stack) | Maintain deterministic host plan, run RAD directory releases, own resolver telemetry inputs. | networking@sora | `artifacts/soradns_directory/<timestamp>/`, `docs/source/soradns/deterministic_hosts.md` diff, RAD release metadata. |
+| Ops Automation Lead (gateway) | Execute TLS/ECH/GAR automation drills, operate `sorafs-gateway-probe`, manage PagerDuty hooks. | ops@sorafs / sre@sora | `artifacts/sorafs_gateway_probe/<timestamp>/`, probe JSON, updated `ops/drill-log.md`. |
+| QA Guild & Tooling WG | Run `ci/check_sorafs_gateway_conformance.sh`, curate fixtures, and archive Norito self-cert bundles. | qa.guild@sorafs / tooling@sora | `artifacts/sorafs_gateway_conformance/<timestamp>/`, `artifacts/sorafs_gateway_attest/<timestamp>/`. |
+| Docs / DevRel | Capture minutes, update `docs/source/sorafs_gateway_dns_design_*` files, publish evidence summary in portal. | docs@sora / devrel@sora | Updated pre-read, runbook changelog, telemetry appendix, agenda action register. |
 
-# 3. Inputs y prerrequisitos
+# 3. Inputs & Prerequisites
 
-- Especificación de host determinista (`docs/source/soradns/deterministic_hosts.md`) y
-  el scaffolding de atestación del resolver (`docs/source/soradns/resolver_attestation_directory.md`).
-- Artefactos de gateway: perfil, deployment handbook, automatización TLS, guía de
-  modo directo y workflow de self-cert (ver docs `docs/source/sorafs_gateway_*`).
-- Tooling: helpers `cargo xtask` (`soradns-directory-release`,
+- Deterministic host spec (`docs/source/soradns/deterministic_hosts.md`) and the
+  resolver attestation scaffolding (`docs/source/soradns/resolver_attestation_directory.md`).
+- Gateway artefacts: profile, deployment handbook, TLS automation, direct-mode
+  guidance, and self-cert workflow (see `docs/source/sorafs_gateway_*` docs).
+- Tooling: `cargo xtask` helpers (`soradns-directory-release`,
   `sorafs-gateway-probe`), `scripts/telemetry/run_soradns_transparency_tail.sh`,
-  `scripts/sorafs_gateway_self_cert.sh`, y helpers de CI
+  `scripts/sorafs_gateway_self_cert.sh`, and CI helpers
   (`ci/check_sorafs_gateway_conformance.sh`, `ci/check_sorafs_gateway_probe.sh`).
-- Secretos y llaves: key de release GAR, credenciales DNS/TLS ACME, routing key
-  de PagerDuty, token de auth Torii para fetches del resolver.
+- Secrets & keys: GAR release key, DNS/TLS ACME credentials, PagerDuty routing
+  key, Torii auth token for resolver fetches.
 
-# 4. Checklist pre-flight
+# 4. Pre-flight Checklist
 
-1. **Confirmar asistentes y agenda:** actualizar
-   `docs/source/sorafs_gateway_dns_design_attendance.md` y compartir
+1. **Confirm attendees & agenda:** Update
+   `docs/source/sorafs_gateway_dns_design_attendance.md` and share the current
    `docs/source/sorafs_gateway_dns_design_agenda.md`.
-2. **Preparar directorios de artefactos:** crear
-   `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` y
-   `artifacts/soradns_directory/<YYYYMMDD>/` para guardar outputs del ensayo.
-3. **Refrescar fixtures:** obtener los últimos manifiestos GAR, pruebas RAD y
-  fixtures de conformidad de gateway (`git submodule update --init --recursive` si aplica).
-4. **Sanidad de secretos:** verificar la key Ed25519 de release, archivo de cuenta ACME,
-  y token PagerDuty con checksums que coincidan con el vault.
-5. **Targets de telemetría:** asegurar que el Pushgateway de staging y el board
-  GAR en Grafana (`dashboards/grafana/sorafs_fetch_observability.json`) estén
-  accesibles antes del drill.
+2. **Stage artefact directories:** Create
+   `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` and
+   `artifacts/soradns_directory/<YYYYMMDD>/` to store rehearsal outputs.
+3. **Refresh fixtures:** Pull the latest GAR manifests, RAD proofs, and gateway
+  conformance fixtures (`git submodule update --init --recursive` if required).
+4. **Secrets sanity check:** Verify the release Ed25519 key, ACME account file,
+  and PagerDuty token exist and have matching checksums in the vault record.
+5. **Telemetry targets:** Ensure the staging Pushgateway endpoint and the GAR
+  Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`) are
+  reachable before the drill begins.
 
-# 5. Pasos del ensayo de automatización
+# 5. Automation Rehearsal Steps
 
-Cada paso DEBE ejecutarse y archivarse antes del kickoff. Guardar outputs bajo
-el directorio del run ID creado en el paso 2.
+Each step MUST be executed and archived before the kickoff. Store command
+outputs under the run ID directory created in step 2.
 
-## 5.1 Mapa determinista de hosts y release del directorio RAD
+## 5.1 Deterministic Host Map & RAD Directory Release
 
-1. Ejecutar el script de derivación determinista (receta Rust o JS) contra el
-   set de manifiestos propuesto para asegurar que no hay drift frente a
+1. Run the deterministic host derivation script (Rust or JS recipe) against the
+   proposed manifest set to ensure no drift from
    `docs/source/soradns/deterministic_hosts.md`.
-2. Cuando ya existan sobres GAR, verificar que los patrones de host coinciden
-   con el output derivado antes de los ensayos:
+2. When GAR envelopes already exist, verify the host patterns match the derived
+   output before rehearsals:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -81,7 +85,7 @@ cargo xtask soradns-hosts \
   --verify-host-patterns artifacts/soradns_gar/docs.sora.json
 ```
 
-3. Generar un bundle de directorio del resolver:
+3. Generate a resolver directory bundle:
 
 ```bash
 cargo xtask soradns-directory-release \
@@ -92,13 +96,13 @@ cargo xtask soradns-directory-release \
   --note "dns-kickoff-20250303"
 ```
 
-4. Registrar el ID del directorio, SHA-256 y rutas de output en
-   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` más las notas de
-   la reunión de kickoff.
+4. Record the printed directory ID, SHA-256, and output paths in
+   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` plus the kickoff
+   meeting notes.
 
-## 5.2 Captura de telemetría DNS
+## 5.2 DNS Telemetry Capture
 
-1. Tail de logs de transparencia del resolver por al menos diez minutos:
+1. Tail resolver transparency logs for at least ten minutes:
 
 ```bash
 ./scripts/telemetry/run_soradns_transparency_tail.sh \
@@ -108,14 +112,14 @@ cargo xtask soradns-directory-release \
   --push-url https://pushgateway.stg.sora.net/metrics/job/soradns
 ```
 
-2. Anexar un resumen (hashes, conteos de pruebas, ventana de frescura) a
+2. Append a summary (hashes, proof counts, freshness window) to
    `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`.
 
-## 5.3 Probe de TLS / GAR de gateway
+## 5.3 Gateway TLS / GAR Probe
 
-1. Ejecutar el drill de automatización TLS según
+1. Execute the TLS automation drill per
    `docs/source/sorafs_gateway_tls_automation.md`.
-2. Ejecutar la probe con flags de drill para ejercitar payloads PagerDuty/webhook:
+2. Run the probe with drill flags so PagerDuty/webhook payloads are exercised:
 
 ```bash
 cargo xtask sorafs-gateway-probe \
@@ -128,20 +132,20 @@ cargo xtask sorafs-gateway-probe \
   --ops-notes artifacts/sorafs_gateway_dns/20250302/ops-notes.md
 ```
 
-3. Si el drill usa CI, invocar `ci/check_sorafs_gateway_probe.sh` para mantener
-   dashboards/tests actuales. Copiar el resultado en `ops/drill-log` a las
-   actas del kickoff.
+3. If the drill uses CI, invoke `ci/check_sorafs_gateway_probe.sh` to keep the
+   dashboards/tests current. Copy the resulting `ops/drill-log` entry into the
+   kickoff minutes.
 
-## 5.4 Harness de conformidad y self-cert
+## 5.4 Conformance Harness & Self-Cert
 
-1. Correr la suite de conformidad:
+1. Run the conformance suite:
 
 ```bash
 CI=1 ci/check_sorafs_gateway_conformance.sh \
   --out artifacts/sorafs_gateway_conformance/20250302
 ```
 
-2. Producir un bundle de atestación Norito para el gateway de ensayo:
+2. Produce a Norito attestation bundle for the rehearsal gateway:
 
 ```bash
 ./scripts/sorafs_gateway_self_cert.sh \
@@ -149,101 +153,131 @@ CI=1 ci/check_sorafs_gateway_conformance.sh \
   --out artifacts/sorafs_gateway_attest/20250302
 ```
 
-3. Adjuntar `sorafs_gateway_report.json` y sobres `.to` al bundle de evidencia;
-   enlazarlos desde `docs/source/sorafs_gateway_dns_design_attendance.md` una vez
-   añadidas las notas de revisión.
+3. Attach `sorafs_gateway_report.json` and `.to` envelopes to the evidence
+   bundle; cross-link them from `docs/source/sorafs_gateway_dns_design_attendance.md`
+   once review notes are added.
 
-## 5.5 Ensamblaje del bundle de evidencia
+## 5.5 Evidence Bundle Assembly
 
-Crear `artifacts/sorafs_gateway_dns/20250302/runbook_bundle/` con:
+Create `artifacts/sorafs_gateway_dns/20250302/runbook_bundle/` with:
 
-- JSON del directorio RAD, record, metadata y copias `.norito` del resolver.
-- Archivos de transparencia `.jsonl` y `.prom` con manifiestos SHA-256.
-- JSON de probe + screenshots, logs de CI, payloads PagerDuty.
-- Output de conformidad (`report.json`, logs) y sobre de self-cert.
-- Agenda firmada de la reunión, snapshot de asistentes y registro de acciones.
+- RAD directory JSON, record, metadata, and resolver `.norito` copies.
+- Transparency `.jsonl` and `.prom` files with SHA-256 manifests.
+- Probe JSON + screenshots, CI logs, PagerDuty payloads.
+- Conformance output (`report.json`, logs) and self-cert envelope.
+- Signed meeting agenda, attendee list snapshot, and action register.
 
-Comprimir el directorio (`tar -czf sorafs_gateway_dns_runbook_20250302.tgz ...`) y
-subirlo junto a las actualizaciones del pre-read.
+Zip the directory (`tar -czf sorafs_gateway_dns_runbook_20250302.tgz ...`) and
+upload it alongside the pre-read updates.
 
-### Tracker de hashes (llenar durante el upload)
+### Hash tracker (fill during upload)
 
-| Artefacto | SHA-256 | Ruta de upload |
-|----------|---------|----------------|
+| Artifact | SHA-256 | Upload path |
+|----------|---------|-------------|
 | `sorafs_gateway_dns_runbook_20250302.tgz` | `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0` | `s3://sora-governance/sorafs/gateway_dns/20250302/` |
 | `gateway_dns_minutes_20250302.pdf` | `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18` | `s3://sora-governance/sorafs/gateway_dns/20250302/` |
-| Capturas adicionales / evidencia | n/a (no capturado para este ensayo) | — |
+| Additional screenshots / evidence | n/a (not captured for this rehearsal) | — |
 
-## 5.6 Verificación del bundle de alertas
+## 5.6 Alert bundle verification
 
-- Cargar el pack de alertas DNS/gateway (`dashboards/alerts/soradns_gateway_rules.yml`) en el
-  Alertmanager de staging y ejecutar `promtool check rules dashboards/alerts/soradns_gateway_rules.yml`
-  como parte del ensayo. El pack monitorea edad/TTL de pruebas del resolver, drift de CID, lag de
-  sync, fallas de refresh de caché de alias y renovación/expiración TLS del gateway para que los
-  operadores tengan guardrails durante promociones.
-- Ejecutar los tests de alertas respaldados por fixtures con
-  `promtool test rules dashboards/alerts/tests/soradns_gateway_rules.test.yml` (o
-  `scripts/check_prometheus_rules.sh dashboards/alerts/tests/soradns_gateway_rules.test.yml`) y
-  guardar el stdout en el bundle de evidencia; esto prueba que los thresholds de
-  stale-proof/TTL/drift/TLS están bien cableados antes del workshop.
-- Capturar el output del drill de PromQL (o stdout de promtool) en el bundle de
-  evidencia antes de pasar a la facilitación.
+- Load the DNS/gateway alert pack (`dashboards/alerts/soradns_gateway_rules.yml`) into the staging
+  Alertmanager and run `promtool check rules dashboards/alerts/soradns_gateway_rules.yml` as part of
+  the rehearsal. The pack watches resolver proof age/TTL, CID drift, sync lag, alias cache refresh
+  failures, and gateway TLS renewal/expiry so operators have guardrails during promotions.
+- Execute the fixture-backed alert tests with
+  `promtool test rules dashboards/alerts/tests/soradns_gateway_rules.test.yml` (or
+  `scripts/check_prometheus_rules.sh dashboards/alerts/tests/soradns_gateway_rules.test.yml`) and
+  drop the stdout into the evidence bundle; this proves stale-proof/TTL/drift/TLS thresholds are
+  wired correctly before the workshop.
+- Capture the PromQL drill output (or promtool stdout) in the evidence bundle before moving to
+  the session facilitation step.
 
-# 6. Facilitación de sesión y hand-off de evidencia
+# 6. Session Facilitation & Evidence Hand-off
 
-Esta sección mantiene el taller en curso una vez completados los dry-runs. Los
-moderadores deben seguir la mini-línea de tiempo, registrar decisiones en la
-plantilla de actas y empujar artefactos a governance inmediatamente después de
-la llamada.
+This section keeps the live workshop on-rails once the dry-runs above are
+completed. Moderators should follow the mini-timeline, record decisions in the
+minute template, and push artefacts to governance immediately after the call.
 
-## 6.1 Timeline del moderador
+## 6.1 Moderator timeline
 
-| Offset | Owner | Acción |
+| Offset | Owner | Action |
 |--------|-------|--------|
-| T‑24 h | Program Management | Publicar recordatorio en `#nexus-steering`, adjuntar la última agenda/attendance y enlazar el bundle de artefactos. |
-| T‑2 h | Networking TL | Re-ejecutar el script de telemetría GAR y anexar deltas en `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`. |
-| T‑15 m | Ops Automation | Verificar health del host de probe y actualizar el run ID en `artifacts/sorafs_gateway_dns/current`. |
-| Kickoff | Moderador | Compartir el enlace al runbook + plantilla de actas, llamar criterios de éxito y asignar un scribe en vivo. |
-| +15 m | Docs/DevRel | Capturar action items + punteros de evidencia en el doc de actas, resaltando bloqueos que requieran escalamiento de governance. |
-| EoS | Todos los owners | Confirmar uploads de artefactos, notar TODOs pendientes y crear tickets de seguimiento. |
+| T‑24 h | Program Management | Post the reminder in `#nexus-steering`, attach the latest agenda/attendance snapshot, and link the staged artefact bundle. |
+| T‑2 h | Networking TL | Re-run the GAR telemetry script and append deltas to `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`. |
+| T‑15 m | Ops Automation | Verify probe host health and update the run ID in `artifacts/sorafs_gateway_dns/current`. |
+| Kickoff | Moderator | Share the runbook link + minute template, call out success criteria, and assign a live scribe. |
+| +15 m | Docs/DevRel | Capture action items + evidence pointers directly in the minutes doc, highlighting blockers that require governance escalation. |
+| EoS | All owners | Confirm artefact uploads, note unresolved follow-ups, and queue owner tickets. |
 
-## 6.2 Plantilla de actas
+## 6.2 Minute template
 
-Copiar este esqueleto en `docs/source/sorafs_gateway_dns_design_minutes.md`
-para cada sesión (un archivo por fecha):
+Copy the following skeleton into `docs/source/sorafs_gateway_dns_design_minutes.md`
+for each session (one file per date):
 
 ```markdown
 # Gateway & DNS Kickoff — YYYY-MM-DD
 
-- **Moderador:** <name>
+- **Moderator:** <name>
 - **Scribe:** <name>
-- **Asistentes:** <list>
-- **Puntos de agenda:** <bullets>
-- **Decisiones:** <numbered list>
-- **Acciones:** <owner → due date>
-- **Bundle de evidencia:** `artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/`
-- **Riesgos/preguntas abiertas:** <bullets>
+- **Attendees:** <list>
+- **Agenda checkpoints:** <bullets>
+- **Decisions:** <numbered list>
+- **Action items:** <owner → due date>
+- **Evidence bundle:** `artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/`
+- **Open risks/questions:** <bullets>
 ```
 
-Una vez exportado a PDF para governance, guardar el archivo renderizado junto
-al bundle y enlazarlo desde `docs/source/sorafs_gateway_dns_design_attendance.md`.
+Once exported to PDF for governance, store the rendered file alongside the
+artefact bundle and link it from `docs/source/sorafs_gateway_dns_design_attendance.md`.
 
-## 6.3 Checklist de upload de evidencia
+## 6.3 Evidence upload checklist
 
-1. Subir el tarball de § 5.5 más el PDF de actas al bucket de governance
-   (`s3://sora-governance/sorafs/gateway_dns/20250302/`).
-2. Registrar los hashes SHA-256 en las actas y en el issue tracker del steering.
-3. Avisar al alias de reviewer de governance con el link de upload, ACKs de Networking
-   y Storage leads, y el screenshot de PagerDuty.
+1. Upload the tarball from § 5.5 and, when rendered, the minutes PDF to the
+   governance bucket (`s3://sora-governance/sorafs/gateway_dns/20250302/`).
+2. Record the available SHA-256 hashes in the minutes and in the steering issue
+   tracker. If the rendered PDF is not present yet, record the markdown minutes
+   hash and the bundle manifest hash as the repo-local evidence.
+3. Ping the governance reviewer alias with the upload link, ACKs from Networking
+   and Storage leads, and the PagerDuty screenshot.
 
-# 7. Acciones post-run
+# 7. Post-Run Actions
 
-1. Actualizar `docs/source/sorafs_gateway_dns_design_pre_read.md` y la agenda
-   con riesgos/assumptions nuevos descubiertos durante el ensayo.
-2. Añadir una fila a `ops/drill-log.md` resumiendo el drill, versiones de tooling
-  y resultado de PagerDuty.
-3. Registrar un bullet en `status.md` bajo “Latest Updates” referenciando los
-   artefactos ensayados para que equipos downstream sepan que el material del
-   kickoff está listo.
-4. Si hubo fallos de conformidad, abrir issues de GitHub con label `sf-5a` y
-   listarlos en `docs/source/sorafs_gateway_dns_design_attendance.md`.
+1. Update `docs/source/sorafs_gateway_dns_design_pre_read.md` and the agenda
+   with any new risks/assumptions discovered during the rehearsal.
+2. Append a row to `ops/drill-log.md` summarising the drill, tooling versions,
+  and PagerDuty outcome.
+3. File a `status.md` bullet under “Latest Updates” referencing the rehearsed
+   artefacts so downstream teams know the kickoff collateral is ready.
+4. If conformance failures occurred, open GitHub issues with the `sf-5a` label
+   and list them in `docs/source/sorafs_gateway_dns_design_attendance.md`.
+
+# 8. Command Reference
+
+| Command | Purpose | Output |
+|---------|---------|--------|
+| `cargo xtask soradns-directory-release …` | Build signed RAD/directory bundle. | `artifacts/soradns_directory/<run>/` sub-tree with JSON/TO files. |
+| `./scripts/telemetry/run_soradns_transparency_tail.sh …` | Capture resolver telemetry and Pushgateway metrics. | `.jsonl` log + `.prom` metrics for GAR appendix. |
+| `cargo xtask sorafs-gateway-probe …` | Validate headers, TLS/ECH, GAR enforcement. | Probe JSON, summary JSON, drill log updates, optional PagerDuty payload. |
+| `ci/check_sorafs_gateway_conformance.sh` | Execute SF‑5a replay/load suites. | `artifacts/sorafs_gateway_conformance/<run>/report.json` + logs. |
+| `./scripts/sorafs_gateway_self_cert.sh …` | Produce Norito self-cert bundle for rehearsal gateway. | `sorafs_gateway_report.json`, `.to` attestation, signed manifest. |
+
+Keep this runbook next to the pre-read and update it whenever tooling, alerts,
+or owner assignments change; reference the Git history in kickoff minutes.
+
+# 9. 2025-03-02 Mock Run Snapshot
+
+- **Run ID:** `artifacts/sorafs_gateway_dns/20250302`
+- **RAD + manifest:** produced via `cargo xtask soradns-directory-release`
+  (see `rad/resolver-demo.norito` and
+  `20251109T090535482584Z_soradns_directory/{directory.json,record.{json,to},metadata.json}`).
+- **Transparency evidence:** `logs/transparency_demo.log` plus
+  `telemetry/transparency.{jsonl,prom}` from
+  `scripts/telemetry/run_soradns_transparency_tail.sh`.
+- **Gateway probe:** `cargo xtask sorafs-gateway-probe` against the demo headers
+  writes `probe_xtask/{report.json,summary.json}`. The demo headers return `503`
+  intentionally, so the run reports the failure; swap in live gateway headers to
+  obtain a green probe.
+- **Additional probe:** `probe/{report.json,summary.txt}` contains the lightweight
+  checker output used while validating the xtask fixes.
+- **Release metadata:** `directory_release/**/metadata.json` captures hashes,
+  signing note (`dns-gateway-kickoff`), and resolver list.

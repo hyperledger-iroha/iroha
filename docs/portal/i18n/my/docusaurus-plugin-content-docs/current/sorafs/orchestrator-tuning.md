@@ -84,7 +84,7 @@ translation_last_reviewed: 2026-02-07
 
 ## CLI & SDK အလံ အကိုးအကား
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` ကိုကြည့်ပါ) နှင့်
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` ကိုကြည့်ပါ) နှင့်
 `iroha_cli app sorafs fetch` ထုပ်ပိုးခြင်း (`crates/iroha_cli/src/commands/sorafs.rs`)
 တူညီသော orchestrator configuration မျက်နှာပြင်ကိုမျှဝေပါ။ အောက်ပါအလံများကို အသုံးပြုပါ။
 စတင်ရောင်းချခြင်းဆိုင်ရာ အထောက်အထားများကို ဖမ်းယူခြင်း သို့မဟုတ် Canonical fixtures များကို ပြန်လည်ပြသခြင်း-

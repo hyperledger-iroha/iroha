@@ -1,14 +1,16 @@
 ---
-title: SoraFS Gateway Conformance Backlog
-summary: Execution plan for remaining SF-5a conformance tasks, including owners, dependencies, and status.
+title: SoraFS Gateway Conformance Status
+summary: Implemented SF-5a conformance workstreams plus live rollout evidence hand-offs.
 ---
 
-# SoraFS Gateway Conformance Backlog
+# SoraFS Gateway Conformance Status
 
-This living document tracks the work required to ship the SF-5a conformance harness,
-covering replay verification, load testing, release automation, and governance reporting.
+This living document records the shipped SF-5a conformance harness and the
+external rollout evidence still owned by operators or hosted CI. Replay
+verification, deterministic load testing, local CI gating, signed attestation
+generation, and dashboard assets are implemented in this checkout.
 
-## Milestone Breakdown
+## Implementation And Rollout Breakdown
 
 ### 1. Replay Harness Core (Owner: Conformance WG, Issue: SF-5a-REPLAY)
 - **Scope**
@@ -19,8 +21,8 @@ covering replay verification, load testing, release automation, and governance r
   - Fixture index (`fixtures/sorafs_gateway/index.norito.json`).
   - Token schema helpers from `sorafs_token_schema`.
 - **Deliverables**
-  - Rust crate `sorafs_gateway_cert::replay`.
-  - Golden fixtures + regression tests (`cargo test -p sorafs_gateway_cert -- replay_*`).
+  - Harness module `integration_tests::sorafs_gateway_conformance`.
+  - Golden fixture and regression tests (`cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance`).
   - Attestation samples archived under `artifacts/sorafs_gateway/replay/`.
 
 ### 2. Concurrent Load Runner (Owner: Reliability WG, Issue: SF-5a-LOAD)
@@ -32,49 +34,53 @@ covering replay verification, load testing, release automation, and governance r
   - Replay harness libraries (reuse HTTP adapter + proof pipeline).
   - Metrics export pipeline (`sorafs_telemetry`).
 - **Deliverables**
-  - Module `sorafs_gateway_cert::load` with CLI integration (`--profile mock-chaos`).
-  - Telemetry dashboards added to `dashboards/sorafs_gateway_conformance.json`.
+  - Deterministic load helper `run_deterministic_load_test` in the conformance harness.
+  - Telemetry dashboards added to `dashboards/grafana/sorafs_gateway_conformance.json`.
   - Documentation covering load profiles within this backlog.
 
-### 3. CLI Packaging (`sorafs-gateway-cert`) (Owner: Tooling WG, Issue: SF-5a-CLI)
+### 3. CLI Packaging (`sorafs-gateway-attest`) (Owner: Tooling WG, Issue: SF-5a-CLI)
 - **Scope**
-  - Expose replay and load flows via a single CLI with subcommands:
-    - `replay run --scenario sf1/full`
-    - `load run --profile mock-chaos`
-    - `report sign --input report.json`
-  - Implement configuration discovery (`.sorafs-gateway-cert/config.toml` + env overrides).
+  - Expose attestation generation and verification through `cargo xtask
+    sorafs-gateway-attest`.
+  - Keep replay and load execution in the deterministic harness used by the
+    generator; avoid a second config surface until a standalone operator binary
+    is needed.
 - **Deliverables**
-  - Binary crate `sorafs-gateway-cert`.
-  - Installation guide in `docs/source/sorafs_gateway_cert_cli.md`.
-  - Smoke tests executed in CI (`cargo run --bin sorafs-gateway-cert -- replay --help`).
+  - Implemented `cargo xtask sorafs-gateway-attest --signing-key ...` report
+    generation and `--verify <attestation.to>` envelope verification.
+  - Parser and verifier regression tests covering command selection, digest
+    drift, and signature verification.
+  - Future standalone packaging can wrap the same verified helper without
+    changing the attestation format.
 
 ### 4. Fixture Publication Automation (Owner: Build Infra, Issue: SF-5a-FIXTURES)
 - **Scope**
-  - Create CI job (`.buildkite/sorafs-fixtures.yml`) that packages fixture bundles, signs manifests, and uploads artifacts.
-  - Publish Norito-signed manifest list to `fixtures/releases/latest.manifest`.
-  - Verify signatures during pipeline execution and fail on drift.
+  - Keep local fixture drift gated by `scripts/verify_sorafs_fixtures.sh`.
+  - Package, sign, upload, and retain hosted fixture-release artifacts once
+    Buildkite credentials and release storage are provisioned.
+  - Verify signatures during hosted pipeline execution and fail on drift.
 - **Deliverables**
-  - Buildkite step integrated into nightly and merge pipelines.
-  - Artifact retention policy documented in `docs/source/fixtures_retention.md`.
-  - Validation script `scripts/verify_sorafs_fixtures.sh` (wraps `cargo xtask sorafs-gateway-fixtures --verify`) invoked pre-merge so fixture digests, helper files, and scenario matrices drift only with intentional commits.
+  - Local validation script `scripts/verify_sorafs_fixtures.sh` wraps
+    `cargo xtask sorafs-gateway-fixtures --verify` and is ready for pre-merge
+    or nightly invocation.
+  - Hosted fixture publication and retention remain deployment evidence, not a
+    local harness implementation blocker.
 
 ### 5. CI / Nightly Integration (Owner: CI WG, Issue: SF-5a-CI)
 - **Scope**
-  - Add pipeline `ci/sorafs-gateway-cert` that runs replay + load profiles against nightly builds.
-  - Introduce merge gate for PRs touching gateway, orchestrator, or fixture code.
+  - Keep `ci/check_sorafs_gateway_conformance.sh` as the local merge gate for gateway, orchestrator, fixture, and conformance harness changes.
+  - Let hosted nightly jobs wrap the same script when Buildkite and PagerDuty rollout secrets are available.
 - **Deliverables**
-  - Buildkite configuration with notifications to PagerDuty service `svc_sorafs_cert`.
-  - Metrics exported to `ci/sorafs-gateway-cert:{profile}`.
-  - CI documentation updates in `docs/source/ci_matrix.md`.
+  - Scripted conformance gate invoking `cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`.
+  - CI documentation points at the local script; hosted notification wiring remains deployment work, not harness implementation.
 
 ### 6. Governance Dashboard Integration (Owner: GovOps WG, Issue: SF-5a-DASHBOARD)
 - **Scope**
-  - Surface conformance status, last attestation hash, and outstanding failures on the governance dashboard.
-  - Provide drill-down views for recent runs with links to artifacts.
+  - Provide local Grafana panels for fixture metadata, refusal totals, latency, throughput, and active concurrency.
+  - Keep live governance portal embedding and attestation datastore ingestion as rollout evidence once GovOps supplies the deployment surface.
 - **Deliverables**
-  - Dashboard panels (`dashboards/governance.json` sections `sorafs_conformance_*`).
-  - Telemetry ingestion job that reads Norito attestation envelopes and updates the dashboard datastore.
-  - Operations runbook entry for interpreting dashboard alerts.
+  - Dashboard panels in `dashboards/grafana/sorafs_gateway_conformance.json`.
+  - Runbook references interpret `torii_sorafs_gateway_refusals_total` and fixture metadata alongside signed attestations.
 
 ## Future Enhancements
 
@@ -87,11 +93,12 @@ covering replay verification, load testing, release automation, and governance r
 
 | Workstream | Issue ID | Status | Next Checkpoint | Notes |
 |------------|----------|--------|-----------------|-------|
-| Replay harness core | SF-5a-REPLAY | In design | 2026-03-05 | Waiting on fixture index finalization. |
-| Load runner | SF-5a-LOAD | Planned | 2026-03-08 | Seed distribution agreed with Reliability WG. |
-| CLI packaging | SF-5a-CLI | In progress | 2026-03-04 | Parsing layer scaffolding in review. |
-| Fixture publication | SF-5a-FIXTURES | Not started | 2026-03-06 | Requires Buildkite secrets approval. |
-| CI integration | SF-5a-CI | Planned | 2026-03-10 | Dependent on CLI availability. |
-| Governance dashboard | SF-5a-DASHBOARD | Planned | 2026-03-12 | Design mock-ups awaiting GovOps sign-off. |
+| Replay harness core | SF-5a-REPLAY | Implemented | 2026-06-22 | Deterministic fixture replay is covered by `integration_tests::sorafs_gateway_conformance`. |
+| Load runner | SF-5a-LOAD | Implemented | 2026-06-22 | `run_deterministic_load_test` covers the seeded ≥1,000 request profile in the harness. |
+| CLI packaging | SF-5a-CLI | Implemented | 2026-06-22 | `cargo xtask sorafs-gateway-attest` now generates and verifies signed envelopes; standalone packaging is optional wrapper work. |
+| Fixture publication | SF-5a-FIXTURES | Local verification implemented | Deployment rollout | `scripts/verify_sorafs_fixtures.sh` verifies fixture digests locally; hosted Buildkite publication waits on credentials and release storage. |
+| CI integration | SF-5a-CI | Implemented | 2026-06-22 | `ci/check_sorafs_gateway_conformance.sh` runs the `nexus_and_streaming` conformance harness; hosted nightly wrapping remains rollout work. |
+| Governance dashboard | SF-5a-DASHBOARD | Implemented | 2026-06-22 | Grafana panels live at `dashboards/grafana/sorafs_gateway_conformance.json`; GovOps embedding remains deployment evidence. |
 
-Review and update this table at the end of each sprint to keep stakeholders aligned with the roadmap.
+Update this table when live rollout evidence, hosted fixture publication, or
+new transport scenarios land.

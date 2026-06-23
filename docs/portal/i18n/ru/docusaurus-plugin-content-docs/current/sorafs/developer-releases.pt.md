@@ -31,7 +31,7 @@ captura artefatos для потребителей ниже по течению. 
 - Приложение или ссылка на билет на исправление (например, `governance/tickets/SF6-SR-2026.md`) и примечание.
   наши специалисты по обеспечению безопасности и рабочая группа по инструментарию.
 - Убедитесь, что контрольный список исправлений не найден в записке; itens pendentes bloqueiam o Release.
-- Подготовьте или загрузите журналы DoS, чтобы выполнить paridade (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Подготовьте или загрузите журналы DoS, чтобы выполнить paridade (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   junto как пакет манифеста.
 - Подтвердите, что команда убийцы должна выполнить команду, включающую `--identity-token-provider` и
   um `--identity-token-audience=<aud>` явно для того, чтобы захватить или скрыться от Фульчио для освобождения доказательств.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 О скрипте, как и последующие проверки:
 
 - `cargo fmt --all -- --check` (рабочая область)
-- `cargo clippy --locked --all-targets` для `sorafs_car` (с функцией `cli`),
-  `sorafs_manifest` и `sorafs_chunker`
-- `cargo test --locked --all-targets` для ящиков с предметами
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Если вы хотите пройти мимо, это приведет к регрессу до того, как вы почувствуете боль. Сборки релизной версии
 ser continuos com main; мы часто выбираем исправления в ветках выпуска. О

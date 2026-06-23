@@ -1292,6 +1292,45 @@ def _summary_release_d2d_payment_transports(
     return []
 
 
+def _summary_release_d2d_payment_transport_coverage_by_family(
+    reports: list[dict],
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> dict[str, list[str]]:
+    """Return complete release D2D transport coverage by standard device family."""
+
+    coverage: dict[str, set[str]] = {
+        family: set() for family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    }
+    for report in reports:
+        family = _summary_release_device_family(
+            report,
+            trusted_signer_public_key_sha256,
+        )
+        if family is None:
+            continue
+        coverage[family].update(
+            _summary_release_d2d_payment_transports(
+                report,
+                trusted_signer_public_key_sha256,
+            )
+        )
+    return {family: sorted(transports) for family, transports in coverage.items()}
+
+
+def _missing_summary_release_d2d_payment_transport_pairs(
+    coverage_by_family: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Return required standard-family D2D transport pairs without evidence."""
+
+    missing: list[dict[str, str]] = []
+    for family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+        covered = set(coverage_by_family.get(family, []))
+        for transport in sorted(D2D_PAYMENT_TRANSPORTS):
+            if transport not in covered:
+                missing.append({"device_family": family, "transport": transport})
+    return missing
+
+
 def _summary_reports_for_release_output(
     reports: list[dict],
     *,
@@ -5260,6 +5299,17 @@ def build_summary(
             for transport in sorted(D2D_PAYMENT_TRANSPORTS)
             if transport not in covered_d2d_payment_transports
         ]
+        covered_d2d_payment_transports_by_family = (
+            _summary_release_d2d_payment_transport_coverage_by_family(
+                summary_reports,
+                trusted_signer_public_key_sha256,
+            )
+        )
+        missing_d2d_payment_transport_pairs = (
+            _missing_summary_release_d2d_payment_transport_pairs(
+                covered_d2d_payment_transports_by_family,
+            )
+        )
         summary["kagemusha"] = {
             "production_evidence_required": require_kagemusha_production_evidence,
             "standard_matrix_required": require_kagemusha_standard_matrix,
@@ -5269,6 +5319,8 @@ def build_summary(
             "required_d2d_payment_transports": sorted(D2D_PAYMENT_TRANSPORTS),
             "covered_d2d_payment_transports": covered_d2d_payment_transports,
             "missing_d2d_payment_transports": missing_d2d_payment_transports,
+            "covered_d2d_payment_transports_by_family": covered_d2d_payment_transports_by_family,
+            "missing_d2d_payment_transport_pairs": missing_d2d_payment_transport_pairs,
             "duplicate_bindings": kagemusha_duplicate_matrix_bindings(
                 summary_reports,
                 require_complete_signed_evidence=require_complete_kagemusha,
@@ -5910,6 +5962,17 @@ def main(argv: list[str] | None = None) -> int:
             for transport in sorted(D2D_PAYMENT_TRANSPORTS)
             if transport not in covered_d2d_payment_transports
         ]
+        covered_d2d_payment_transports_by_family = (
+            _summary_release_d2d_payment_transport_coverage_by_family(
+                reports,
+                trusted_signer_public_key_sha256,
+            )
+        )
+        missing_d2d_payment_transport_pairs = (
+            _missing_summary_release_d2d_payment_transport_pairs(
+                covered_d2d_payment_transports_by_family,
+            )
+        )
         if missing:
             failures += 1
             print(
@@ -5917,12 +5980,15 @@ def main(argv: list[str] | None = None) -> int:
                 + ", ".join(missing),
                 file=sys.stderr,
             )
-        if missing_d2d_payment_transports:
+        if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:
             failures += 1
             print(
-                "[device-lab] missing Kagemusha production evidence for D2D "
-                "payment transports: "
-                + ", ".join(missing_d2d_payment_transports),
+                "[device-lab] missing Kagemusha production evidence for "
+                "standard-family D2D payment transports: "
+                + ", ".join(
+                    f"{item['device_family']}={item['transport']}"
+                    for item in missing_d2d_payment_transport_pairs
+                ),
                 file=sys.stderr,
             )
     if require_kagemusha:

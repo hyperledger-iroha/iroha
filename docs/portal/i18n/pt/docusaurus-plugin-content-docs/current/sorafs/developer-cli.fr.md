@@ -18,7 +18,7 @@ descrição: Parcours orienté tâches de la surface consolidada `sorafs_cli`.
 :::nota Fonte canônica
 :::
 
-A superfície consolidada `sorafs_cli` (fornecida pela caixa `sorafs_car` com o recurso `cli` ativado) expõe toda a etapa necessária para preparar os artefatos SoraFS. Use este livro de receitas para direcionar os fluxos de trabalho atuais; associe o pipeline de manifesto e os runbooks do orquestrador para o contexto operacional.
+A superfície consolidada `sorafs_cli` (provided by the `sorafs_orchestrator` crate) expõe toda a etapa necessária para preparar os artefatos SoraFS. Use este livro de receitas para direcionar os fluxos de trabalho atuais; associe o pipeline de manifesto e os runbooks do orquestrador para o contexto operacional.
 
 ## Empacotar cargas úteis
 

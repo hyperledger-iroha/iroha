@@ -10,80 +10,84 @@ translation_last_reviewed: 2026-02-07
 id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
-description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+description: Completed status for ManifestV1 validation gating in the SF-4 Pin Registry rollout.
 translator: machine-google-reviewed
 ---
 
-::: ማስታወሻ ቀኖናዊ ምንጭ
-::
+:::note Canonical Source
+:::
 
-# የፒን መዝገብ ቤት መግለጫ ማረጋገጫ እቅድ (SF-4 መሰናዶ)
+# Pin Registry Manifest Validation Status (SF-4)
 
-ይህ እቅድ `sorafs_manifest::ManifestV1` ክር ለመስራት የሚያስፈልጉትን ደረጃዎች ይዘረዝራል።
-የ SF-4 ሥራ እንዲሠራ በሚመጣው የፒን መዝገብ ቤት ውል ውስጥ ማረጋገጥ
-ኢንኮድ/አመክንዮ ሳይገለብጡ አሁን ባለው መሳሪያ ላይ ይገንቡ።
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-# ግቦች
+## Implemented Goals
 
-1. የአስተናጋጅ-ጎን የማስረከቢያ ዱካዎች አንጸባራቂ አወቃቀሩን ያረጋግጣሉ፣ መገለጫን መቆራረጥ እና
-   ሀሳቦችን ከመቀበልዎ በፊት የአስተዳደር ፖስታዎች ።
-2. Torii እና የጌትዌይ አገልግሎቶችን ለማረጋገጥ ተመሳሳይ የማረጋገጫ ስልቶችን በድጋሚ ይጠቀማሉ።
-   በመላ አስተናጋጆች ላይ የሚወሰን ባህሪ።
-3. የውህደት ሙከራዎች በግልጽ ተቀባይነት ለማግኘት አወንታዊ/አሉታዊ ጉዳዮችን ይሸፍናሉ።
-   የፖሊሲ አፈፃፀም እና የቴሌሜትሪ ስህተት።
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## አርክቴክቸር
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### አካላት
+## Shipped Components
 
-- `ManifestValidator` (አዲስ ሞጁል በ I18NI0000015X ወይም I18NI0000016X crate)
-  መዋቅራዊ ቼኮችን እና የፖሊሲ በሮችን ያጠቃልላል።
-- Torii ወደ ውስጥ የሚጠራውን የ gRPC የመጨረሻ ነጥብ `SubmitManifest` ያጋልጣል
-  ወደ ውሉ ከማስተላለፉ በፊት `ManifestValidator`።
-- የጌትዌይ ዱካ እንደ አማራጭ አዲስ ሲሸጎጥ ተመሳሳዩን አረጋጋጭ ይበላል
-  ከመዝገቡ ውስጥ ይገለጣል.
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## የተግባር ዝርዝር መግለጫ
+## Completion Matrix
 
-| ተግባር | መግለጫ | ባለቤት | ሁኔታ |
-|-------------|-------|--------|
-| V1 API አጽም | `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` ወደ I18NI0000020X ያክሉ። BLAKE3 ዳይጀስት ማረጋገጫ እና chunker መዝገብ ፍለጋን ያካትቱ። | ኮር ኢንፍራ | ✅ ተፈጸመ | የተጋሩ ረዳቶች (I18NI0000021X፣ `validate_pin_policy`፣ I18NI0000023X) አሁን በ`sorafs_manifest::validation` ይኖራሉ። |
-| ፖሊሲ ሽቦ | የካርታ መዝገብ ፖሊሲ ​​ውቅረት (`min_replicas`፣ ጊዜው ያለፈበት ዊንዶውስ፣ የተፈቀደ ቻንከር እጀታ) ወደ የማረጋገጫ ግብዓቶች። | አስተዳደር / ኮር ኢንፍራ | በመጠባበቅ ላይ - በ SORAFS-215 |
-| Torii ውህደት | በI18NT0000007X አንጸባራቂ የማስረከቢያ መንገድ ውስጥ አረጋጋጭ ይደውሉ; በብልሽት ላይ የተዋቀሩ I18NT0000000X ስህተቶችን መመለስ። | Torii ቡድን | የታቀደ - በ SORAFS-216 |
-| አስተናጋጅ ውል stub | የኮንትራት መግቢያ ነጥብ ውድቅ ማድረጉን ማረጋገጥ ያልተሳካ የማረጋገጫ ሃሽ; መለኪያዎች ቆጣሪዎችን ያጋልጡ። | ብልጥ የኮንትራት ቡድን | ✅ ተፈጸመ | `RegisterPinManifest` አሁን የተጋራውን አረጋጋጭ (`ensure_chunker_handle`/`ensure_pin_policy`) የግዛት እና የዩኒት ሙከራዎች የውድቀት ጉዳዮችን ይሸፍናሉ። |
-| ፈተናዎች | ልክ ላልሆኑ አንጸባራቂዎች የክፍል ሙከራዎችን ለአረጋጋጭ + trybuild ጉዳዮችን ያክሉ። በ I18NI0000029X ውስጥ የውህደት ሙከራዎች። | QA Guild | 🟠 በሂደት ላይ | የማረጋገጫ ክፍል ሙከራዎች በሰንሰለት ላይ ካለመቀበል ሙከራዎች ጎን ለጎን አርፈዋል። ሙሉ ውህደት ስብስብ አሁንም በመጠባበቅ ላይ። |
-| ሰነዶች | `docs/source/sorafs_architecture_rfc.md` እና `migration_roadmap.md` አንዴ የተረጋገጠ መሬቶችን አዘምን; የሰነድ CLI አጠቃቀም በ I18NI0000032X. | ሰነዶች ቡድን | በመጠባበቅ ላይ - በ DOCS-489 |
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-## ጥገኛዎች
+## Operational Notes
 
-- የፒን መዝገብ ቤት I18NT0000001X እቅድ ማጠናቀቅ (ማጣቀሻ፡ SF-4 በፍኖተ ካርታ)።
-- በካውንስሉ የተፈረመ የ chunker መዝገብ ቤት ፖስታዎች (አረጋጋጭ የካርታ ስራ መሆኑን ያረጋግጣል
-  ቆራጥ)።
-- ለአንጸባራቂ ግቤት Torii የማረጋገጫ ውሳኔዎች።
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## አደጋዎች እና ቅነሳዎች
+## Remaining Rollout Evidence
 
-| ስጋት | ተጽዕኖ | ቅነሳ |
-|-------|--------|-----------|
-| በ Torii እና በኮንትራት መካከል ያለው ልዩነት የፖሊሲ ትርጓሜ | የማይወሰን ተቀባይነት. | የማረጋገጫ ሳጥን ያጋሩ + አስተናጋጁ በሰንሰለት ላይ ካሉ ውሳኔዎች ጋር የሚያወዳድሩ የውህደት ሙከራዎችን ያክሉ። |
-| ለትልልቅ መገለጫዎች የአፈጻጸም መመለሻ | ቀስ ብሎ ማስረከብ | ቤንችማርክ በጭነት መስፈርት; አንጸባራቂ የምግብ መፈጨት ውጤቶችን መሸጎጥ ያስቡበት። |
-| ስህተት የመልእክት መንሸራተት | ኦፕሬተር ግራ መጋባት | Norito የስህተት ኮዶችን ይግለጹ; በ `manifest_pipeline.md` ሰነዳቸው። |
-
-## የጊዜ መስመር ኢላማዎች
-
-- 1ኛው ሳምንት፡ የመሬት I18NI0000034X አጽም + የክፍል ሙከራዎች።
-- 2ኛው ሳምንት፡ Wire Torii የማስረከቢያ መንገድ እና CLIን ወደ የማረጋገጫ ስህተቶች ያዘምኑ።
-- 3ኛው ሳምንት፡ የኮንትራት መንጠቆዎችን ይተግብሩ፣ የውህደት ሙከራዎችን ያክሉ፣ ሰነዶችን ያዘምኑ።
-- 4ኛው ሳምንት፡ ከጫፍ እስከ ጫፍ ልምምዱን ከስደት ደብተር መግቢያ ጋር ያካሂዱ፣ የምክር ቤት ማቋረጥ።
-
-የማረጋገጫው ሥራ ከጀመረ በኋላ ይህ እቅድ በፍኖተ ካርታው ውስጥ ይጠቀሳል።
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

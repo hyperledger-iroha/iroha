@@ -28,7 +28,7 @@ SoraFS екілік файлдары (`sorafs_cli`, `sorafs_fetch`, көмекш
 - Түзету билетінің сілтемесін тіркеңіз (мысалы, `governance/tickets/SF6-SR-2026.md`) және шығуды ескеріңіз
   Қауіпсіздік инженериясы және Құрал-саймандар жөніндегі жұмыс тобының мақұлдаушылары.
 - Жаднамадағы қалпына келтіруді тексеру парағының жабық екенін тексеріңіз; шешілмеген элементтер шығарылымды блоктайды.
-- Тепе-теңдік қосқыш журналдарын жүктеп салуға дайындалыңыз (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Тепе-теңдік қосқыш журналдарын жүктеп салуға дайындалыңыз (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   манифест бумасының жанында.
 - Іске қосуды жоспарлап отырған қол қою пәрмені `--identity-token-provider` және айқын пәрменді қамтитынын растаңыз.
   `--identity-token-audience=<aud>` сондықтан Fulcio ауқымы шығарылым дәлелдерінде жазылған.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Сценарий келесі бекітулерді орындайды:
 
 - `cargo fmt --all -- --check` (жұмыс кеңістігі)
-- `cargo clippy --locked --all-targets` `sorafs_car` үшін (`cli` мүмкіндігімен),
-  `sorafs_manifest`, және `sorafs_chunker`
-- Дәл сол жәшіктер үшін `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Кез келген қадам сәтсіз болса, тегтеу алдында регрессияны түзетіңіз. Шығарылым құрастырулары болуы керек
 негізгімен үздіксіз; босату бұтақтарына түзетулерді таңдамаңыз. Қақпа

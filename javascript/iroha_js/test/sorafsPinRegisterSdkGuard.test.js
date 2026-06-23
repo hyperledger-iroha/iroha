@@ -422,6 +422,13 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
   const dist = read("javascript/iroha_js/dist/toriiClient.js");
   const dts = read("javascript/iroha_js/index.d.ts");
   const tests = read("javascript/iroha_js/test/toriiClient.test.js");
+  const pythonClient = read("python/iroha_python/src/iroha_python/client.py");
+  const pythonTests = read("python/iroha_python/tests/client_sorafs_pin_register_test.py");
+  const swiftClient = read("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift");
+  const swiftTests = read("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift");
+  const csharpClient = read("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs");
+  const csharpModels = read("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs");
+  const csharpTests = read("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs");
 
   for (const text of [src, dist]) {
     assert.match(text, /async registerSorafsPinManifest\(input = \{\}\)/);
@@ -429,12 +436,40 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
     assert.match(text, /buildSorafsPinRegisterPayload/);
     assert.match(text, /normalizeSorafsPinRegisterResponse/);
     assert.match(text, /ambiguous aliases/);
+    assert.match(text, /"manifestBytes"/);
+    assert.match(text, /"manifest_b64"/);
+    assert.match(text, /payload\.manifest_b64 = normalizeRequiredBase64Payload/);
   }
   assert.match(dts, /registerSorafsPinManifest\(/);
   assert.match(dts, /registerSorafsPinManifestTyped\(/);
+  assert.match(dts, /manifestBytes\?: BinaryLike \| string \| null;/);
+  assert.match(dts, /manifest_b64\?: BinaryLike \| string \| null;/);
   assert.match(
     tests,
     /registerSorafsPinManifest rejects ambiguous request field aliases before fetch/,
   );
+  assert.match(tests, /registerSorafsPinManifest rejects malformed manifest payload before fetch/);
   assert.match(tests, /registerSorafsPinManifestTyped rejects ambiguous response aliases/);
+
+  assert.match(pythonClient, /"manifest_b64"/);
+  assert.match(pythonClient, /"manifestBytes"/);
+  assert.match(pythonClient, /accepts only one of manifest_b64 or manifest_bytes/);
+  assert.match(pythonTests, /"manifestBytes": b"manifest-norito"/);
+  assert.match(pythonTests, /body\["manifest_b64"\]/);
+
+  assert.match(swiftClient, /public var manifestBase64: String\?/);
+  assert.match(swiftClient, /public var manifestBytes: Data\?/);
+  assert.match(swiftClient, /case manifestBase64 = "manifest_b64"/);
+  assert.match(swiftClient, /optionalManifestPayload\(manifestBase64: String\?, manifestBytes: Data\?\)/);
+  assert.match(swiftTests, /testRegisterSoraFsPinManifestAcceptsManifestBase64Payload/);
+  assert.match(swiftTests, /root\["manifest_b64"\]/);
+
+  assert.match(csharpClient, /NormalizeOptionalSoraFsManifestPayload/);
+  assert.match(csharpClient, /Convert\.ToBase64String\(manifestBytes\)/);
+  assert.match(csharpClient, /Provide either ManifestBase64 or ManifestBytes, not both\./);
+  assert.match(csharpModels, /public string\? ManifestBase64/);
+  assert.match(csharpModels, /public byte\[\]\? ManifestBytes/);
+  assert.match(csharpModels, /\[JsonPropertyName\("manifest_b64"\)\]/);
+  assert.match(csharpTests, /RegisterSoraFsPinManifestAsyncAcceptsManifestBase64Payload/);
+  assert.match(csharpTests, /GetProperty\("manifest_b64"\)/);
 });

@@ -45,7 +45,7 @@ Les boutons de mise en application du côté de la passerelle sont reconnus sur 
 La préparation de mode direct aujourd'hui inclut une couverture aussi importante pour l'orquesteur que pour les caisses de CLI :- `direct_only_policy_rejects_soranet_only_providers` garantit que `TransportPolicy::DirectOnly` tombera rapidement lorsque chaque candidat annoncera seul un lien avec SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` garantit que les transports Torii/QUIC sont utilisés lorsque vous les présentez et que les relais SoraNet sont exclus de la session.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` analyse `docs/examples/sorafs_direct_mode_policy.json` pour garantir que la documentation est alignée avec les assistants d'utilisation.
-- `fetch_command_respects_direct_transports` ejercita `sorafs_cli fetch --transport-policy=direct-only` contre une passerelle Torii simulée, en fournissant une vérification de l'humidité pour les entreprises régulées qui transportent directement.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` ejercita `sorafs_cli fetch --transport-policy=direct-only` contre une passerelle Torii simulée, en fournissant une vérification de l'humidité pour les entreprises régulées qui transportent directement.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` inclut la même commande avec le JSON de politique et la persistance du tableau de bord pour l'automatisation du déploiement.
 
 Exécutez la suite affichée avant de publier les mises à jour :

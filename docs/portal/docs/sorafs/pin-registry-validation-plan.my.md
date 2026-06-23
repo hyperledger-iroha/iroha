@@ -10,80 +10,84 @@ translation_last_reviewed: 2026-02-07
 id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
-description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+description: Completed status for ManifestV1 validation gating in the SF-4 Pin Registry rollout.
 translator: machine-google-reviewed
 ---
 
-::: Canonical Source ကို သတိပြုပါ။
+:::note Canonical Source
 :::
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# Pin Registry Manifest Validation Status (SF-4)
 
-ဤအစီအစဥ်တွင် `sorafs_manifest::ManifestV1` အတွက် လိုအပ်သော အဆင့်များကို အကြမ်းဖျင်းဖော်ပြထားသည်။
-SF-4 အလုပ်လုပ်နိုင်စေရန်အတွက် လာမည့် Pin Registry စာချုပ်တွင် တရားဝင်အတည်ပြုခြင်း။
-encode/decode logic ကို မပွားဘဲ ရှိပြီးသား tooling ကို တည်ဆောက်ပါ။
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-## ပန်းတိုင်
+## Implemented Goals
 
-1. လက်ခံသူဖက်မှ တင်ပြမှုလမ်းကြောင်းများသည် ထင်ရှားသောဖွဲ့စည်းပုံ၊ အတုံးအခဲပရိုဖိုင်၊ နှင့်
-   အဆိုပြုချက်များကို လက်ခံခြင်းမပြုမီ အုပ်ချုပ်မှုစာအိတ်များ။
-2. Torii နှင့် ဂိတ်ဝေးဝန်ဆောင်မှုများသည် တူညီသော တရားဝင်မှုလုပ်ရိုးလုပ်စဉ်များကို သေချာစေရန်အတွက် ပြန်လည်အသုံးပြုသည်
-   အိမ်ရှင်များအနှံ့ အဆုံးအဖြတ်ပေးသော အပြုအမူ။
-3. ပေါင်းစပ်စစ်ဆေးမှုများသည် ထင်ရှားစွာလက်ခံမှုအတွက် အပြုသဘော/အနုတ်လက္ခဏာကိစ္စများကို အကျုံးဝင်သည်၊
-   မူဝါဒ ပြဋ္ဌာန်းခြင်းနှင့် တယ်လီမီတာ အမှားအယွင်း။
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## ဗိသုကာ
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### ပါဝင်ပစ္စည်းများ
+## Shipped Components
 
-- `ManifestValidator` (`sorafs_manifest` သို့မဟုတ် `sorafs_pin` ဗူးတွင် မော်ဂျူးအသစ်)
-  ဖွဲ့စည်းတည်ဆောက်ပုံဆိုင်ရာ စစ်ဆေးမှုများနှင့် မူဝါဒတံခါးများကို ဖုံးအုပ်ထားသည်။
-- Torii သည် ခေါ်ဆိုသော gRPC အဆုံးမှတ် `SubmitManifest` ကို ဖော်ထုတ်သည်
-  စာချုပ်သို့မပို့မီ `ManifestValidator`။
-- Gateway fetch path သည် caching အသစ်လုပ်သောအခါ တူညီသော validator ကို ရွေးချယ်နိုင်သည်။
-  မှတ်ပုံတင်ခြင်းမှထင်ရှားသည်။
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## အလုပ်ပျက်ခြင်း။
+## Completion Matrix
 
-| တာဝန် | ဖော်ပြချက် | ပိုင်ရှင် | အဆင့်အတန်း |
-|--------|----------------|------|--------|
-| V1 API အရိုးစု | `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` ကို `sorafs_manifest` သို့ ထည့်ပါ။ BLAKE3 Digest အတည်ပြုခြင်းနှင့် chunker registry lookup ကို ထည့်သွင်းပါ။ | Core Infra | ✅ ပြီးပြီ | မျှဝေထားသော ကူညီသူများ (`validate_chunker_handle`၊ `validate_pin_policy`၊ `validate_manifest`) ယခု `sorafs_manifest::validation` တွင် နေထိုင်ပါသည်။ |
-| မူဝါဒ ဝိုင်ယာကြိုး | မြေပုံစာရင်းသွင်းခြင်းမူဝါဒ config (`min_replicas`၊ သက်တမ်းကုန်ဝင်းဒိုးများ၊ ခွင့်ပြုထားသော chunker လက်ကိုင်များ) ကို တရားဝင်ထည့်သွင်းမှုများထဲသို့။ | အုပ်ချုပ်မှု / Core Infra | စောင့်ဆိုင်းနေသည် — SORAFS-215 | တွင် ခြေရာခံထားသည်။
-| Torii ပေါင်းစပ်မှု | Torii မန်နီးဖက်စ်တင်ပြမှုလမ်းကြောင်းအတွင်း အတည်ပြုသူကို ခေါ်ဆိုပါ။ ရှုံးနိမ့်မှုတွင် တည်ဆောက်ထားသော Norito အမှားများကို ပြန်ပေးသည်။ | Torii အဖွဲ့ | စီစဉ်ထားသည် — SORAFS-216 | တွင် ခြေရာခံထားသည်။
-| စာချုပ်စာတမ်းပုဒ်မ | စာချုပ်ဝင်ရောက်မှုအမှတ်သည် တရားဝင်အတည်ပြုခြင်း hash ပျက်ကွက်သည့်ဖော်ပြချက်များကို ငြင်းပယ်ကြောင်းသေချာစေပါ။ မက်ထရစ်ကောင်တာများကို ဖော်ထုတ်ပါ။ | စမတ်စာချုပ်အဖွဲ့ | ✅ ပြီးပြီ | `RegisterPinManifest` သည် ယခုအခါ မျှဝေထားသော တရားဝင်စနစ် (`ensure_chunker_handle`/`ensure_pin_policy`) သည် ပျက်ကွက်မှုများကို အကျုံးမဝင်မီ အခြေအနေနှင့် ယူနစ်စစ်ဆေးမှုများ မပြောင်းလဲမီ ခေါ်ဆိုပါသည်။ |
-| စာမေးပွဲများ | မမှန်ကန်သောဖော်ပြချက်များအတွက် ယူနစ်စမ်းသပ်မှုများ + trybuild အမှုတွဲများ ၊ `crates/iroha_core/tests/pin_registry.rs` တွင် ပေါင်းစပ်စစ်ဆေးမှုများ။ | QA Guild | 🟠 လုပ်ဆောင်နေဆဲ | ကွင်းဆက်ဆိုင်ရာ ငြင်းပယ်ခြင်းဆိုင်ရာ စမ်းသပ်မှုများနှင့်အတူ မှန်ကန်သည့် ယူနစ်စမ်းသပ်မှုများ၊ ပေါင်းစပ်မှုအစုံအလင်ကို ဆိုင်းငံ့ထားဆဲဖြစ်သည်။ |
-| Docs | `docs/source/sorafs_architecture_rfc.md` နှင့် `migration_roadmap.md` တစ်ကြိမ် validator lands ကို အပ်ဒိတ်လုပ်ပါ။ `docs/source/sorafs/manifest_pipeline.md` တွင် CLI အသုံးပြုမှုစာရွက်စာတမ်း။ | Docs အဖွဲ့ | စောင့်ဆိုင်းနေသည် — DOCS-489 | တွင် ခြေရာခံထားသည်။
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-## မှီခိုမှု
+## Operational Notes
 
-- Pin Registry Norito schema အပြီးသတ်ခြင်း (လမ်းပြမြေပုံရှိ SF-4 အကြောင်းအရာ)။
-- ကောင်စီမှ လက်မှတ်ရေးထိုးထားသော chunker မှတ်ပုံတင်စာအိတ်များ (တရားဝင်စစ်ဆေးသည့် မြေပုံဆွဲခြင်းကို သေချာစေသည်။
-  အဆုံးအဖြတ်)။
-- ထင်ရှားစွာတင်ပြမှုအတွက် Torii စစ်မှန်ကြောင်းအထောက်အထားပြဆုံးဖြတ်ချက်များ။
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## အန္တရာယ်များနှင့် လျော့ပါးရေး
+## Remaining Rollout Evidence
 
-| အန္တရာယ် | ထိခိုက်မှု | လျော့ပါးရေး |
-|--------|--------|------------|
-| Torii နှင့် စာချုပ် | အဆုံးအဖြတ်မရှိသော လက်ခံမှု။ | အတည်ပြုချက်သေတ္တာကို မျှဝေပါ + အိမ်ရှင်နှင့် ကွင်းဆက်ဆုံးဖြတ်ချက်များကို နှိုင်းယှဉ်သည့် ပေါင်းစပ်စမ်းသပ်မှုများကို ပေါင်းထည့်ပါ။ |
-| ကြီးမားသော သရုပ်ပြပွဲများ | တင်ပြချက် | ကုန်တင်စံနှုန်းမှတစ်ဆင့် စံသတ်မှတ်ချက် caching manifest ၏ ရလဒ်များကို ထည့်သွင်းစဉ်းစားပါ။ |
-| စာတိုပေးပို့မှု ပျံ့ | အော်ပရေတာ ဗြောင်းဆန် | Norito အမှားကုဒ်များကို သတ်မှတ်ပါ။ ၎င်းတို့ကို `manifest_pipeline.md` ဖြင့် မှတ်တမ်းတင်ပါ။ |
-
-## အချိန်လိုင်းပစ်မှတ်များ
-
-- ရက်သတ္တပတ် 1- Land `ManifestValidator` အရိုးစု + ယူနစ် စမ်းသပ်မှုများ။
-- ရက်သတ္တပတ် 2- Wire Torii တင်သွင်းမှုလမ်းကြောင်းနှင့် အတည်ပြုချက်အမှားများကို ကျော်လွှားနိုင်ရန် CLI ကို အပ်ဒိတ်လုပ်ပါ။
-- ရက်သတ္တပတ် 3- စာချုပ်ချိတ်များကို အကောင်အထည်ဖော်ပါ၊ ပေါင်းစပ်စစ်ဆေးမှုများထည့်ပါ၊ စာရွက်စာတမ်းများကို အပ်ဒိတ်လုပ်ပါ။
-- ရက်သတ္တပတ် 4- ရွှေ့ပြောင်းစာရင်းဇယားထည့်သွင်းမှုဖြင့် အဆုံးမှ အဆုံး အစမ်းလေ့ကျင့်မှုကို လုပ်ဆောင်ပါ၊ ကောင်စီမှ အကောင့်ဖွင့်ခြင်းကို ရယူပါ။
-
-အတည်ပြုခြင်းလုပ်ငန်းစတင်သည်နှင့် ဤအစီအစဉ်ကို လမ်းပြမြေပုံတွင် ကိုးကားပါမည်။
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

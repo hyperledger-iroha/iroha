@@ -2267,6 +2267,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_checked_versions"], 1)
             self.assertEqual(summary["profile_schema_backed_versions"], 1)
             self.assertEqual(summary["missing_profile_schema_versions"], [])
+            self.assertEqual(summary["missing_profile_schema_message_ids"], [])
             self.assertEqual(summary["profile_catalog"]["profiles"], 1)
             self.assertEqual(
                 summary["profile_catalog"]["sha256"],
@@ -2307,6 +2308,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_checked_versions"], 1)
             self.assertEqual(summary["profile_schema_backed_versions"], 1)
             self.assertEqual(summary["missing_profile_schema_versions"], [])
+            self.assertEqual(summary["missing_profile_schema_message_ids"], [])
 
     def test_profile_catalog_loader_ignores_commented_or_string_spoofs(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2454,6 +2456,18 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(
                 summary["missing_profile_schema_versions"][0]["message_def_id"],
                 "fooo.001.001.02",
+            )
+            self.assertEqual(
+                summary["missing_profile_schema_message_ids"],
+                [
+                    {
+                        "message_def_id": "fooo.001.001.02",
+                        "profile_version_count": 1,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    }
+                ],
             )
 
             rc, _stdout, stderr = run_verify(
@@ -3381,6 +3395,81 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertGreater(summary["profile_schema_backed_versions"], 0)
             self.assertEqual(summary["profile_schema_backed_versions"], 31)
             self.assertEqual(len(summary["missing_profile_schema_versions"]), 24)
+            self.assertEqual(
+                summary["missing_profile_schema_message_ids"],
+                [
+                    {
+                        "message_def_id": "colr.012.001.05",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": True,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "pacs.002.001.12",
+                        "profile_version_count": 4,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": True,
+                    },
+                    {
+                        "message_def_id": "pacs.008.001.10",
+                        "profile_version_count": 3,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": True,
+                    },
+                    {
+                        "message_def_id": "pacs.009.001.10",
+                        "profile_version_count": 3,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": True,
+                    },
+                    {
+                        "message_def_id": "sese.023.001.09",
+                        "profile_version_count": 1,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.023.001.11",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": True,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.024.001.09",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.024.001.10",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": True,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.025.001.08",
+                        "profile_version_count": 2,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                    {
+                        "message_def_id": "sese.025.001.10",
+                        "profile_version_count": 3,
+                        "reviewed_missing_schema_fixture": False,
+                        "reviewed_schema_only": False,
+                        "blocked_source": False,
+                    },
+                ],
+            )
 
     def test_xml_schema_validation_bounds_xmllint_output(self):
         cases = [

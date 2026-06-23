@@ -5414,6 +5414,23 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             cases.append((missing_mismatch, "xsd.missing_profile_schema_versions_mismatch"))
 
+            missing_message_mismatch = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_message_mismatch["missing_profile_schema_message_ids"].append(
+                {
+                    "message_def_id": "fooo.001.001.02",
+                    "profile_version_count": 1,
+                    "reviewed_missing_schema_fixture": False,
+                    "reviewed_schema_only": False,
+                    "blocked_source": False,
+                }
+            )
+            cases.append(
+                (
+                    missing_message_mismatch,
+                    "xsd.missing_profile_schema_message_ids_mismatch",
+                )
+            )
+
             catalog_missing_mismatch = json.loads(xsd_summary.read_text(encoding="utf-8"))
             catalog_missing_mismatch["profile_catalog"]["missing_schema_versions"].append(
                 {

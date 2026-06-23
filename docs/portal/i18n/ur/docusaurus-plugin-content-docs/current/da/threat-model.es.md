@@ -245,7 +245,7 @@ DA-1 (فن تعمیر اور خطرے کے ماڈل) کے لئے اور کامو
   اور `crates/iroha_torii/src/da/ingest.rs` میں انضمام Torii ، جو تھریڈ کرتا ہے
   فنگر پرنٹ `/v1/da/ingest` کے ذریعے چیک کرتا ہے۔
 - PDP/POTR اسٹریمنگ تخروپن استعمال کی جاتی ہیں ہارنس پروف اسٹریم کے ذریعے
-  `crates/sorafs_car/tests/sorafs_cli.rs` پر ، درخواست کے بہاؤ کو ڈھانپتے ہوئے
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs` پر ، درخواست کے بہاؤ کو ڈھانپتے ہوئے
   خطرہ ماڈل میں پور/PDP/POTR اور متحرک ناکامی کے منظرنامے۔
 - صلاحیت اور مرمت کو بھگوانے کے نتائج میں رہتے ہیں
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` ، جبکہ میٹرکس

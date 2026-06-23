@@ -86,7 +86,7 @@ translator: machine-google-reviewed
 
 ## CLI & SDK դրոշի հղում
 
-`sorafs_cli fetch` (տես `crates/sorafs_car/src/bin/sorafs_cli.rs`) և
+`sorafs_cli fetch` (տես `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) և
 `iroha_cli app sorafs fetch` փաթաթան (`crates/iroha_cli/src/commands/sorafs.rs`)
 կիսում են նվագախմբի կազմաձևման նույն մակերեսը: Օգտագործեք հետևյալ դրոշները, երբ
 ներկայացման ապացույցների գրավում կամ կանոնական սարքերի վերարտադրում.

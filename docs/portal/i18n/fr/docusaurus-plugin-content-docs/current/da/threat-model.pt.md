@@ -227,7 +227,7 @@ liste blanche des fournisseurs malveillants, ou alertes suprêmes.
   et une intégration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui enchaîne les vérifications de
   empreinte digitale via `/v1/da/ingest`.
 - En tant que simulations de streaming PDP/PoTR à partir d'exercices via ou Harness Proof-Stream
-  dans `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
+  dans `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
   PoR/PDP/PoTR et scénarios de faux animés sur le modèle des amis.
 - Résultats de capacité et réparation tremper vivem em
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, concerne la matrice de trempage

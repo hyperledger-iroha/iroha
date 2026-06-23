@@ -74,7 +74,7 @@ Sidebar_label: آرکستریٹر ٹیوننگ
 
 ## CLI وSDK فليج ريفيرنس
 
-`sorafs_cli fetch` (ديكا `crates/sorafs_car/src/bin/sorafs_cli.rs`) و
+`sorafs_cli fetch` (ديكا `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) و
 غلاف `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) موجود
 سطح تكوين المنسق. الأدلة التمهيدية أو الكنسي
 إعادة تشغيل المباريات باستخدام الأعلام أو:

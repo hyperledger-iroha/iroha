@@ -29,7 +29,7 @@ ci-dessous pour chaque tag المرشح.
 - قم بتسجيل رهن تذكرة الإصلاح (على سبيل المثال `governance/tickets/SF6-SR-2026.md`) ولاحظه
   معتمدو هندسة الأمن ومجموعة عمل الأدوات.
 - التحقق من أن قائمة التحقق من معالجة الذاكرة مغلقة؛ العناصر لا تمنع الإصدار.
-- التحضير لتحميل سجلات حزام التكافؤ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- التحضير لتحميل سجلات حزام التكافؤ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   مع حزمة البيان.
 - قم بتأكيد أمر التوقيع الذي ستنفذه بما في ذلك `--identity-token-provider` et
   `--identity-token-audience=<aud>` واضح لالتقاط النطاق الكامل في إجراءات الإصدار.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 يقوم البرنامج النصي بتفعيل التأكيدات التالية:
 
 - `cargo fmt --all -- --check` (مساحة العمل)
-- `cargo clippy --locked --all-targets` لـ `sorafs_car` (مع الميزة `cli`)،
-  `sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` لهذه الصناديقإذا تم صدى الشريط، قم بتصحيح الانحدار قبل العلامة. ليه يبني دي الإصدار
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 doivent être continus avec main ; لا تقم باختيار التصحيحات في الفروع
 الافراج. تتحقق البوابة أيضًا من أعلام التوقيع بدون مفتاح (`--identity-token-issuer`،
 `--identity-token-audience`) هو مصدر عند الطلب؛ الخط les الوسيطات manquants

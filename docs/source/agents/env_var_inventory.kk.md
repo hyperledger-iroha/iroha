@@ -77,7 +77,7 @@ _Соңғы рет `python3 scripts/inventory_env_toggles.py --json docs/source/
 
 ## CARGO_BIN_EXE_sorafs_cli (сынақ: 1)
 
-- сынақ: crates/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- сынақ: crates/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_алу (сынақ: 1)
 
@@ -85,7 +85,7 @@ _Соңғы рет `python3 scripts/inventory_env_toggles.py --json docs/source/
 
 ## CARGO_BIN_EXE_taikai_car (сынақ: 1)
 
-- сынақ: crates/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- сынақ: crates/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## ЖҮК_БАҚ_АТЫ (өнім: 3)
 

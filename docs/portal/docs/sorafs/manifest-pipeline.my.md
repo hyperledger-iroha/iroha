@@ -57,7 +57,7 @@ JSON ကိုမှတ်တမ်းတင်ရန် `--por-proof-out` သ�
 - ကောင်စီလက်မှတ်များနှင့် ရွေးချယ်နိုင်သော မက်တာဒေတာများ (ဥပမာ၊ တည်ဆောက် ID များ)။
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

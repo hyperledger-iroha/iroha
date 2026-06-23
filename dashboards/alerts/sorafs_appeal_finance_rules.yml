@@ -1,0 +1,49 @@
+groups:
+  - name: sorafs-appeal-finance
+    interval: 1m
+    rules:
+      - alert: SoraFSAppealFinancePublishFailures
+        expr: increase(sorafs_governance_dag_publish_total{payload_kind=~"appeal_finance_report|appeal_finance_weekly_rollup",result="failure"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS appeal finance publication failures detected"
+          description: |
+            Appeal finance payload publication failed for {{ $labels.payload_kind }} on
+            sink {{ $labels.sink }} within the last 15 minutes. Check the Governance DAG
+            filesystem/runtime publisher, local sidecars, and public mirror before relying on
+            appeal finance dashboard totals.
+      - alert: SoraFSAppealFinanceReportStale
+        expr: time() - max by (sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report"}) > 7200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS appeal finance reports are stale"
+          description: |
+            Sink {{ $labels.sink }} has not published an appeal finance report for more than
+            two hours. Verify moderation tally automation, operator report ingestion, and
+            Governance DAG publishing before treating appeal finance totals as live.
+      - alert: SoraFSAppealFinanceWeeklyRollupStale
+        expr: time() - max by (sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup"}) > 172800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS appeal finance weekly rollups are stale"
+          description: |
+            Sink {{ $labels.sink }} has not published an appeal finance weekly rollup for more
+            than 48 hours. Confirm rollup generation, treasury review inputs, and public DAG
+            publication before using weekly finance summaries.
+      - alert: SoraFSAppealFinanceRollupLaggingReports
+        expr: (max by (sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report"}) - max by (sink) (sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup"})) > 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS appeal finance rollups lag reports"
+          description: |
+            Sink {{ $labels.sink }} has appeal finance reports more than 24 hours newer than
+            the latest weekly rollup. Rebuild and publish the weekly rollup before closing
+            treasury reconciliation.

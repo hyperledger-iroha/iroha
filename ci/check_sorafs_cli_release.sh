@@ -12,7 +12,17 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/.target}"
 echo "[sorafs-release] fmt check (workspace)"
 cargo fmt --all -- --check
 
-echo "[sorafs-release] clippy sorafs_car (cli feature)"
+echo "[sorafs-release] shell syntax checks"
+bash -n scripts/release_sorafs_cli.sh scripts/package_sorafs_validate_release.sh \
+  ci/check_sorafs_reference_ffi_header.sh
+
+echo "[sorafs-release] reference FFI header contract"
+ci/check_sorafs_reference_ffi_header.sh
+
+echo "[sorafs-release] clippy sorafs_orchestrator (sorafs_cli)"
+cargo clippy --locked -p sorafs_orchestrator --all-targets -- -D warnings
+
+echo "[sorafs-release] clippy sorafs_car helpers (cli feature)"
 cargo clippy --locked -p sorafs_car --features cli --all-targets -- -D warnings
 
 echo "[sorafs-release] clippy sorafs_manifest"
@@ -21,7 +31,10 @@ cargo clippy --locked -p sorafs_manifest --all-targets -- -D warnings
 echo "[sorafs-release] clippy sorafs_chunker"
 cargo clippy --locked -p sorafs_chunker --all-targets -- -D warnings
 
-echo "[sorafs-release] tests sorafs_car (cli feature)"
+echo "[sorafs-release] tests sorafs_orchestrator (sorafs_cli)"
+cargo test --locked -p sorafs_orchestrator --test sorafs_cli
+
+echo "[sorafs-release] tests sorafs_car helpers (cli feature)"
 cargo test --locked -p sorafs_car --features cli --all-targets
 
 echo "[sorafs-release] tests sorafs_manifest"

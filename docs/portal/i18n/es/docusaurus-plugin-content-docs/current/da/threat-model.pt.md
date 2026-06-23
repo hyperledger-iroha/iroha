@@ -227,7 +227,7 @@ Lista blanca de proveedores maliciosos o alertas superiores.
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia cheques de
   huella digital a través de `/v1/da/ingest`.
 - Como simulacros de streaming PDP/PoTR también ejercitados a través del arnésproof-stream
-  en `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo flujos de requisicao
+  en `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobrindo flujos de requisicao
   PoR/PDP/PoTR e escenarios de falha animados no modelo de ameacas.
 - Resultados de capacidad y reparación remojo vivem em
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, mientras que la matriz de remojo

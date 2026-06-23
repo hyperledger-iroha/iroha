@@ -1,0 +1,93 @@
+rule_files:
+  - ../sorafs_orderbook_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_orderbook_match_lag_seconds{cluster="local",tier="hot"}'
+        values: '3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
+      - series: 'torii_sorafs_orderbook_settlement_backlog{cluster="local"}'
+        values: '120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120'
+      - series: 'torii_sorafs_orderbook_oldest_settlement_age_seconds{cluster="local"}'
+        values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
+      - series: 'torii_sorafs_orderbook_contract_mirror_divergence{cluster="local"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_api_error_ratio{route="/v1/sorafs/orderbook/orders"}'
+        values: '0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08'
+      - series: 'torii_sorafs_orderbook_escrow_runway_seconds{provider="provider-a"}'
+        values: '3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600'
+    alert_rule_test:
+      - alertname: SoraFSOrderbookMatchingLagHigh
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookMatchingLagHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              cluster: local
+              tier: hot
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS orderbook matching lag is high"
+      - alertname: SoraFSOrderbookSettlementBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              cluster: local
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS settlement backlog is high"
+      - alertname: SoraFSOrderbookContractMirrorDivergence
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              cluster: local
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS orderbook mirror diverged from contract state"
+      - alertname: SoraFSOrderbookApiErrorRatioHigh
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              route: /v1/sorafs/orderbook/orders
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS orderbook API error ratio is high"
+      - alertname: SoraFSOrderbookEscrowRunwayLow
+        eval_time: 17m
+        exp_alerts:
+          - exp_labels:
+              provider: provider-a
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS orderbook escrow runway below one day"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_orderbook_match_lag_seconds{cluster="local",tier="hot"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_settlement_backlog{cluster="local"}'
+        values: '10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
+      - series: 'torii_sorafs_orderbook_oldest_settlement_age_seconds{cluster="local"}'
+        values: '60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60'
+      - series: 'torii_sorafs_orderbook_contract_mirror_divergence{cluster="local"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_orderbook_api_error_ratio{route="/v1/sorafs/orderbook/orders"}'
+        values: '0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01'
+      - series: 'torii_sorafs_orderbook_escrow_runway_seconds{provider="provider-a"}'
+        values: '172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800'
+    alert_rule_test:
+      - alertname: SoraFSOrderbookMatchingLagHigh
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookSettlementBacklogHigh
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookContractMirrorDivergence
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookApiErrorRatioHigh
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookEscrowRunwayLow
+        eval_time: 17m
+        exp_alerts: []

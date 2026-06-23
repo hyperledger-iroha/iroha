@@ -9,83 +9,80 @@ source_last_modified: "2025-11-09T05:21:32.467725+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-id: pin-registry-validation-plan
-title: Pin Registry Manifest 検証計画
-sidebar_label: Pin Registry 検証
-description: SF-4 の Pin Registry ロールアウト前に ManifestV1 をゲートする検証計画。
----
-
-:::note 正規ソース
-このページは `docs/source/sorafs/pin_registry_validation_plan.md` を反映しています。レガシー文書が有効な間は両方を同期してください。
+:::note Canonical Source
 :::
 
-# Pin Registry Manifest 検証計画 (SF-4 準備)
+# Pin Registry Manifest Validation Status (SF-4)
 
-この計画は、`sorafs_manifest::ManifestV1` の検証を今後の Pin Registry コントラクトへ
-組み込むために必要な手順を示します。SF-4 の作業が既存 tooling を土台にでき、
-encode/decode ロジックを重複させないことが狙いです。
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-## 目標
+## Implemented Goals
 
-1. ホスト側の submission パスは、提案を受け付ける前に manifest 構造、chunking
-   プロファイル、ガバナンス envelope を検証する。
-2. Torii と gateway サービスは同一の検証ルーチンを再利用し、ホスト間での
-   決定論的挙動を保証する。
-3. 統合テストは、manifest 受理、ポリシー enforcement、エラーテレメトリの
-   正負ケースをカバーする。
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## アーキテクチャ
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### コンポーネント
+## Shipped Components
 
-- `ManifestValidator` (新規モジュール。`sorafs_manifest` または `sorafs_pin` crate)
-  が構造チェックとポリシーゲートを内包。
-- Torii は gRPC endpoint `SubmitManifest` を公開し、コントラクトへ渡す前に
-  `ManifestValidator` を呼び出す。
-- gateway の fetch パスは、registry から新しい manifests をキャッシュする際に
-  同じバリデータをオプションで利用する。
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## タスク分解
+## Completion Matrix
 
-| タスク | 説明 | Owner | Status |
-|-------|------|-------|--------|
-| V1 API スケルトン | `sorafs_manifest` に `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` を追加。BLAKE3 digest 検証と chunker registry lookup を含める。 | Core Infra | ✅ 完了 | 共有 helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) は `sorafs_manifest::validation` に配置済み。 |
-| ポリシー配線 | registry ポリシー設定 (`min_replicas`, 期限ウィンドウ, 許可 chunker handles) を検証入力にマッピング。 | Governance / Core Infra | Pending — SORAFS-215 で追跡 |
-| Torii 統合 | Torii の submission パス内でバリデータを呼び出し、失敗時は構造化 Norito エラーを返す。 | Torii Team | Planned — SORAFS-216 で追跡 |
-| ホスト側コントラクト stub | コントラクト entrypoint が検証ハッシュに失敗した manifests を拒否することを保証し、メトリクスカウンタを公開。 | Smart Contract Team | ✅ 完了 | `RegisterPinManifest` は状態変更前に共有バリデータ (`ensure_chunker_handle`/`ensure_pin_policy`) を呼び出し、unit tests で失敗ケースをカバー。 |
-| テスト | バリデータの unit tests + 不正 manifest の trybuild ケースを追加。`crates/iroha_core/tests/pin_registry.rs` に統合テストを追加。 | QA Guild | 🟠 進行中 | バリデータ unit tests は on-chain 拒否テストと一緒に着地。統合スイートは未完了。 |
-| Docs | `docs/source/sorafs_architecture_rfc.md` と `migration_roadmap.md` を更新し、`docs/source/sorafs/manifest_pipeline.md` に CLI 利用を記載。 | Docs Team | Pending — DOCS-489 で追跡 |
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-## 依存関係
+## Operational Notes
 
-- Pin Registry Norito スキーマの最終化 (roadmap の SF-4 項目参照)。
-- Council 署名済み chunker registry envelopes (バリデータのマッピングを決定論的にする)。
-- Manifest submission に関する Torii 認証方針の決定。
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## リスクと緩和
+## Remaining Rollout Evidence
 
-| リスク | 影響 | 緩和 |
-|-------|------|------|
-| Torii とコントラクト間のポリシー解釈の差異 | 非決定的な受理。 | 検証 crate を共有し、host vs on-chain の判定を比較する統合テストを追加。 |
-| 大きな manifests での性能劣化 | submission が遅くなる | cargo criterion でベンチマークし、manifest digest 結果のキャッシュを検討。 |
-| エラーメッセージのドリフト | オペレータの混乱 | Norito エラーコードを定義し、`manifest_pipeline.md` に記載。 |
-
-## タイムライン目標
-
-- Week 1: `ManifestValidator` スケルトン + unit tests を着地。
-- Week 2: Torii submission パスを配線し、CLI で検証エラーを表示。
-- Week 3: コントラクト hooks を実装し、統合テストを追加、docs 更新。
-- Week 4: migration ledger エントリ付きの end-to-end リハーサルを実施し、評議会の承認を取得。
-
-この計画はバリデータ作業が始まった時点で roadmap から参照されます。
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

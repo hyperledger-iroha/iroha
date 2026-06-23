@@ -251,7 +251,7 @@ retenção, lista branca de provedores mal-intencionados ou suprime alertas.
   cache) e integração Torii em `crates/iroha_torii/src/da/ingest.rs`, aqui thread
   eles verificam a impressão digital via `/v1/da/ingest`.
 - As simulações de streaming PDP/PoTR são exercidas por meio do chicote de prova-stream
-  em `crates/sorafs_car/tests/sorafs_cli.rs`, cobre o fluxo de recepção
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobre o fluxo de recepção
   PoR/PDP/PoTR e os cenários de fracasso animes no modelo de ameaças.
 - Os resultados de capacidade e reparo absorvem vivent sous
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, tanto que a matriz de

@@ -34,11 +34,13 @@ on:
       - "scripts/deploy_localnet.sh"
       - "scripts/run_local_swarm.sh"
       - "scripts/training_script_2.sh"
+      - "scripts/run_100tps_profile_localnet.sh"
       - "scripts/tests/check_android_device_lab_slot_test.py"
       - "scripts/tests/kagemusha_production_readiness_test.py"
       - "scripts/tests/deploy_localnet_test.py"
       - "scripts/tests/run_local_swarm_test.py"
       - "scripts/tests/training_script_2_test.py"
+      - "scripts/tests/run_100tps_profile_localnet_test.py"
       - "fixtures/android/device_lab/**"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "fixtures/kagemusha_recursive_spend_abi7/**"
@@ -1151,6 +1153,7 @@ jobs:
           python3 -m unittest discover -s scripts/tests -p deploy_localnet_test.py
           python3 -m unittest discover -s scripts/tests -p run_local_swarm_test.py
           python3 -m unittest discover -s scripts/tests -p training_script_2_test.py
+          python3 -m unittest discover -s scripts/tests -p run_100tps_profile_localnet_test.py
       - name: Kagemusha production readiness negative controls
         run: |
           ci/check_kagemusha_production_readiness.sh --negative-control-doc-route
@@ -1270,6 +1273,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-deploy-localnet-pid-safety-test
           ci/check_kagemusha_production_readiness.sh --negative-control-local-swarm-pid-safety-test
           ci/check_kagemusha_production_readiness.sh --negative-control-training-script-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-100tps-profile-pid-safety-test
           ci/check_kagemusha_production_readiness.sh --negative-control-kagami-localnet-stop-script-pid-safety
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-path-component-whitespace
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-signer-input-preflight

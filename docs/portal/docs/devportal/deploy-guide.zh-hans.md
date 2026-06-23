@@ -23,7 +23,7 @@ translator: machine-google-reviewed
 发布工件是可重现和可审计的。
 
 该流程假设您有 `sorafs_cli` 二进制文件（使用
-`--features cli`)，使用 PIN 注册权限访问 Torii 端点，以及
+`sorafs_orchestrator` Cargo target)，使用 PIN 注册权限访问 Torii 端点，以及
 OIDC Sigstore 的凭据。存储长期秘密（`IROHA_PRIVATE_KEY`，
 `SIGSTORE_ID_TOKEN`、Torii 代币）在您的 CI 金库中；本地运行可以获取它们
 来自壳出口。
@@ -31,7 +31,7 @@ OIDC Sigstore 的凭据。存储长期秘密（`IROHA_PRIVATE_KEY`，
 ## 先决条件
 
 - 节点 18.18+ 具有 `npm` 或 `pnpm`。
-- `sorafs_cli` 来自 `cargo run -p sorafs_car --features cli --bin sorafs_cli`。
+- `sorafs_cli` 来自 `cargo run -p sorafs_orchestrator --bin sorafs_cli`。
 - Torii 公开 `/v1/sorafs/*` 的 URL 以及授权帐户/私钥
   可以提交清单和别名。
 - OIDC 发行者（GitHub Actions、GitLab、工作负载身份等）来铸造

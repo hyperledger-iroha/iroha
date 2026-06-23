@@ -1,16 +1,28 @@
 ---
 title: Reserve+Rent & Lifecycle Policy
-summary: Final specification for SFM-6 covering reserve underwriting, lifecycle states, credit lines, APIs, dashboards, and rollout.
+summary: SFM-6 implementation status for reserve underwriting payloads, quote/ledger helpers, dashboard digest wiring, and remaining reserve-service rollout.
 ---
 
 # Reserve+Rent & Lifecycle Policy
 
-## Goals & Scope
-- Define the financial policy for provider reserves and recurring rent, including lifecycle stages and credit line management.
-- Provide APIs, dashboards, and alerts to monitor provider health, enforce underwriting ratios, and trigger governance actions.
-- Integrate with hedging/billing, reputation, and moderation systems.
+## Status
+SFM-6 is partially implemented in this workspace. The shared data model ships
+`ReservePolicyV1`, `ReserveQuote`, and `ReserveLedgerProjection` in
+`crates/iroha_data_model/src/sorafs/reserve.rs`; the CLI exposes deterministic
+`iroha app sorafs reserve quote` and `iroha app sorafs reserve ledger` helpers;
+`cargo xtask sorafs-reserve-matrix` emits quote matrices; and
+`scripts/telemetry/reserve_ledger_digest.py` feeds the reserve economics
+dashboards and Alertmanager rules.
 
-This specification completes **SFM-6 — Reserve-plus-Rent & lifecycle policies**.
+The production reserve/rent control plane is still outstanding. There is no
+reserve daemon, no Torii REST surface for reserve lifecycle management, no
+automatic credit-line drawdown/accrual engine, and no shipped CLI for provider
+status, top-ups, withdrawals, appeals, or policy updates.
+
+## Goals & Scope
+- Track the implemented financial policy for provider reserves and recurring rent.
+- Keep quote/ledger automation, dashboard inputs, and governance evidence aligned with the shared `ReservePolicyV1` schema.
+- Identify the remaining service work required for lifecycle stages, reserve movements, appeals, credit lines, and governance policy changes.
 
 ## Policy Model
 - Key variables:
@@ -21,75 +33,70 @@ This specification completes **SFM-6 — Reserve-plus-Rent & lifecycle policies*
 - Tier base rates (governance adjustable): hot 12 XOR/GiB-month, warm 6, archive 2.
 - Duration factors: monthly 1.0, quarterly 0.9, annual 0.75.
 - Underwriting ratios default: Tier A 2.0, Tier B 3.0, Tier C 4.5.
-- Credit line caps: Tier A 2× monthly rent, Tier B 1×, Tier C manual approval.
-- Interest accrues daily (simple) with APR defined per tier (3%, 6%, none).
-- Lifecycle stages (same table as draft) with automated transitions.
-- Penalties:
+- Credit line caps are encoded in the tier policy: Tier A 2x monthly rent, Tier B 1x, Tier C manual approval.
+- APR parameters are encoded per tier (3%, 6%, none), but runtime accrual and credit draws are not implemented yet.
+- Target lifecycle stages remain:
   - Stage `Warning`: restrict new manifests.
   - `Grace`: auto-draw credit line.
-  - `Delinquent`: penalty APR + governance notification.
-  - `Default`: disable adverts, initiate slashing (pull from reserve then credit line).
-- Manual appeal: `ReserveAppealV1` allows provider to request extension; governance decision required within 72h.
+  - `Delinquent`: penalty APR plus governance notification.
+  - `Default`: disable adverts, initiate slashing from reserve and then credit line.
+- Manual appeals and policy-update payloads are target service work, not currently shipped data-model types.
 
 ## APIs & Services
-- Reserve service (`reserve_rentd`) computes rent/reserve, manages credit lines, emits events.
-- REST endpoints:
-  - `GET /v1/reserve/summary?provider=` – returns `ReserveSummaryV1` (balance, requirement, stage, credit line status).
-  - `POST /v1/reserve/top-up` – apply reserve top-up.
-  - `POST /v1/reserve/withdraw` – withdraw excess reserve (must maintain requirement).
-  - `POST /v1/reserve/appeal` – file appeal, optionally attach documentation.
-  - `GET /v1/reserve/lifecycle` – list stage thresholds and overrides.
-  - `GET /v1/reserve/events?provider=` – pagination of `ReserveLifecycleEventV1`.
-- CLI commands:
-  - `sorafs reserve status --provider <id>`
-  - `sorafs reserve top-up --provider <id> --amount 500`
-  - `sorafs reserve appeal --provider <id> --reason <text>`
-  - `sorafs reserve config` – display policy parameters.
-  - `sorafs reserve quote --storage-class <hot|warm|cold> --tier <tier-a|tier-b|tier-c> --duration <monthly|quarterly|annual> --gib <capacity>` — compute deterministic rent/reserve breakdowns (monthly rent, reserve requirement, top-up threshold, credit line cap) using the embedded policy or JSON/Norito overrides. Quotes are emitted as JSON and can be persisted via `--quote-out`. The CLI reuses the shared `ReservePolicyV1` schema so economics dashboards and SDKs can reference the same Norito payloads without reimplementing the formulas. The JSON payload now includes a `ledger_projection` object with:
+- Implemented payloads:
+  - `ReservePolicyV1` stores storage-class rates, duration factors, tier underwriting ratios, credit caps, APR values, and the top-up threshold.
+  - `ReserveQuote` stores the deterministic quote result for a storage class, tier, duration, capacity, and reserve balance.
+  - `ReserveLedgerProjection` derives `rent_due`, reserve shortfall, top-up shortfall, and underwriting/top-up booleans from a quote.
+- Implemented CLI commands:
+  - `iroha app sorafs reserve quote --storage-class <hot|warm|cold> --tier <tier-a|tier-b|tier-c> --duration <monthly|quarterly|annual> --gib <capacity>` computes deterministic rent/reserve breakdowns (monthly rent, reserve requirement, top-up threshold, credit line cap) using the embedded policy or JSON/Norito overrides. Quotes are emitted as JSON and can be persisted via `--quote-out`. The CLI reuses the shared `ReservePolicyV1` schema so economics dashboards and SDKs can reference the same Norito payloads without reimplementing the formulas. The JSON payload includes a `ledger_projection` object with:
     - `rent_due` — XOR due for the billing period after applying reserve offsets.
     - `reserve_shortfall` — reserve delta required to satisfy underwriting.
     - `top_up_shortfall` — amount needed to clear the top-up alert threshold.
     - `meets_underwriting` / `needs_top_up_alert` — booleans used by dashboards and admission ISIs to trigger policy transitions.
-  - `sorafs reserve ledger --quote <path> --provider-account <id> --treasury-account <id> --reserve-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` — convert a saved quote into the concrete XOR transfers required for rent settlement and reserve top-ups. The helper reads the `ledger_projection` block, echoes the micro-XOR totals, and emits an `instructions` array containing Norito-encoded `Transfer` ISIs that can be piped straight into existing automation (or stored alongside governance evidence).
+  - `iroha app sorafs reserve ledger --quote <path> --provider-account <id> --treasury-account <id> --reserve-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` converts a saved quote into the concrete XOR transfers required for rent settlement and reserve top-ups. The helper reads the `ledger_projection` block, echoes the micro-XOR totals, and emits an `instructions` array containing Norito-encoded `Transfer` ISIs that can be piped into automation or stored alongside governance evidence.
+- Target service/API work:
+  - Add a reserve lifecycle service that computes provider summaries, manages reserve movements, applies credit-line policy, and emits lifecycle events.
+  - Add authenticated Torii endpoints for provider summary, top-up, withdraw, appeal, lifecycle policy, and event history.
+  - Add operator CLI commands for status, top-up, withdraw, appeal, and policy/config inspection once those service routes exist.
 
 ## Integration Points
-- **Hedging/Billing**: rent calculations feed billing aggregator; hedging service uses reserve balance to estimate exposure.
-- **Reputation**: stage transitions adjust reputation degradation flags.
-- **Orderbook**: providers in `Grace` or worse receive limits/penalties.
-- **Governance**: events recorded in DAG; council receives weekly summary.
-- **Compliance**: default stage triggers compliance notifications (disconnect provider).
+- **Billing**: implemented quote/ledger helpers produce deterministic rent and reserve transfer plans for offline settlement automation.
+- **Telemetry**: ledger digest output feeds the reserve economics dashboard, capacity dashboard, and reserve Alertmanager rules.
+- **Governance evidence**: quote, ledger, Markdown digest, Prometheus textfile, and matrix artifacts can be attached to economics reports.
+- **Reputation, orderbook, compliance, and automatic lifecycle policy**: still target integrations because the runtime reserve lifecycle service is not shipped.
 
 ## Observability
-- Metrics:
-  - `sorafs_reserve_balance_xor{provider}`
-  - `sorafs_reserve_requirement_xor{provider}`
-  - `sorafs_reserve_stage{stage}`
-  - `sorafs_reserve_credit_usage{provider}`
-  - `sorafs_reserve_alerts_total{type}`
-  - `sorafs_reserve_default_total`
-- Alerts:
-  - Reserve coverage < 0.8.
-  - Credit line usage > 95%.
-  - Stage transitions to `Grace` or `Delinquent`.
-  - Appeal backlog > SLA.
-- Dashboards display provider reserve health, aggregate exposure, stage distribution.
+- Implemented metrics come from the ledger digest textfile:
+  - `sorafs_reserve_ledger_rent_due_xor`
+  - `sorafs_reserve_ledger_reserve_shortfall_xor`
+  - `sorafs_reserve_ledger_top_up_shortfall_xor`
+  - `sorafs_reserve_ledger_requires_top_up`
+  - `sorafs_reserve_ledger_meets_underwriting`
+  - `sorafs_reserve_ledger_instruction_total`
+  - `sorafs_reserve_ledger_transfer_xor`
+- Implemented dashboards:
+  - `dashboards/grafana/sorafs_reserve_economics.json`
+  - reserve panels mirrored in `dashboards/grafana/sorafs_capacity_health.json`
+- Implemented alerts in `dashboards/alerts/sorafs_capacity_rules.yml` cover ledger top-up requirements, underwriting breaches, missing transfer feeds, and rent/top-up transfer drift.
+- Provider balance, lifecycle-stage, credit-usage, default, appeal-backlog, and service-rate-limit metrics are target work for the reserve lifecycle service.
 
 ## Security & Governance
-- Reserve and credit line adjustments require authentication (mTLS + RBAC).
-- Data stored encrypted; audit logs hashed daily and committed to DAG.
-- Governance approves policy changes via `ReservePolicyUpdateV1`; changes propagate to config service.
-- Stage overrides (manual) require multi-sig sign-off; recorded as `ReserveOverrideEventV1`.
+- Current helpers are local/offline tooling. They render deterministic JSON/Norito-backed artifacts and transfer instructions, but they do not submit authenticated reserve movements on their own.
+- Production reserve movements must be authenticated through Torii/client signing once the service API is implemented.
+- Governance policy updates, manual stage overrides, and appeal decisions remain target payload/service work.
 
 ## Testing & Rollout
-- Unit tests for rent/reserve calculations, stage transitions, credit line logic.
-- Integration tests with billing and hedging to ensure consistency.
-- Chaos tests: simulate reserve depletion, credit line max out, ensure alerts triggered.
-- Rollout:
-  1. Implement reserve service with staging dataset.
-  2. Calibrate parameters with Economics WG.
-  3. Deploy dashboards and alert rules.
-  4. Staging bake with select providers; adjust thresholds.
-  5. Production rollout; monitor initial month, report to governance.
+- Implemented test coverage:
+  - `crates/iroha_data_model/src/sorafs/reserve.rs` covers deterministic rent/reserve calculation and ledger projection behavior.
+  - `crates/iroha_cli/tests/cli_smoke.rs` covers reserve quote JSON output and reserve ledger transfer instruction emission.
+  - `xtask/src/sorafs.rs` covers the reserve matrix report, including ledger projection output.
+  - Alert rule tests under `dashboards/alerts/tests/` cover the reserve ledger alert paths.
+- Remaining rollout work:
+  1. Implement the reserve lifecycle service and signed Torii routes.
+  2. Add provider status, top-up, withdrawal, appeal, and policy/config CLI commands.
+  3. Wire lifecycle events into governance logs and downstream reputation/compliance/orderbook policy.
+  4. Add integration tests for live reserve movement, credit-line drawdown, appeal decisions, and service telemetry.
+  5. Run a staged provider bake before production rollout and attach the ledger digest/report bundle to governance evidence.
 
 ## Automation & Dashboards
 
@@ -124,20 +131,20 @@ recomputing underwriting math.
 
 ### Reserve Ledger Digest & Dashboard Wiring
 
-Field teams asked for a deterministic way to embed `sorafs reserve ledger`
+Field teams asked for a deterministic way to embed `iroha app sorafs reserve ledger`
 output inside dashboards and governance packets. The workflow below turns the
 CLI JSON into a reusable digest and keeps the telemetry panels in sync with the
 ledger projection that triggered the payment.
 
 1. **Generate the ledger projection JSON.**
    ```bash
-  sorafs reserve ledger \
-    --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-    --provider-account <i105-account-id> \
-    --treasury-account <i105-account-id> \
-    --reserve-account <i105-account-id> \
-    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
-    --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
+   iroha app sorafs reserve ledger \
+     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
+     --provider-account <i105-account-id> \
+     --treasury-account <i105-account-id> \
+     --reserve-account <i105-account-id> \
+     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
+     > artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
 2. **Normalise the values with the new helper.**
    ```bash
@@ -165,14 +172,12 @@ ledger projection that triggered the payment.
    Grafana and Alertmanager without bespoke exporters; batched runs append every
    ledger to the same textfile so Alertmanager rewires as soon as treasury
    stages a new reserve transfer.
-3. **Attach the digest to telemetry.** The digest JSON is scraped by the
-   rent/reserve exporter and enriches the `torii_da_*` counters with the same
-   labels (`provider`, `storage_class`, `tier`) that the CLI used for the quote.
-   Store the digest under `artifacts/sorafs_reserve/ledger/<provider>/` so the
-   observability jobs that refresh `dashboards/grafana/sorafs_capacity_health.json`
-   and the reserve-focused board in
-   `dashboards/grafana/sorafs_reserve_economics.json` can locate the latest
-   projection before each rent cycle.
+3. **Attach the digest to telemetry.** Publish the `--out-prom` textfile through
+   the node exporter textfile collector and keep the JSON digest under
+   `artifacts/sorafs_reserve/ledger/<provider>/` so the observability jobs that
+   refresh `dashboards/grafana/sorafs_capacity_health.json` and the
+   reserve-focused board in `dashboards/grafana/sorafs_reserve_economics.json`
+   can locate the latest projection before each rent cycle.
 4. **Update the runbook evidence block.** Drop the Markdown digest next to the
    weekly economics report (`docs/source/sorafs/reports/`) and link it from the
    rent burn-down so reviewers see the exact ledger inputs that produced the
@@ -205,10 +210,6 @@ cards make it obvious when rent/reserve instructions drift from the ledger
 projection, and the new alerts fire as soon as a digest omits the required rent
 or reserve top-up transfers.
 
-## Implementation Checklist
-- [x] Specify policy formulas, stages, and parameters.
-- [x] Document APIs, CLI, and integrations.
-- [x] Capture observability metrics, alerts, and governance controls.
-- [x] Outline testing, calibration, and rollout.
-
-With this specification, economics and platform teams can implement Reserve+Rent management that keeps providers solvent while maintaining governance oversight.
+## Rollout Status
+- Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger CLI helpers, matrix generation, ledger digest conversion, dashboards, alert rules, and focused tests for those local paths.
+- Remaining: reserve lifecycle service, signed Torii routes, runtime reserve movement/authentication, lifecycle-stage automation, appeal/policy-update payloads, credit-line accrual/drawdown logic, and live provider bake evidence.

@@ -29,7 +29,7 @@ artefacts:
 - Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
   approvers from Security Engineering and the Tooling Working Group.
 - Verify that the remediation checklist in the memo is closed; unresolved items block the release.
-- Prepare to upload parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Prepare to upload parity harness logs (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   alongside the manifest bundle.
 - Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
   `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 The script performs the following assertions:
 
 - `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` for `sorafs_car` (with the `cli` feature),
-  `sorafs_manifest`, and `sorafs_chunker`
-- `cargo test --locked --all-targets` for those same crates
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 If any step fails, fix the regression before tagging. Release builds must be
 continuous with main; do not cherry-pick fixes into release branches. The gate

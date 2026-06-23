@@ -217,7 +217,7 @@ PDP/PoTR を参照してください。
   `crates/iroha_core/src/da/replay_cache.rs` (キャッシュ) Torii في
   `crates/iroha_torii/src/da/ingest.rs` は、指紋 `/v1/da/ingest` をチェックします。
 - PDP/PoTR ストリーミング ハーネス プルーフ ストリーム
-  `crates/sorafs_car/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
   重要な問題は、次のとおりです。
 - 修理容量と浸漬量
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`، بينما مصفوفة 浸す Sumeragi

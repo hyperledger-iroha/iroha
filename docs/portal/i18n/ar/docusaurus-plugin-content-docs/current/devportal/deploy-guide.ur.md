@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 الاسم المستعار بروموشن، توثيق، والتراجع عن المعاينة والمعاينة
 أطلق سراح فكرة رائعة ورائعة.
 
-هل يفترض أن هذا هو الحال مع `sorafs_cli` باير (`--features cli`)
+هل يفترض أن هذا هو الحال مع `sorafs_cli` باير (built from the `sorafs_orchestrator` Cargo target)
 تم إصدار نسخة البناء) وتسجيل رقم التعريف الشخصي Torii لنقطة النهاية، و
 Sigstore لـ OIDC إسناد. طول مدت راز (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`، Torii) و CI متجدد؛ لوكل رنز ان
@@ -25,7 +25,7 @@ Sigstore لـ OIDC إسناد. طول مدت راز (`IROHA_PRIVATE_KEY`,
 ## پيشگي قطاعي
 
 - العقدة 18.18+ ساتھ `npm` أو `pnpm`.
-- `sorafs_cli` جو `cargo run -p sorafs_car --features cli --bin sorafs_cli` حصل على ہو۔
+- `sorafs_cli` جو `cargo run -p sorafs_orchestrator --bin sorafs_cli` حصل على ہو۔
 - Torii URL `/v1/sorafs/*` ظهور الصفحة وأي بطاقة إلكترونية/رائعة موجودة هنا
   تم جمع شركاتي والأسماء المستعارة.
 - مُصدر OIDC (إجراءات GitHub، GitLab، هوية عبء العمل)

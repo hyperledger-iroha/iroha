@@ -18,7 +18,7 @@ Sidebar_label: Recettes CLI
 :::note Источник канонический
 :::
 
-Консолидированная поверхность `sorafs_cli` (четыре ящика `sorafs_car` с активированной функцией `cli`) обнажить необходимый этап для подготовки артефактов SoraFS. Используйте эту кулинарную книгу для всех направлений рабочих процессов; associez-le au Pipeline de Manifest и aux runbooks de l'orchestrateur pour le contexte Operationnel.
+Консолидированная поверхность `sorafs_cli` (provided by the `sorafs_orchestrator` crate) обнажить необходимый этап для подготовки артефактов SoraFS. Используйте эту кулинарную книгу для всех направлений рабочих процессов; associez-le au Pipeline de Manifest и aux runbooks de l'orchestrateur pour le contexte Operationnel.
 
 ## Упаковать полезные данные
 

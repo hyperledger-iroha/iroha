@@ -1165,6 +1165,8 @@ pub struct PorCoordinatorRuntime {
     vrf_provider: Arc<dyn VrfProvider>,
     /// Publisher invoked to emit governance-facing telemetry (reports, exports).
     publisher: Arc<dyn GovernancePublisher>,
+    /// Torii telemetry handle used for scheduler metrics.
+    telemetry: crate::routing::MaybeTelemetry,
     /// Interval between PoR epochs in seconds.
     epoch_interval_secs: u64,
     /// Response window duration granted to providers (seconds).
@@ -1195,11 +1197,31 @@ impl PorCoordinatorRuntime {
             randomness,
             vrf_provider,
             publisher,
+            telemetry: crate::routing::MaybeTelemetry::disabled(),
             epoch_interval_secs: epoch_interval_secs.max(60),
             response_window_secs: response_window_secs.max(60),
             last_epoch: AtomicU64::new(u64::MAX),
             last_report_marker: AtomicU64::new(0),
         }
+    }
+
+    /// Attach Torii telemetry to the runtime.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: crate::routing::MaybeTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    fn record_challenge_metric(&self, challenge: &PorChallengeV1, duplicate_samples: usize) {
+        self.telemetry.with_metrics(|tel| {
+            tel.record_sorafs_por_scheduler_challenge(challenge.forced, duplicate_samples);
+        });
+    }
+
+    fn record_scheduler_failure(&self) {
+        self.telemetry.with_metrics(|tel| {
+            tel.record_sorafs_por_scheduler_failure();
+        });
     }
 
     fn compute_epoch(&self, now_secs: u64) -> u64 {
@@ -1296,6 +1318,7 @@ impl PorCoordinatorRuntime {
                 );
                 return Err(PorAutomationError::Governance(err));
             }
+            self.record_challenge_metric(&challenge, duplicate_samples);
         }
 
         self.last_epoch.store(epoch, AtomicOrdering::SeqCst);
@@ -1324,6 +1347,7 @@ impl PorCoordinatorRuntime {
                     _ = shutdown.receive() => break,
                     _ = ticker.tick() => {
                         if let Err(err) = self.run_once() {
+                            self.record_scheduler_failure();
                             iroha_logger::error!(%err, "PoR coordinator runtime tick failed");
                         }
                     }
@@ -1931,8 +1955,15 @@ mod tests {
             let publisher = Arc::new(FilesystemGovernancePublisher::new(governance_dir.clone()));
             let coordinator = Arc::new(PorCoordinator::new());
             let storage: Arc<dyn PorStorage> = Arc::new(handle.clone());
+            #[cfg(feature = "telemetry")]
+            let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+            #[cfg(feature = "telemetry")]
+            let telemetry = crate::routing::MaybeTelemetry::from_profile(
+                Some(iroha_core::telemetry::Telemetry::new(metrics.clone(), true)),
+                iroha_config::parameters::actual::TelemetryProfile::Full,
+            );
 
-            let runtime = Arc::new(PorCoordinatorRuntime::new(
+            let runtime = PorCoordinatorRuntime::new(
                 storage,
                 coordinator.clone(),
                 randomness_provider,
@@ -1940,10 +1971,22 @@ mod tests {
                 publisher,
                 epoch_interval,
                 randomness.response_window_secs,
-            ));
+            );
+            #[cfg(feature = "telemetry")]
+            let runtime = runtime.with_telemetry(telemetry);
+            let runtime = Arc::new(runtime);
 
             let triggered = runtime.run_once_at(now_secs).expect("runtime tick");
             assert!(triggered, "expected challenge scheduling on new epoch");
+            #[cfg(feature = "telemetry")]
+            assert_eq!(
+                metrics
+                    .torii_sorafs_por_challenges_total
+                    .with_label_values(&["scheduled"])
+                    .get(),
+                1,
+                "runtime should emit a scheduler metric for a published challenge"
+            );
 
             let statuses = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
             assert_eq!(statuses.len(), 1);

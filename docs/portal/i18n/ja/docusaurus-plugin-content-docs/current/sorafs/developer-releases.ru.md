@@ -30,7 +30,7 @@ SoraFS (`sorafs_cli`、`sorafs_fetch`、ヘルパー) および SDK クレート
 - 修復チケット (например、`governance/tickets/SF6-SR-2026.md`) および отметьте を参照してください。
   承認-ответственных из セキュリティ エンジニアリング および ツール ワーキング グループ。
 - 修正チェックリストを参照してください。 незакрытые пункты блокируют релиз。
-- パリティ ハーネス (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- パリティ ハーネス (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   バンドルマニフェストです。
 - Убедитесь、что команда подписи、которую вы планируете выполнить、включает и `--identity-token-provider`, и
   явный `--identity-token-audience=<aud>`、スコープのフルシオ был зафиксирован в релизных の証拠。
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Скрипт выполняет следующие проверки:
 
 - `cargo fmt --all -- --check` (ワークスペース)
-- `cargo clippy --locked --all-targets` と `sorafs_car` (機能 `cli`)、
-  `sorafs_manifest` および `sorafs_chunker`
-- `cargo test --locked --all-targets` для этих же 木箱
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 タグ付けが必要です。 Релизные сборки должны
 メインです。チェリーピックとリリースの両方。ゲート также

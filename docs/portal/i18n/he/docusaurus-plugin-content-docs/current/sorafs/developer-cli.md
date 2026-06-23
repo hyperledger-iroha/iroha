@@ -12,7 +12,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 עמוד זה משקף את `docs/source/sorafs/developer/cli.md`. שמרו על שתי הגרסאות מסונכרנות עד שהסט הישן של Sphinx יופסק.
 :::
 
-המשטח המאוחד `sorafs_cli` (מסופק על ידי crate `sorafs_car` עם feature `cli` מופעלת) חושף כל שלב הדרוש להכנת ארטיפקטים של SoraFS. השתמשו בקוקבוק הזה כדי לקפוץ ישירות לזרימות נפוצות; שלבו אותו עם ה-pipeline של manifest ועם runbooks של האורקסטרטור להקשר תפעולי.
+המשטח המאוחד `sorafs_cli` (provided by the `sorafs_orchestrator` crate) חושף כל שלב הדרוש להכנת ארטיפקטים של SoraFS. השתמשו בקוקבוק הזה כדי לקפוץ ישירות לזרימות נפוצות; שלבו אותו עם ה-pipeline של manifest ועם runbooks של האורקסטרטור להקשר תפעולי.
 
 ## אריזת payloads
 

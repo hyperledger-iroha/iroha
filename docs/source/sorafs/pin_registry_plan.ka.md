@@ -46,45 +46,56 @@ Rust Norito schemas and validation helpers backing these records. Validation
 mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
 contract, Torii facades, and CLI share identical invariants.
 
-Tasks:
-- Finalise Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs`.
-- Generate code (Rust + other SDKs) using Norito macros.
-- Update docs (`sorafs_architecture_rfc.md`) once schemas land.
+Status:
+- Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs` are the
+  first-release schema surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation is handled through Norito derives; SDK parity now follows
+  the normal SDK guard lanes whenever the schema changes.
+- Architecture, migration, manifest-pipeline, CLI, OpenAPI, status, and roadmap
+  docs already describe the shared validation path and endpoint behavior.
 
 ## Contract Implementation
 
 | Task | Owner(s) | Notes |
 |------|----------|-------|
-| Implement registry storage (sled/sqlite/off-chain) or smart contract module. | Core Infra / Smart Contract Team | Provide deterministic hashing, avoid floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Leverage `ManifestValidator` from validation plan. Alias binding now flows through `RegisterPinManifest` (Torii DTO surfacing) while dedicated `bind_alias` remains planned for successive updates. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness. | Governance Council / Core Infra | Alias uniqueness, retention limits, and predecessor approval/retirement checks now live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection and replication bookkeeping remain open. |
-| Governed parameters: load `ManifestPolicyV1` from config/governance state; allow updates via governance events. | Governance Council | Provide CLI for policy updates. |
-| Event emission: emit Norito events for telemetry (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Define event schema + logging. |
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`. | Core Infra | Core execution validates aliases, council envelopes, pin policy, replication ownership, and order completion; there is no separate local `bind_alias` backlog. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness/retention and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-Testing:
-- Unit tests for each entry point (positive + rejection).
-- Property tests for succession chain (no cycles, monotonic epochs).
-- Fuzz validation by generating random manifests (bounded).
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and then runs the parity checks that keep the canonical
+  schema surface stable.
 
 ## Service Facade (Torii/SDK Integration)
 
 | Component | Task | Owner(s) |
 |-----------|------|----------|
-| Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering. | Networking TL / Core Infra |
-| Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication` listing/lookup endpoints with deterministic pagination and filters. | Networking TL / Core Infra |
+| Attestation | Listing and detail responses include the attestation object derived from the latest block hash. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
 Operations:
-- Add caching layer/ETag for GET endpoints.
-- Provide rate limiting / auth consistent with Torii policies.
+- GET endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## Fixtures & CI
 
 - Fixtures directory: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` stores signed manifest/alias/order snapshots regenerated by `cargo run -p iroha_core --example gen_pin_snapshot`.
 - CI step: `ci/check_sorafs_fixtures.sh` regenerates the snapshot and fails if diffs appear, keeping CI fixtures aligned.
 - Integration tests (`crates/iroha_core/tests/pin_registry.rs`) exercise the happy path plus duplicate-alias rejection, alias approval/retention guards, mismatched chunker handles, replica-count validation, governance-policy ceilings/retention/storage allowlists, and successor-guard failures (unknown/pre-approved/retired/self pointers); see `register_manifest_rejects_*` cases for coverage details.
-- Unit tests now cover alias validation, retention guards, and successor checks in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection once state machine lands.
+- Unit tests cover alias validation, retention guards, replication order issue/complete, and multi-hop successor-chain cycle rejection in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
 - Golden JSON for events used by observability pipelines.
 
 ## Telemetry & Observability
@@ -99,7 +110,9 @@ Metrics (Prometheus):
 - Existing provider telemetry (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) remains in scope for end-to-end dashboards.
 
 Logs:
-- Structured Norito event stream for governance audits (signed?).
+- Attested REST snapshots and registry metrics are the local audit surface; signed
+  governance archives can consume those snapshots through the governance DAG when
+  an operator rollout requires durable external evidence.
 
 Alerts:
 - Pending replication orders exceeding SLA.
@@ -111,18 +124,19 @@ Dashboards:
 
 ## Runbooks & Documentation
 
-- Update `docs/source/sorafs/migration_ledger.md` to include registry status updates.
-- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` (now published) covering metrics, alerting, deployment, backup, and recovery flows.
-- Governance guide: describe policy parameters, approval workflow, dispute handling.
-- API reference pages for each endpoint (Docusaurus docs).
+- `docs/source/sorafs/migration_ledger.md`, `docs/source/sorafs/migration_roadmap.md`, and `roadmap.md` carry registry status updates.
+- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` covers metrics, alerting, deployment, backup, and recovery flows.
+- Governance and dispute flows are documented through the admission policy, alias policy, capacity marketplace, and dispute/revocation runbooks.
+- Endpoint behavior is covered by the SoraFS CLI, node-client protocol, and OpenAPI surfaces.
 
 ## Dependencies & Sequencing
 
-1. Harden endpoint/client submission polish; the shared validator, governance config mapping, Torii `manifest_b64` validation, and on-chain registry DTO policy checks are already wired.
-2. Finalise Norito schema + policy defaults.
-3. Implement contract + service, wire telemetry.
-4. Regenerate fixtures, run integration suites.
-5. Update docs/runbooks and mark roadmap items complete.
+1. Endpoint/client submission polish, shared validation, governance config mapping,
+   Torii `manifest_b64` validation, and registry DTO policy checks are wired.
+2. Norito schema, policy defaults, contract state, service facade, telemetry,
+   fixtures, and local integration coverage are implemented.
+3. Ongoing SF-4 work is rollout evidence: live registry audits, governance archive
+   handoff, and operator-specific policy-change transcripts.
 
 Each roadmap checklist item under SF-4 should reference this plan when progress is made.
 The REST façade now ships with attested listing endpoints:

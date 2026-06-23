@@ -194,8 +194,12 @@ spend-lineage accumulator it is supposed to compress.
 SDK surfaces must not expose recursive accumulator material as caller-provided
 inputs. Package declarations and source guards treat proof-chain,
 accumulator-state, accumulator-snapshot, recursive-snapshot, lineage-snapshot,
-generic proof-state (`proofState`, `ProofState`, `proof_state`), and
-recursive/lineage proof-state aliases as native-owned accumulator bytes.
+generic proof-state (`proofState`, `ProofState`, `proof_state`),
+recursive/lineage proof-state, aggregation-transcript, fixed-window
+table-schedule/shared-manifest/table-base, verifier-witness batch,
+transition-profile binding, append-opening preflight, recursive
+verifier scalar-projection, and previous/resulting accumulator aliases as
+native-owned accumulator bytes.
 The C bridge, Node NAPI host, and Python native redeem helpers also reject zero
 or mismatched public amounts before emitting a `RedeemKagemushaRecursive`
 instruction. Their shared request validation also rejects final redeem proof
@@ -1584,6 +1588,10 @@ scanner's standard-matrix mode and
 the readiness rollup both require accepted Android evidence to cover every
 declared offline D2D payment transport (`nearby_offline`, `nfc_hce`, and `qr`)
 before a production release bundle can be marked ready. The readiness rollup
+also records `covered_d2d_payment_transports_by_family` and
+`missing_d2d_payment_transport_pairs`, and blocks the matrix unless every
+standard Android device family has signed evidence for every required transport.
+The readiness rollup
 only credits a multi-transport slot when `d2d_payment_transports` is a sorted
 unique list that exactly matches a `d2d_payment_transcripts` object, every
 entry has a canonical non-zero path/digest binding, paths and digests are

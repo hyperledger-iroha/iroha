@@ -47,7 +47,7 @@ Gateway-side enforcement knob များကို `docs/examples/sorafs_gatewa
 - `direct_only_policy_rejects_soranet_only_providers` သည် ကြော်ငြာသူတိုင်းသည် SoraNet relays များကိုသာ ပံ့ပိုးပေးသောအခါ `TransportPolicy::DirectOnly` လျင်မြန်စွာ ကျရှုံးကြောင်း အာမခံပါသည်။【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` သည် Torii/QUIC သယ်ယူပို့ဆောင်မှုများကို လက်ရှိအချိန်တွင်အသုံးပြုကြောင်းသေချာစေပြီး SoraNet relay များကို စက်ရှင်မှဖယ်ထုတ်ထားသည်။【crates/sorafs_orchestrator/src/lib.rs:7285】
 - အကူအညီပေးသူ utilities များနှင့် လိုက်လျောညီထွေရှိစေရန်အတွက် `direct_mode_policy_example_is_valid` သည် `docs/examples/sorafs_direct_mode_policy.json` ကို ခွဲခြမ်းစိပ်ဖြာပါသည်။【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` လေ့ကျင့်ခန်း `sorafs_cli fetch --transport-policy=direct-only` ကို လှောင်ပြောင်သော Torii တံခါးပေါက်ကို ဆန့်ကျင်၍ တိုက်ရိုက်သယ်ယူပို့လွှတ်မှုကို ထိန်းညှိထားသော ပတ်ဝန်းကျင်အတွက် မီးခိုးစမ်းသပ်မှုကို ပံ့ပိုးပေးပါသည်။【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` လေ့ကျင့်ခန်း `sorafs_cli fetch --transport-policy=direct-only` ကို လှောင်ပြောင်သော Torii တံခါးပေါက်ကို ဆန့်ကျင်၍ တိုက်ရိုက်သယ်ယူပို့လွှတ်မှုကို ထိန်းညှိထားသော ပတ်ဝန်းကျင်အတွက် မီးခိုးစမ်းသပ်မှုကို ပံ့ပိုးပေးပါသည်။【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` သည် မူဝါဒကို JSON နှင့် အလိုအလျောက်လုပ်ဆောင်မှုအတွက် ရမှတ်ဘုတ်စွဲမြဲမှုဖြင့် တူညီသောအမိန့်ကို ခြုံငုံထားသည်။
 
 အပ်ဒိတ်များကို မထုတ်ဝေမီ အာရုံစိုက်ထားသော suite ကို ဖွင့်ပါ-

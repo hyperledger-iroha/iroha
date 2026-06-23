@@ -58,10 +58,10 @@ SDK）。它強制執行別名和句柄不變量檢查
      `docs/source/sorafs/proposals/`。
    - 包括 CLI 輸出：
      ```bash
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - 提交包含固定裝置、提案、確定性報告和註冊表的 PR

@@ -86,7 +86,7 @@ translator: machine-google-reviewed
 
 ## CLI және SDK жалаушасының анықтамасы
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` қараңыз) және
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` қараңыз) және
 `iroha_cli app sorafs fetch` орауыш (`crates/iroha_cli/src/commands/sorafs.rs`)
 бірдей оркестр конфигурациясының бетін ортақ пайдалану. Кезде келесі жалаушаларды пайдаланыңыз
 шығару дәлелдерін түсіру немесе канондық құрылғыларды қайта ойнату:

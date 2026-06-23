@@ -373,7 +373,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   profile-version gap,
   makes final production-readiness replay recompute profile-version
   `schema_backed` booleans from the schema-backed XML fixture
-  message-definition IDs in the same digest-bound summary,
+  message-definition IDs in the same digest-bound summary, and now requires
+  XSD summary version 2 to carry a recomputed
+  `missing_profile_schema_message_ids` aggregate so readiness can reject forged
+  unique-message gap counts or reviewed-gap classifications,
   rejects XSDs that contain
   known restricted Standards Editor redistribution terms even when those terms
   are line-wrapped, tab-separated, or zero-width obfuscated in the license
@@ -406,8 +409,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   packages are checked in; the direct strict profile-catalog gate now reports
   the missing advertised-version count without echoing profile or message IDs,
   and the current checked-in manifest/catalog pair still reports `24` missing
-  profile schema proofs. An inspected `pacs.008.001.10` candidate still carries
-  restricted redistribution terms and is intentionally not imported.
+  profile schema proofs across `10` unique message definitions. An inspected
+  `pacs.008.001.10` candidate still carries restricted redistribution terms and
+  is intentionally not imported.
   The fixture manifest now records blocked public candidate-source evidence for
   `pacs.002.001.12`, `pacs.008.001.10`, and `pacs.009.001.10`, including the
   audited GitHub source path, commit, candidate SHA-256, and restriction-marker

@@ -47,7 +47,7 @@ Utilisez la CLI comme suit :
 - `direct_only_policy_rejects_soranet_only_providers` est compatible avec `TransportPolicy::DirectOnly` et est connecté à l'annonce de SoraNet. فقط.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` est compatible avec Torii/QUIC et est compatible avec SoraNet. Fichier.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` يحلل `docs/examples/sorafs_direct_mode_policy.json` لضمان بقاء الوثائق متوافقة مع أدوات Fichier.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` pour `sorafs_cli fetch --transport-policy=direct-only` pour la fumée Torii pour la fumée et la fumée Fichier.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` pour `sorafs_cli fetch --transport-policy=direct-only` pour la fumée Torii pour la fumée et la fumée Fichier.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` est compatible avec le tableau de bord JSON et le tableau de bord.
 
 شغّل المجموعة المركزة قبل نشر التحديثات:

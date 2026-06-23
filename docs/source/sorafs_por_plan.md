@@ -1,6 +1,6 @@
 ---
 title: SoraFS PoR Challenge Scheduler & Randomness Integration
-summary: Final specification for SF-9a covering randomness, sampling, coordinator workflow, telemetry, and persistence.
+summary: SF-9a implementation status for PoR randomness, scheduler runtime wiring, telemetry, persistence, and remaining rollout evidence.
 ---
 
 # SoraFS PoR Challenge Scheduler & Randomness Integration
@@ -8,10 +8,21 @@ summary: Final specification for SF-9a covering randomness, sampling, coordinato
 ## Goals & Scope
 - Provide a deterministic yet unpredictable challenge pipeline that proves SoraFS providers hold the chunks they advertise.
 - Combine public randomness with provider-specific VRF attestations to eliminate bias while keeping challenges reproducible for audits.
-- Define the PoR coordinator architecture, Norito payloads, sampling policies, and response handling required by roadmap item **SF-9a — Challenge scheduler & randomness integration**.
+- Track the PoR coordinator architecture, Norito payloads, sampling policies, and response handling required by roadmap item **SF-9a — Challenge scheduler & randomness integration**.
 - Align PoR results with repair automation (SF-8b) and future proof initiatives (SF-9, SF-13, SF-14).
 
-This document completes SF-9a, promotes the scheduler blueprint from draft to implementation-ready, and keeps SF-9 overall in-flight until validator tooling (SF-9b) lands.
+## Status
+The local SF-9a scheduler and reporting foundations are implemented. Torii builds
+`PorCoordinatorRuntime` from `torii.sorafs_por`, persists coordinator state to a
+Norito snapshot when configured, starts the runtime when both PoR and embedded
+SoraFS storage are enabled, exposes status/export/report and ingestion endpoints,
+records scheduler/ingestion telemetry, and ships dashboard panels plus alert
+fixtures. The reference validator also provides
+`sorafs-validate por --challenge <path> --proof <path>`.
+
+Remaining SF-9a rollout work is live deployment evidence for external drand,
+VRF, and auditor feeds, plus any production governance archive handoff required
+by the operator.
 
 ## Randomness Model
 1. **Epoch cadence:** 1-hour epochs (`epoch_id = floor(unix_time / 3600)`).
@@ -46,7 +57,7 @@ This document completes SF-9a, promotes the scheduler blueprint from draft to im
 - Scheduler tracks per-manifest sample state to avoid duplicates within an epoch; if RNG produces a previously sampled index, draw again until a fresh value appears or 8 attempts fail (after which duplicates are allowed but flagged in telemetry).
 
 ## Norito Payloads
-New schema (to live in `sorafs_manifest::por`):
+The canonical schema lives in `sorafs_manifest::por`:
 
 ```norito
 struct PorChallengeV1 {
@@ -87,7 +98,10 @@ struct PorSampleProofV1 {
 }
 ```
 
-All payloads carry Norito headers for canonical decoding. `PorChallengeV1` is broadcast via Torii `/sorafs/por/challenge` and enqueued to provider queues. Providers respond with `PorProofV1` within the response window (see below).
+All payloads carry Norito headers for canonical decoding. Torii currently accepts
+capacity PoR lifecycle submissions at `/v1/sorafs/capacity/por-challenge`,
+`/v1/sorafs/capacity/por-proof`, and `/v1/sorafs/capacity/por-verdict`, and
+the coordinator status surfaces are under `/v1/sorafs/por/*`.
 
 ## Coordinator Workflow
 1. **Epoch bootstrap**
@@ -112,32 +126,43 @@ All payloads carry Norito headers for canonical decoding. `PorChallengeV1` is br
    - After deadline, coordinator optionally issues a `grace` challenge (smaller sample set) if network anomalies are detected; otherwise escalate immediately.
 
 ## Proof Verification
-- Reuse `sorafs_manifest::proof_stream::Verifier`.
-- Steps:
-  1. Validate challenge seed matches recomputed seed (drand + VRF). Reject if mismatch.
-  2. Verify each `PorSampleProofV1`:  
-     - Merkle path leads to manifest root.  
-     - Chunk bytes hashed with `blake3` equals `PorSampleV1::blake3_digest`.  
-     - `chunk_length` matches manifest chunk metadata.
-  3. Ensure provider signature covers the entire proof payload.
-  4. Audit log includes `verification_time_ms`, `chunk_bytes_total`.
-- Failures categorised as: `seed_mismatch`, `merkle_invalid`, `digest_mismatch`, `expired`, `signature_invalid`.
+- `sorafs_manifest::reference::validate_por_challenge_proof_bytes` validates
+  canonical Norito decoding, `PorChallengeV1` and `PorProofV1` structural
+  policy, challenge/proof binding, deadline policy, and exact sample-index
+  coverage.
+- Torii records challenges, proofs, and auditor verdicts through the capacity
+  PoR submission routes and exposes the resulting history through the
+  coordinator status/export/report endpoints.
+- Full live auditor verification against external drand/VRF feeds and any
+  deployment-specific Merkle replay archive remain rollout evidence items.
 
 ## Telemetry & Alerts
-- Metrics (Prometheus):
-  - `sorafs_por_challenges_total{result}` — success/failed/forced.
+- Implemented Torii runtime metrics (Prometheus):
+  - `torii_sorafs_por_challenges_total{result}` — `scheduled`, `forced`, or `failed`.
+  - `torii_sorafs_por_forced_challenges_total`.
+  - `torii_sorafs_por_sampling_duplicates_total`.
+  - `torii_sorafs_por_ingest_backlog{manifest,provider}`.
+  - `torii_sorafs_por_ingest_failures_total{manifest,provider}`.
+- Deployed auditor/drand/VRF integration metrics to add with live rollout evidence:
   - `sorafs_por_response_latency_seconds_bucket{result}`.
   - `sorafs_vrf_missing_total`.
-  - `sorafs_por_sampling_duplicates_total`.
   - `sorafs_por_seed_verification_failures_total{reason}`.
-- Alerts:
-  - `SORAfsPorFailuresHigh`: failure rate >5% over 6 hours.
-  - `SORAfsVrfMissing`: provider missing VRF for 3 consecutive epochs.
-  - `SORAfsPorUnverified`: >20 pending challenges older than deadline.
+- Implemented alerts:
+  - `SoraFSPoRSchedulerFailures`: any failed scheduler tick over 15 minutes.
+  - `SoraFSPoRForcedChallenges`: any forced challenge over 2 hours.
+  - `SoraFSPoRIngestBacklogHigh`: backlog above 3 items for 10 minutes.
+  - `SoraFSPoRDuplicateSamplesHigh`: more than 100 duplicate samples in 1 hour.
 - Logs include `epoch_id`, `manifest_digest`, `provider_id`, `sample_count`, `result`, `failure_reason`.
-- Grafana dashboards overlay PoR outcomes with repair queue depth to visualise churn.
+- `dashboards/grafana/sorafs_gateway_observability.json` overlays gateway proof
+  outcomes with PoR scheduler and ingestion health.
 
 ## Persistence
+Current local persistence is `PorCoordinator::with_persistence`, which snapshots
+coordinator state to a Norito file such as `por_coordinator_snapshot.norito`
+under the configured storage directory. The SQL shape below remains the
+production warehouse/archive target for operators that need long-retention
+analytics outside the node snapshot.
+
 ```sql
 CREATE TABLE sorafs_por_history (
     id BIGSERIAL PRIMARY KEY,
@@ -173,21 +198,24 @@ CREATE TABLE sorafs_vrf_history (
 - `proof_digest` stores SHA-256 of `PorProofV1` saved in object storage for later audits.
 - `gov_event_cid` references the DAG entry containing the public verdict.
 
-## Operational integration (runtime work-in-progress)
+## Operational integration (runtime wired)
 
 - **Coordinator runtime wiring:** `PorCoordinatorRuntime` (see
-  `crates/iroha_torii/src/sorafs/por.rs`) now exposes `PorCoordinatorRuntime::drive_epoch`.
-  Thread this into the Torii scheduler loop so challenges are issued even when no HTTP traffic is
-  present. The runtime should honour `por.coordinator.{enabled,interval_secs}` config knobs.
-- **Storage hooks:** The SoraFS node (`crates/sorafs_node`) consumes coordinator events via a
-  channel so proofs are streamed straight into the persistent store. A new ingestion status endpoint
-  (`GET /sorafs/por/ingestion/{manifest}`) reports backlog depth and last success timestamp.
-- **Governance events:** Every verified or failed proof results in a Norito event emitted through
-  `GovernancePublisher`, tagged with `por_epoch`, `manifest_digest`, and `provider_id`, so
-  GovernanceLog subscribers can correlate verdicts with repair automation.
-- **Alerts:** Feed `sorafs_por_ingest_backlog`, `sorafs_por_ingest_failures_total`, and
-  `sorafs_por_forced_challenges_total` metrics into the existing dashboards. Alert when backlog
-  exceeds 3 epochs or forced challenges persist for >2 epochs.
+  `crates/iroha_torii/src/sorafs/por.rs`) exposes `run_once_at`, `run_once`, and
+  `spawn`. Torii builds it from `Config::sorafs_por` and starts it during Torii
+  startup when `torii.sorafs_por.enabled` is true and embedded SoraFS storage is enabled.
+  The config supplies `epoch_interval_secs`, `response_window_secs`, `governance_dag_dir`,
+  and optional `randomness_seed`; defaults keep the runtime disabled until operators opt in.
+- **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
+  challenges from the local manifest/capacity state, records accepted challenges, and leaves
+  proof/verdict persistence to the existing Torii PoR submission routes. The ingestion status
+  endpoint (`GET /v1/sorafs/por/ingestion/{manifest_digest_hex}`) reports backlog depth,
+  oldest epoch/deadline, and last success/failure timestamps.
+- **Governance events:** Published challenges and weekly reports are materialised by
+  `FilesystemGovernancePublisher` under the configured governance DAG directory. Status,
+  export, and report endpoints expose the coordinator history as canonical Norito payloads.
+- **Alerts:** `dashboards/alerts/sorafs_por_rules.yml` covers scheduler failures, forced
+  challenges, ingestion backlog, and duplicate sample spikes.
 
 Implementation status: Torii exposes `/v1/sorafs/por/ingestion/{manifest_digest_hex}`, which
 delegates to `sorafs_node::NodeHandle::por_ingestion_status` for backlog depth, oldest epoch/deadline,
@@ -197,8 +225,9 @@ collects `por_ingestion_overview` snapshots every 30 seconds and drives the
 alerts stay fresh even when providers are idle; stale providers are zeroed out whenever they drop
 from the snapshot.【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/lib.rs:7859】【crates/iroha_telemetry/src/metrics.rs:10452】
 
-Implementation of these hooks is the remaining SF‑9 deliverable referenced by `roadmap.md`
-("PoR coordinator runtime integration").
+The local SF-9 runtime integration is implemented. Remaining rollout work is live
+deployment evidence for external drand/VRF/auditor feeds and any production governance
+archive handoff required by the deployment operator.
 
 ## Integration with Repair Automation
 - On `failed` status, coordinator emits:
@@ -225,13 +254,22 @@ Implementation of these hooks is the remaining SF‑9 deliverable referenced by 
   - Fixture replay verifying `PorProofV1`.
 - Trybuild UI tests ensure compile-time errors for malformed Norito payloads.
 
-## Implementation Checklist
-- [x] Document randomness combination (drand + VRF) and seed derivation.
-- [x] Define sampling tiers, coverage guarantees, and duplicate handling.
-- [x] Specify Norito payloads for challenges, proofs, and failure events.
-- [x] Describe coordinator workflow, response deadlines, and retries.
-- [x] Detail verification steps, metrics, alerts, and logging.
-- [x] Provide persistence schema, retention, and DAG integration.
-- [x] Outline fixtures/tests ensuring deterministic behaviour.
+## Rollout Status
+Implemented locally:
+- `sorafs_manifest::por` challenge, proof, status, manual challenge, provider
+  summary, slashing event, and weekly-report payloads.
+- `PorCoordinator`, `PorCoordinatorRuntime`, optional Norito snapshot
+  persistence, filesystem governance publishing, and Torii startup wiring.
+- Capacity PoR submission routes plus `/v1/sorafs/por/status`,
+  `/v1/sorafs/por/export`, `/v1/sorafs/por/report/{iso_week}`, and
+  `/v1/sorafs/por/ingestion/{manifest_digest_hex}`.
+- Scheduler, forced-challenge, duplicate-sample, and ingestion telemetry with
+  checked-in dashboard and alert fixtures.
+- `generate_por_fixtures` and `sorafs-validate por` reference validation.
 
-Remaining work tracked under SF-9 (implementation + validator tooling). This specification, alongside SF-8b’s repair automation plan, enables engineers to build the PoR coordinator without ambiguity.
+Remaining production gates:
+- Archive a live drand/VRF/auditor run showing deterministic challenge
+  generation and verdict replay.
+- Decide whether each deployment needs the SQL/Parquet warehouse layer in
+  addition to the node-local Norito snapshot.
+- Capture governance DAG archive handoff evidence for production operators.

@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-02-07
 - Приложите ссылку на заявку на исправление (например, `governance/tickets/SF6-SR-2026.md`) и от рекомендаций.
   утвердить-ответственных из Рабочей группы по технике безопасности и инструментарию.
 - проверьте, что контрольный список исправлений в мемо закрыт; незакрытые пункты блокируют релиз.
-- Подготовьте загрузку журналов четности (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Подготовьте загрузку журналов четности (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   вместе с манифестом пакета.
 - Убедитесь, что команда подключения, с помощью которой вы планируете калибровку, включает и `--identity-token-provider`, и
   явный `--identity-token-audience=<aud>`, чтобы объем Fulcio был зафиксирован в релизных доказательствах.
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Скрипт выполняет следующие проверки:
 
 - `cargo fmt --all -- --check` (рабочая область)
-- `cargo clippy --locked --all-targets` для `sorafs_car` (с функцией `cli`),
-  `sorafs_manifest` и `sorafs_chunker`
-- `cargo test --locked --all-targets` для этих же ящиков
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Если какой-либо шаг выпадает, исправьте регрессию до разметки. Релизные сборки должны
 продолжать непрерывность работы от основного; Не делайте выборочных исправлений в релиз-ветках. Ворота также

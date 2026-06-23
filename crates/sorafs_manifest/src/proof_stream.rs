@@ -69,9 +69,9 @@ impl ProofStreamRequestV1 {
 pub enum ProofStreamKind {
     /// Proof-of-Retrievability samples.
     Por,
-    /// Proofs of Data Possession (future work).
+    /// Proofs of Data Possession requests.
     Pdp,
-    /// Proof-of-Timed Retrieval receipts (future work).
+    /// Proof-of-Timed Retrieval receipt requests.
     Potr,
 }
 

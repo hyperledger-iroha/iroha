@@ -31,7 +31,7 @@ révision de la sécurité :
 - Anexe ou link do ticket de remediacao (par exemple, `governance/tickets/SF6-SR-2026.md`) et note
   Nous sommes les avenants de l'ingénierie de sécurité et du groupe de travail sur l'outillage.
 - Vérifiez qu'une liste de contrôle de remediacao no memo esta fechada ; les éléments pendants bloquent la libération.
-- Préparer ou télécharger les journaux dos pour exploiter la parité (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Préparer ou télécharger les journaux dos pour exploiter la parité (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   avec le bundle de manifeste.
 - Confirmez que le commandant d'assassinat qui va exécuter inclut `--identity-token-provider` et
   un `--identity-token-audience=<aud>` explicite pour capturer la sauvegarde de Fulcio dans les preuves de la libération.Inclut ces articles pour notifier la gouvernance et publier la libération.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 O script faz as seguintes verificacoes :
 
 - `cargo fmt --all -- --check` (espace de travail)
-- `cargo clippy --locked --all-targets` pour `sorafs_car` (avec une fonctionnalité `cli`),
-  `sorafs_manifest` et `sorafs_chunker`
-- `cargo test --locked --all-targets` pour ces caisses mesmos
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Si vous faites un faux pas, corrigez la régression avant de commencer. Construit le développement de la version
 être continu avec le principal ; nao faca cherry-pick de correcoes em branches de release. Ô

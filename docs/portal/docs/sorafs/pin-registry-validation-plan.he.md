@@ -9,83 +9,80 @@ source_last_modified: "2025-11-09T05:21:32.467725+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-id: pin-registry-validation-plan
-title: תוכנית אימות manifests ל-Pin Registry
-sidebar_label: אימות Pin Registry
-description: תוכנית אימות ל-gating של ManifestV1 לפני rollout Pin Registry SF-4.
----
-
-:::note מקור קנוני
-עמוד זה משקף את `docs/source/sorafs/pin_registry_validation_plan.md`. שמרו על שני המיקומים מיושרים כל עוד התיעוד הישן נשאר פעיל.
+:::note Canonical Source
 :::
 
-# תוכנית אימות manifests ל-Pin Registry (הכנת SF-4)
+# Pin Registry Manifest Validation Status (SF-4)
 
-תוכנית זו מתארת את הצעדים הדרושים לשילוב אימות
-`sorafs_manifest::ManifestV1` בחוזה Pin Registry העתידי, כך שעבודת SF-4 תבנה
-על ה-tooling הקיים ללא שכפול לוגיקת encode/decode.
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-## מטרות
+## Implemented Goals
 
-1. מסלולי submission בצד ה-host מאמתים מבנה manifest, פרופיל chunking ו-envelopes
-   של ממשל לפני קבלת הצעות.
-2. Torii ושירותי gateway עושים שימוש חוזר באותן רוטינות אימות כדי להבטיח התנהגות
-   דטרמיניסטית בין hosts.
-3. בדיקות אינטגרציה מכסות מקרים חיוביים/שליליים לקבלת manifests, אכיפת מדיניות
-   וטלמטריית שגיאות.
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## ארכיטקטורה
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### רכיבים
+## Shipped Components
 
-- `ManifestValidator` (מודול חדש ב-crate `sorafs_manifest` או `sorafs_pin`)
-  מכיל בדיקות מבניות ושערי מדיניות.
-- Torii חושף endpoint gRPC בשם `SubmitManifest` שקורא ל-`ManifestValidator`
-  לפני העברה לחוזה.
-- נתיב fetch ב-gateway יכול לצרוך אופציונלית את אותו validator בעת caching
-  של manifests חדשים מה-registry.
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## פירוק משימות
+## Completion Matrix
 
-| משימה | תיאור | בעלים | סטטוס |
-|-------|-------|-------|-------|
-| שלד API V1 | הוספת `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` ל-`sorafs_manifest`. לכלול בדיקת BLAKE3 digest ו-lookup של chunker registry. | Core Infra | ✅ הושלם | עזרי שיתוף (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) נמצאים כעת ב-`sorafs_manifest::validation`. |
-| חיבור מדיניות | מיפוי קונפיגורציית מדיניות registry (`min_replicas`, חלונות תפוגה, handles של chunker מותרים) לקלטי אימות. | Governance / Core Infra | בהמתנה — במעקב ב-SORAFS-215 |
-| אינטגרציית Torii | קריאה ל-validator במסלול submission ב-Torii; החזרת שגיאות Norito מובנות בכשל. | Torii Team | מתוכנן — במעקב ב-SORAFS-216 |
-| stub לחוזה בצד ה-host | להבטיח שה-entrypoint בחוזה דוחה manifests שלא עוברים hash אימות; לחשוף מונים של metrics. | Smart Contract Team | ✅ הושלם | `RegisterPinManifest` קורא ל-validator המשותף (`ensure_chunker_handle`/`ensure_pin_policy`) לפני שינוי מצב ובדיקות יחידה מכסות מקרי כשל. |
-| בדיקות | להוסיף unit tests ל-validator + מקרי trybuild ל-manifests לא תקינים; בדיקות אינטגרציה ב-`crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 בתהליך | בדיקות יחידה ל-validator נחתו יחד עם בדיקות הדחייה on-chain; חבילת האינטגרציה המלאה עדיין בהמתנה. |
-| Docs | לעדכן `docs/source/sorafs_architecture_rfc.md` ו-`migration_roadmap.md` לאחר נחיתת ה-validator; לתעד שימוש CLI ב-`docs/source/sorafs/manifest_pipeline.md`. | Docs Team | בהמתנה — במעקב ב-DOCS-489 |
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-## תלויות
+## Operational Notes
 
-- סיום סכמת Norito ל-Pin Registry (ref: פריט SF-4 ב-roadmap).
-- chunker registry envelopes חתומים על ידי המועצה (מבטיחים מיפוי דטרמיניסטי של ה-validator).
-- החלטות אימות Torii עבור submission של manifests.
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## סיכונים ומזעור
+## Remaining Rollout Evidence
 
-| סיכון | השפעה | מזעור |
-|-------|-------|-------|
-| פרשנות מדיניות שונה בין Torii לחוזה | קבלה לא דטרמיניסטית. | לשתף crate אימות + להוסיף בדיקות אינטגרציה שמשוות החלטות host מול on-chain. |
-| ירידת ביצועים עבור manifests גדולים | submission איטי יותר | Benchmark דרך cargo criterion; לשקול caching של תוצאות digest עבור manifest. |
-| סטיה בהודעות שגיאה | בלבול למפעילים | להגדיר קודי שגיאה Norito; לתעד ב-`manifest_pipeline.md`. |
-
-## יעדי לוח זמנים
-
-- שבוע 1: נחיתת שלד `ManifestValidator` + unit tests.
-- שבוע 2: חיבור מסלול submission ב-Torii ועדכון CLI להצגת שגיאות אימות.
-- שבוע 3: מימוש hooks לחוזה, הוספת בדיקות אינטגרציה, עדכון docs.
-- שבוע 4: הרצת חזרה end-to-end עם רשומת migration ledger ואיסוף אישור המועצה.
-
-תוכנית זו תוזכר ב-roadmap עם תחילת עבודת ה-validator.
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

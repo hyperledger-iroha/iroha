@@ -43,7 +43,7 @@ EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
-XSD_SUMMARY_VERSION = 1
+XSD_SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
@@ -295,6 +295,7 @@ XSD_SUMMARY_KEYS = {
     "missing_schema_fixtures",
     "schema_only_entries",
     "missing_profile_schema_versions",
+    "missing_profile_schema_message_ids",
     "blocked_schema_source_count",
     "blocked_schema_sources",
     "schemas",
@@ -389,6 +390,13 @@ XSD_PROFILE_MISSING_VERSION_KEYS = {
     "message_type",
     "direction",
     "message_def_id",
+}
+XSD_PROFILE_MISSING_MESSAGE_KEYS = {
+    "message_def_id",
+    "profile_version_count",
+    "reviewed_missing_schema_fixture",
+    "reviewed_schema_only",
+    "blocked_source",
 }
 XSD_PROFILE_SKIPPED_VERSION_KEYS = {
     "profile_id",
@@ -3445,6 +3453,77 @@ def _verify_xsd_profile_catalog_entries(
     }
 
 
+def _verify_missing_profile_schema_message_ids(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    missing_profile_schema_versions: list[Any],
+    missing_schema_message_ids: set[str],
+    schema_only_message_ids: set[str],
+    blocked_schema_message_ids: set[str],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Verify the unique missing-message aggregate against raw profile gaps."""
+
+    raw_entries = _require_list(
+        summary.get("missing_profile_schema_message_ids"),
+        f"{path}.missing_profile_schema_message_ids",
+    )
+    counts: dict[str, int] = {}
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        message_def_id = _require_message_def_id(missing, "message_def_id", label)
+        counts[message_def_id] = counts.get(message_def_id, 0) + 1
+
+    expected = sorted(
+        (
+            message_def_id,
+            count,
+            message_def_id in missing_schema_message_ids,
+            message_def_id in schema_only_message_ids,
+            message_def_id in blocked_schema_message_ids,
+        )
+        for message_def_id, count in counts.items()
+    )
+    actual: list[tuple[str, int, bool, bool, bool]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(raw_entries):
+        label = f"{path}.missing_profile_schema_message_ids[{offset}]"
+        entry = _require_object(raw_entry, label)
+        _reject_unknown_keys(entry, XSD_PROFILE_MISSING_MESSAGE_KEYS, label)
+        message_def_id = _require_message_def_id(entry, "message_def_id", label)
+        if message_def_id in seen:
+            _blocker(
+                blockers,
+                "xsd.missing_profile_schema_message_id_duplicate",
+                (
+                    f"{label}.message_def_id duplicates "
+                    f"{path}.missing_profile_schema_message_ids"
+                    f"[{seen[message_def_id]}].message_def_id"
+                ),
+                path,
+            )
+        else:
+            seen[message_def_id] = offset
+        actual.append(
+            (
+                message_def_id,
+                _require_positive_int(entry, "profile_version_count", label),
+                _require_bool(entry, "reviewed_missing_schema_fixture", label),
+                _require_bool(entry, "reviewed_schema_only", label),
+                _require_bool(entry, "blocked_source", label),
+            )
+        )
+    if sorted(actual) != expected:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_message_ids_mismatch",
+            "XSD summary missing_profile_schema_message_ids does not match profile gaps",
+            path,
+        )
+
+
 def _block_xsd_profile_catalog_digest_role_confusion(
     profile_catalog: dict[str, str],
     summary: dict[str, Any],
@@ -4014,10 +4093,20 @@ def verify_xsd_summary(
         if isinstance(entry, dict)
     }
     current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
-    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | {
+    blocked_schema_message_ids = {
         blocked["message_def_id"]
         for blocked in summary["_validated_blocked_schema_sources"]
     }
+    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | blocked_schema_message_ids
+    _verify_missing_profile_schema_message_ids(
+        summary,
+        path,
+        missing_profile_schema_versions=missing_profile_schema_versions,
+        missing_schema_message_ids=missing_schema_message_ids,
+        schema_only_message_ids=schema_only_message_ids,
+        blocked_schema_message_ids=blocked_schema_message_ids,
+        blockers=blockers,
+    )
     blocked_gap_message_ids = missing_schema_message_ids | {
         _require_message_def_id(
             entry,

@@ -244,6 +244,9 @@ enum CommandKind {
     SorafsGatewayAttest {
         options: Box<sorafs::GatewayAttestOptions>,
     },
+    SorafsGatewayAttestVerify {
+        envelope: PathBuf,
+    },
     SorafsGatewayProbe {
         options: Box<sorafs::GatewayProbeOptions>,
     },
@@ -1332,6 +1335,9 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SorafsGatewayAttest { options } => {
             sorafs::generate_gateway_attestation(*options)?;
+        }
+        CommandKind::SorafsGatewayAttestVerify { envelope } => {
+            sorafs::verify_gateway_attestation(&envelope)?;
         }
         CommandKind::SorafsGatewayProbe { options } => {
             sorafs::run_gateway_probe(*options)?;
@@ -3674,6 +3680,7 @@ where
             let mut signing_key: Option<PathBuf> = None;
             let mut signer_account: Option<String> = None;
             let mut gateway_target: Option<String> = None;
+            let mut verify_envelope: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -3701,12 +3708,29 @@ where
                         };
                         gateway_target = Some(value);
                     }
+                    "--verify" => {
+                        let Some(path) = pending.next() else {
+                            return Err("expected path after --verify".into());
+                        };
+                        verify_envelope = Some(normalize_path(Path::new(&path))?);
+                    }
                     flag => {
                         return Err(
                             format!("unknown flag for sorafs-gateway-attest: {flag}").into()
                         );
                     }
                 }
+            }
+
+            if let Some(envelope) = verify_envelope {
+                if output.is_some()
+                    || signing_key.is_some()
+                    || signer_account.is_some()
+                    || gateway_target.is_some()
+                {
+                    return Err("sorafs-gateway-attest --verify cannot be combined with attestation generation flags".into());
+                }
+                return Ok(CommandKind::SorafsGatewayAttestVerify { envelope });
             }
 
             let signing_key_path =
@@ -10359,6 +10383,50 @@ mod acceleration_state_tests {
     }
 
     #[test]
+    fn parse_sorafs_gateway_attest_verify_command() {
+        let args = [
+            "xtask",
+            "sorafs-gateway-attest",
+            "--verify",
+            "attestation.to",
+        ];
+        let iter = args.into_iter().map(String::from);
+        let command = parse_command(iter).expect("parse sorafs-gateway-attest verify");
+        match command {
+            CommandKind::SorafsGatewayAttestVerify { envelope } => {
+                assert!(
+                    envelope.ends_with("attestation.to"),
+                    "unexpected envelope path: {}",
+                    envelope.display()
+                );
+            }
+            _ => panic!("expected sorafs-gateway-attest verify command"),
+        }
+    }
+
+    #[test]
+    fn parse_sorafs_gateway_attest_verify_rejects_generation_flags() {
+        let args = [
+            "xtask",
+            "sorafs-gateway-attest",
+            "--verify",
+            "attestation.to",
+            "--signing-key",
+            "key.hex",
+        ];
+        let iter = args.into_iter().map(String::from);
+        let err = match parse_command(iter) {
+            Ok(_) => panic!("verify mode must reject generation flags"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("cannot be combined"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
     fn render_outputs_include_last_error() {
         let config = ivm::AccelerationConfig {
             enable_simd: true,
@@ -12165,6 +12233,10 @@ fn print_usage() {
     );
     eprintln!(
         "    Run the SoraFS gateway conformance harness, then write the JSON report, attestation envelope, and summary to artifacts/sorafs_gateway_attest unless --out is provided."
+    );
+    eprintln!("  cargo xtask sorafs-gateway-attest --verify <attestation.to>");
+    eprintln!(
+        "    Verify a SoraFS gateway conformance attestation envelope by recomputing the embedded report hash and checking the signer signature."
     );
     eprintln!(
         "  cargo xtask sorafs-gateway-probe --gateway <url>|--headers-file <path> --gar <path> --gar-key kid=hex [options]"

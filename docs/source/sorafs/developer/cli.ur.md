@@ -16,7 +16,7 @@ summary: Task-oriented cookbook for the `sorafs_cli` command surface.
 
 # CLI Cookbook
 
-The consolidated `sorafs_cli` surface (crate `sorafs_car`, feature `cli`)
+The consolidated `sorafs_cli` surface (crate `sorafs_orchestrator`)
 exposes every step required to prepare SoraFS artefacts. This page highlights
 common workflows and links to deeper references.
 
@@ -128,7 +128,11 @@ sorafs_cli proof stream \
   verification (triggered by `--por-root-hex`) rejects a proof. Override the
   budgets with `--max-failures` / `--max-verification-failures` when rehearsing
   flakier environments.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14 land.
+- Supports PoR and PoTR today: PoR streams sample proofs, while PoTR
+  replays signed deadline receipts with `--proof-kind=potr` and
+  `--deadline-ms`. The CLI also accepts `--proof-kind=pdp` for
+  schema-compatible requests, but Torii rejects PDP until SF-13 provider
+  protocol support lands.
 
 ## Additional references
 

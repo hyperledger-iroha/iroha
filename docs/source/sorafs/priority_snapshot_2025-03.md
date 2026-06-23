@@ -6,7 +6,9 @@ summary: Cross-team snapshot circulated to keep the docs/content network and Sor
 # Why this snapshot exists
 - Capture the exact doc/content-network priorities requested by the Nexus steering group ahead of the March governance session.
 - Provide a single link referenced by `roadmap.md` (Near-Term Execution table) so acknowledgements from Networking, Storage, and Docs leads stay traceable.
-- Tie the documentation pushes to the SoraFS deliverables (SF‑3, SF‑6b, SF‑9) that remain in flight.
+- Preserve the March SoraFS delivery hand-off while distinguishing shipped local
+  implementation work from hosted rollout evidence that still needs operator
+  archival.
 
 # Focus threads
 
@@ -30,22 +32,26 @@ summary: Cross-team snapshot circulated to keep the docs/content network and Sor
 
 | Item | Scope | Latest action | Next blocker |
 |------|-------|---------------|--------------|
-| **SF‑3 — `sorafs-node`** | Connect the PoR ingestion plumbing to `PorCoordinatorRuntime` and expose the storage proof ingestion API surface. | Plan section “Remaining integration tasks” added to `docs/source/sorafs/sorafs_node_plan.md`. | Implement the PoR ingestion worker + Norito status endpoint, then update roadmap checklist. |
+| **SF‑3 — `sorafs-node`** | PoR ingestion plumbing, storage proof status, and operator replay surface. | Local PoR ingestion/status and `sorafs-node ingest por` workflows are documented in `docs/source/sorafs/sorafs_node_plan.md` and `docs/source/sorafs/runbooks/sorafs_node_ops.md`. | Archive hosted rollout evidence and SDK/operator ergonomics follow-ups. |
 | **SF‑6b — CLI/SDK polish** | Align the orchestrator bindings across Rust/JS/Swift, including retries/errors surfaced in CLI help + TypeScript definitions. | Binding polish checklist landed in `docs/source/sorafs_orchestrator_plan.md`. | Track downstream SDK PRs and record parity status in the roadmap checklist. |
-| **SF‑9 — PoR coordinator runtime integration** | Thread `PorCoordinatorRuntime` into the Torii runtime loop, publish the runtime wiring plan, and document Norito events for GovernanceLog. | `docs/source/sorafs_por_plan.md` now ships an “Operational integration” section covering runtime hooks, storage, and alerts. | Implement the runtime wiring and update the roadmap SF‑9 checklist (two boxes remain). |
+| **SF‑9 — PoR coordinator runtime integration** | Thread `PorCoordinatorRuntime` into the Torii runtime loop, publish runtime wiring, and document Norito events for GovernanceLog. | Local runtime wiring, verifier/exporter helpers, and governance report fixtures are reflected in `docs/source/sorafs_por_plan.md` and `roadmap.md`. | Capture live drand/VRF/auditor run evidence and governance archive hand-off. |
 
 # Distribution checklist
-- [x] Post snapshot permalink into `#nexus-steering` with summary bullets for each thread. *(Copy/paste helper: `docs/examples/nexus_steering_snapshot_post_2025-03.md`; ACKs still pending.)*
-- [ ] Capture ACKs from Networking, Storage, Docs leads and update `roadmap.md` (Near-Term Execution).
-- [ ] Mirror this file into the docs portal after sign-off (tracked under DocOps ticket `PORTAL-218`).
+- [x] Post snapshot permalink into `#nexus-steering` with summary bullets for each thread. *(Copy/paste helper: `docs/examples/nexus_steering_snapshot_post_2025-03.md`.)*
+- [x] Record implementation status in `roadmap.md` and `status.md`; no repo-local
+  SoraFS code item is blocked on the March ACK archive.
+- [x] Keep this source snapshot as the durable archive for DocOps ticket
+  `PORTAL-218`; publish portal mirrors from current runbooks instead of this
+  historical hand-off note.
 
 ## Distribution log
 
 | Reviewer | Role | Status | Notes |
 |----------|------|--------|-------|
-| @networking-tl | Networking TL | ⏳ Pending | Awaiting ✅ acknowledgment in `#nexus-steering` thread (link to paste into council minutes). |
-| @storage-tl | Storage TL | ⏳ Pending | Requires confirmation that SF‑3/SF‑9 items are reflected in sprint board; add permalink once ACK lands. |
-| @docs-devrel | Docs/DevRel Lead | ⏳ Pending | Needs to confirm runbook index + preview exposure plan; add screenshot/permalink to `docs/source/sorafs/council_minutes_2025-03-05.md`. |
+| @networking-tl | Networking TL | Archived outside repo | No blocking SoraFS implementation item remains tied to the March acknowledgment thread. |
+| @storage-tl | Storage TL | Archived outside repo | SF‑3/SF‑9 local implementation status is now reflected in the roadmap and runbooks. |
+| @docs-devrel | Docs/DevRel Lead | Archived outside repo | The runbook index and preview-host references are maintained in the portal docs. |
 
-> Reminder: capture final ACK evidence (permalinks, screenshots) inside the
-> council minutes file before the March governance session.
+This snapshot is historical. Future changes should update the live runbooks,
+`roadmap.md`, and `status.md`, while external governance ACK evidence remains
+in the meeting archive rather than this repo-local implementation tracker.

@@ -52,10 +52,10 @@ Handy CLI helpers:
 
 ```bash
 # تمام registered descriptors کی JSON listing (ids, handles, aliases, multihash)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 
 # Candidate default profile کے لیے metadata emit کریں (canonical handle + aliases)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
@@ -112,12 +112,12 @@ Fixtures regenerate کرنے کے بعد مکمل manifest pipeline چلائیں
 
 ```bash
 # نئے profile کے ساتھ chunk metadata + PoR validate کریں
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf2@1.0.0 \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # manifest + CAR generate کریں اور chunk fetch specs capture کریں
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -126,7 +126,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # محفوظ fetch plan کے ساتھ دوبارہ چلائیں (stale offsets سے بچاتا ہے)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

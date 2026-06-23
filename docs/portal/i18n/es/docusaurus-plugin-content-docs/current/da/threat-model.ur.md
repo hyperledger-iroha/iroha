@@ -212,7 +212,7 @@ proveedores maliciosos کو lista blanca کرتا ہے، یا alertas suprimen �
   `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے huella digital
   comprueba el hilo کرتا ہے۔
 - Arnés de flujo de prueba de simulaciones de transmisión PDP/PoTR کے ذریعے چلتی ہیں:
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ Flujos de solicitudes PoR/PDP/PoTR اور
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ یہ Flujos de solicitudes PoR/PDP/PoTR اور
   los escenarios de falla cubren el modelo de amenaza کرتا ہے جو میں بیان ہیں۔
 - Capacidad de remojo de reparación کے نتائج `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   میں ہیں، جبکہ Sumeragi matriz de remojo `docs/source/sumeragi_soak_matrix.md` میں ہے

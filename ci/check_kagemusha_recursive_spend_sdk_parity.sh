@@ -10657,6 +10657,21 @@ def check_javascript(texts, errors):
             "publicProofChainBytes",
             "privateAccumulatorState",
             "externalRecursiveAccumulatorBytes",
+            "aggregationTranscript",
+            "AggregationTranscriptBytes",
+            "aggregation_transcript_v1",
+            "fixedWindowTableSchedule",
+            "FixedWindowTableScheduleBytes",
+            "fixed_window_table_schedule_v1",
+            "fixedWindowSharedTableManifest",
+            "FixedWindowSharedTableManifestBytes",
+            "fixed_window_shared_table_manifest_v1",
+            "fixedWindowTableBase",
+            "FixedWindowTableBaseBytes",
+            "fixed_window_table_base_v1",
+            "verifierWitnessBatch",
+            "VerifierWitnessBatchBytes",
+            "verifier_witness_batch_v1",
             "proofChain",
             "ProofChainState",
             "proof_chain_bytes",
@@ -10666,6 +10681,21 @@ def check_javascript(texts, errors):
             "recursiveAccumulator",
             "recursiveAccumulatorV1",
             "recursive_accumulator_bytes",
+            "transitionProfileBinding",
+            "TransitionProfileBindingBytes",
+            "transition_profile_binding_v1",
+            "appendOpeningPreflight",
+            "AppendOpeningPreflightBytes",
+            "append_opening_preflight_v1",
+            "recursiveVerifierScalarProjection",
+            "RecursiveVerifierScalarProjectionBytes",
+            "recursive_verifier_scalar_projection_v1",
+            "previousAccumulator",
+            "PreviousAccumulatorBytes",
+            "previous_accumulator_v1",
+            "resultingAccumulator",
+            "ResultingAccumulatorBytes",
+            "resulting_accumulator_v1",
             "lineageAccumulatorState",
             "LineageAccumulatorState",
             "lineage_accumulator_state",
@@ -10696,12 +10726,22 @@ def check_javascript(texts, errors):
             "AccumulatorStateBytes",
             "accumulator_state_v1",
             "lineageAccumulator|LineageAccumulator|lineage_accumulator",
+            "aggregationTranscript|AggregationTranscript|aggregation_transcript",
+            "fixedWindowTableSchedule|FixedWindowTableSchedule|fixed_window_table_schedule",
+            "fixedWindowSharedTableManifest|FixedWindowSharedTableManifest|fixed_window_shared_table_manifest",
+            "fixedWindowTableBase|FixedWindowTableBase|fixed_window_table_base",
+            "verifierWitnessBatch|VerifierWitnessBatch|verifier_witness_batch",
             "recursiveProofChain|RecursiveProofChain|recursive_proof_chain",
             "proofChain|ProofChain|proof_chain",
             "appendAccumulator|AppendAccumulator|append_accumulator",
             "recursiveAccumulator|RecursiveAccumulator|recursive_accumulator",
             "terminalAccumulator|TerminalAccumulator|terminal_accumulator",
             "walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain",
+            "transitionProfileBinding|TransitionProfileBinding|transition_profile_binding",
+            "appendOpeningPreflight|AppendOpeningPreflight|append_opening_preflight",
+            "recursiveVerifierScalarProjection|RecursiveVerifierScalarProjection|recursive_verifier_scalar_projection",
+            "previousAccumulator|PreviousAccumulator|previous_accumulator",
+            "resultingAccumulator|ResultingAccumulator|resulting_accumulator",
             "accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot",
             "recursiveSnapshot|RecursiveSnapshot|recursive_snapshot",
             "lineageSnapshot|LineageSnapshot|lineage_snapshot",
@@ -10736,6 +10776,21 @@ def check_javascript(texts, errors):
             '"publicProofChainBytes",',
             '"privateAccumulatorState",',
             '"externalRecursiveAccumulatorBytes",',
+            '"aggregationTranscript",',
+            '"AggregationTranscriptBytes",',
+            '"aggregation_transcript_v1",',
+            '"fixedWindowTableSchedule",',
+            '"FixedWindowTableScheduleBytes",',
+            '"fixed_window_table_schedule_v1",',
+            '"fixedWindowSharedTableManifest",',
+            '"FixedWindowSharedTableManifestBytes",',
+            '"fixed_window_shared_table_manifest_v1",',
+            '"fixedWindowTableBase",',
+            '"FixedWindowTableBaseBytes",',
+            '"fixed_window_table_base_v1",',
+            '"verifierWitnessBatch",',
+            '"VerifierWitnessBatchBytes",',
+            '"verifier_witness_batch_v1",',
             '"proofChain",',
             '"ProofChainState",',
             '"proof_chain_bytes",',
@@ -10745,6 +10800,21 @@ def check_javascript(texts, errors):
             '"recursiveAccumulator",',
             '"recursiveAccumulatorV1",',
             '"recursive_accumulator_bytes",',
+            '"transitionProfileBinding",',
+            '"TransitionProfileBindingBytes",',
+            '"transition_profile_binding_v1",',
+            '"appendOpeningPreflight",',
+            '"AppendOpeningPreflightBytes",',
+            '"append_opening_preflight_v1",',
+            '"recursiveVerifierScalarProjection",',
+            '"RecursiveVerifierScalarProjectionBytes",',
+            '"recursive_verifier_scalar_projection_v1",',
+            '"previousAccumulator",',
+            '"PreviousAccumulatorBytes",',
+            '"previous_accumulator_v1",',
+            '"resultingAccumulator",',
+            '"ResultingAccumulatorBytes",',
+            '"resulting_accumulator_v1",',
             '"lineageAccumulatorState",',
             '"LineageAccumulatorState",',
             '"lineage_accumulator_state",',
@@ -18926,7 +18996,11 @@ def check_offline_doc_native_owned_accumulator_boundary(texts, errors):
         "previous/resulting accumulator digests",
         "SDKs must not derive, supply, or patch accumulator state themselves",
         "generic proof-state (`proofState`, `ProofState`, `proof_state`)",
-        "recursive/lineage proof-state aliases as native-owned accumulator bytes",
+        "recursive/lineage proof-state, aggregation-transcript, fixed-window table-schedule/shared-manifest/table-base",
+        "transition-profile binding",
+        "append-opening preflight",
+        "recursive verifier scalar-projection",
+        "previous/resulting accumulator aliases as native-owned accumulator bytes",
     )
     for needle in required:
         require(
@@ -29124,10 +29198,20 @@ if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
         "proof-state aliases may be SDK metadata.",
         1,
     )
+    mutated[target] = mutated[target].replace(
+        "generic proof-state (`proofState`, `ProofState`, `proof_state`),\n"
+        "recursive/lineage proof-state, aggregation-transcript, fixed-window\n"
+        "table-schedule/shared-manifest/table-base, verifier-witness batch,\n"
+        "transition-profile binding, append-opening preflight, recursive\n"
+        "verifier scalar-projection, and previous/resulting accumulator aliases as\n"
+        "native-owned accumulator bytes.",
+        "proof-state and native material aliases may be SDK metadata.",
+        1,
+    )
     if (
         "Native append lets SDKs supply accumulator digests as optional metadata."
         not in mutated[target]
-        or "proof-state aliases may be SDK metadata." not in mutated[target]
+        or "proof-state and native material aliases may be SDK metadata." not in mutated[target]
     ):
         raise SystemExit("negative control failed: unable to mutate offline Kagemusha accumulator boundary")
     try:
@@ -29138,6 +29222,7 @@ if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
             "offline Kagemusha docs missing native-owned accumulator boundary: Native append streams the previous "
             "recursive proof bytes and per-hop accumulator material into native-owned accumulator digests",
             "offline Kagemusha docs missing native-owned accumulator boundary: generic proof-state (`proofState`, `ProofState`, `proof_state`)",
+            "offline Kagemusha docs missing native-owned accumulator boundary: previous/resulting accumulator aliases as native-owned accumulator bytes",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -30474,7 +30559,7 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
 if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
     mutated = dict(texts)
     # Exercise current-note amount trailing-field coverage by removing the
-    # numericPayloadWithTrailingField vectors from every non-C# SDK surface.
+    # numericPayloadWithTrailingField vectors from every SDK surface.
     replacements = (
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
@@ -34343,6 +34428,26 @@ if mode == "--negative-control-js-package-dist-accumulator-material-denylist":
             "lineage accumulator material",
         ),
         (
+            "aggregationTranscript|AggregationTranscript|aggregation_transcript|",
+            "aggregation transcript material",
+        ),
+        (
+            "fixedWindowTableSchedule|FixedWindowTableSchedule|fixed_window_table_schedule|",
+            "fixed-window table schedule material",
+        ),
+        (
+            "fixedWindowSharedTableManifest|FixedWindowSharedTableManifest|fixed_window_shared_table_manifest|",
+            "fixed-window shared-table manifest material",
+        ),
+        (
+            "fixedWindowTableBase|FixedWindowTableBase|fixed_window_table_base|",
+            "fixed-window table-base material",
+        ),
+        (
+            "verifierWitnessBatch|VerifierWitnessBatch|verifier_witness_batch|",
+            "verifier witness batch material",
+        ),
+        (
             "recursiveProofChain|RecursiveProofChain|recursive_proof_chain|",
             "recursive proof-chain material",
         ),
@@ -34365,6 +34470,26 @@ if mode == "--negative-control-js-package-dist-accumulator-material-denylist":
         (
             "walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain|",
             "wallet recursive proof-chain material",
+        ),
+        (
+            "transitionProfileBinding|TransitionProfileBinding|transition_profile_binding|",
+            "transition profile binding material",
+        ),
+        (
+            "appendOpeningPreflight|AppendOpeningPreflight|append_opening_preflight|",
+            "append opening preflight material",
+        ),
+        (
+            "recursiveVerifierScalarProjection|RecursiveVerifierScalarProjection|recursive_verifier_scalar_projection|",
+            "recursive verifier scalar projection material",
+        ),
+        (
+            "previousAccumulator|PreviousAccumulator|previous_accumulator|",
+            "previous accumulator material",
+        ),
+        (
+            "resultingAccumulator|ResultingAccumulator|resulting_accumulator|",
+            "resulting accumulator material",
         ),
         (
             "accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot|",
@@ -34460,6 +34585,46 @@ if mode == "--negative-control-js-package-dist-accumulator-material-self-check-e
         (
             '"recursiveAccumulator",',
             "recursive accumulator material exact self-check entry",
+        ),
+        (
+            '"aggregationTranscript",',
+            "aggregation transcript material exact self-check entry",
+        ),
+        (
+            '"fixedWindowTableSchedule",',
+            "fixed-window table schedule material exact self-check entry",
+        ),
+        (
+            '"fixedWindowSharedTableManifest",',
+            "fixed-window shared-table manifest material exact self-check entry",
+        ),
+        (
+            '"fixedWindowTableBase",',
+            "fixed-window table-base material exact self-check entry",
+        ),
+        (
+            '"verifierWitnessBatch",',
+            "verifier witness batch material exact self-check entry",
+        ),
+        (
+            '"transitionProfileBinding",',
+            "transition profile binding material exact self-check entry",
+        ),
+        (
+            '"appendOpeningPreflight",',
+            "append opening preflight material exact self-check entry",
+        ),
+        (
+            '"recursiveVerifierScalarProjection",',
+            "recursive verifier scalar projection material exact self-check entry",
+        ),
+        (
+            '"previousAccumulator",',
+            "previous accumulator material exact self-check entry",
+        ),
+        (
+            '"resultingAccumulator",',
+            "resulting accumulator material exact self-check entry",
         ),
         (
             '"accumulatorSnapshot",',

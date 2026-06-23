@@ -22,12 +22,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 يحولهذا الدليل الاجرائي عناصر خارطة الطريق **DOCS-7** (نشر SoraFS) و **DOCS-8** (اتمتة pin في CI/CD) الى اجراء عملي لبوابة المطورين. يغطي مرحلة build/lint، تغليف SoraFS، توقيع المانيفست عبر Sigstore، ترقية الاسماء المستعارة، التحقق، وتمارين التراجع بحيث تكون كل معاينة واصدار قابلة لاعادة الانتاج وقابلة للتدقيق.
 
-يفترض هذا المسار ان لديك ثنائي `sorafs_cli` (مبني عبر `--features cli`)، وصولا الى Torii endpoint مع صلاحيات pin-registry، وبيانات اعتماد OIDC لـ Sigstore. خزّن الاسرار طويلة العمر (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، رموز Torii) في خزينة CI؛ ويمكن للعمليات المحلية تحميلها عبر exports من الـ shell.
+يفترض هذا المسار ان لديك ثنائي `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target)، وصولا الى Torii endpoint مع صلاحيات pin-registry، وبيانات اعتماد OIDC لـ Sigstore. خزّن الاسرار طويلة العمر (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، رموز Torii) في خزينة CI؛ ويمكن للعمليات المحلية تحميلها عبر exports من الـ shell.
 
 ## المتطلبات المسبقة
 
 - Node 18.18 او احدث مع `npm` او `pnpm`.
-- `sorafs_cli` من `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` من `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان Torii يكشف `/v1/sorafs/*` مع حساب/مفتاح خاص بسلطة يمكنها ارسال المانيفست والاسماء المستعارة.
 - مُصدِر OIDC (GitHub Actions، GitLab، workload identity، الخ) لاصدار `SIGSTORE_ID_TOKEN`.
 - اختياري: `examples/sorafs_cli_quickstart.sh` للتجارب الجافة و `docs/source/sorafs_ci_templates.md` لقوالب workflows في GitHub/GitLab.

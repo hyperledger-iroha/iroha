@@ -16199,13 +16199,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     offlineDocAccumulatorBranch,
-    /previous recursive proof bytes and per-hop[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?SDKs must not derive, supply[\s\S]*?accumulator state themselves[\s\S]*?SDKs supply accumulator digests as optional metadata[\s\S]*?generic proof-state[\s\S]*?proofState[\s\S]*?ProofState[\s\S]*?proof_state[\s\S]*?proof-state aliases may be SDK metadata[\s\S]*?run_checks\(mutated\)/u,
+    /previous recursive proof bytes and per-hop[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?SDKs must not derive, supply[\s\S]*?accumulator state themselves[\s\S]*?SDKs supply accumulator digests as optional metadata[\s\S]*?generic proof-state[\s\S]*?proofState[\s\S]*?ProofState[\s\S]*?proof_state[\s\S]*?recursive\/lineage proof-state[\s\S]*?aggregation-transcript[\s\S]*?fixed-window[\s\S]*?verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive[\s\S]*?verifier scalar-projection[\s\S]*?previous\/resulting accumulator aliases[\s\S]*?native-owned accumulator bytes[\s\S]*?proof-state and native material aliases may be SDK metadata[\s\S]*?run_checks\(mutated\)/u,
     "offline Kagemusha doc accumulator negative control must mutate the native-owned accumulator and proof-state boundaries",
   );
   assert.match(
     offlineDocAccumulatorBranch,
-    /expected_labels\s*=\s*\([\s\S]*?native-owned accumulator digests[\s\S]*?generic proof-state \(`proofState`, `ProofState`, `proof_state`\)[\s\S]*?\)/u,
-    "offline Kagemusha doc accumulator negative control must require the generic proof-state doc marker",
+    /expected_labels\s*=\s*\([\s\S]*?native-owned accumulator digests[\s\S]*?generic proof-state \(`proofState`, `ProofState`, `proof_state`\)[\s\S]*?previous\/resulting accumulator aliases as native-owned accumulator bytes[\s\S]*?\)/u,
+    "offline Kagemusha doc accumulator negative control must require the generic proof-state and material-alias doc markers",
   );
   assert.match(
     offlineDocAccumulatorBranch,
@@ -16831,7 +16831,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
-    /current-note amount trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
+    /current-note-amount-trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
     "SDK current-note amount trailing-field vector negative control must keep trailing-field labels visible",
   );
   assert.match(
@@ -17243,7 +17243,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkRedeemChangeOutputFixed32Branch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,
@@ -18335,6 +18335,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /lineageAccumulator\|LineageAccumulator\|lineage_accumulator\|[\s\S]*?recursiveProofChain\|RecursiveProofChain\|recursive_proof_chain\|[\s\S]*?proofChain\|ProofChain\|proof_chain\|[\s\S]*?appendAccumulator\|AppendAccumulator\|append_accumulator\|[\s\S]*?recursiveAccumulator\|RecursiveAccumulator\|recursive_accumulator\|[\s\S]*?terminalAccumulator\|TerminalAccumulator\|terminal_accumulator\|[\s\S]*?walletRecursiveProofChain\|WalletRecursiveProofChain\|wallet_recursive_proof_chain\|[\s\S]*?accumulatorSnapshot\|AccumulatorSnapshot\|accumulator_snapshot\|[\s\S]*?recursiveSnapshot\|RecursiveSnapshot\|recursive_snapshot\|[\s\S]*?lineageSnapshot\|LineageSnapshot\|lineage_snapshot\|[\s\S]*?proofState\|ProofState\|proof_state\|[\s\S]*?recursiveProofState\|RecursiveProofState\|recursive_proof_state\|[\s\S]*?lineageProofState\|LineageProofState\|lineage_proof_state\|[\s\S]*?accumulatorState\|AccumulatorState\|accumulator_state/u,
     "JS package dist accumulator material denylist negative control must cover representative material token groups",
   );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /aggregationTranscript\|AggregationTranscript\|aggregation_transcript\|[\s\S]*?fixedWindowTableSchedule\|FixedWindowTableSchedule\|fixed_window_table_schedule\|[\s\S]*?fixedWindowSharedTableManifest\|FixedWindowSharedTableManifest\|fixed_window_shared_table_manifest\|[\s\S]*?fixedWindowTableBase\|FixedWindowTableBase\|fixed_window_table_base\|[\s\S]*?verifierWitnessBatch\|VerifierWitnessBatch\|verifier_witness_batch\|[\s\S]*?transitionProfileBinding\|TransitionProfileBinding\|transition_profile_binding\|[\s\S]*?appendOpeningPreflight\|AppendOpeningPreflight\|append_opening_preflight\|[\s\S]*?recursiveVerifierScalarProjection\|RecursiveVerifierScalarProjection\|recursive_verifier_scalar_projection\|[\s\S]*?previousAccumulator\|PreviousAccumulator\|previous_accumulator\|[\s\S]*?resultingAccumulator\|ResultingAccumulator\|resulting_accumulator\|/u,
+    "JS package dist accumulator material denylist negative control must cover non-digest accumulator material token groups",
+  );
   assert.ok(
     guard.includes("JavaScript package dist accumulator material declaration coverage"),
     "JS package dist guard must expose a material-specific declaration coverage label",
@@ -18374,6 +18379,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "JS package dist material exact self-check scanner must pin quoted material entries for every family",
   );
   assert.match(
+    materialExactSelfCheckScanner,
+    /"aggregationTranscript",[\s\S]*?"fixedWindowTableSchedule",[\s\S]*?"fixedWindowSharedTableManifest",[\s\S]*?"fixedWindowTableBase",[\s\S]*?"verifierWitnessBatch",[\s\S]*?"transitionProfileBinding",[\s\S]*?"appendOpeningPreflight",[\s\S]*?"recursiveVerifierScalarProjection",[\s\S]*?"previousAccumulator",[\s\S]*?"resultingAccumulator",/u,
+    "JS package dist material exact self-check scanner must pin non-digest accumulator material entries",
+  );
+  assert.match(
     jsPackageDistAccumulatorMaterialDenylistBranch,
     /for removed_token, material_name in mutations:[\s\S]*?updated = original\.replace\(removed_token, "", 1\)[\s\S]*?run_checks\(mutated\)/u,
     "JS package dist accumulator material denylist negative control must mutate each guarded material token group",
@@ -18408,6 +18418,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
     /"lineageAccumulatorState",[\s\S]*?"recursiveProofChainBytes",[\s\S]*?"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"proofChain",[\s\S]*?"appendAccumulator",[\s\S]*?"recursiveAccumulator",[\s\S]*?"accumulatorSnapshot",[\s\S]*?"recursiveSnapshot",[\s\S]*?"lineageSnapshot",[\s\S]*?"proofState",[\s\S]*?"recursiveProofState",[\s\S]*?"lineageProofState",[\s\S]*?"accumulatorState",/u,
     "JS package dist accumulator material self-check exactness negative control must mutate every quoted material family",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /"aggregationTranscript",[\s\S]*?"fixedWindowTableSchedule",[\s\S]*?"fixedWindowSharedTableManifest",[\s\S]*?"fixedWindowTableBase",[\s\S]*?"verifierWitnessBatch",[\s\S]*?"transitionProfileBinding",[\s\S]*?"appendOpeningPreflight",[\s\S]*?"recursiveVerifierScalarProjection",[\s\S]*?"previousAccumulator",[\s\S]*?"resultingAccumulator",/u,
+    "JS package dist accumulator material self-check exactness negative control must mutate every non-digest accumulator material family",
   );
   assert.match(
     jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,

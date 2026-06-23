@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-01-30
 ---
 
 ---
-title: SoraFS Chaos Drill & Incident Playbook Plan (Draft)
+title: SoraFS Chaos Drill & Incident Playbook Plan
 summary: Outline for SF-7b chaos drills and incident response materials.
 ---
 
-# SoraFS Chaos Drill & Incident Playbook Plan (Draft)
+# SoraFS Chaos Drill & Incident Playbook Plan
 
 ## Chaos Scenarios (Initial)
 

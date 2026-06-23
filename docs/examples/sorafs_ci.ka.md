@@ -81,7 +81,7 @@ jobs:
 
 ## შენიშვნები
 
-- `sorafs_cli` ხელმისაწვდომი უნდა იყოს მორბენალზე (მაგ., `cargo install --path crates/sorafs_car --features cli` ამ ნაბიჯების წინ).
+- `sorafs_cli` ხელმისაწვდომი უნდა იყოს მორბენალზე (მაგ., `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` ამ ნაბიჯების წინ).
 - სამუშაო პროცესმა უნდა უზრუნველყოს აშკარა OIDC აუდიტორია (აქ `sorafs`); დაარეგულირეთ `--identity-token-audience`, რათა შეესაბამებოდეს თქვენს Fulcio პოლიტიკას.
 - გამოშვების მილსადენმა უნდა დაარქივოს `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` და `artifacts/proof.json` მმართველობის განსახილველად.
 - დეტერმინისტული ნიმუშის არტეფაქტები ცხოვრობს `fixtures/sorafs_manifest/ci_sample`-ში; დააკოპირეთ ისინი ტესტებში, როდესაც გჭირდებათ ოქროს მანიფესტები, გეგმები ან JSON შეფუთვა მილსადენის ხელახალი გამოთვლის გარეშე.

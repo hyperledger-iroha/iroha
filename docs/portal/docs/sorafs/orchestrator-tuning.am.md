@@ -86,7 +86,7 @@ translator: machine-google-reviewed
 
 ## CLI እና ኤስዲኬ ባንዲራ ማጣቀሻ
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` ይመልከቱ) እና እ.ኤ.አ.
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` ይመልከቱ) እና እ.ኤ.አ.
 `iroha_cli app sorafs fetch` መጠቅለያ (I18NI0000070X)
 ተመሳሳይ የኦርኬስትራ ውቅር ገጽን ያካፍሉ። የሚከተሉትን ባንዲራዎች ሲጠቀሙ ይጠቀሙ
 የታቀዱ ማስረጃዎችን ማንሳት ወይም ቀኖናዊ መጫዎቻዎችን እንደገና መጫወት፡-

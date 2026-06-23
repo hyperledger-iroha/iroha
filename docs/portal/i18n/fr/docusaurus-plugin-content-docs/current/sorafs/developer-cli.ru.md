@@ -18,7 +18,7 @@ description : Rasoir pratique pour la console de puissance `sorafs_cli`.
 :::note Канонический источник
 :::
 
-La console de configuration `sorafs_cli` (préparée à la caisse `sorafs_car` avec la fonction intégrée `cli`) prend en charge le système, Non disponible pour les articles d'art SoraFS. Utilisez ce livre de recettes pour découvrir les types de flux de travail ; Connectez-vous au manifeste de pipeline et à l'opérateur de runbooks pour le contexte d'exploitation.
+La console de configuration `sorafs_cli` (provided by the `sorafs_orchestrator` crate) prend en charge le système, Non disponible pour les articles d'art SoraFS. Utilisez ce livre de recettes pour découvrir les types de flux de travail ; Connectez-vous au manifeste de pipeline et à l'opérateur de runbooks pour le contexte d'exploitation.
 
 ## Charges utiles Упаковка
 

@@ -22,11 +22,11 @@ digest הקנונית של manifest ומעטפות ממשל.
 
 | מזהה | אבן דרך | בעלים | חלון יעד | סטטוס | הערות |
 |----|-----------|--------|---------------|--------|-------|
-| PR-001 | שלד חוזה (`PinRegistry::register`, `approve`, `retire`) | Storage Team; Nexus Core Infra TL | Q4 2025 | בתהליך | `iroha_data_model` חושף כעת טיפוסי נתונים לרישום pin של SoraFS יחד עם ISI stubs ל‑`RegisterPinManifest`, `ApprovePinManifest`, ו‑`RetirePinManifest`. |
-| PR-002 | צנרת חתימות ממשל | Governance Secretariat; Tooling WG | Q1 2026 | בתהליך | Iroha core מאמתת כעת מעטפות מועצה (digest/manifest/profile/signatures) במהלך `ApprovePinManifest`; עבודה נותרת: חשיפה ב‑Torii/CLI ותמיכה רב‑אלגוריתמית. |
-| PR-003 | אכיפת alias + מדיניות retention | Storage Team | Q1 2026 | בתהליך | אימות alias + ייחודיות נמצאים כעת ב‑`crates/iroha_core/src/smartcontracts/isi/sorafs.rs`, עם עדכוני DTO ב‑Torii ב‑`crates/iroha_torii/src/routing.rs`; חלונות retention ומספר רפליקות עדיין נדרשים. |
-| PR-004 | התאמת CI + fixtures | Tooling WG | Q1 2026 | מתוכנן | להרחיב `ci/check_sorafs_fixtures.sh` ולהוסיף בדיקות golden ממוקדות חוזה. |
-| PR-005 | תיעוד rollout ומדריך מפעיל | Docs Team | Q1 2026 | מתוכנן | לפרסם runbook מפעילים שמפנה למעטפות ממשל ותוכנית מיגרציה. |
+| PR-001 | Contract scaffolding (`RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`) | Storage Team; Nexus Core Infra TL | Q4 2025 | Complete | Data model, world-state storage, permissions, and ISI dispatch are implemented for manifest registration, approval, retirement, alias binding, and replication order issue/complete. |
+| PR-002 | Governance signature plumbing | Governance Secretariat; Tooling WG | Q1 2026 | Complete locally | Core validates Ed25519 council envelopes during `ApprovePinManifest`; Torii/CLI surfaces carry manifest payloads and council-digest validation, while Dilithium/ML-DSA governance verification lives in the SF-11 reference validator and release-policy surface. |
+| PR-003 | Alias + retention policy enforcement | Storage Team | Q1 2026 | Complete | Alias binding validation, uniqueness, retention windows, replica-count policy, and successor-chain cycle rejection live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`, with Torii DTO and listing support in `crates/iroha_torii/src/sorafs/api.rs`. |
+| PR-004 | CI + fixture parity | Tooling WG | Q1 2026 | Complete | `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin-registry fixtures; core unit coverage includes contract-focused alias, successor, replication-order, and policy guard tests. |
+| PR-005 | Rollout documentation & operator guide | Docs Team | Q1 2026 | Rollout evidence | `docs/source/sorafs/runbooks/pin_registry_ops.md`, migration docs, CLI docs, and API surfaces are published; live cutover packets and governance archive handoff are deployment evidence. |
 
 ## הפניות
 

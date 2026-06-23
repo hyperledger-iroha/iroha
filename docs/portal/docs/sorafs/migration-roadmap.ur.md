@@ -9,48 +9,46 @@ source_last_modified: "2025-11-07T10:28:53.296738+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: "SoraFS مائیگریشن روڈ میپ"
----
+> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-> [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md) سے ماخوذ۔
+# SoraFS Migration Roadmap (SF-1)
 
-# SoraFS مائیگریشن روڈ میپ (SF-1)
+This document operationalises the migration guidance captured in
+`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
+execution-ready milestones, gating criteria, and owner checklists so storage,
+governance, release engineering, and docs teams can coordinate SoraFS-backed
+publication.
 
-یہ دستاویز `docs/source/sorafs_architecture_rfc.md` میں بیان کردہ مائیگریشن رہنمائی کو
-عملی بناتی ہے۔ یہ SF-1 کے deliverables کو ایسے milestones، gate criteria اور owner
-checklists میں توسیع دیتی ہے جو اجرا کے لیے تیار ہوں، تاکہ storage، governance، DevRel
-ہم آہنگ کر سکیں۔
+The roadmap is intentionally deterministic: every milestone names the required
+artifacts, command invocations, and attestation steps so downstream pipelines
+produce identical outputs and governance retains an auditable trail.
 
-یہ روڈ میپ جان بوجھ کر deterministic ہے: ہر milestone مطلوبہ artifacts، command
-invocations اور attestation steps کو نام دیتا ہے تاکہ downstream pipelines ایک جیسے
-outputs بنائیں اور governance کے پاس audit-able trail برقرار رہے۔
+## Milestone Overview
 
-## Milestone overview
-
-| Milestone | Window | Primary goals | Must ship | Owners |
+| Milestone | Window | Primary Goals | Must Ship | Owners |
 |-----------|--------|---------------|-----------|--------|
-| **M1 - Deterministic Enforcement** | Weeks 7-12 | signed fixtures نافذ کرنا اور alias proofs stage کرنا جب pipelines expectation flags اپنائیں۔ | nightly fixture verification، council-signed manifests، alias registry staging entries. | Storage, Governance, SDKs |
+| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and expectation flags locally while rollout tickets carry fresh staging alias evidence. | Fixture verification, council-signed manifests, expectation-flag release checklists, and external alias evidence. | Storage, Governance, SDKs |
 
-Milestone status `docs/source/sorafs/migration_ledger.md` میں ٹریک ہوتا ہے۔ اس روڈ میپ میں
-ہر تبدیلی لازمی طور پر ledger کو اپڈیٹ کرے تاکہ governance اور release engineering ہم آہنگ رہیں۔
+Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
+changes to this roadmap MUST update the ledger to keep governance and release
+engineering in sync.
 
 ## Workstreams
 
-### 2. Deterministic pinning adoption
+### 2. Deterministic Pinning Adoption
 
 | Step | Milestone | Description | Owner(s) | Output |
 |------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | ہفتہ وار dry-runs جو local chunk digests کو `fixtures/sorafs_chunker` کے ساتھ compare کریں۔ `docs/source/sorafs/reports/` میں رپورٹ شائع کریں۔ | Storage Providers | `determinism-<date>.md` pass/fail matrix کے ساتھ۔ |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` اس وقت fail ہوں جب signatures یا manifests drift کریں۔ Dev overrides کے لیے governance waiver PR کے ساتھ منسلک ہونا چاہیے۔ | Tooling WG | CI log، waiver ticket link (اگر لاگو ہو). |
-| Expectation flags | M1 | Pipelines `sorafs_manifest_stub` کو explicit expectations کے ساتھ کال کرتے ہیں تاکہ outputs pin ہوں: | Docs CI | Updated scripts referencing expectation flags (نیچے command block دیکھیں). |
-| Registry-first pinning | M2 | `sorafs pin propose` اور `sorafs pin approve` manifest submissions کو wrap کرتے ہیں؛ CLI default `--require-registry` ہے۔ | Governance Ops | Registry CLI audit log، failed proposals کی telemetry. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert کرتے ہیں جب chunk inventories registry manifests سے diverge ہوں؛ alerts ops on-call سے جڑے ہوں۔ | Observability | Dashboard link، alert rule IDs، GameDay results. |
+| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
+| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
+| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
+| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. Torii submissions include `manifest_b64` when full `ManifestV1` validation or council-signature enforcement is required. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
+| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
 
 #### Canonical publishing command
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
@@ -61,47 +59,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-digest، size اور CID کو انہی متوقع حوالوں سے بدلیں جو migration ledger entry میں ریکارڈ ہیں۔
+Replace the digest, size, and CID values with the expected references recorded in
+the migration ledger entry for the artifact.
 
-### 3. Alias transition اور communications
+### 3. Alias Transition & Communications
 
 | Step | Milestone | Description | Owner(s) | Output |
 |------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Pin Registry staging میں alias claims رجسٹر کریں اور manifests کے ساتھ Merkle proofs لگائیں (`--alias`). | Governance, Docs | Proof bundle manifest کے ساتھ محفوظ + ledger comment میں alias نام۔ |
-| Proof enforcement | M2 | Gateways ایسے manifests کو reject کریں جن میں تازہ `Sora-Proof` headers نہ ہوں؛ CI میں `sorafs alias verify` step شامل کریں۔ | Networking | Gateway config patch + CI output جس میں verification success ہو۔ |
+| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`) for live rollout tickets. | Governance, Docs | Proof bundle stored next to manifest plus external governance archive link. |
+| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
 
-### 4. Communication & audit
+### 4. Communication & Audit
 
-- **Ledger discipline:** ہر state change (fixture drift, registry submission, alias activation)
-  کو `docs/source/sorafs/migration_ledger.md` میں dated note کے طور پر append کرنا لازمی ہے۔
-- **Governance minutes:** council sessions جو pin registry changes یا alias policies approve کریں
-  انہیں اس roadmap اور ledger کا حوالہ دینا چاہیے۔
-- **External comms:** DevRel ہر milestone پر status updates شائع کرتا ہے (blog + changelog excerpt)
-  جو deterministic guarantees اور alias timelines کو نمایاں کریں۔
+- **Ledger discipline:** every state change (fixture drift, registry submission,
+  alias activation) must append a dated note to
+  `docs/source/sorafs/migration_ledger.md`.
+- **Governance minutes:** council sessions approving pin registry changes or
+  alias policies must reference both this roadmap and the ledger.
+- **External comms:** DevRel publishes status updates at each milestone (blog +
+  changelog excerpt) highlighting deterministic guarantees and alias timelines.
 
-## Dependencies & risks
+## Dependencies & Risks
 
 | Dependency | Impact | Mitigation |
 |------------|--------|------------|
-| Pin Registry contract availability | M2 pin-first rollout کو بلاک کرتی ہے۔ | M2 سے پہلے replay tests کے ساتھ contract stage کریں؛ regressions ختم ہونے تک envelope fallback برقرار رکھیں۔ |
-| Council signing keys | Manifest envelopes اور registry approvals کے لیے ضروری۔ | Signing ceremony `docs/source/sorafs/signing_ceremony.md` میں دستاویزی ہے؛ overlap کے ساتھ keys rotate کریں اور ledger note رکھیں۔ |
-| SDK release cadence | Clients کو M3 سے پہلے alias proofs پر عمل کرنا ہوگا۔ | SDK release windows کو milestone gates کے ساتھ align کریں؛ migration checklists کو release templates میں شامل کریں۔ |
+| Pin Registry contract availability | Blocks hosted M2 pin-first rollout evidence. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
+| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
+| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
 
-Residual risks اور mitigations `docs/source/sorafs_architecture_rfc.md` میں بھی درج ہیں
-اور adjustments کے وقت cross-reference کرنا چاہیے۔
+Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
+and should be cross-referenced when adjustments are made.
 
-## Exit criteria checklist
+## Exit Criteria Checklist
 
 | Milestone | Criteria |
 |-----------|----------|
-| M1 | - Nightly fixture job سات دن مسلسل green۔ <br /> - Staging alias proofs CI میں verify۔ <br /> - Governance expectation flag policy کی توثیق کرے۔ |
+| M1 | - `ci/check_sorafs_fixtures.sh` and fixture verification stay green. <br /> - Release checklists use explicit `--car-digest`/`--root-cid` expectations. <br /> - Staging alias proof evidence is attached to the external rollout archive. |
 
-## Change management
+## Change Management
 
-1. PR کے ذریعے تبدیلیاں تجویز کریں اور یہ فائل **اور**
-   `docs/source/sorafs/migration_ledger.md` دونوں اپڈیٹ کریں۔
-2. PR description میں governance minutes اور CI evidence کے links شامل کریں۔
-3. merge کے بعد storage + DevRel mailing list کو summary اور expected operator actions بھیجیں۔
+1. Propose adjustments via PR updating this file **and**
+   `docs/source/sorafs/migration_ledger.md`.
+2. Link supporting governance minutes and CI evidence in the PR description.
+3. On merge, notify storage + DevRel mailing list with summary and expected
+   operator actions.
 
-یہ طریقہ کار یقینی بناتا ہے کہ SoraFS rollout deterministic، auditable، اور transparent رہے
-اور Nexus لانچ میں شریک ٹیموں کے درمیان ہم آہنگی برقرار رہے۔
+Following this procedure ensures the SoraFS rollout remains deterministic,
+auditable, and transparent across teams participating in the Nexus launch.

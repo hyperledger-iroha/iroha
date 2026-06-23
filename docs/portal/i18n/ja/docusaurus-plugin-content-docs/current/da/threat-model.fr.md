@@ -247,7 +247,7 @@ blob surdimensionnes は、epuiser les resources ou injecter une メタデータ
   キャッシュ) と統合 Torii と `crates/iroha_torii/src/da/ingest.rs`、スレッド
   `/v1/da/ingest` 経由で指紋をチェックします。
 - ハーネスプルーフストリームを介したストリーミングPDP/PoTRソントのシミュレーション
-  `crates/sorafs_car/tests/sorafs_cli.rs`、リクエストに対する要求
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`、リクエストに対する要求
   PoR/PDP/PoTR および脅威のモデルの失敗アニメのシナリオ。
 - 容量と修理の結果が生き生きとしている
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`、マトリックスのタンディス

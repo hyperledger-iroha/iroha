@@ -82,7 +82,7 @@ ID: آرکسٹریٹر ٹوننگ
 
 ## سی ایل آئی اور ایس ڈی کے پرچم حوالہ
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` دیکھیں) اور ریپر
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` دیکھیں) اور ریپر
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) اسی کا اشتراک کریں
 آرکسٹریٹر کنفیگریشن سطح۔ مندرجہ ذیل جھنڈوں کا استعمال کریں
 تعیناتی کے ثبوت پر قبضہ کریں یا کیننیکل فکسچر کو دوبارہ چلائیں:

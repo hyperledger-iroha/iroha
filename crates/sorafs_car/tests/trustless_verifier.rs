@@ -1,6 +1,8 @@
 use std::{fs, path::PathBuf};
 
+use assert_cmd::cargo::cargo_bin_cmd;
 use norito::decode_from_bytes;
+use norito::json::Value;
 use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig};
 use sorafs_manifest::{ManifestV1, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX};
 
@@ -63,5 +65,72 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
     assert!(
         !outcome.report.chunk_store.chunks().is_empty(),
         "chunk store should carry the rebuilt plan"
+    );
+}
+
+#[test]
+fn trustless_verifier_emits_reference_validation_outcome() {
+    let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
+    let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
+    let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
+
+    let output = cargo_bin_cmd!("soranet_trustless_verifier")
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--car",
+            car.to_str().expect("CAR path is utf-8"),
+            "--config",
+            config.to_str().expect("config path is utf-8"),
+            "--validation-outcome",
+            "--generated-at",
+            "123",
+        ])
+        .output()
+        .expect("run trustless verifier");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
+    assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+    assert_eq!(
+        outcome.get("code").and_then(Value::as_str),
+        Some("SFS-OK-000")
+    );
+    assert_eq!(
+        outcome.get("generated_at").and_then(Value::as_u64),
+        Some(123)
+    );
+}
+
+#[test]
+fn validation_outcome_rejects_pin_record_flag_explicitly() {
+    let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
+    let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
+    let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
+
+    let output = cargo_bin_cmd!("soranet_trustless_verifier")
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--car",
+            car.to_str().expect("CAR path is utf-8"),
+            "--config",
+            config.to_str().expect("config path is utf-8"),
+            "--validation-outcome",
+            "--pin-record",
+            "pin-record.to",
+        ])
+        .output()
+        .expect("run trustless verifier");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--validation-outcome emits manifest/CAR replay outcomes"),
+        "stderr: {stderr}"
     );
 }

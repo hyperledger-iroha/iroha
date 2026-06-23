@@ -9,105 +9,149 @@ source_last_modified: "2025-11-02T04:40:39.847639+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Guia de rechazos de capacidades del gateway SoraFS
+# SoraFS Gateway Capability Refusal Guidance
 
-Este documento cumple el entregable del item SF-5c del roadmap “Publicar guia para operadores/devs” documentando como los gateways SoraFS, SDKs y tooling downstream deben detectar, exponer y remediar rutas de rechazo que protegen la entrega trustless. La guia complementa la matriz de pruebas negativas en `docs/source/sorafs_gateway_capability_tests.md` y el borrador del kit de auto-certificacion en `docs/source/sorafs_gateway_self_cert.md`.
+This document promotes the SF-5c roadmap item deliverable “Publish operator/dev
+guidance” by documenting how SoraFS gateways, SDKs, and downstream tooling must
+detect, surface, and remediate refusal paths that protect trustless delivery.
+The guidance complements the negative test matrix in
+`docs/source/sorafs_gateway_capability_tests.md` and the self-certification kit
+captured in `docs/source/sorafs_gateway_self_cert.md`.
 
-## Audiencia y alcance
+## Audience & Scope
 
-- **Operadores** que ejecutan gateways u orquestadores y deben mantener el comportamiento de rechazo determinista, observable y auditado.
-- **Desarrolladores** que mantienen SDKs/CLIs o integran endpoints SoraFS en aplicaciones downstream.
-- **QA/DevRel** que cablean suites de conformidad y workflows de onboarding que ejercitan rutas de rechazo antes del despliegue.
+- **Operators** running gateways or orchestrators who must keep refusal behaviour
+  deterministic, observable, and auditable.
+- **Developers** maintaining SDKs/CLIs or integrating SoraFS endpoints into
+  downstream applications.
+- **QA/DevRel** teams wiring conformance suites and onboarding workflows that
+  exercise refusal paths before deployment.
 
-El catalogo siguiente enumera los motivos de rechazo que DEBEN permanecer estables en la superficie API. Nuevos motivos de rechazo requieren un update del roadmap y fixtures correspondientes antes de llegar a produccion.
+The catalogue below enumerates the refusal reasons that MUST remain stable in
+the API surface. New refusal reasons require a roadmap update and matching
+fixtures before production rollout.
 
-## Catalogo de rechazos
+## Refusal Catalogue
 
-El gateway DEBE codificar rechazos como cuerpos JSON que cumplen el esquema descrito en `docs/source/sorafs_gateway_capability_tests.md` y reutilizar el campo `error` como etiqueta de telemetria. Las filas de la tabla tambien representan la expectativa minima de compliance.
+The gateway MUST encode refusals as JSON bodies matching the schema described in
+`docs/source/sorafs_gateway_capability_tests.md` and reuse the `error` field as
+the telemetry label. Table rows double as the minimum compliance expectation.
 
-| ID | HTTP | codigo `error` | Etiqueta(s) de telemetria | Remediacion primaria | Referencia cruzada |
-|----|------|----------------|---------------------------|----------------------|--------------------|
-| C1 | 406 | `unsupported_chunker` | `unsupported_chunker` | Alinear handle de chunker con la lista de perfiles SF-1; refrescar alias del manifiesto. | Docs del registro de chunker, entregables SF-1. |
-| C2 | 412 | `manifest_variant_missing` | `manifest_variant_missing`, `alias_stale` | Publicar manifiesto sucesor o fijar alias al perfil solicitado; verificar snapshot del registro. | Plan de pin registry, politica de alias. |
-| C3 | 412 | `admission_envelope_mismatch` | `governance_violation`, `alias_stale` | Regenerar sobre de admision via Torii; confirmar firmas de governance. | `docs/source/sorafs/pin_registry_validation_plan.md`. |
-| C4 | 428 | `capability_grease_unsupported` | `capability_refusal` | Rechazar TLVs desconocidos salvo permiso explicito; asegurar que el cliente nego capacidades soportadas. | Draft del RFC Capability GREASE. |
-| C5 | 428 | `missing_dag_scope` | `capability_refusal` | Agregar header `Sora-Dag-Scope` o actualizar cliente; configurar defaults del orquestador. | Spec de chunk-range (SF-5d). |
-| C6 | 406 | `unsupported_encoding` | `unsupported_encoding` | Eliminar requests `Accept-Encoding` o habilitar compresion en la politica del manifiesto. | Docs de politica de manifiestos. |
-| C7 | 422 | `proof_validation_failed` | `proof_validation_failed` | Verificar pruebas PoR/PoTR; inspeccionar output del replay harness para chunks corruptos. | Guia del replay harness. |
+| ID | HTTP | `error` code | Telemetry label(s) | Primary remediation | Cross-reference |
+|----|------|--------------|--------------------|---------------------|-----------------|
+| C1 | 406 | `unsupported_chunker` | `unsupported_chunker` | Align chunker handle with SF-1 profile list; refresh manifest alias. | Chunker registry docs, SF-1 deliverables. |
+| C2 | 412 | `manifest_variant_missing` | `manifest_variant_missing`, `alias_stale` | Publish successor manifest or pin alias to requested profile; verify registry snapshot. | Pin registry plan, alias policy. |
+| C3 | 412 | `admission_envelope_mismatch` | `governance_violation`, `alias_stale` | Validate the provider admission envelope and manifest council signatures with the current CLI tooling. | `docs/source/sorafs/pin_registry_validation_plan.md`. |
+| C4 | 428 | `capability_grease_unsupported` | `capability_refusal` | Reject unknown TLVs unless explicitly allowed; ensure client negotiated supported capabilities. | Capability GREASE policy. |
+| C5 | 428 | `missing_dag_scope` | `capability_refusal` | Add `Sora-Dag-Scope` header or upgrade client; configure orchestrator defaults. | Chunk-range spec (SF-5d). |
+| C6 | 406 | `unsupported_encoding` | `unsupported_encoding` | Drop `Accept-Encoding` requests or enable compression in manifest policy. | Manifest policy docs. |
+| C7 | 422 | `proof_validation_failed` | `proof_validation_failed` | Verify PoR/PoTR proofs; inspect harness replay output for corrupted chunks. | Replay harness guide. |
 
-Los gateways PUEDEN extender la tabla con etiquetas de telemetria adicionales (p. ej., `profile=sf1`, `provider_id=aa12`) pero DEBEN conservar las etiquetas base listadas para que dashboards y alertas sigan siendo portables entre despliegues.
+Gateways MAY extend the table with additional telemetry labels (e.g.,
+`profile=sf1`, `provider_id=aa12`) but MUST retain the listed base labels so
+dashboards and alerts remain portable across deployments.
 
-## Playbooks de troubleshooting
+## Troubleshooting Playbooks
 
-### Chunker no soportado (`C1`)
+### Unsupported Chunker (`C1`)
 
-1. Inspeccionar la entrada de log del request para el hint `chunker_handle` emitido por Torii.
-2. Comparar con la lista de perfiles del manifiesto servida por el Pin Registry (`/v1/sorafs/pin/<cid>`). El manifiesto DEBE incluir un chunker que coincida con el request.
-3. Si el manifiesto falta, publicar un manifiesto sucesor via `sorafs-manifest submit` y esperar aprobacion de governance.
-4. Confirmar que la cache del gateway refresco dentro de `alias_refresh_window` (ver `docs/source/sorafs_alias_policy.md`). Si la cache excedio `alias_hard_expiry`, evacuar localmente y re-solicitar.
+1. Inspect the request log entry for the `chunker_handle` hint emitted by Torii.
+2. Compare against the manifest profile list served by the Pin Registry
+   (`/v1/sorafs/pin/<cid>`). The manifest MUST include a chunker matching the
+   request.
+3. If the manifest is missing, publish a successor manifest via
+   `sorafs_cli manifest submit` and wait for governance approval.
+4. Confirm that the gateway cache refreshed within
+   `alias_refresh_window` (see `docs/source/sorafs_alias_policy.md`). If the
+   cache exceeded `alias_hard_expiry`, evict locally and re-request.
 
-### Variante de manifiesto ausente (`C2`)
+### Manifest Variant Missing (`C2`)
 
-1. Usar `sorafs-manifest inspect` para confirmar que el perfil solicitado existe.
-2. Si el alias apunta a un manifiesto sin el perfil, enviar un manifiesto sucesor y disparar ordenes de replicacion.
-3. Verificar que los registros emiten eventos SSE `alias-proof-updated` y que el gateway se suscribio correctamente. Eventos faltantes suelen indicar drift de TLS o auth.
+1. Use `/v1/sorafs/pin/<cid>` to confirm the requested profile exists.
+2. If the alias already points at a manifest lacking the profile, submit a
+   successor manifest and trigger replication orders.
+3. Verify that registries broadcast `alias-proof-updated` SSE events and that
+   the gateway subscribed successfully. Missing events often indicate TLS or
+   auth drift.
 
-### Mismatch de sobre de admision (`C3`)
+### Admission Envelope Mismatch (`C3`)
 
-1. Ejecutar `sorafs-manifest attest --cid <cid>` para regenerar un sobre de admision.
-2. Revisar que el digest del payload Norito coincida con el CID del manifiesto; mismatches indican logs de governance obsoletos.
-3. Confirmar cada firma del council con `sorafs-manifest verify`, asegurando que las llaves publicas coinciden con la ultima rotacion.
-4. Si el sobre pertenece a una epoch de governance revocada, los operadores deben obtener un snapshot mas nuevo antes de que el gateway acepte el manifiesto.
+1. Run `cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission verify --envelope=<envelope.to>` to validate the provider admission envelope. Include `--proposal`, `--advert`, or `--advert-body` sidecars when available so the tool checks the envelope binding.
+2. Run `cargo run -p sorafs_manifest --bin sorafs-validate -- admission --input <envelope.to>` to emit the SF-11 validation report and telemetry evidence.
+3. Confirm manifest council signatures with `sorafs_cli manifest verify-signature`, ensuring public
+   keys align with the latest rotation.
+4. If the envelope belongs to a revoked governance epoch, operators must fetch a
+   newer snapshot before the gateway accepts the manifest.
 
 ### Capability TLV GREASE / Missing Dag Scope (`C4`, `C5`)
 
-1. Capturar el request HTTP para asegurar que el cliente anuncia una lista de capacidades.
-2. Si aparecen TLVs GREASE, confirmar que el cliente habilito el preview flag listado en el RFC GREASE; de lo contrario, indicar al cliente que alinee con la tabla de capacidades del manifiesto publicada.
-3. Para `Sora-Dag-Scope` faltante, actualizar la configuracion del orquestador o SDK para inyectar el header automaticamente; fallar aqui indica regresion del SDK.
+1. Capture the HTTP request to ensure the client advertises a capability list.
+2. If GREASE TLVs appear, confirm the client enabled the preview flag listed in
+   the GREASE RFC; if not, instruct the client to align with the published
+   manifest capability table.
+3. For missing `Sora-Dag-Scope`, update the orchestrator or SDK configuration to
+   inject the header automatically; failure to do so indicates SDK regression.
 
-### Encoding no soportado (`C6`)
+### Unsupported Encoding (`C6`)
 
-1. Inspeccionar el `StreamEncodingPolicy` del manifiesto en el snapshot del Pin Registry.
-2. Si la compresion esta deshabilitada, considerar habilitar la capacidad `compression` y publicar un manifiesto sucesor. De lo contrario, eliminar `Accept-Encoding` de los requests del cliente o negociar deflate/gzip explicitamente.
+1. Inspect the manifest `StreamEncodingPolicy` in the Pin Registry snapshot.
+2. If compression is disallowed, consider enabling the `compression` capability
+   and publishing a successor manifest. Otherwise, strip `Accept-Encoding` from
+   client requests or negotiate deflate/gzip explicitly.
 
-### Validacion de prueba fallida (`C7`)
+### Proof Validation Failed (`C7`)
 
-1. Ejecutar el replay harness (`cargo test -p integration_tests sorafs_gateway_conformance`) contra el gateway; asegurar que el fixture negativo reproduce la falla.
-2. Inspeccionar el transcript PoR en `fixtures/sorafs_gateway/conformance/proofs/*.norito` para detectar tampering.
-3. Si la corrupcion se origino upstream, poner en cuarentena al provider y rotar el alias del manifiesto hacia un replica sana. Registrar IDs de incidente en los logs de governance.
+1. Run the replay harness (`cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`)
+   against the gateway; ensure the negative fixture reproduces the failure.
+2. Inspect the PoR transcript in
+   `fixtures/sorafs_gateway/conformance/proofs/*.norito` for tampering.
+3. If corruption originated upstream, quarantine the provider and rotate the
+   manifest alias to a healthy replica. Record incident IDs in governance logs.
 
-## Responsabilidades de desarrollo
+## Developer Responsibilities
 
-- Los SDKs DEBEN exponer las respuestas de rechazo verbatim, incluyendo `error`, `reason` y `details`, y evitar convertir fallas en errores de transporte.
-- Proveer enums de errores tipados que reflejen el catalogo anterior y asegurar que los retries traten `4xx` como rechazos deterministas (sin exponential backoff).
-- Cuando los SDKs exponen fallback automatico, solo reintentar contra un provider diferente si el motivo es `unsupported_chunker` y existe un perfil compatible.
-- Las librerias cliente DEBEN loguear eventos de rechazo con las mismas etiquetas de telemetria para que los operadores correlacionen tendencias de gateway y cliente.
-- Los tests de integracion DEBERIAN importar los fixtures canonicos referenciados en el kit de self-cert para evitar drift entre comportamiento del SDK y del gateway.
+- SDKs MUST surface refusal responses verbatim, including `error`, `reason`, and
+  `details`, and avoid coercing failures into transport errors.
+- Provide typed error enums mirroring the catalogue above and ensure retries
+  treat `4xx` refusals as deterministic (no exponential backoff).
+- When SDKs expose automatic fallback, only retry against a different provider
+  if the refusal reason is `unsupported_chunker` and a matching profile exists.
+- Client libraries MUST log refusal events with the same telemetry labels so
+  operators can correlate gateway and client trends.
+- Integration tests SHOULD import the canonical fixtures referenced in the
+  self-certification kit to avoid drift between SDK and gateway behaviour.
 
-## Compliance y monitoreo
+## Compliance & Monitoring
 
-- Los gateways DEBEN exponer `sorafs_gateway_refusals_total` con al menos la etiqueta `reason` y DEBERIAN incluir `profile`, `provider_id` y `scope`.
-- Alertas:
-  - Disparar alerta `critical` si las tasas de `unsupported_chunker` superan `threshold=25/minute` durante cinco minutos.
-  - Disparar alerta `warning` si los rechazos totales exceden la media movil de una hora por mas de dos desviaciones estandar.
-- Los logs DEBEN redactar bearer tokens y secretos de sesion. Retener logs de rechazo por al menos 30 dias para auditorias de governance.
-- Los operadores DEBEN documentar rechazos en runbooks de incidentes cuando un tipo de rechazo persiste mas de 15 minutos o impacta mas del 5% del trafico.
-- Asegurar que los pipelines de CI ejecuten la suite de rechazos del replay harness antes del despliegue; las fallas bloquean promociones.
+- Gateways MUST expose `sorafs_gateway_refusals_total` with at least the `reason`
+  label and SHOULD include `profile`, `provider_id`, and `scope`.
+- Alerts:
+  - Trigger `critical` alert if `unsupported_chunker` rates spike above
+    `threshold=25/minute` for five minutes.
+  - Trigger `warning` alert if total refusals exceed the moving one-hour mean by
+    more than two standard deviations.
+- Logs MUST redact bearer tokens and session secrets. Retain refusal logs for at
+  least 30 days to satisfy governance audits.
+- Operators MUST document refusals in incident runbooks when a refusal type
+  persists beyond 15 minutes or impacts more than 5% of traffic.
+- Ensure CI pipelines run the replay harness refusal suite before deployment;
+  failures block promotion.
 
-## Checklist de integracion
+## Integration Checklist
 
-Antes de hacer onboarding de un gateway o release de SDK, confirmar:
+Before onboarding a gateway or SDK release, confirm:
 
-1. Los escenarios negativos del replay harness pasan con status codes deterministas.
-2. El reporte de `self-cert` incluye conteos de rechazo con etiquetas de telemetria coincidentes.
-3. Los dashboards grafican contadores de rechazo con baselines y alertas configuradas.
-4. Los runbooks de operadores referencian este documento para pasos de remediacion.
-5. Los developers actualizaron las notas de release del SDK resumiendo cualquier manejo nuevo de rechazos.
+1. Replay harness negative scenarios pass with deterministic status codes.
+2. `self-cert` report includes refusal counts with matching telemetry labels.
+3. Dashboards plot the refusal counters with baselines and alerts configured.
+4. Operator runbooks reference this document for remediation steps.
+5. Developers updated SDK release notes summarising any new refusal handling.
 
-## Gestion de cambios
+## Change Management
 
-- Cualquier modificacion a codigos de rechazo o estados HTTP requiere:
-  1. Actualizacion de esta guia y la matriz de pruebas.
-  2. Regeneracion de fixtures y cobertura del replay harness.
-  3. Aprobacion del council de governance con manifiesto firmado.
-- Mantener actualizado el item del roadmap SF-5c cuando nuevos rechazos pasan de draft a produccion para evitar drift entre docs, tests y telemetria.
+- Any modification to refusal codes or HTTP statuses requires:
+  1. Update to this guidance document and the test matrix.
+  2. Regenerated fixtures and replay harness coverage.
+  3. Governance council approval with signed manifest.
+- Keep roadmap item SF-5c updated when new refusal paths are added or promoted
+  to production to avoid drift between the docs, tests, and telemetry.

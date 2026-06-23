@@ -245,7 +245,7 @@ Cadencia de mantenimiento: Рабочая группа по доступност
   и интеграция Torii и `crates/iroha_torii/src/da/ingest.rs`, que enhebra las
   проверки отпечатков пальцев на пути `/v1/da/ingest`.
 - Моделирование потоковой передачи PDP/PoTR выполняется через протокол проверки потока
-  en `crates/sorafs_car/tests/sorafs_cli.rs`, cubriendo flujos de solicitud
+  en `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cubriendo flujos de solicitud
   PoR/PDP/PoTR и сценарии падения животных в модели аменаза.
 - Результаты восстановления и восстановления работоспособности
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, сейчас, когда матрица

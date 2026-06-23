@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 alias پروموشن، توثیق، اور rollback ڈرلز کو کور کرتی ہے تاکہ ہر preview اور
 release آرٹیفیکٹ قابلِ اعادہ اور قابلِ آڈٹ ہو۔
 
-یہ فلو فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری (`--features cli` کے ساتھ
+یہ فلو فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری (`sorafs_orchestrator` Cargo target کے ساتھ
 build شدہ) ہے، pin-registry اجازتوں والے Torii endpoint تک رسائی ہے، اور
 Sigstore کے لئے OIDC اسناد ہیں۔ طویل مدتی راز (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii ٹوکنز) کو اپنے CI والٹ میں رکھیں؛ لوکل رنز انہیں
@@ -25,7 +25,7 @@ shell exports سے لوڈ کر سکتے ہیں۔
 ## پیشگی شرائط
 
 - Node 18.18+ کے ساتھ `npm` یا `pnpm`.
-- `sorafs_cli` جو `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے حاصل ہو۔
+- `sorafs_cli` جو `cargo run -p sorafs_orchestrator --bin sorafs_cli` سے حاصل ہو۔
 - Torii URL جو `/v1/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
   مینی فیسٹس اور aliases جمع کر سکے۔
 - OIDC issuer (GitHub Actions, GitLab, workload identity وغیرہ) تاکہ

@@ -273,6 +273,11 @@ blocked-source gap warnings, never repository fixture manifest blockers or an
 unreviewed profile-catalog-only schema gap; advertised profile-version gaps
 remain blockers unless the exact message definition also has reviewed
 missing-schema, schema-only, or blocked source evidence.
+XSD summary version 2 now also carries a recomputed
+`missing_profile_schema_message_ids` aggregate with unique missing message
+definitions, per-message profile-version counts, and reviewed-gap
+classifications; final readiness replays the raw gap evidence and blocks forged
+aggregate counts or classifications.
 Blocked schema-source evidence now also requires candidate SHA-256 values to
 stay disjoint from checked-in schema and fixture XML digests, and final
 readiness replays those overlaps as dedicated blockers so a forged

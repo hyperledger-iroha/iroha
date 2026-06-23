@@ -18,7 +18,7 @@ descripción: Практический разбор по задачам для �
 :::nota Канонический источник
 :::
 
-Consola de almacenamiento `sorafs_cli` (caja de almacenamiento `sorafs_car` con función adicional `cli`) раскрывает каждый шаг, необходимый для подготовки артефактов SoraFS. Utilice este libro de cocina para saber cuáles son los flujos de trabajo más importantes; Utilice el programador de canalizaciones y el organizador de runbooks para el contacto operativo.
+Consola de almacenamiento `sorafs_cli` (provided by the `sorafs_orchestrator` crate) раскрывает каждый шаг, необходимый для подготовки артефактов SoraFS. Utilice este libro de cocina para saber cuáles son los flujos de trabajo más importantes; Utilice el programador de canalizaciones y el organizador de runbooks para el contacto operativo.
 
 ## Cargas útiles de Упаковка
 

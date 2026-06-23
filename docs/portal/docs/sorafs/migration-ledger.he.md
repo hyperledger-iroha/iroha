@@ -9,35 +9,37 @@ source_last_modified: "2025-11-09T14:34:44.965608+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: יומן ההגירה של SoraFS
-description: יומן שינוי קנוני העוקב אחר כל אבן דרך של הגירה, בעלי אחריות והמשך נדרש.
----
+> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-> מותאם מ-[`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+# SoraFS Migration Ledger
 
-# יומן ההגירה של SoraFS
+This ledger mirrors the migration change log captured in the SoraFS
+Architecture RFC. Entries are grouped by milestone and list the effective
+window, impacted teams, and required actions. Updates to the migration plan
+MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
+to keep downstream consumers aligned.
 
-יומן זה משקף את יומן שינויי ההגירה שנלכד ב-RFC של ארכיטקטורת SoraFS. הרשומות
-מקובצות לפי אבני דרך ומפרטות את חלון התוקף, הצוותים המושפעים והפעולות הנדרשות.
-עדכונים לתוכנית ההגירה חייבים לעדכן גם את הדף הזה וגם את ה-RFC
-(`docs/source/sorafs_architecture_rfc.md`) כדי לשמור על יישור בין הצרכנים במורד הזרם.
+| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
+|-----------|------------------|----------------|----------------|--------------|--------|
+| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; local tooling exposes explicit expectation flags; staging alias proof evidence is archived outside this repo. | Docs, Storage, Governance | Keep fixtures signed, keep release checklists using `--car-digest`/`--root-cid`, and attach fresh staging alias evidence to rollout tickets. | Local controls implemented; external evidence tracked in governance archive. |
 
-| אבן דרך | חלון תוקף | תקציר שינוי | צוותים מושפעים | פעולות | סטטוס |
-|---------|-----------|-------------|----------------|--------|-------|
-| M1 | שבועות 7–12 | CI אוכף fixtures דטרמיניסטיים; הוכחות alias זמינות ב-staging; tooling חושף expectation flags מפורשים. | Docs, Storage, Governance | לוודא שה-fixtures נשארים חתומים, לרשום aliases ברישום staging, לעדכן רשימות release עם אכיפת `--car-digest/--root-cid`. | ⏳ ממתין |
+Governance control plane minutes referencing these milestones live under
+`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
+when notable events occur (e.g., new alias registrations, registry incident
+retrospectives) to provide an auditable paper trail.
 
-פרוטוקולי ישיבות של מישור הבקרה של הממשל המתייחסים לאבני דרך אלה נמצאים תחת
-`docs/source/sorafs/`. על הצוותים להוסיף נקודות מתוארכות מתחת לכל שורה כאשר
-מתרחשים אירועים משמעותיים (למשל רישומי alias חדשים, retrospectives של תקריות registry)
-כדי לספק עקבות ביקורתיות.
+## Recent Updates
 
-## עדכונים אחרונים
-
-- 2025-11-01 — הופץ `migration_roadmap.md` למועצת הממשל ולרשימות המפעילים לסקירה;
-  ממתין לאישור בישיבת המועצה הבאה (ref: `docs/source/sorafs/council_minutes_2025-10-29.md`).
-- 2025-11-02 — ISI של רישום Pin Registry אוכף כעת אימות chunker/מדיניות משותף דרך
-  helpers של `sorafs_manifest`, כך שהנתיבים on-chain נשארים מיושרים עם בדיקות Torii.
-- 2026-02-13 — נוספו שלבי rollout של provider advert (R0–R3) ליומן ופורסמו לוחות הבקרה
-  והנחיות המפעיל הרלוונטיות
+- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
+  operator lists for review; repository implementation status is now tracked by
+  the dated ledger entries below and external sign-off evidence remains in the
+  governance archive.
+- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
+  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
+  with Torii checks.
+- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
+  published the associated dashboards and operator guidance
   (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2026-06-22 — Refreshed the M1 status to separate implemented local
+  fixture/expectation-flag controls from external staging alias and governance
+  evidence required for live rollout sign-off.

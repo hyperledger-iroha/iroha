@@ -76,7 +76,7 @@ Como fazer isso:1. **تحقّق من حداثة التليمترية.** تأكد
 
 ## مرجع أعلام CLI e SDK
 
-`sorafs_cli fetch` (راجع `crates/sorafs_car/src/bin/sorafs_cli.rs`) e
+`sorafs_cli fetch` (راجع `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) e
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) تشترك في
 سطح إعداد المُنسِّق نفسه. استخدم الأعلام التالية عند التقاط أدلة الإطلاق أو
 إعادة تشغيل الـ fixtures:

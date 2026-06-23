@@ -61,7 +61,10 @@ reconciliation using the `capacity_reconcile.py` helper and the alert hook in
    collector, Alertmanager will evaluate `SoraFSCapacityReconciliationMismatch`
    from `dashboards/alerts/sorafs_capacity_rules.yml`. A non-zero missing,
    overpaid, or unexpected transfer count triggers a warning alert until the
-   next reconciliation run succeeds.
+   next reconciliation run succeeds. The same rule file also evaluates
+   `SoraFSEgressCounterDrift` for capacity telemetry submissions that include
+   gateway or orchestrator egress counters; reconcile export windows before
+   approving settlement when that alert fires.
 
 ## Output Fields
 

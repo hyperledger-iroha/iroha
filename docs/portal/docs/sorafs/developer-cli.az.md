@@ -17,8 +17,7 @@ translator: machine-google-reviewed
 :::Qeyd Kanonik Mənbə
 :::
 
-Konsolidə edilmiş `sorafs_cli` səthi (`sorafs_car` qutusu ilə təmin edilmişdir.
-`cli` funksiyası aktivləşdirilib) SoraFS hazırlamaq üçün tələb olunan hər addımı ifşa edir
+Konsolidə edilmiş `sorafs_cli` səthi (provided by the `sorafs_orchestrator` crate) SoraFS hazırlamaq üçün tələb olunan hər addımı ifşa edir
 artefaktlar. Birbaşa ümumi iş axınlarına keçmək üçün bu yemək kitabından istifadə edin; ilə cütləşdirin
 əməliyyat konteksti üçün manifest boru kəməri və orkestrator runbooks.
 

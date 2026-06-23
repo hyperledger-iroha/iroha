@@ -245,7 +245,7 @@ whitelist de provedores maliciosos, ou alertas surpresa.
   e a integração Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia verificações de
   impressão digital via `/v1/da/ingest`.
 - As simulações de streaming PDP/PoTR são exercitadas via o aproveitamento proof-stream
-  em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisição
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobrindo fluxos de requisição
   PoR/PDP/PoTR e cenários de falhas animadas no modelo de ameacas.
 - Resultados de capacidade e reparação absorver vivem em
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, enquanto a matriz de imersão

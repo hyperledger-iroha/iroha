@@ -57,7 +57,7 @@ SoraFS stack သည် သေးငယ်ပြီး namespaced registry တစ
 tooling မှ registry ကိုစစ်ဆေးရန်၊ helper CLI ကို run ပါ။
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -123,7 +123,7 @@ $ ကုန်တင်ကုန်ချ -p sorafs_manifest --bin sorafs_manife
 Manifest stub သည် ပိုက်လိုင်းများတွင် `--chunker-profile-id` ရွေးချယ်မှုကို ဇာတ်ညွှန်းရေးသားရာတွင် အဆင်ပြေသည့် တူညီသောဒေတာကို ထင်ဟပ်စေသည်။ အတုံးလိုက်စတိုးဆိုင် CLI နှစ်ခုလုံးသည် canonical handle form (`--profile=sorafs.sf1@1.0.0`) ကိုလည်း လက်ခံသောကြောင့် script များသည် hard-coding ဂဏန်း ID များကို ရှောင်ရှားနိုင်သည်-
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

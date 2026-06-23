@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 ترقية الأسماء المستعارة والتحقق وتدريبات التراجع لكل معاينة وإصدار
 لذا فهي قابلة للتكرار وقابلة للتدقيق.
 
-يفترض التدفق أنك حصلت على الملف الثنائي `sorafs_cli` (تجميع مع `--features cli`)، والوصول إلى
+يفترض التدفق أنك حصلت على الملف الثنائي `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target)، والوصول إلى
 نقطة نهاية Torii مع أذونات تسجيل الدخول وبيانات الاعتماد OIDC لـ Sigstore.
 تخزين الأسرار لفترة طويلة (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، الرموز المميزة Torii) في
 صندوق الاقتراع CI؛ يمكن أن يتم شحن عمليات التنفيذ المحلية عبر صادرات du Shell.
@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-02-07
 ## المتطلبات الأساسية
 
 - العقدة 18.18+ مع `npm` أو `pnpm`.
-- `sorafs_cli` عبر `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` عبر `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان URL Torii الذي يعرض `/v1/sorafs/*` بالإضافة إلى حساب/cle خاص بأداة التفويض التي يمكن أن تكون كذلك
   البيانات والاسم المستعار.
 - Emmeteur OIDC (GitHub Actions، GitLab، هوية عبء العمل، وما إلى ذلك) من أجل الحصول على `SIGSTORE_ID_TOKEN`.

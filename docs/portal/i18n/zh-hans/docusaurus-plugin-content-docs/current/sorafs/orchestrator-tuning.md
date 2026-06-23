@@ -84,7 +84,7 @@ translation_last_reviewed: 2026-02-07
 
 ## CLI 和 SDK 标志参考
 
-`sorafs_cli fetch`（参见 `crates/sorafs_car/src/bin/sorafs_cli.rs`）和
+`sorafs_cli fetch`（参见 `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`）和
 `iroha_cli app sorafs fetch` 包装器 (`crates/iroha_cli/src/commands/sorafs.rs`)
 共享相同的协调器配置表面。使用以下标志时
 捕获推出证据或重播规范赛程：

@@ -79,7 +79,7 @@ Sidebar_label: آرکسٹریٹر ٹیوننگ
 
 ## Использование CLI в SDK
 
-`sorafs_cli fetch` (دیکھیں `crates/sorafs_car/src/bin/sorafs_cli.rs`)
+`sorafs_cli fetch` (دیکھیں `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`)
 Обертка `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`)
 Поверхность конфигурации оркестратора شیئر کرتے ہیں۔ распространение доказательств یا канонический
 повторы матчей

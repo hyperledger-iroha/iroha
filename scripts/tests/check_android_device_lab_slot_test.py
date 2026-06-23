@@ -26216,6 +26216,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     family,
                     signer,
                     d2d_payment_transport=transports[index % len(transports)],
+                    d2d_payment_transports=tuple(transports),
                 )
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = device_lab.main(
@@ -26259,10 +26260,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIn(
-            "missing Kagemusha production evidence for D2D payment transports: "
-            "nearby_offline, qr",
+            "missing Kagemusha production evidence for standard-family D2D payment transports:",
             rendered,
         )
+        self.assertIn("Google Pixel 6 / 6a=nearby_offline", rendered)
         self.assertEqual(
             summary["kagemusha"]["required_d2d_payment_transports"],
             sorted(device_lab.D2D_PAYMENT_TRANSPORTS),
@@ -26271,6 +26272,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(
             summary["kagemusha"]["missing_d2d_payment_transports"],
             ["nearby_offline", "qr"],
+        )
+        self.assertGreater(
+            len(summary["kagemusha"]["missing_d2d_payment_transport_pairs"]),
+            0,
         )
 
     def test_standard_matrix_rejects_duplicate_device_fingerprint(self) -> None:
@@ -27531,6 +27536,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     family,
                     signer,
                     d2d_payment_transport=transports[index % len(transports)],
+                    d2d_payment_transports=tuple(transports),
                 )
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = device_lab.main(
@@ -27572,6 +27578,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             transports,
         )
         self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports_by_family"],
+            {
+                family: transports
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+        )
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transport_pairs"],
+            [],
+        )
         self.assertEqual(
             summary["kagemusha"]["trusted_signer_public_key_sha256"],
             [signer["public_key_sha256"]],

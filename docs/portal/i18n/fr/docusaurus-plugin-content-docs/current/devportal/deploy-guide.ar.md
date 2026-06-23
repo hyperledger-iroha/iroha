@@ -12,10 +12,10 @@ translation_last_reviewed: 2026-02-07
 
 **DOCS-7** (numéro SoraFS) et **DOCS-8** (broche de CI/CD) pour CI/CD لبوابة المطورين. Vous pouvez utiliser build/lint pour SoraFS, pour créer un lien vers Sigstore. التحقق، وتمارين التراجع بحيث تكون كل معاينة واصدار قابلة لاعادة الانتاج وقابلة للتدقيق.
 
-Il s'agit d'un point de terminaison `sorafs_cli` (avec `--features cli`) et d'un point de terminaison Torii. pin-registry, et correspond à OIDC pour Sigstore. خزّن الاسرار طويلة العمر (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, رموز Torii) pour CI؛ Il y a des exportations vers le shell.
+Il s'agit d'un point de terminaison `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target) et d'un point de terminaison Torii. pin-registry, et correspond à OIDC pour Sigstore. خزّن الاسرار طويلة العمر (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, رموز Torii) pour CI؛ Il y a des exportations vers le shell.
 
 ## المتطلبات المسبقة- Nœud 18.18 et `npm` et `pnpm`.
-- `sorafs_cli` ou `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` ou `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان Torii يكشف `/v1/sorafs/*` مع حساب/مفتاح خاص بسلطة يمكنها ارسال المانيفست والاسماء المستعارة.
 - Utilisez OIDC (Actions GitHub, GitLab, identité de charge de travail, ici) pour `SIGSTORE_ID_TOKEN`.
 - Version : `examples/sorafs_cli_quickstart.sh` pour les workflows et `docs/source/sorafs_ci_templates.md` pour les workflows sur GitHub/GitLab.

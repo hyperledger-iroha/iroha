@@ -8,8 +8,7 @@ description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
 :::note Canonical Source
 :::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
+The consolidated `sorafs_cli` surface (provided by the `sorafs_orchestrator` crate) exposes every step required to prepare SoraFS
 artifacts. Use this cookbook to jump directly to common workflows; pair it with
 the manifest pipeline and orchestrator runbooks for operational context.
 

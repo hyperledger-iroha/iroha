@@ -43,7 +43,7 @@ from typing import Any
 
 
 MANIFEST_VERSION = 1
-SUMMARY_VERSION = 1
+SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 ISO_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:"
@@ -2699,6 +2699,38 @@ def verify_profile_catalog(
     }
 
 
+def _missing_profile_schema_message_ids(
+    missing_profile_schema_versions: list[dict[str, str]],
+    missing_schema_fixtures: list[dict[str, Any]],
+    schema_only: list[dict[str, Any]],
+    blocked_schema_sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return unique missing profile message ids with reviewed-gap context."""
+
+    counts: dict[str, int] = {}
+    for missing in missing_profile_schema_versions:
+        message_def_id = missing["message_def_id"]
+        counts[message_def_id] = counts.get(message_def_id, 0) + 1
+
+    missing_schema_ids = {
+        fixture["message_def_id"] for fixture in missing_schema_fixtures
+    }
+    schema_only_ids = {schema["message_def_id"] for schema in schema_only}
+    blocked_source_ids = {
+        blocked["message_def_id"] for blocked in blocked_schema_sources
+    }
+    return [
+        {
+            "message_def_id": message_def_id,
+            "profile_version_count": counts[message_def_id],
+            "reviewed_missing_schema_fixture": message_def_id in missing_schema_ids,
+            "reviewed_schema_only": message_def_id in schema_only_ids,
+            "blocked_source": message_def_id in blocked_source_ids,
+        }
+        for message_def_id in sorted(counts)
+    ]
+
+
 def verify_manifest(
     path: Path,
     args: argparse.Namespace,
@@ -2936,6 +2968,12 @@ def verify_manifest(
             for schema in schema_only
         ],
         "missing_profile_schema_versions": missing_profile_schema_versions,
+        "missing_profile_schema_message_ids": _missing_profile_schema_message_ids(
+            missing_profile_schema_versions,
+            missing_schema_fixtures,
+            schema_only,
+            blocked_schema_sources,
+        ),
         "blocked_schema_sources": blocked_schema_sources,
         "schemas": schemas,
         "fixtures": fixtures,

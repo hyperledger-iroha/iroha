@@ -205,7 +205,7 @@ BLOB を使用してリソースを使い果たすか、無効なメタデータ
   `crates/iroha_torii/src/da/ingest.rs` の Torii 統合。
   指紋は `/v1/da/ingest` を通じてチェックされます。
 - PDP/PoTR ストリーミング シミュレーションは、プルーフ ストリーム ハーネスを介して実行されます。
-  `crates/sorafs_car/tests/sorafs_cli.rs`、PoR/PDP/PoTR リクエスト フローをカバー
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`、PoR/PDP/PoTR リクエスト フローをカバー
   脅威モデルでアニメーション化された障害シナリオ。
 - 容量と修復ソークの結果は以下に保存されます
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`、一方、より広範な

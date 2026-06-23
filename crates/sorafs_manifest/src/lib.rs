@@ -27,6 +27,7 @@ pub mod governance;
 pub mod hosts;
 pub mod hybrid_envelope;
 pub mod manifest_capabilities;
+pub mod orderbook;
 pub mod pdp;
 pub mod pin_registry;
 pub mod por;
@@ -36,6 +37,8 @@ pub mod proof_stream;
 pub mod provider_admission;
 pub mod provider_advert;
 pub mod reconciliation;
+pub mod reference;
+pub mod reference_ffi;
 pub mod repair;
 pub mod reputation;
 pub mod retention;
@@ -49,8 +52,10 @@ pub use capacity::{
     CapacityDisputeV1, CapacityDisputeValidationError, CapacityMetadataEntry, CapacityTelemetryV1,
     CapacityTelemetryValidationError, ChunkerCommitmentError, ChunkerCommitmentV1,
     LaneCommitmentError, LaneCommitmentV1, MetadataError, PricingScheduleError, PricingScheduleV1,
-    REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
-    ReplicationOrderV1, ReplicationOrderValidationError, SlaError,
+    REPLICATION_ORDER_SIGNATURE_DOMAIN_V1, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
+    ReplicationOrderSignatureV1, ReplicationOrderSignatureVerificationError, ReplicationOrderSlaV1,
+    ReplicationOrderV1, ReplicationOrderValidationError, SIGNED_REPLICATION_ORDER_VERSION_V1,
+    SignedReplicationOrderV1, SignedReplicationOrderValidationError, SlaError,
 };
 pub use chunker_registry::{ChunkerProfileDescriptor, DEFAULT_MULTIHASH_CODE, MANIFEST_DAG_CODEC};
 pub use deal::{
@@ -66,12 +71,40 @@ pub use gateway::{
     HostPattern,
 };
 pub use governance::{
-    GOVERNANCE_LOG_VERSION_V1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureV1, GovernanceLogValidationError, GovernanceSignatureAlgorithm,
+    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
+    GovernanceDagBlockV1, GovernanceDagBlockValidationError, GovernanceDagChainValidationError,
+    GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
+    GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
+    GovernanceLogSignatureVerificationError, GovernanceLogValidationError,
+    GovernanceSignatureAlgorithm, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+    SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1,
+    SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
+    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeRollupV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceReportValidationError, SoraFsAppealFinanceWeeklyRollupBuildError,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsAppealFinanceWeeklyRollupValidationError,
+    SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
+    SoraFsModerationBallotGovernanceEventValidationError, SoraFsModerationBallotGovernanceTallyV1,
+    SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1, governance_dag_block_cid_v1,
+    governance_log_node_cid_v1, validate_governance_dag_chain_v1,
+    validate_governance_dag_head_against_chain_v1,
 };
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{
     ChunkProfileSummary, ManifestCapabilitySummary, detect_manifest_capabilities,
+};
+pub use orderbook::{
+    BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
+    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderBookMatchOutcomeV1,
+    OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1,
+    OrderTierV1, OrderbookSignatureV1, OrderbookValidationError, SETTLEMENT_CHANNEL_VERSION_V1,
+    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
+    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1, derive_orderbook_trade_id_v1,
+    match_order_book_v1, match_orders_v1, open_settlement_channel_for_trade_v1,
+    order_cancel_signature_digest_v1, order_request_signature_digest_v1,
+    settlement_receipt_signature_digest_v1, trade_escrow_requirement_v1, trade_gross_value_v1,
+    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
+    verify_settlement_receipt_signature_v1,
 };
 pub use pdp::{
     HashAlgorithmV1, PDP_CHALLENGE_VERSION_V1, PDP_COMMITMENT_VERSION_V1, PDP_PROOF_VERSION_V1,
@@ -95,7 +128,10 @@ pub use por::{
     PorReportIsoWeekValidationError, PorSlashingEventV1, PorSlashingEventValidationError,
     PorWeeklyReportV1, PorWeeklyReportValidationError,
 };
-pub use potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrReceiptValidationError, PotrStatus};
+pub use potr::{
+    POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm,
+    PotrSignatureV1, PotrStatus,
+};
 pub use pricing::{
     BondPolicyError, BondPolicyV1, CreditPolicyError, CreditPolicyV1, MicropaymentDecision,
     PRICING_MANIFEST_VERSION_V1, PricingManifestError, PricingManifestV1,
@@ -117,24 +153,46 @@ pub use provider_admission::{
     verify_envelope, verify_revocation_signatures,
 };
 pub use provider_advert::{
-    AdvertEndpoint, AdvertSignature, AdvertValidationError, AvailabilityTier, CapabilityTlv,
-    CapabilityType, EndpointKind, EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS,
-    PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, ProviderAdvertBodyV1,
+    AdvertEndpoint, AdvertSignature, AdvertSignatureError, AdvertValidationError, AvailabilityTier,
+    CapabilityTlv, CapabilityType, EndpointKind, EndpointMetadata, EndpointMetadataKey,
+    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, ProviderAdvertBodyV1,
     ProviderAdvertBuildError, ProviderAdvertBuilder, ProviderAdvertV1, ProviderCapabilityRangeV1,
     QosHints, REFRESH_RECOMMENDATION_SECS, RangeCapabilityError, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StreamBudgetError, StreamBudgetV1, TransportHintError,
     TransportHintV1, TransportProtocol,
 };
 pub use reconciliation::{
-    ReconciliationValidationError, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-    SorafsReconciliationReportV1,
+    AppealFinanceReconciliationSummaryV1, ReconciliationValidationError,
+    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
+};
+pub use reference::{
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderbookValidationPayloadKindV1,
+    REFERENCE_SDK_ERRORS_DOC_URL, RepairValidationPayloadKindV1, VALIDATION_OUTCOME_VERSION_V1,
+    ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes, validate_por_challenge_proof_bytes, validate_potr_receipt_bytes,
+    validate_provider_admission_envelope_bytes, validate_provider_admission_renewal_bytes,
+    validate_provider_admission_revocation_bytes, validate_provider_advert_bytes,
+    validate_repair_payload_bytes, validate_replication_order_bytes,
+    validate_signed_replication_order_bytes,
 };
 pub use repair::{
+    AuditorSignatureV1, AuditorSignatureVerificationError, GC_AUDIT_EVENT_VERSION_V1,
+    GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
     REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_ESCALATION_POLICY_VERSION_V1,
     REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-    REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEscalationApprovalV1, RepairEscalationPolicyV1,
-    RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStateV1,
-    RepairTicketId, RepairValidationError,
+    REPAIR_TASK_EVENT_VERSION_V1, REPAIR_TASK_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
+    RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEscalationPolicyV1,
+    RepairEvidenceV1, RepairLatencySlaCauseV1, RepairManualCauseV1, RepairPorFailureCauseV1,
+    RepairReplicaShortfallCauseV1, RepairReportV1, RepairSlashProposalV1, RepairTaskEventV1,
+    RepairTaskRecordV1, RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
+    RepairValidationError, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+    SIGNED_AUDITOR_REQUEST_VERSION_V1, SignedAuditorRequestPayloadV1,
+    SignedAuditorRequestSignaturePayloadV1, SignedAuditorRequestV1,
 };
 pub use reputation::{
     DEFAULT_CURRENT_SCORE_WEIGHT_BPS, DEFAULT_EIGENTRUST_ALPHA_BPS, LOW_REPUTATION_SCORE_FLAG_BPS,

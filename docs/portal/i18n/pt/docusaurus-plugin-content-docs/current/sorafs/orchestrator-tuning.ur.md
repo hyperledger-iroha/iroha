@@ -79,7 +79,7 @@ O que fazer:1. **ٹیلیمیٹری کی تازگی چیک کریں۔** یقین
 
 ## CLI e SDK para instalação
 
-`sorafs_cli fetch` (دیکھیں `crates/sorafs_car/src/bin/sorafs_cli.rs`)
+`sorafs_cli fetch` (دیکھیں `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`)
 Invólucro `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) Branco
 superfície de configuração do orquestrador شیئر کرتے ہیں۔ evidência de implementação یا canônica
 replay de jogos کرنے کے لیے یہ flags استعمال کریں:

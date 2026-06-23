@@ -8,31 +8,26 @@ source_hash: a0e479cae4018bbbc689fba16e2e59f93af50f1fad35509a65bce80e09e62186
 source_last_modified: "2026-01-04T10:50:53.657290+00:00"
 translation_last_reviewed: 2026-01-22
 ---
+# SoraFS Migration Ledger
 
-<div dir="rtl">
+This ledger mirrors the migration change log captured in the SoraFS
+Architecture RFC. Entries are grouped by milestone and list the effective window,
+impacted teams, and required actions. Updates to the migration plan MUST modify
+both this file and the RFC (`docs/source/sorafs_architecture_rfc.md`) to keep
+downstream consumers aligned.
 
-<!-- תרגום עברי ל-docs/source/sorafs/migration_ledger.md -->
-
-# יומן נדידת SoraFS
-
-יומן זה משקף את יומן השינויים בנדידה כפי שנלכד ב‑RFC לארכיטקטורת SoraFS.
-הרשומות מקובצות לפי אבני דרך ומפרטות את חלון התוקף, הצוותים שהושפעו ופעולות
-נדרשות. עדכונים לתכנית הנדידה חייבים לשנות גם קובץ זה וגם את ה‑RFC
-(`docs/source/sorafs_architecture_rfc.md`) כדי לשמור על יישור עם צרכנים במורד הזרם.
-
-| אבן דרך | חלון תוקף | תקציר שינוי | צוותים מושפעים | פריטי פעולה | סטטוס |
+| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
 |-----------|------------------|----------------|----------------|--------------|--------|
-| M1 | שבועות 7–12 | CI אוכף fixtures דטרמיניסטיים; הוכחות alias זמינות ב‑staging; כלי העבודה חושפים דגלי ציפייה מפורשים. | Docs, Storage, Governance | ודאו שה‑fixtures נשארים חתומים, רשמו aliases ברשומת staging, עדכנו רשימות שחרור עם אכיפת `--car-digest/--root-cid`. | ⏳ ממתין |
+| M1 | Weeks 7–12 | CI enforces deterministic fixtures; local tooling exposes explicit expectation flags; staging alias proof evidence is archived outside this repo. | Docs, Storage, Governance | Keep fixtures signed, keep release checklists using `--car-digest`/`--root-cid`, and attach fresh staging alias evidence to rollout tickets. | Local controls implemented; external evidence tracked in governance archive. |
 
-פרוטוקולי control plane של הממשל שמפנים לאבני הדרך הללו נשמרים תחת
-`docs/source/sorafs/`. צוותים צריכים להוסיף נקודות תבליט מתוארכות מתחת לכל שורה
-כאשר אירועים משמעותיים מתרחשים (למשל רישומי alias חדשים, רטרוספקטיבות על תקלות
-ברג'יסטרי) כדי לספק מסלול ביקורת ניתן לאימות.
+Governance control plane minutes referencing these milestones are stored under
+`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
+when notable events occur (e.g., new alias registrations, registry incident
+retrospectives) to provide an auditable paper trail.
 
-## עדכונים אחרונים
+## Recent Updates
 
-- 2025-11-01 — הופץ `migration_roadmap.md` למועצת הממשל ולרשימות מפעילים לביקורת; ממתינים לאישור בישיבת המועצה הבאה (ref: מעקב `docs/source/sorafs/council_minutes_2025-10-29.md`).
-- 2025-11-02 — רישום ISI של Pin Registry כעת אוכף אימות chunker/מדיניות משותף באמצעות עזרי `sorafs_manifest`, ושומר על יישור נתיבי on-chain מול בדיקות Torii.
-- 2026-02-13 — נוספו שלבי rollout של פרסום ספקים (R0–R3) ליומן ופורסמו הדשבורדים והנחיות המפעיל המשויכים (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
-
-</div>
+- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and operator lists for review; repository implementation status is now tracked by the dated ledger entries below and external sign-off evidence remains in the governance archive.
+- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy validation via `sorafs_manifest` helpers, keeping on-chain paths aligned with Torii checks.
+- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and published the associated dashboards and operator guidance (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2026-06-22 — Refreshed the M1 status to separate implemented local fixture/expectation-flag controls from external staging alias and governance evidence required for live rollout sign-off.

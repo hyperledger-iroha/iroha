@@ -136,7 +136,7 @@ and GAR telemetry.
    `cargo xtask sorafs-gateway-attest` and archive the signed bundle alongside
    the metric output from their telemetry plane.
 
-## Pending Actions
+## Completed Actions
 
 - [x] Regenerate the canonical fixtures and publish the digests above. ✅
 - [x] Attach the signed manifest envelope for version `1.0.0` using the

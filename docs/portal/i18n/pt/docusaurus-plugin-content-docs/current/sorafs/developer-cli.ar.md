@@ -19,7 +19,7 @@ description: شرح موجّه للمهام لسطح `sorafs_cli` الموحّد
 Verifique o valor `docs/source/sorafs/developer/cli.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
 :::
 
-A caixa `sorafs_cli` (a caixa `sorafs_car` é a caixa `cli`) é uma caixa de papelão Verifique o SoraFS. Faça o download do seu cartão de crédito para obter mais informações واقرنه بخط أنابيب المانيفست ودلائل تشغيل المُنسِّق للحصول على السياق التشغيلي.
+A caixa `sorafs_cli` (provided by the `sorafs_orchestrator` crate) é uma caixa de papelão Verifique o SoraFS. Faça o download do seu cartão de crédito para obter mais informações واقرنه بخط أنابيب المانيفست ودلائل تشغيل المُنسِّق للحصول على السياق التشغيلي.
 
 ## تغليف الحمولات
 

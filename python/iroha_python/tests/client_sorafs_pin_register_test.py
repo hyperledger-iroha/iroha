@@ -30,6 +30,7 @@ def _pin_register_request() -> dict[str, Any]:
             "retentionEpoch": 72,
         },
         "manifestDigestHex": "A" * 64,
+        "manifestBytes": b"manifest-norito",
         "chunkDigestSha3_256Hex": "0x" + "b" * 64,
         "contentLength": 4096,
         "submittedEpoch": 42,
@@ -72,6 +73,7 @@ def test_register_sorafs_pin_manifest_posts_validated_payload() -> None:
         "retention_epoch": 72,
     }
     assert body["manifest_digest_hex"] == "a" * 64
+    assert body["manifest_b64"] == base64.b64encode(b"manifest-norito").decode("ascii")
     assert body["chunk_digest_sha3_256_hex"] == "b" * 64
     assert body["content_length"] == 4096
     assert body["submitted_epoch"] == 42
@@ -98,6 +100,8 @@ def test_register_sorafs_pin_manifest_accepts_snake_case_policy_alias_and_succes
     request["alias_name"] = "main"
     request["alias_proof_base64"] = base64.b64encode(b"alias-proof").decode("ascii")
     request["successor_of_hex"] = successor_hex.upper()
+    request["manifestBytes"] = None
+    request["manifest_b64"] = base64.b64encode(b"explicit-manifest").decode("ascii")
     session = RecordingSession(StubResponse(200, {"status": "queued"}))
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
@@ -105,6 +109,7 @@ def test_register_sorafs_pin_manifest_accepts_snake_case_policy_alias_and_succes
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert body["pin_policy"]["storage_class"] == {"type": "Warm"}
+    assert body["manifest_b64"] == base64.b64encode(b"explicit-manifest").decode("ascii")
     assert body["alias"]["proof_base64"] == base64.b64encode(b"alias-proof").decode("ascii")
     assert body["successor_of_hex"] == successor_hex
 
@@ -179,6 +184,12 @@ def test_register_sorafs_pin_manifest_typed_normalizes_response() -> None:
         ),
         (
             lambda request: request.update(
+                {"manifest_b64": base64.b64encode(b"other").decode("ascii")}
+            ),
+            "accepts only one of manifest_b64 or manifest_bytes",
+        ),
+        (
+            lambda request: request.update(
                 {"pin_policy": {"min_replicas": 3, "storage_class": "hot"}}
             ),
             "ambiguous aliases: pin_policy, pinPolicy",
@@ -232,6 +243,8 @@ def test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_field
     ("mutate", "match"),
     [
         (lambda request: request.update({"manifestDigestHex": "abc123"}), "manifest_digest_hex"),
+        (lambda request: request.update({"manifestBytes": b""}), "manifest_bytes"),
+        (lambda request: request.update({"manifestBytes": "not base64!"}), "manifest_bytes"),
         (
             lambda request: request.update({"chunkDigestSha3_256Hex": "z" * 64}),
             "chunk_digest_sha3_256_hex",

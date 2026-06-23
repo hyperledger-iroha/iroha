@@ -3012,6 +3012,9 @@ public sealed class ToriiClient : IDisposable
             ManifestDigestHex = NormalizeSoraFsDigestHex(
                 request.ManifestDigestHex,
                 nameof(request.ManifestDigestHex)),
+            ManifestBase64 = NormalizeOptionalSoraFsManifestPayload(
+                request.ManifestBase64,
+                request.ManifestBytes),
             ChunkDigestSha3_256Hex = NormalizeSoraFsDigestHex(
                 request.ChunkDigestSha3_256Hex,
                 nameof(request.ChunkDigestSha3_256Hex)),
@@ -3030,6 +3033,39 @@ public sealed class ToriiClient : IDisposable
                 ? null
                 : NormalizeSoraFsDigestHex(request.SuccessorOfHex, nameof(request.SuccessorOfHex)),
         };
+    }
+
+    private static string? NormalizeOptionalSoraFsManifestPayload(
+        string? manifestBase64,
+        byte[]? manifestBytes)
+    {
+        if (manifestBase64 is not null && manifestBytes is not null)
+        {
+            throw new ArgumentException(
+                "Provide either ManifestBase64 or ManifestBytes, not both.",
+                nameof(ToriiSoraFsPinRegisterRequest.ManifestBase64));
+        }
+
+        if (manifestBase64 is not null)
+        {
+            return NormalizeRequiredBase64(
+                manifestBase64,
+                nameof(ToriiSoraFsPinRegisterRequest.ManifestBase64));
+        }
+
+        if (manifestBytes is null)
+        {
+            return null;
+        }
+
+        if (manifestBytes.Length == 0)
+        {
+            throw new ArgumentException(
+                "Value must be a non-empty base64 payload.",
+                nameof(ToriiSoraFsPinRegisterRequest.ManifestBytes));
+        }
+
+        return Convert.ToBase64String(manifestBytes);
     }
 
     private static ToriiSoraFsPinRegisterResponse NormalizeSoraFsPinRegisterResponse(

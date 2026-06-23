@@ -15,8 +15,7 @@ translation_last_reviewed: 2026-02-07
 ::: Eslatma Kanonik manba
 :::
 
-Konsolidatsiyalangan `sorafs_cli` yuzasi (`sorafs_car` sandiq bilan ta'minlangan.
-`cli` xususiyati yoqilgan) SoraFS tayyorlash uchun zarur bo'lgan har bir qadamni ochib beradi.
+Konsolidatsiyalangan `sorafs_cli` yuzasi (provided by the `sorafs_orchestrator` crate) SoraFS tayyorlash uchun zarur bo'lgan har bir qadamni ochib beradi.
 artefaktlar. To'g'ridan-to'g'ri umumiy ish oqimlariga o'tish uchun ushbu oshxona kitobidan foydalaning; bilan bog'lang
 manifest quvur liniyasi va operativ kontekst uchun orkestratorning ish kitoblari.
 
