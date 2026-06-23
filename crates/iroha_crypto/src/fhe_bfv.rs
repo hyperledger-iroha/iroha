@@ -3005,6 +3005,10 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
 #[allow(clippy::struct_excessive_bools)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "release-audit wire profile exposes one boolean per audited proof obligation"
+)]
 pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     /// Evidence proof-profile version.
     pub version: u16,
@@ -3736,6 +3740,10 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Encode)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "native fingerprint preimage exposes one boolean per audited proof obligation"
+)]
 struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     version: u16,
     field_count: u16,
@@ -16896,11 +16904,11 @@ pub(crate) fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
 ///
 /// This is the verifier admission companion to
 /// [`validate_bfv_full_bootstrap_circuit_material_v1`]. Callers provide the
-/// application-specific public-input schema digest and, once a proof attachment
-/// is available, the verifier-key material commitment expected for the proof
-/// that will govern this material. The crypto layer then enforces that the
-/// full-bootstrap material commits to exactly those proof-facing values without
-/// hard-coding an application verifier profile.
+/// expected governed BFV proof public-input schema artifact digest and, once a
+/// proof attachment is available, the verifier-key material commitment
+/// expected for the proof that will govern this material. The crypto layer then
+/// enforces that the full-bootstrap material commits to exactly those
+/// proof-facing values.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the material is invalid, either expected digest is
@@ -40821,7 +40829,7 @@ mod tests {
         let schema_digest = Hash::new(&schema_artifact);
         assert_eq!(
             schema_digest.to_string(),
-            "b9d8ff97d4dcfed1229115d17f90407233843f02e52a3f6fc214fee17a527b95",
+            "2df07f4287dfd54d050081363f85440038957694efa11e34b9d1f5f016cc66c3",
             "canonical proof public-input schema artifact digest drifted"
         );
         let evaluator_artifact_set_digest =
@@ -40881,7 +40889,7 @@ mod tests {
             .expect("derive canonical prover-key material commitment");
         assert_eq!(
             prover_commitment.to_string(),
-            "d6cfae04e02a15aa172f78cfb5e4bd5e4240e463aef557592db01663d1fae68d",
+            "cb8daff63adad2f7ea200144028ec006989d1e370d8dc27da19eeaef43baa8bf",
             "canonical prover-key material commitment drifted"
         );
     }

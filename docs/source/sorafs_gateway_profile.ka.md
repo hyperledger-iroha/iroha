@@ -11,16 +11,18 @@ title: SoraFS Gateway Trustless Profile
 summary: Normative profile for trustless HTTP delivery of SoraFS objects.
 ---
 
-# SoraFS Gateway Trustless Profile (Draft)
+# SoraFS Gateway Trustless Profile
 
 This document specifies the **trustless delivery profile** required for
 SoraFS gateways and clients that participate in the SF-5 rollout. It captures
 the HTTP request/response matrix, proof formats, and verification rules needed
-to stream CAR objects deterministically over untrusted transport. Future
-iterations of the conformance suite, load tests, and self-certification tooling
-will follow the definitions here.
+to stream CAR objects deterministically over untrusted transport. The
+conformance replay harness, gateway load tests, and self-certification tooling
+now validate this profile as the SF-5a baseline.
 
-> **Status:** Draft. Feedback should target the Networking TL and QA Guild.
+> **Status:** Implemented baseline profile. Local conformance, load, and
+> self-certification checks are wired; hosted rollout evidence remains the
+> tracked follow-up before public onboarding.
 
 ## 1. Scope
 
@@ -133,8 +135,9 @@ When chunk streaming completes successfully, gateways SHOULD emit a signed recei
 }
 ```
 
-Receipts enable PoTR-Lite deadline proofs (SF-14). The exact schema will stabilise
-in a follow-up iteration.
+Receipts enable PoTR-Lite deadline proofs (SF-14). The v1 shape above is the
+self-certification archive shape; future SF-14 fields should extend it
+compatibly rather than changing existing keys.
 
 ## 5. Negative Behaviour
 
@@ -186,23 +189,30 @@ statistics using pseudonymous identifiers derived from the request nonce.
 
 ## 7. Conformance Targets
 
-The QA Guild will publish a replay harness that:
+The conformance suite validates this profile through:
 
-1. Replays canonical fixtures (full and ranged CARs) and ensures BLAKE3/PoR checks pass.
-2. Issues negative requests (unsupported chunker, corrupted proof) and expects refusal codes.
-3. Launches ≥1,000 concurrent range streams with seeded randomness to confirm gateways maintain
-   deterministic throughput and proof integrity under load.
+1. Canonical fixture replay for full and ranged CARs, including BLAKE3 and PoR checks.
+2. Negative requests for unsupported chunkers, corrupted proofs, and refusal codes.
+3. Seeded concurrent range streams that confirm deterministic throughput and proof integrity under load.
 
-Gateways MUST satisfy the harness before onboarding. Operators will self-certify using
+Gateways MUST satisfy the harness before onboarding. The local CI target is:
+
+```bash
+cargo test --locked -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture
+```
+
+Operators self-certify with `scripts/sorafs_gateway_self_cert.sh`, which emits
 a signed attestation containing the conformance run hash, proof receipts, and
 gateway build metadata.
 
-## 8. Open Questions
+## 8. Rollout Follow-ups
 
-* Finalise receipt signature scheme (Ed25519 vs multi-sig council keys).
-* Determine whether chunk-range endpoints require GREASE capabilities.
-* Align PoR sampling defaults with SF-13 PDP upgrades.
-* Evaluate feasibility of HTTP/3 support within the same profile or publish a
-  dedicated QUIC supplement.
+* Archive signed local conformance reports for each onboarding candidate.
+* Capture live staging evidence on production-like hardware before public
+  gateway onboarding.
+* Add a live-target adapter once the public staging endpoint is assigned.
+* Publish HTTP/3 support as a separate supplement after endpoint and config
+  semantics are committed.
 
-Contributions and feedback are tracked via the SF-5a task in `roadmap.md`.
+Profile changes are tracked via the SF-5/SF-5a entries in `roadmap.md` and
+the dated completion notes in `status.md`.

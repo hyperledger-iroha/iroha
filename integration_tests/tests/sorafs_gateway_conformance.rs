@@ -3,7 +3,9 @@
 
 use integration_tests::{
     sorafs_gateway_capability_refusal,
-    sorafs_gateway_conformance::{ScenarioOutcome, default_suite_report, generate_attestation},
+    sorafs_gateway_conformance::{
+        ScenarioOutcome, default_suite_report, generate_attestation, verify_attestation_envelope,
+    },
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::account::AccountAddress;
@@ -111,6 +113,13 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
     signature
         .verify(ALICE_KEYPAIR.public_key(), &bundle.report_json)
         .expect("attestation signature verifies with Alice key");
+    let verified =
+        verify_attestation_envelope(&bundle.envelope_bytes).expect("attestation envelope verifies");
+    assert_eq!(verified.profile_version, report.profile_version);
+    assert_eq!(verified.scenario_count, report.scenario_count());
+    assert_eq!(verified.algorithm, Algorithm::Ed25519);
+    assert_eq!(verified.signer_account, signer.to_string());
+
     let wrong_key = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
         .expect("derive SoraFS gateway wrong-key fixture");
     assert!(
@@ -118,6 +127,36 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
             .verify(wrong_key.public_key(), &bundle.report_json)
             .is_err(),
         "attestation signature must reject a wrong key"
+    );
+}
+
+#[test]
+fn sorafs_gateway_attestation_verifier_rejects_report_tamper() {
+    let report = default_suite_report();
+    let signer = AccountAddress::from_account_id(&ALICE_ID).expect("Alice address encodes");
+    let bundle = generate_attestation(
+        &report,
+        &ALICE_KEYPAIR,
+        &signer,
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+    )
+    .expect("attestation generation succeeds");
+    let mut envelope: Value =
+        norito::json::from_slice(&bundle.envelope_bytes).expect("attestation envelope is JSON");
+    envelope
+        .as_object_mut()
+        .and_then(|root| root.get_mut("report"))
+        .and_then(Value::as_object_mut)
+        .expect("report object")
+        .insert("profile_version".into(), Value::from("sf1-tampered"));
+    let tampered =
+        norito::json::to_vec(&envelope).expect("serialize tampered attestation envelope");
+
+    let err = verify_attestation_envelope(&tampered)
+        .expect_err("tampered embedded report must fail attestation verification");
+    assert!(
+        err.to_string().contains("payload hash mismatch"),
+        "unexpected error: {err}"
     );
 }
 

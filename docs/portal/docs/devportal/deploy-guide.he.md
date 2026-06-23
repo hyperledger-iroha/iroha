@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-01-01
 קידום alias, אימות ותרגילי rollback כדי שכל ארטיפקט תצוגה מקדימה ושחרור יהיה
 ניתן לשחזור וניתן לביקורת.
 
-הזרימה מניחה שיש לך את הבינארי `sorafs_cli` (נבנה עם `--features cli`), גישה לנקודת
+הזרימה מניחה שיש לך את הבינארי `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), גישה לנקודת
 קצה Torii עם הרשאות pin-registry, ואישורי OIDC עבור Sigstore. אחסן סודות
 ארוכי-חיים (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, טוקני Torii) בכספת ה-CI;
 ריצות מקומיות יכולות לטעון אותם מ-exports של ה-shell.
@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-01-01
 ## דרישות מקדימות
 
 - Node 18.18+ עם `npm` או `pnpm`.
-- `sorafs_cli` מתוך `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` מתוך `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - כתובת Torii שחושפת `/v1/sorafs/*` וכן חשבון/מפתח פרטי של רשות שיכולה להגיש
   מניפסטים ו-aliasים.
 - מנפיק OIDC (GitHub Actions, GitLab, workload identity, וכו') כדי להנפיק

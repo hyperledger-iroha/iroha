@@ -205,7 +205,7 @@ PDP/PoTR စိန်ခေါ်မှုများကို အတုအပ 
   Torii ပေါင်းစည်းမှု `crates/iroha_torii/src/da/ingest.rs`၊
   လက်ဗွေရာ `/v1/da/ingest` မှတဆင့် စစ်ဆေးသည်။
 - PDP/PoTR streaming simulations များကို proof-stream harness in မှတဆင့် ကျင့်သုံးပါသည်။
-  `crates/sorafs_car/tests/sorafs_cli.rs`၊ PoR/PDP/PoTR တောင်းဆိုချက်စီးဆင်းမှုများကို အကျုံးဝင်သည်။
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`၊ PoR/PDP/PoTR တောင်းဆိုချက်စီးဆင်းမှုများကို အကျုံးဝင်သည်။
   နှင့် ခြိမ်းခြောက်မှုပုံစံတွင် သက်ဝင်လှုပ်ရှားနေသော ရှုံးနိမ့်မှုအခြေအနေများ။
 - စွမ်းဆောင်ရည် နှင့် ပြုပြင်မှု ရလဒ်များ အောက်တွင် နေထိုင်ပါ။
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` သည် ပိုမိုကျယ်ပြန့်သည်။

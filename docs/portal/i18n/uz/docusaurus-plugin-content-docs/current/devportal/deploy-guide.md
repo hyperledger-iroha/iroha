@@ -21,7 +21,7 @@ imzolash, taxallusni ilgari surish, tekshirish va orqaga qaytarish mashqlari, sh
 reliz artefakti takrorlanishi va tekshirilishi mumkin.
 
 Oqim sizda `sorafs_cli` ikkilik faylga ega ekanligingizni taxmin qiladi (o'rnatilgan).
-`--features cli`), Torii so'nggi nuqtasiga pin-ro'yxatga olish ruxsati bilan kirish va
+`sorafs_orchestrator` Cargo target), Torii so'nggi nuqtasiga pin-ro'yxatga olish ruxsati bilan kirish va
 OIDC Sigstore uchun hisob ma'lumotlari. Uzoq muddatli sirlarni saqlang (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii tokenlari) sizning CI omboringizda; mahalliy ishga tushirish ularni manba qilishi mumkin
 qobiq eksportidan.
@@ -29,7 +29,7 @@ qobiq eksportidan.
 ## Old shartlar
 
 - `npm` yoki `pnpm` bilan 18.18+ tugun.
-- `cargo run -p sorafs_car --features cli --bin sorafs_cli` dan `sorafs_cli`.
+- `cargo run -p sorafs_orchestrator --bin sorafs_cli` dan `sorafs_cli`.
 - Torii URL manzili, `/v1/sorafs/*` va vakolatli hisob/maxfiy kalit
   manifest va taxalluslarni yuborishi mumkin.
 - OIDC emitenti (GitHub Actions, GitLab, ish yukining identifikatori va boshqalar)

@@ -9,112 +9,114 @@ source_last_modified: "2025-12-05T17:03:20.753001+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Perfil trustless del gateway SoraFS (Borrador)
+# SoraFS Gateway Trustless Profile
 
-Este documento especifica el **perfil de entrega trustless** requerido para
-gateways y clientes SoraFS que participan en el rollout SF-5. Captura la matriz
-de requests/responses HTTP, los formatos de prueba y las reglas de verificación
-necesarias para streamear objetos CAR de forma determinista sobre transporte no
-confiable. Iteraciones futuras del suite de conformidad, pruebas de carga y
-tooling de auto-certificación seguirán las definiciones aquí.
+This document specifies the **trustless delivery profile** required for
+SoraFS gateways and clients that participate in the SF-5 rollout. It captures
+the HTTP request/response matrix, proof formats, and verification rules needed
+to stream CAR objects deterministically over untrusted transport. The
+conformance replay harness, gateway load tests, and self-certification tooling
+now validate this profile as the SF-5a baseline.
 
-> **Estado:** Borrador. El feedback debe dirigirse al Networking TL y al QA Guild.
+> **Status:** Implemented baseline profile. Local conformance, load, and
+> self-certification checks are wired; hosted rollout evidence remains the
+> tracked follow-up before public onboarding.
 
-## 1. Alcance
+## 1. Scope
 
-El perfil aplica a endpoints HTTPS HTTP/1.1 y HTTP/2 que emiten chunks SoraFS
-codificados como CARv2. Los gateways PUEDEN ofrecer otras APIs, pero **cada**
-endpoint cubierto aquí DEBE cumplir el comportamiento normativo para que los
-clientes puedan intercalar múltiples proveedores sin confianza fuera de banda.
+The profile applies to HTTP/1.1 and HTTP/2 HTTPS endpoints broadcasting SoraFS
+chunks encoded as CARv2. Gateways MAY offer other APIs, but **every** endpoint
+covered here MUST adhere to the normative behaviour so clients can safely
+interleave multiple providers without out-of-band trust.
 
-## 2. Matriz de requests
+## 2. Request Matrix
 
-| Método | Patrón de ruta                | Descripción                               | Headers requeridos                                 |
-|--------|--------------------------------|-------------------------------------------|----------------------------------------------------|
-| `GET`  | `/car/{manifest_cid}`          | Recuperación de objeto completo           | `Accept: application/vnd.ipld.car; dag-scope=full` |
-| `GET`  | `/car/{manifest_cid}`          | Recuperación por rango (byte ranges)      | `Accept: application/vnd.ipld.car; dag-scope=block`, `Range` |
-| `HEAD` | `/car/{manifest_cid}`          | Probe de metadata                         | `Accept: application/vnd.ipld.car`                 |
-| `GET`  | `/chunk/{chunk_digest}`        | Recuperación de chunk único               | `Accept: application/octet-stream`, `X-SoraFS-Chunk-Index` |
-| `GET`  | `/proof/{manifest_cid}`        | Payload de prueba PoR (`PorProofV1`)      | `Accept: application/json`                         |
+| Method | Path Pattern                    | Description                                | Required Headers                            |
+|--------|---------------------------------|--------------------------------------------|---------------------------------------------|
+| `GET`  | `/car/{manifest_cid}`           | Full-object retrieval                      | `Accept: application/vnd.ipld.car; dag-scope=full` |
+| `GET`  | `/car/{manifest_cid}`           | Range retrieval (byte ranges)              | `Accept: application/vnd.ipld.car; dag-scope=block`, `Range` |
+| `HEAD` | `/car/{manifest_cid}`           | Metadata probe                             | `Accept: application/vnd.ipld.car`           |
+| `GET`  | `/chunk/{chunk_digest}`         | Single chunk retrieval                     | `Accept: application/octet-stream`, `X-SoraFS-Chunk-Index` |
+| `GET`  | `/proof/{manifest_cid}`         | PoR proof payload (`PorProofV1`)           | `Accept: application/json`                   |
 
-### 2.1. Headers requeridos
+### 2.1. Required Request Headers
 
-* `X-SoraFS-Version`: `sf1` para el rollout inicial; se incrementará en perfiles futuros.
-* `X-SoraFS-Client`: identificador opaco (útil para telemetría). OPCIONAL pero
-  **RECOMENDADO**.
-* `X-SoraFS-Nonce`: nonce hex de 32 bytes, reflejado en la firma de respuesta para evitar replay.
+* `X-SoraFS-Version`: `sf1` for the initial rollout, bump on future profiles.
+* `X-SoraFS-Client`: opaque identifier (useful for telemetry). OPTIONAL but
+  **RECOMMENDED**.
+* `X-SoraFS-Nonce`: 32-byte hex nonce echoed in the response signature to prevent replay.
 
-Los clientes DEBEN adjuntar el sobre de manifiesto firmado (`manifest_signatures.json`)
-usando `X-SoraFS-Manifest-Envelope` al solicitar un CAR completo para permitir que los gateways
-realicen checks de política (GAR, PDP/PoR).
+Clients MUST attach the Norito-signed manifest envelope (`manifest_signatures.json`)
+using `X-SoraFS-Manifest-Envelope` when requesting a full CAR to allow gateways to
+perform policy checks (GAR, PDP/PoR status).
 
-## 3. Requisitos de respuesta
+## 3. Response Requirements
 
-### 3.1. Headers comunes
+### 3.1. Common Headers
 
-Todas las respuestas exitosas (2xx) DEBEN incluir:
+All successful responses (2xx) MUST include:
 
-* `Content-Type`: `application/vnd.ipld.car` para streams CAR, `application/json`
-  para bundles de prueba, `application/octet-stream` para chunks crudos.
-* `X-SoraFS-Nonce`: eco del nonce del request.
-* `X-SoraFS-Chunker`: handle canónico de chunker (`sorafs.sf1@1.0.0`).
-* `X-SoraFS-Proof-Digest`: digest hex de la prueba PoR acompañante
-  (`PorProofV1.proof_digest`, BLAKE3-256 sobre los campos de prueba excluyendo la firma).
-* `X-SoraFS-PoR-Root`: digest hex de la raíz Merkle PoR para el scope solicitado.
+* `Content-Type`: `application/vnd.ipld.car` for CAR streams, `application/json`
+  for proof bundles, `application/octet-stream` for raw chunks.
+* `X-SoraFS-Nonce`: echo of the request nonce.
+* `X-SoraFS-Chunker`: canonical chunker handle (`sorafs.sf1@1.0.0`).
+* `X-SoraFS-Proof-Digest`: hex digest of the accompanying PoR proof payload
+  (`PorProofV1.proof_digest`, BLAKE3-256 over the proof fields excluding the signature).
+* `X-SoraFS-PoR-Root`: hex digest of the PoR Merkle root for the requested scope.
 
-Los gateways DEBEN fallar con `428 Precondition Required` cuando el sobre de manifiesto
-falta o no coincide con el registro de admisión cacheado localmente.
+Gateways MUST fail requests with `428 Precondition Required` when the manifest
+envelope is missing or does not match the locally cached admission record.
 
-### 3.2. Soporte de rangos
+### 3.2. Range Support
 
-* Implementar byte ranges (`Range: bytes=start-end`). La respuesta DEBE incluir
-  `Content-Range` y alinear chunks a los límites de bloque CAR anunciados en el
-  plan de chunks del manifiesto.
-* Hacer cumplir la semántica determinista de `dag-scope`:
-  * `full`: DAG completo con raíz en `manifest_cid`.
-  * `block`: subconjunto que contiene el rango solicitado, más bloques padres
-    requeridos para validación.
-* Códigos de estado: respuestas CAR completas devuelven `200 OK`; rangos alineados
-  devuelven `206 Partial Content` con `Content-Range`, mientras que rangos inválidos
-  devuelven `416 Range Not Satisfiable`.
+* Implement byte ranges (`Range: bytes=start-end`). The response MUST include
+  `Content-Range` and align chunks to the CAR block boundaries advertised in the
+  manifest’s chunk plan.
+* Enforce the deterministic `dag-scope` semantics:
+  * `full`: entire DAG rooted at `manifest_cid`.
+  * `block`: subset containing the requested byte range, plus parent blocks
+    required for validation.
+* Status codes: full CAR responses return `200 OK`; aligned range responses
+  return `206 Partial Content` with `Content-Range`, while invalid ranges
+  surface `416 Range Not Satisfiable`.
 
-### 3.3. Requests condicionales
+### 3.3. Conditional Requests
 
-* Soportar `If-None-Match` con el digest del manifiesto.
-* Responder `304 Not Modified` cuando el digest proporcionado coincide con el manifiesto actual
-  para permitir que los clientes omitan descargas redundantes.
+* Support `If-None-Match` with the manifest digest.
+* Respond with `304 Not Modified` when the provided digest matches the current
+  manifest to allow clients to skip redundant downloads.
 
-## 4. Formatos de prueba
+## 4. Proof Formats
 
-### 4.1. Integridad de CAR
+### 4.1. CAR Integrity
 
-* Cada respuesta CAR DEBE contener un sobre de prueba Norito con:
-  * `manifest_digest`: BLAKE3-256 de `ManifestV1`.
-  * `chunk_plan_digest`: SHA3-256 de la metadata de chunks ordenada.
-  * `range_proof`: lista opcional de índices de chunk cubiertos por la respuesta.
+* Each CAR response MUST contain a Norito-encoded proof envelope with:
+  * `manifest_digest`: BLAKE3-256 of `ManifestV1`.
+  * `chunk_plan_digest`: SHA3-256 of the ordered chunk metadata.
+  * `range_proof`: optional list of chunk indices covered by the response.
 
-Los clientes DEBEN verificar:
+Clients MUST verify:
 
-1. El digest BLAKE3 de los bytes streameados coincide con `manifest_digest`.
-2. La prueba BLAKE3 se descomprime al plan de chunks registrado en el manifiesto.
-3. Las secciones CAR se alinean con los offsets del plan de chunks.
+1. BLAKE3 digest of streamed bytes equals `manifest_digest`.
+2. The BLAKE3 proof decompresses to the chunk plan recorded in the manifest.
+3. CAR sections align with the chunk plan offsets.
 
 ### 4.2. Proof-of-Retrievability (PoR)
 
-* Los gateways deben servir `GET /proof/{manifest_cid}` retornando un payload Norito JSON `PorProofV1`:
+* Gateways must serve `GET /proof/{manifest_cid}` returning a Norito JSON `PorProofV1` payload:
   * `manifest_digest`, `provider_id`, `samples[]`, `auth_path`, `signature`, `submitted_at`.
-  * `auth_path` es la lista ordenada de raíces de chunk del árbol PoR.
-  * `signature` es Ed25519 sobre `proof_digest` (BLAKE3-256 de los campos de prueba sin la firma), y `signature.public_key`
-    es la clave pública Ed25519 del gateway.
-* La clave de firma se configura en `torii.sorafs.storage.stream_tokens.signing_key_path`
-  y se comparte con la emisión de stream tokens.
+  * `auth_path` is the ordered list of chunk roots for the PoR tree.
+  * `signature` is Ed25519 over `proof_digest` (BLAKE3-256 of the proof fields excluding
+    the signature), and `signature.public_key` is the gateway's Ed25519 public key.
+* The signing key is configured at `torii.sorafs.storage.stream_tokens.signing_key_path`
+  and is shared with stream token issuance.
 
-Los clientes DEBEN verificar la firma y asegurar que la clave pública coincida con la clave
-del gateway admitido antes de confiar en el header `X-SoraFS-PoR-Root`.
+Clients MUST verify the signature and ensure the public key matches the provider's
+admitted gateway key before trusting the `X-SoraFS-PoR-Root` header.
 
-### 4.3. Recibos de streaming
+### 4.3. Streaming Receipts
 
-Cuando el streaming de chunks se completa con éxito, los gateways DEBERÍAN emitir un recibo firmado:
+When chunk streaming completes successfully, gateways SHOULD emit a signed receipt:
 
 ```json
 {
@@ -131,75 +133,84 @@ Cuando el streaming de chunks se completa con éxito, los gateways DEBERÍAN emi
 }
 ```
 
-Los recibos habilitan pruebas de deadline PoTR-Lite (SF-14). El esquema exacto se estabilizará
-en una iteración posterior.
+Receipts enable PoTR-Lite deadline proofs (SF-14). The v1 shape above is the
+self-certification archive shape; future SF-14 fields should extend it
+compatibly rather than changing existing keys.
 
-## 5. Comportamiento negativo
+## 5. Negative Behaviour
 
-Los gateways DEBEN devolver códigos de error deterministas para rutas de rechazo:
+Gateways MUST return deterministic error codes for refusal paths:
 
-| Condición                                               | Estado | Body                                                     |
-|---------------------------------------------------------|--------|----------------------------------------------------------|
-| Perfil de chunker no soportado                          | 406    | `{ "error": "unsupported_chunker", "handle": "..." }`    |
-| Sobre de manifiesto faltante/inválido                   | 428    | `{ "error": "manifest_envelope_required" }`              |
-| Manifiesto no admitido / registro de admisión no disponible | 412 | `{ "error": "provider_not_admitted" \| "admission_unavailable" }` |
-| Falta identificador de proveedor para admisión/capability | 428  | `{ "error": "provider_id_missing" }`                     |
-| Fallo de verificación de prueba                         | 422    | `{ "error": "proof_verification_failed" }`               |
-| Intento de downgrade (headers faltantes)                | 428    | `{ "error": "required_headers_missing" }`                |
-| Violación de rate limit / política GAR                  | 429    | `{ "error": "rate_limited", "reason": "..." }`           |
-| Denylist (provider/manifest/CID/familia perceptual)     | 451    | `{ "error": "denylisted", "kind": "..." }`               |
-| Errores internos                                        | 500    | `{ "error": "internal", "request_id": "..." }`           |
+| Condition                                            | Status | Body                                                     |
+|------------------------------------------------------|--------|----------------------------------------------------------|
+| Unsupported chunker profile                          | 406    | `{ "error": "unsupported_chunker", "handle": "..." }`    |
+| Manifest envelope missing/invalid                    | 428    | `{ "error": "manifest_envelope_required" }`              |
+| Manifest not admitted / admission registry unavailable | 412  | `{ "error": "provider_not_admitted" \| "admission_unavailable" }` |
+| Missing provider identifier for admission/capability | 428    | `{ "error": "provider_id_missing" }`                     |
+| Proof verification failure                           | 422    | `{ "error": "proof_verification_failed" }`               |
+| Downgrade attempt (missing headers)                  | 428    | `{ "error": "required_headers_missing" }`                |
+| Rate limit / GAR policy violation                    | 429    | `{ "error": "rate_limited", "reason": "..." }`           |
+| Denylist (provider/manifest/CID/perceptual family)   | 451    | `{ "error": "denylisted", "kind": "..." }`               |
+| Internal errors                                      | 500    | `{ "error": "internal", "request_id": "..." }`           |
 
-Los clientes DEBEN tratar cualquier respuesta no-2xx como rechazo y excluir el gateway
-del schedule multi-source hasta que ocurra una revisión del operador.
+Clients MUST treat any non-2xx response as a refusal and exclude the gateway
+from the multi-source schedule until an operator review occurs.
 
-### 5.1. Superficie de matriz de políticas (fixtures)
+### 5.1. Policy Matrix Surface (Fixtures)
 
-Los fixtures de conformidad en `fixtures/sorafs_gateway/1.0.0/scenarios.json`
-ejercitan la matriz canónica de estados:
+The conformance fixtures under `fixtures/sorafs_gateway/1.0.0/scenarios.json`
+exercise the canonical status matrix:
 
-- Rutas de éxito: `200` (CAR completo) y `206` (replay de rango alineado).
-- Enforcement de headers/manifiesto: `428` por sobres faltantes o headers requeridos
-  (`B2`), `412` por fallos de admisión (`B5`).
-- Enforcement GAR/denylist: `451` por rechazos de gobernanza o compliance (`D1`).
+- Success paths: `200` (full CAR) and `206` (aligned range replay).
+- Header/manifest enforcement: `428` for missing manifest envelopes or required
+  headers (`B2`), `412` for admission failures (`B5`).
+- GAR/denylist enforcement: `451` for governance or compliance refusals (`D1`).
 
-Los fixtures de rechazo por capacidad (`fixtures/sorafs_gateway/capability_refusal`) reflejan
-los mismos códigos y los usan suites de SDK y auto-certificación de gateways para evitar drift.
+Capability refusal fixtures (`fixtures/sorafs_gateway/capability_refusal`) mirror
+the same codes and are used by SDK and gateway self-certification suites to
+guard against drift.
 
-## 6. Expectativas de telemetría
+## 6. Telemetry Expectations
 
-Los gateways DEBERÍAN emitir las siguientes métricas Prometheus y headers HTTP:
+Gateways SHOULD emit the following Prometheus metrics and HTTP headers:
 
-| Métrica / Header                     | Descripción                                        |
-|--------------------------------------|----------------------------------------------------|
-| `sorafs_gateway_requests_total{result}` | Buckets de éxito/error                          |
-| `sorafs_gateway_range_bytes_total`      | Bytes servidos por handle de chunker           |
-| `sorafs_gateway_proof_failures_total`   | Conteo de validaciones PoR/manifiesto fallidas |
-| `sorafs_gateway_latency_ms_bucket`      | Histograma de latencia de requests              |
-| `X-SoraFS-Telemetry-Nonce`              | Nonce de 16 bytes correlacionado con telemetría |
+| Metric / Header                | Description                                         |
+|--------------------------------|-----------------------------------------------------|
+| `sorafs_gateway_requests_total{result}` | Success/err buckets                            |
+| `sorafs_gateway_range_bytes_total`      | Bytes served per chunker handle                |
+| `sorafs_gateway_proof_failures_total`   | Count of failed PoR/manifest validations       |
+| `sorafs_gateway_latency_ms_bucket`      | Request latency histogram                      |
+| `X-SoraFS-Telemetry-Nonce`              | 16-byte nonce correlated with telemetry events |
 
-La telemetría NO DEBE filtrar información identificable de usuarios. Agrega estadísticas
-por cliente usando identificadores seudónimos derivados del nonce de request.
+Telemetry MUST NOT leak user-identifying information. Aggregate per-client
+statistics using pseudonymous identifiers derived from the request nonce.
 
-## 7. Objetivos de conformidad
+## 7. Conformance Targets
 
-El QA Guild publicará un harness de replay que:
+The conformance suite validates this profile through:
 
-1. Reproduce fixtures canónicos (CAR completos y con rango) y verifica BLAKE3/PoR.
-2. Emite requests negativas (chunker no soportado, prueba corrupta) y espera códigos de rechazo.
-3. Lanza ≥1.000 streams de rango concurrentes con aleatoriedad con semilla para confirmar que
-   los gateways mantienen throughput determinista e integridad de pruebas bajo carga.
+1. Canonical fixture replay for full and ranged CARs, including BLAKE3 and PoR checks.
+2. Negative requests for unsupported chunkers, corrupted proofs, and refusal codes.
+3. Seeded concurrent range streams that confirm deterministic throughput and proof integrity under load.
 
-Los gateways DEBEN cumplir el harness antes de onboarding. Los operadores auto-certificarán con
-una atestación firmada que contenga el hash de la corrida de conformidad, recibos de prueba y
-metadata de build del gateway.
+Gateways MUST satisfy the harness before onboarding. The local CI target is:
 
-## 8. Preguntas abiertas
+```bash
+cargo test --locked -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture
+```
 
-* Finalizar el esquema de firma de recibos (Ed25519 vs claves multi-sig del consejo).
-* Determinar si los endpoints chunk-range requieren capacidades GREASE.
-* Alinear defaults de muestreo PoR con upgrades de SF-13 PDP.
-* Evaluar factibilidad de soporte HTTP/3 dentro del mismo perfil o publicar un
-  suplemento QUIC dedicado.
+Operators self-certify with `scripts/sorafs_gateway_self_cert.sh`, which emits
+a signed attestation containing the conformance run hash, proof receipts, and
+gateway build metadata.
 
-Las contribuciones y el feedback se rastrean vía la tarea SF-5a en `roadmap.md`.
+## 8. Rollout Follow-ups
+
+* Archive signed local conformance reports for each onboarding candidate.
+* Capture live staging evidence on production-like hardware before public
+  gateway onboarding.
+* Add a live-target adapter once the public staging endpoint is assigned.
+* Publish HTTP/3 support as a separate supplement after endpoint and config
+  semantics are committed.
+
+Profile changes are tracked via the SF-5/SF-5a entries in `roadmap.md` and
+the dated completion notes in `status.md`.

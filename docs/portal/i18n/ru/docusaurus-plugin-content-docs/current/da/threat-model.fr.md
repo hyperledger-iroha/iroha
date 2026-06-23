@@ -247,7 +247,7 @@ Nexus переулок и артефакты управления, подлеж�
   кэш) и интеграция Torii с `crates/iroha_torii/src/da/ingest.rs`, этот поток
   проверки отпечатков пальцев через `/v1/da/ingest`.
 - Моделирование потоковой передачи данных PDP/PoTR с помощью протокола проверки потока.
-  в `crates/sorafs_car/tests/sorafs_cli.rs`, проверьте требуемый поток
+  в `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, проверьте требуемый поток
   PoR/PDP/PoTR и аниме-сценарии неудач в моделях угроз.
 - Результаты емкости и ремонта замачиваются в условиях vivent sous.
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, тогда это матрица

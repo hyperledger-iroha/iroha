@@ -1644,28 +1644,12 @@ pub mod handles {
                 crate::network::message::Topic::ConsensusChunk => &self.senders.hi_consensus_chunk,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
                 crate::network::message::Topic::BlockSync
-                    if matches!(priority, crate::network::message::Priority::High) =>
-                {
-                    &self.senders.hi_control
-                }
-                crate::network::message::Topic::TxGossip
+                | crate::network::message::Topic::TxGossip
                 | crate::network::message::Topic::TxGossipRestricted
-                    if matches!(priority, crate::network::message::Priority::High) =>
-                {
-                    &self.senders.hi_control
-                }
-                crate::network::message::Topic::PeerGossip
+                | crate::network::message::Topic::PeerGossip
                 | crate::network::message::Topic::TrustGossip
-                    if matches!(priority, crate::network::message::Priority::High) =>
-                {
-                    &self.senders.hi_control
-                }
-                crate::network::message::Topic::Health
-                    if matches!(priority, crate::network::message::Priority::High) =>
-                {
-                    &self.senders.hi_control
-                }
-                crate::network::message::Topic::Other
+                | crate::network::message::Topic::Health
+                | crate::network::message::Topic::Other
                     if matches!(priority, crate::network::message::Priority::High) =>
                 {
                     &self.senders.hi_control
@@ -4088,9 +4072,7 @@ mod run {
             if self.plain_high.is_empty() {
                 return Ok(());
             }
-            let class = self
-                .plain_high_class
-                .expect("high plaintext batch must track its scheduling class");
+            let class = self.plain_high_class.unwrap_or(HighBatchClass::Other);
             let plaintext = core::mem::take(&mut self.plain_high);
             match self.enqueue_encrypted(&plaintext, Priority::High, Some(class)) {
                 Ok(()) => {
@@ -4276,28 +4258,13 @@ mod run {
             }
         }
 
-        fn pop_high_frame(&mut self, class: HighBatchClass) -> BytesMut {
+        fn pop_high_frame(&mut self, class: HighBatchClass) -> Option<BytesMut> {
             match class {
-                HighBatchClass::Control => self
-                    .queue_high_control
-                    .pop_front()
-                    .expect("selected control queue must contain a frame"),
-                HighBatchClass::Consensus => self
-                    .queue_high_consensus
-                    .pop_front()
-                    .expect("selected consensus queue must contain a frame"),
-                HighBatchClass::ConsensusPayload => self
-                    .queue_high_consensus_payload
-                    .pop_front()
-                    .expect("selected payload queue must contain a frame"),
-                HighBatchClass::ConsensusChunk => self
-                    .queue_high_consensus_chunk
-                    .pop_front()
-                    .expect("selected chunk queue must contain a frame"),
-                HighBatchClass::Other => self
-                    .queue_high_other
-                    .pop_front()
-                    .expect("selected high-other queue must contain a frame"),
+                HighBatchClass::Control => self.queue_high_control.pop_front(),
+                HighBatchClass::Consensus => self.queue_high_consensus.pop_front(),
+                HighBatchClass::ConsensusPayload => self.queue_high_consensus_payload.pop_front(),
+                HighBatchClass::ConsensusChunk => self.queue_high_consensus_chunk.pop_front(),
+                HighBatchClass::Other => self.queue_high_other.pop_front(),
             }
         }
 
@@ -4378,10 +4345,12 @@ mod run {
                     break;
                 }
 
-                let mut frame = if let Some(class) = next_high {
+                let Some(mut frame) = (if let Some(class) = next_high {
                     self.pop_high_frame(class)
                 } else {
-                    self.queue_low.pop_front().expect("queue.front checked")
+                    self.queue_low.pop_front()
+                }) else {
+                    break;
                 };
                 self.batch.extend_from_slice(&frame);
                 frame.clear();
@@ -5215,6 +5184,56 @@ mod run {
                 delivered,
                 (1..=max_msgs_hi.saturating_add(1)).collect::<Vec<_>>()
             );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_flushes_missing_high_class_as_other_without_panic() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[17u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            sender
+                .prepare_message(&Message::Data(Dummy), Priority::High)
+                .expect("prepare high message");
+            assert!(
+                !sender.plain_high.is_empty(),
+                "test must start with an accumulated high-priority plaintext batch"
+            );
+            sender.plain_high_class = None;
+
+            sender
+                .flush_plain_high()
+                .expect("missing high class should flush as other");
+
+            assert!(sender.plain_high.is_empty());
+            assert_eq!(sender.plain_high_msgs, 0);
+            assert_eq!(sender.queue_high_other.len(), 1);
+        }
+
+        #[test]
+        fn message_sender_empty_selected_high_queues_return_none_without_panic() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[18u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for class in [
+                HighBatchClass::Control,
+                HighBatchClass::Consensus,
+                HighBatchClass::ConsensusPayload,
+                HighBatchClass::ConsensusChunk,
+                HighBatchClass::Other,
+            ] {
+                assert!(
+                    sender.pop_high_frame(class).is_none(),
+                    "empty selected {class:?} queue should not panic"
+                );
+            }
         }
 
         #[tokio::test(flavor = "current_thread")]

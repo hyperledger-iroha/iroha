@@ -8,96 +8,172 @@ source_hash: e843072093b18bc3fcae6c4a2898cd2b091dd7e9d445986c730899d1b9805421
 source_last_modified: "2026-01-05T09:28:12.087905+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Wire Format & Schema Reference
-summary: Final specification for SF-10 covering Norito payloads, fixtures, and cross-language ingestion.
+summary: SF-10 implementation status for canonical Norito payloads, fixtures, validators, and remaining release-evidence work.
+---
+
+---
+title: SoraFS Wire Format & Schema Reference
+summary: SF-10 implementation status for canonical Norito payloads, fixtures, validators, and remaining release-evidence work.
 ---
 
 # SoraFS Wire Format & Schema Reference
 
-## Goals & Scope
-- Define the canonical Norito payloads that power adverts, admission, replication orders, PoR/PoTR artefacts, and governance DAG entries in SoraFS.
-- Document how the schemas map to the Rust source (`crates/sorafs_manifest`) and how SDKs in other languages ingest the same bytes without bespoke codecs.
-- Capture fixture generation, versioning, and release processes so teams can validate changes deterministically.
+## Current Status
 
-This document completes **SF-10 — Publish `sora-proto` schemas** and supersedes the earlier draft plan.
+SF-10 has local schema, fixture, and reference-validation foundations. Canonical
+SoraFS payloads live in `crates/sorafs_manifest`, committed fixtures live under
+`fixtures/sorafs_manifest/`, and `sorafs-validate` plus the reference FFI expose
+stable validation outcomes for SDK and release smoke tests. Remaining work is
+live release evidence and SDK distribution hygiene, not defining a separate
+`sora-proto` codec outside Norito.
 
 ## Canonical Modules & Payloads
-| Domain | Rust module | Primary structs | Notes |
-|--------|-------------|-----------------|-------|
-| Provider adverts | `crates/sorafs_manifest/src/provider_advert.rs` | `ProviderAdvertV1`, `ProviderAdvertBodyV1`, `AdvertSignature` | Describes capability TLVs, transport hints, escrow policy, and signature shells. |
-| Provider admission | `crates/sorafs_manifest/src/provider_admission.rs` | `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `RenewalV1`, `RevocationV1` | Governance proposals and envelopes for onboarding, renewal, and revocation. |
-| Replication orders & capacity | `crates/sorafs_manifest/src/capacity.rs` | `ReplicationOrderV1`, `PlacementDirectiveV1`, `CapacityDeclarationV1`, `PricingScheduleV1` | Manifests, chunk assignments, pricing hints, and capacity scheduling. |
-| Deal & incentives | `crates/sorafs_manifest/src/deal.rs` | `DealTermsV1`, `DealMicropaymentV1`, `DealSettlementV1` | Wire format for incentive accounting. |
-| PoR / Audit | `crates/sorafs_manifest/src/por.rs` | `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1`, helper functions (`derive_challenge_seed`, etc.) | Merkle sampling layout referenced by the PoR coordinator. |
-| PoTR | `crates/sorafs_manifest/src/potr.rs` | `PotrProbeV1`, `PotrReceiptV1`, `PotrVerdictV1` | Deadline proof schema for retrieval latency tracking (SF-14). |
-| Repair & governance | `crates/sorafs_manifest/src/repair.rs`, `crates/sorafs_manifest/src/governance.rs` | `RepairTaskV1`, `RepairEvidenceV1`, `GovernanceLogNodeV1` | Artefacts produced by repair automation and the governance DAG pipeline. |
 
-Each struct derives `NoritoSerialize`/`NoritoDeserialize` and `JsonSerialize` so the same definitions drive binary and JSON views. Any schema change MUST land here first.
+| Domain | Rust module | Primary payloads |
+|--------|-------------|------------------|
+| Provider adverts | `provider_advert.rs` | `ProviderAdvertV1`, `ProviderAdvertBodyV1`, `AdvertSignature` |
+| Provider admission | `provider_admission.rs` | `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, renewal and revocation payloads |
+| Capacity and replication | `capacity.rs` | `ReplicationOrderV1`, `SignedReplicationOrderV1`, capacity declarations, pricing, disputes, telemetry |
+| Orderbook and streaming settlement | `orderbook.rs` | `OrderRequestV1`, `OrderCancelV1`, `TradeEventV1`, `SettlementChannelV1`, `SettlementReceiptV1` |
+| PoR / audit | `por.rs` | `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1` |
+| PDP | `pdp.rs` | PDP commitment/challenge/proof descriptors and validators |
+| PoTR | `potr.rs` | `PotrProbeV1`, `PotrReceiptV1`, `PotrVerdictV1` |
+| Repair | `repair.rs` | repair tasks, evidence, reports, policies, approvals, auditor requests, worker signatures, events |
+| Reputation | `reputation.rs` | reputation weights, provider inputs, snapshots, events, Merkle proofs |
+| Governance DAG | `governance.rs` | `GovernanceLogNodeV1`, payload variants, publisher signatures |
+| Reference validation | `reference.rs`, `reference_ffi.rs` | `ValidationOutcomeV1`, byte validators, C ABI facade |
 
-## Versioning Policy
-- **Identifiers.** Numeric enums use explicit `#[repr(u8/u16)]` discriminants. Keep them stable across versions; new values append at the end.
-- **Defaulting.** Optional fields leverage `#[norito(default)]` so omitted values decode deterministically. Builders in each module provide helper constructors to enforce invariants.
-- **Validation.** `validate()` methods exist on major structs (e.g., `ProviderAdvertV1::validate`). CI executes round-trip and validation tests across all fixtures.
-- **Release gates.** schema changes require:
-  1. Updating the relevant struct(s) and inline docs.
-  2. Refreshing fixtures (see below).
-  3. Recording the update in `status.md` and referencing golden test updates.
-  4. Notifying SDK maintainers via the release checklist.
+Every payload that crosses a SoraFS boundary must be encoded with Norito. JSON
+views are for operator readability and fixtures; they are not alternate wire
+formats.
 
-## Fixtures & Generators
-Deterministic fixtures live under `fixtures/sorafs_manifest/`:
-- `provider_admission/`, `provider_advert/`
-- `replication_order/`
-- `por/`, `potr/`
-- `governance/`
-- `ci_sample/` and `ci_sample_sf2/` bundles that combine manifest, CAR, proof, and audit artefacts.
+## Implemented Validators
 
-Generators in `crates/sorafs_manifest/src/bin/` refresh these fixtures:
-- `generate_provider_advert_fixture.rs`
-- `generate_replication_order_fixture.rs`
-- `generate_por_fixtures.rs`
-- `generate_governance_fixture.rs`
+`crates/sorafs_manifest::reference` exposes byte-level validators for:
 
-A typical regeneration flow:
-```bash
-cargo run -p sorafs_manifest --bin generate_replication_order_fixture \
-  -- --manifest fixtures/sorafs_manifest/ci_sample/manifest.json \
-  --out fixtures/sorafs_manifest/replication_order/order.json
+- provider adverts;
+- provider admission envelopes, renewals, and revocations;
+- replication orders and signed replication orders;
+- orderbook and streaming-settlement payloads;
+- PoR challenge/proof pairs;
+- PoTR receipts;
+- repair payloads;
+- fixture-directory bundles, including committed orderbook payload fixtures;
+- governance log nodes.
+
+The `reference_ffi` facade returns `ValidationOutcomeV1` Norito JSON buffers for
+SDK bindings that need the Rust reference validators without duplicating schema
+logic.
+
+## CLI Surface
+
+The `sorafs-validate` binary provides the release-facing validator:
+
+```sh
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  advert --input fixtures/sorafs_manifest/provider_admission/advert_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  admission --input fixtures/sorafs_manifest/provider_admission/envelope_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  order --order fixtures/sorafs_manifest/replication_order/order_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  orderbook --receipt fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  por --challenge fixtures/sorafs_manifest/por/challenge_v1.to \
+      --proof fixtures/sorafs_manifest/por/proof_v1.to \
+      --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  potr --receipt fixtures/sorafs_manifest/potr/receipt_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  repair --task fixtures/sorafs_manifest/repair/task_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  governance --node fixtures/sorafs_manifest/governance/node_v1.to --format json
+
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  bundle --bundle fixtures/sorafs_manifest --format json
 ```
-Each generator writes:
-1. Norito bytes (`*.to`).
-2. Human-readable JSON commentary (`*.json`).
-3. Manifest summarising hashes (`manifest.summary.json`).
 
-CI jobs (`.github/workflows/sorafs-cli-fixture.yml`) diff fixture directories to prevent silent drift.
+The bundle validator discovers `fixtures/sorafs_manifest/orderbook/*.to`
+payloads in addition to the manifest-linked advert, admission, replication,
+PoR, PoTR, repair, and governance fixture artifacts.
 
-## Cross-Language Ingestion
-| Language / Surface | Entry point | Validation strategy |
-|--------------------|-------------|---------------------|
-| Rust (SDKs, services) | `sorafs_manifest::{...}` + `norito::{to_bytes, from_bytes}` | Unit tests in `crates/sorafs_manifest/tests/*` round-trip every fixture. |
-| CLI / pipelines | `sorafs_car`, `sorafs_orchestrator`, `sorafs_cli` | Commands provide `--json-out` / `--por-json-out` to surface Norito commentary while emitting canonical bytes to disk. |
-| JavaScript / TypeScript | `iroha_js_host::sorafs` helpers (`decodeReplicationOrder`, `decodeProviderAdvert`) | Validates `Sora-Proof` headers and advert signatures using the shared Norito definitions. |
-| Python | `iroha_python.sorafs` module | Dataclasses mirror the Norito structs and rely on the Rust library for decoding to avoid duplicate codecs. |
-| Swift / Kotlin | Mobile SDKs consume Norito via FFI glue that forwards to the Rust codec (`IrohaSwift` / `iroha_android`). |
+Signing helpers are available for adverts, replication orders, and governance
+nodes:
 
-Guidelines:
-- Never transcode Norito payloads into alternative formats for transport; store and forward the raw bytes.
-- Always surface both the raw Norito blob and the decoded representation in telemetry/logs to aid audits.
-- Bindings MUST fail fast when they encounter an unknown version or missing helper.
+```sh
+cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+  sign --kind governance \
+  --input fixtures/sorafs_manifest/governance/node_v1.to \
+  --out artifacts/sorafs/governance/signed_node_v1.to \
+  --key-hex <ed25519-seed-hex> \
+  --format json
+```
 
-## Deterministic Signing Domains
-- Providers sign adverts using `AdvertSignature` (Ed25519 today). The signing domain string lives in `provider_advert.rs` and must not change without a new schema version.
-- Governance signatures across admission and replication orders share the `GovernanceSignatureV1` struct; the domain string is `sorafs:governance:v1`.
-- Deal, PoR, and PoTR artefacts embed their own domain constants (see `deal.rs`, `por.rs`, `potr.rs`). When adding algorithms beyond Ed25519, extend the `SignatureAlgorithm` enum while ensuring canonical ordering.
+## Fixtures & Active Generators
 
-## Governance DAG Alignment
-- The governance publishing tool uses `GovernanceLogNodeV1` to wrap Norito payloads stored in the DAG (`governance/sorafs/...`). Nodes include metadata: CID, payload kind, timestamp, and signature set.
-- Validators call `governance::decode_log_node(bytes)` before enforcing policy checks. Unknown payload kinds fail closed.
-- Weekly PoR and repair reports (see SF-9) append to the DAG using the same node schema; filenames follow `por/report/<ISO-week>.json` conventions.
+Committed fixtures live under:
 
-## Open Work & Maintenance
-- **Documentation:** keep module-level docs (`//!`) in sync with this reference. Public APIs must explain versioning guarantees.
-- **Golden tests:** ensure each fixture directory has a matching test in `crates/sorafs_manifest/tests/` or `crates/sorafs_car/tests/`.
-- **SDK regeneration:** release checklist includes `./scripts/sorafs_regenerate_fixtures.sh` and language binding updates.
-- **Telemetry integration:** metrics referencing schema versions (e.g., `sorafs_advert_version_total{version="1"}`) help detect mixed deployments.
+- `fixtures/sorafs_manifest/provider_admission/`
+- `fixtures/sorafs_manifest/replication_order/`
+- `fixtures/sorafs_manifest/orderbook/`
+- `fixtures/sorafs_manifest/por/`
+- `fixtures/sorafs_manifest/potr/`
+- `fixtures/sorafs_manifest/repair/`
+- `fixtures/sorafs_manifest/governance/`
+- `fixtures/sorafs_manifest/ci_sample/`
 
-With this reference in place, schema authors, SDK teams, and governance tooling share a single authoritative source describing every Norito payload shipped by SoraFS.
+Use the active generators and stubs:
+
+```sh
+cargo run --locked -p sorafs_car --features cli --bin provider_admission_fixtures
+cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- \
+  capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json
+cargo run --locked -p sorafs_manifest --bin generate_orderbook_fixtures
+cargo run --locked -p sorafs_manifest --bin generate_por_fixtures
+```
+
+Do not document retired generator names as required workflow. When a schema
+changes, refresh the relevant fixture directory and run the matching
+`sorafs-validate` command plus focused crate tests.
+
+## Cross-Language Contract
+
+- Rust code consumes `sorafs_manifest` payloads directly with
+  `norito::{to_bytes, decode_from_bytes}`.
+- SDKs should call the reference validator or C ABI facade for schema checks
+  rather than reimplementing Norito layout rules.
+- Transport should preserve raw Norito bytes and may include decoded JSON only
+  as commentary.
+- Unknown versions, missing required fields, invalid signatures, and broken
+  fixture cross-links must fail closed. Bundle validation also fails closed if
+  any discovered orderbook fixture is malformed or violates settlement policy.
+
+## Remaining Production Gates
+
+- Publish release bundles that include the refreshed `.to` fixtures,
+  human-readable JSON commentary, validation outcomes, and digest manifests.
+- Keep portal error-catalog links synchronized with `ValidationOutcomeV1` codes.
+- Capture SDK smoke evidence that JavaScript/TypeScript, Python, Swift, Kotlin,
+  Java, and C# consumers validate the same committed fixtures through shared
+  validators or FFI bindings.
+- Re-run fixture and reference-validator smoke tests whenever Norito payload
+  layouts, signing domains, or governance payload variants change.
+
+## Validation
+
+Focused checks for this reference are:
+
+```sh
+cargo test -p sorafs_manifest
+cargo test -p sorafs_manifest --test sorafs_validate_cli
+```
+
+Run SDK parity tests when changing the reference FFI or generated language
+bindings.

@@ -4242,6 +4242,331 @@ fn sorafs_paths() -> Map {
             ],
         )),
     );
+    let repair_events_query_params = vec![
+        integer_query_param(
+            "since",
+            "Return repair events with sequence greater than this cursor.",
+            Some("uint64"),
+        ),
+        integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+    ];
+    paths.insert(
+        "/v1/sorafs/audit/repair/events".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List repair events.",
+            "List local SoraFS repair task transition events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+            "#/components/schemas/JsonValue",
+            repair_events_query_params.clone(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/events/stream".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("SoraFS".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Stream repair events.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Stream local SoraFS repair task transition events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live task transitions keyed by repair status."
+                        .to_owned(),
+                ),
+            );
+            operation.insert("parameters".into(), Value::Array(repair_events_query_params.clone()));
+            let mut responses = Map::new();
+            responses.insert(
+                "200".into(),
+                event_stream_response("Server-sent repair task transition event stream."),
+            );
+            operation.insert("responses".into(), Value::Object(responses));
+            let mut methods = Map::new();
+            methods.insert("get".into(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/sorafs/audit/repair/events/ws".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("SoraFS".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Connect to the repair event WebSocket.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Upgrade to a SoraFS repair event WebSocket. The stream emits JSON text frames with `event` set to the repair status for the optional `since`/`limit` backlog and for live task transitions; lag frames use `event = lagged`."
+                        .to_owned(),
+                ),
+            );
+            operation.insert("parameters".into(), Value::Array(repair_events_query_params));
+            let mut responses = Map::new();
+            responses.insert(
+                "101".into(),
+                Value::Object({
+                    let mut response = Map::new();
+                    response.insert(
+                        "description".into(),
+                        Value::String("WebSocket upgrade accepted.".to_owned()),
+                    );
+                    response
+                }),
+            );
+            operation.insert("responses".into(), Value::Object(responses));
+            let mut methods = Map::new();
+            methods.insert("get".into(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/pricing/config".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch appeal pricing config.",
+            "Fetch the active read-only SoraFS appeal pricing baseline used for quote calculation.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/pricing/status".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch appeal pricing readiness.",
+            "Fetch SoraFS appeal finance API readiness, including which mutating deposit, report, and settlement paths are still pending runtime escrow and ledger integration.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/pricing/quote".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Quote an appeal deposit.",
+            "Quote a deterministic SoraFS appeal deposit from class, backlog, evidence size, urgency, and panel size using the active baseline pricing config.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/settle".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Compute an appeal settlement plan.",
+            "Compute a stateless SoraFS appeal settlement breakdown from deposit, outcome, and panel size using the active baseline settlement config. This endpoint does not mutate escrow or ledger state.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/disburse".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Compute an appeal disbursement plan.",
+            "Compute a stateless SoraFS appeal refund, treasury, held-funds, and juror payout plan using canonical account IDs. This endpoint does not mutate escrow or ledger state.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/deposits".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Build an appeal deposit asset-lock instruction.",
+            "Build a canonical native OpenAssetLock instruction for a SoraFS appeal deposit. The request requires X-Iroha canonical app authentication; the authenticated payer must sign and submit the returned transaction instruction through the normal ledger transaction path.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch an appeal deposit asset-lock status.",
+            "Fetch a submitted native asset lock record for a SoraFS appeal deposit. The request requires X-Iroha canonical app authentication and the authenticated account must be the lock opener, destination, or release authority.",
+            "#/components/schemas/JsonValue",
+            vec![path_param(
+                "escrow_id_hex",
+                "Canonical hex-encoded native lock identifier.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/deposits/confirm".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Confirm an appeal deposit asset lock.",
+            "Verify that a submitted native OpenAssetLock record still matches the expected SoraFS appeal deposit parameters before moderation proceeds. The request requires X-Iroha canonical app authentication and the authenticated account must be the lock opener, destination, or release authority.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/deposits/settle".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Build appeal deposit settlement instructions.",
+            "Confirm a SoraFS appeal deposit asset lock and compute ordered native DrawdownAssetLock/CancelAssetLock instructions for client-side signing according to the active baseline settlement config. Torii does not mutate ledger custody on its own authority.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/deposits/reconcile".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Reconcile an appeal deposit settlement.",
+            "Recompute the expected SoraFS appeal deposit settlement from confirmed deposit parameters and compare it with the current runtime native asset-lock ledger record after client-submitted DrawdownAssetLock/CancelAssetLock transactions. Responses include a deterministic reconciliation_digest_hex for audit and peer comparison.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let mut appeal_finance_reports = json_get_operation(
+        "SoraFS",
+        "List appeal finance report publications.",
+        "Summarize locally published SoraFS appeal finance reports from the Governance DAG publish-index, including outcome counts, finance totals, and source entries.",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    );
+    if let Some(Value::Object(post_operation)) = json_post_operation(
+        "SoraFS",
+        "Publish an appeal finance report.",
+        "Publish a validated SoraFS appeal finance report into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    )
+    .remove("post")
+    {
+        appeal_finance_reports.insert("post".to_owned(), Value::Object(post_operation));
+    }
+    paths.insert(
+        "/v1/sorafs/appeals/finance/reports".to_owned(),
+        Value::Object(appeal_finance_reports),
+    );
+    let mut weekly_rollups = json_get_operation(
+        "SoraFS",
+        "List appeal finance weekly rollup publications.",
+        "Summarize locally published SoraFS appeal finance weekly rollups from the Governance DAG publish-index, including cycle counts, report totals, and source entries.",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    );
+    if let Some(Value::Object(post_operation)) = json_post_operation(
+        "SoraFS",
+        "Publish an appeal finance weekly rollup.",
+        "Publish a validated SoraFS appeal finance weekly rollup into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    )
+    .remove("post")
+    {
+        weekly_rollups.insert("post".to_owned(), Value::Object(post_operation));
+    }
+    paths.insert(
+        "/v1/sorafs/appeals/finance/weekly-rollups".to_owned(),
+        Value::Object(weekly_rollups),
+    );
+    let mut moderation_ballots = json_get_operation(
+        "SoraFS",
+        "List local moderation ballots.",
+        "List locally announced SoraFS moderation ballot records, including announcement context, accepted commits, reveals, and finalized tallies.",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    );
+    if let Some(Value::Object(post_operation)) = json_post_operation(
+        "SoraFS",
+        "Announce a local moderation ballot.",
+        "Announce a local SoraFS moderation ballot and derive the panel roster hash when omitted. The request requires canonical app authentication plus a deposit_confirmation object that Torii confirms against the runtime native asset-lock ledger before the ballot is admitted.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    )
+    .remove("post")
+    {
+        moderation_ballots.insert("post".to_owned(), Value::Object(post_operation));
+    }
+    paths.insert(
+        "/v1/sorafs/moderation/ballots".to_owned(),
+        Value::Object(moderation_ballots),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/{case_id}/{round_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch a local moderation ballot.",
+            "Fetch one locally announced SoraFS moderation ballot record by case id and round id.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_path_param("case_id", "Moderation or appeal case identifier."),
+                string_path_param("round_id", "Moderation ballot round identifier."),
+            ],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/commits".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Submit a moderation ballot commitment.",
+            "Submit a base64 Norito SoraFsModerationBallotCommitV1 payload. The canonical request signer must match the canonical juror account id in the commitment.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/reveals".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Submit a moderation ballot reveal.",
+            "Submit a base64 Norito SoraFsModerationBallotRevealV1 payload. The canonical request signer must match the canonical juror account id in the reveal.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/tally".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Finalize a moderation ballot tally.",
+            "Finalize a local SoraFS moderation ballot tally after quorum and reveal-window checks. The request requires canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/events".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch local moderation ballot events.",
+            "Fetch sequenced local SoraFS moderation ballot events with optional since and limit filters and ETag cache validation.",
+            "#/components/schemas/JsonValue",
+            vec![
+                integer_query_param("since", "Return events with sequence greater than this value.", Some("uint64")),
+                integer_query_param("limit", "Maximum number of events to return.", Some("uint64")),
+            ],
+        )),
+    );
     paths.insert(
         "/v1/sorafs/providers".to_owned(),
         Value::Object(json_get_operation(
@@ -12333,6 +12658,27 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/reputation/events"));
         assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
         assert!(paths.contains_key("/ws/reputation"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/settle"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/disburse"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/confirm"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/settle"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/reconcile"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/reports"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/weekly-rollups"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/reveals"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/tally"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/events"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));

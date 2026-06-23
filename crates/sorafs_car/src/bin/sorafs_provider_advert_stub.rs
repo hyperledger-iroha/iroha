@@ -238,7 +238,7 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
 }
 
 fn usage() -> &'static str {
-    "usage: sorafs-provider-advert-stub <--emit|--verify> \
+    "usage: sorafs_provider_advert_stub <--emit|--verify> \
      --emit \
      [--chunker-profile=namespace.name@semver | --profile-id=id] \
      --provider-id=hex32 \
@@ -1332,6 +1332,14 @@ mod tests {
         assert!(capability.supports_sparse_offsets);
         assert!(!capability.requires_alignment);
         assert!(capability.supports_merkle_proof);
+    }
+
+    #[test]
+    fn usage_uses_cargo_binary_name() {
+        let text = usage();
+
+        assert!(text.contains("sorafs_provider_advert_stub <--emit|--verify>"));
+        assert!(!text.contains("sorafs-provider-advert-stub"));
     }
 
     #[test]

@@ -76,7 +76,7 @@ Antes de la producción:1. **Проверьте свежесть телемет�
 
 ## Справочник флагов CLI y SDK
 
-`sorafs_cli fetch` (см. `crates/sorafs_car/src/bin/sorafs_cli.rs`) y обёртка
+`sorafs_cli fetch` (см. `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) y обёртка
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) используют
 одну и ту же поверхность конфигурации оркестратора. Используйте следующие флаги
 при сборе evidencia или воспроизведении канонических accesorios:

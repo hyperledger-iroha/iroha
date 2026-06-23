@@ -233,7 +233,7 @@ retención, lista blanca de proveedores malintencionados o supresión de alertas
   caché) y la integración Torii en `crates/iroha_torii/src/da/ingest.rs`, aquí hilo
   les checks de huellas dactilares a través de `/v1/da/ingest`.
 - Las simulaciones de streaming PDP/PoTR se realizan a través del arnésproof-stream
-  En `crates/sorafs_car/tests/sorafs_cli.rs`, fluye el flujo de solicitud.
+  En `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, fluye el flujo de solicitud.
   PoR/PDP/PoTR y los escenarios de fracaso animes en el modelo de amenazas.
 - Los resultados de capacidad y reparación empapan vivent sous
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, tandis que la matriz de

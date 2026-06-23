@@ -530,7 +530,7 @@ dump_reuse_stall_diagnostics() {
     local pid
     pid="$(cat "$pidfile" 2>/dev/null || true)"
     [[ -n "$pid" ]] || continue
-    if kill -0 "$pid" 2>/dev/null; then
+    if pid_is_running "$pid"; then
       echo "[run $run] $(basename "$pidfile") pid=${pid} state=alive" >&2
     else
       echo "[run $run] $(basename "$pidfile") pid=${pid} state=stale" >&2
@@ -819,11 +819,35 @@ require_kagami_bin() {
   return 1
 }
 
+pid_matches_localnet_peer() {
+  local pid="$1"
+  local config_path="$2"
+  local command_line
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 1
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$command_line" ]] || return 1
+  printf '%s' "$command_line" | grep -F -- "--config $config_path" >/dev/null \
+    || printf '%s' "$command_line" | grep -F -- "--config=$config_path" >/dev/null
+}
+
+pid_is_running() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
 stop_localnet() {
   local run_dir="$1"
-  if [[ -f "$run_dir/stop.sh" ]]; then
-    (cd "$run_dir" && ./stop.sh) || true
-  fi
+  local run_dir_abs
+  local had_live=0
+  local had_error=0
+  local pidfile pid peer_name config_path
+
+  run_dir_abs="$(cd "$run_dir" 2>/dev/null && pwd || printf '%s' "$run_dir")"
   for pidfile in "$run_dir"/peer*.pid; do
     [[ -f "$pidfile" ]] || continue
     pid="$(cat "$pidfile" 2>/dev/null || true)"
@@ -831,18 +855,41 @@ stop_localnet() {
       rm -f "$pidfile"
       continue
     fi
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      echo "[localnet] removing malformed pidfile $pidfile (pid=$pid)" >&2
+      rm -f "$pidfile"
+      continue
+    fi
+    if ! pid_is_running "$pid"; then
+      rm -f "$pidfile"
+      continue
+    fi
+    peer_name="$(basename "$pidfile" .pid)"
+    config_path="$run_dir_abs/${peer_name}.toml"
+    if ! pid_matches_localnet_peer "$pid" "$config_path"; then
+      echo "[localnet] leaving $pidfile in place: live pid $pid does not match $config_path" >&2
+      had_error=1
+      continue
+    fi
+    kill "$pid" 2>/dev/null || true
     for _ in {1..40}; do
-      if kill -0 "$pid" 2>/dev/null; then
+      if pid_is_running "$pid"; then
         sleep 0.25
       else
         break
       fi
     done
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -9 "$pid" 2>/dev/null || true
+    if pid_is_running "$pid"; then
+      echo "[localnet] refusing to remove $run_dir while peer $peer_name pid $pid is still running" >&2
+      had_live=1
+      continue
     fi
     rm -f "$pidfile"
   done
+
+  if [[ "$had_live" -ne 0 || "$had_error" -ne 0 ]]; then
+    return 1
+  fi
 }
 
 port_is_free() {
@@ -927,7 +974,7 @@ verify_peers_started() {
     [[ -f "$pidfile" ]] || continue
     pid="$(cat "$pidfile" 2>/dev/null || true)"
     [[ -n "$pid" ]] || continue
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! pid_is_running "$pid"; then
       dead_peers+=("$(basename "$pidfile" .pid)")
     fi
   done
@@ -947,7 +994,7 @@ verify_peers_started() {
 }
 
 cleanup_run_dir=""
-trap 'if [[ -n "${cleanup_run_dir:-}" ]]; then stop_localnet "$cleanup_run_dir"; fi' EXIT
+trap 'if [[ -n "${cleanup_run_dir:-}" ]]; then stop_localnet "$cleanup_run_dir" || true; fi' EXIT
 
 successes=0
 failures=0
@@ -960,7 +1007,11 @@ for run in $(seq 1 "$RUNS"); do
   reuse_existing_run=false
   echo ""
   echo "[run $run/$RUNS] generating localnet..."
-  stop_localnet "$run_dir"
+  if ! stop_localnet "$run_dir"; then
+    echo "[run $run] run dir has live or mismatched pidfiles; not regenerating $run_dir" >&2
+    failures=$((failures + 1))
+    continue
+  fi
   if [[ -e "$run_dir" ]]; then
     if [[ "$FORCE" == true ]]; then
       rm -rf "$run_dir"

@@ -759,6 +759,7 @@ export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-bsc-main
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
+export const SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1: "iroha-sccp-bsc-groth16-proof-self-test/v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1: Readonly<{
   javascript: "pure-typescript";
   swift: "native-swift";
@@ -826,6 +827,10 @@ export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
 export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
+
+export function bscGroth16VerifierKeyHash(
+  material: Record<string, unknown>,
+): string;
 
 export interface SccpBurnPayload {
   version: number;
@@ -4704,6 +4709,30 @@ export interface EthereumMainnetNativeEvmProverArtifacts {
   readonly implementationHash: string;
 }
 
+export interface BscGroth16ProofSelfTestReport {
+  readonly schema: typeof SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1;
+  readonly routeId: typeof SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1;
+  readonly assetKey: typeof SCCP_TAIRA_XOR_ASSET_KEY_V1;
+  readonly bscNetwork: "mainnet" | "testnet";
+  readonly chain: "bsc-mainnet" | "bsc-testnet";
+  readonly chainIdHex: string;
+  readonly networkIdHex: string;
+  readonly circuitProfile: "sccp-bsc-full-message-v1";
+  readonly proofBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly materialManifestHash: string;
+  readonly circuitSourceHash: string;
+  readonly proofArtifactHash: string;
+  readonly provingKeyHash: string;
+  readonly bscVerifierKeyArtifactHash: string;
+  readonly snarkjsVerificationKeyHash: string;
+  readonly witnessWasmHash: string;
+  readonly witnessHash: string;
+  readonly proofHash: string;
+  readonly publicSignalsHash: string;
+  readonly publicSignals: readonly string[];
+}
+
 export function verifyEthereumMainnetNativeEvmProverArtifacts(
   input: EthereumMainnetNativeEvmProverArtifactsInput,
   options?: {
@@ -4742,6 +4771,18 @@ export interface EthereumMainnetNativeEvmProverArtifactResolverMetadata {
     | "native-swift"
     | "pure-typescript";
   readonly nativeProverBundle: Readonly<EthereumMainnetNativeEvmProverBundle>;
+}
+
+export interface BscNativeEvmProverArtifactResolverMetadata extends Omit<
+  EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  "label" | "nativeProverBundle" | "role"
+> {
+  readonly label:
+    | EthereumMainnetNativeEvmProverArtifactResolverMetadata["label"]
+    | "groth16ProofSelfTestBytes";
+  readonly role:
+    | EthereumMainnetNativeEvmProverArtifactResolverMetadata["role"]
+    | "groth16ProofSelfTestArtifact";
 }
 
 export interface EthereumMainnetNativeEvmProverArtifactBundleInput {
@@ -4818,6 +4859,10 @@ export type BscTestnetNativeEvmProverBundleInput = Omit<
     bundleId?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     bundle_id?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     chain?: "bsc-testnet";
+    groth16ProofSelfTestArtifact?: string;
+    groth16_proof_self_test_artifact?: string;
+    groth16ProofSelfTestHash?: string;
+    groth16_proof_self_test_hash?: string;
     auditHashes?: BscTestnetNativeEvmProverAuditHashesInput;
     audit_hashes?: BscTestnetNativeEvmProverAuditHashesInput;
   };
@@ -4831,6 +4876,8 @@ export interface BscTestnetNativeEvmProverBundle extends Omit<
 > {
   readonly bundleId: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   readonly chain: "bsc-testnet";
+  readonly groth16ProofSelfTestArtifact: string;
+  readonly groth16ProofSelfTestHash: string;
   readonly auditHashes: Readonly<BscTestnetNativeEvmProverAuditHashes>;
 }
 
@@ -4949,6 +4996,8 @@ export interface BscTestnetNativeEvmProverArtifacts extends Omit<
   readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
   readonly crossSdkParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
+  readonly groth16ProofSelfTestHash: string;
+  readonly groth16ProofSelfTest: Readonly<BscGroth16ProofSelfTestReport>;
 }
 
 export interface BscTestnetNativeEvmProverArtifactsInput extends Omit<
@@ -4968,6 +5017,8 @@ export interface BscTestnetNativeEvmProverArtifactsInput extends Omit<
   proverBundle?: BscTestnetNativeEvmProverBundleInput | string;
   prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
   manifest?: BscTestnetNativeEvmProverBundleInput | string;
+  groth16ProofSelfTestBytes?: BinaryLike;
+  groth16_proof_self_test_bytes?: BinaryLike;
 }
 
 export function verifyBscTestnetNativeEvmProverArtifacts(
@@ -4983,7 +5034,7 @@ export function verifyBscTestnetNativeEvmProverArtifacts(
 ): BscTestnetNativeEvmProverArtifacts;
 
 export interface BscTestnetNativeEvmProverArtifactResolverMetadata extends Omit<
-  EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  BscNativeEvmProverArtifactResolverMetadata,
   "nativeProverBundle"
 > {
   readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
@@ -5122,6 +5173,10 @@ export type BscMainnetNativeEvmProverBundleInput = Omit<
     bundleId?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     bundle_id?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     chain?: "bsc-mainnet";
+    groth16ProofSelfTestArtifact?: string;
+    groth16_proof_self_test_artifact?: string;
+    groth16ProofSelfTestHash?: string;
+    groth16_proof_self_test_hash?: string;
     auditHashes?: BscMainnetNativeEvmProverAuditHashesInput;
     audit_hashes?: BscMainnetNativeEvmProverAuditHashesInput;
   };
@@ -5135,6 +5190,8 @@ export interface BscMainnetNativeEvmProverBundle extends Omit<
 > {
   readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   readonly chain: "bsc-mainnet";
+  readonly groth16ProofSelfTestArtifact: string;
+  readonly groth16ProofSelfTestHash: string;
   readonly auditHashes: Readonly<BscMainnetNativeEvmProverAuditHashes>;
 }
 
@@ -5193,6 +5250,8 @@ export interface BscMainnetNativeEvmProverArtifacts extends Omit<
   readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
   readonly crossSdkParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
+  readonly groth16ProofSelfTestHash: string;
+  readonly groth16ProofSelfTest: Readonly<BscGroth16ProofSelfTestReport>;
 }
 
 export interface BscMainnetNativeEvmProverArtifactsInput extends Omit<
@@ -5212,10 +5271,12 @@ export interface BscMainnetNativeEvmProverArtifactsInput extends Omit<
   proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
   prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
   manifest?: BscMainnetNativeEvmProverBundleInput | string;
+  groth16ProofSelfTestBytes?: BinaryLike;
+  groth16_proof_self_test_bytes?: BinaryLike;
 }
 
 export interface BscMainnetNativeEvmProverArtifactResolverMetadata extends Omit<
-  EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  BscNativeEvmProverArtifactResolverMetadata,
   "nativeProverBundle"
 > {
   readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
@@ -15930,6 +15991,13 @@ export interface SorafsPinRegisterRequest {
   pin_policy?: SorafsPinRegisterPinPolicyInput;
   manifestDigestHex?: string;
   manifest_digest_hex?: string;
+  manifest?: BinaryLike | string | null;
+  manifestBytes?: BinaryLike | string | null;
+  manifest_bytes?: BinaryLike | string | null;
+  manifestB64?: BinaryLike | string | null;
+  manifest_b64?: BinaryLike | string | null;
+  manifestBase64?: BinaryLike | string | null;
+  manifest_base64?: BinaryLike | string | null;
   chunkDigestSha3_256Hex?: string;
   chunk_digest_sha3_256_hex?: string;
   chunkDigest?: string;

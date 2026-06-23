@@ -77,7 +77,7 @@ CLI وSDK والأتمتة حتى تتمكن كل نقطة من متابعة ن�
 
 ## مرجع علامات CLI وSDK
 
-`sorafs_cli fetch` (الإصدار `crates/sorafs_car/src/bin/sorafs_cli.rs`) والمجمّع
+`sorafs_cli fetch` (الإصدار `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) والمجمّع
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) شارك
 نفس سطح تكوين orquestador. أعلام الولايات المتحدة الأمريكية لوس siguientes آل
 التقاط الأدلة من التحلل أو إعادة إنتاج التركيبات التقليدية:

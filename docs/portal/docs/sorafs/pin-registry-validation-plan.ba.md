@@ -10,80 +10,84 @@ translation_last_reviewed: 2026-02-07
 id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
-description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+description: Completed status for ManifestV1 validation gating in the SF-4 Pin Registry rollout.
 translator: machine-google-reviewed
 ---
 
-:::иҫкәртергә канонлы сығанаҡ
-::: 1990 й.
+:::note Canonical Source
+:::
 
-# Пин реестры валидация планы (SF-4 әҙерлек)
+# Pin Registry Manifest Validation Status (SF-4)
 
-Был планда `sorafs_manifest::ManifestV1` еп өсөн кәрәкле аҙымдар билдәләнә.
-раҫлау өсөн алдағы булавка реестр килешүе, шулай итеп, SF-4 эше ала
-төҙөү өҫтөндә булған инструменттар дубляжһыҙ кодировка/decode логикаһы.
+This page records the completed SF-4 manifest-validation wiring for SoraFS pin
+registration. The shared validation path now lives in `sorafs_manifest`, is used
+by Torii submission handling, and is enforced by the on-chain pin registry entry
+points before state or fee side effects.
 
-## Маҡсаттар
+## Implemented Goals
 
-.
-   идара итеү тәҡдимдәр ҡабул итеү алдынан конверттар.
-2. I18NT0000000003X һәм шлюз хеҙмәттәре ҡабаттан ҡулланыу шул уҡ валидация рутинаһы тәьмин итеү өсөн
-   хужалар араһында детерминистик тәртип.
-3. Интеграция һынауҙары асыҡ ҡабул итеү өсөн ыңғай/тиҫкәре осраҡтарҙы ҡаплай,
-   сәйәсәтте үтәү, һәм хата телеметрияһы.
+1. Host-side submission paths verify manifest structure, chunking profile, pin
+   policy, and governance envelopes before accepting proposals.
+2. Torii and gateway-facing services reuse the same validation routines so hosts
+   and clients see deterministic acceptance and refusal labels.
+3. Unit and integration tests cover positive registration, validator error cases,
+   governance-policy rejections, and no-side-effect failures.
 
-## Архитектура
+## Current Architecture
 
 ```mermaid
 flowchart LR
-    cli["sorafs_pin CLI"] --> torii["Torii Manifest Service"]
-    torii --> validator["ManifestValidator (new)"]
-    validator --> manifest["sorafs_manifest::ManifestV1"]
-    validator --> registry["Pin Registry Contract"]
-    validator --> policy["Governance Policy Checks"]
-    registry --> torii
+    cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
+    torii --> validator["sorafs_manifest::validation"]
+    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    validator --> registry["Pin Registry ISI"]
+    registry --> state["pin_manifests / aliases / replication_orders"]
 ```
 
-### Компоненттар
+## Shipped Components
 
-- I18NI000000014X (яңы модуль `sorafs_manifest` йәки `sorafs_pin` йәшниктә)
-  структур тикшерелеүҙәрҙе һәм сәйәсәт ҡапҡаларын капсулировать итә.
-- I18NT0000000005X gRPC ос нөктәһе I18NI000000017X асыҡлана, тип шылтырата
-  I18NI000000018X контрактҡа ебәрер алдынан.
-- Ҡапҡалар юл fetch юл теләк буйынса ҡулланыу шул уҡ валитатор ҡасан кэшлау яңы .
-  реестрҙан күренә.
+- `sorafs_manifest::validation` provides shared chunker, pin-policy, and
+  `ManifestV1` validation helpers.
+- `manifest_pin_policy_constraints_from_config` maps governance configuration
+  into `sorafs_manifest::PinPolicyConstraints`.
+- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
+  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
+  digest/chunker/content-length/policy consistency, and returns stable
+  `sorafs_pin_*` application-validation labels.
+- `RegisterPinManifest` invokes the shared validation path before mutating pin
+  state or applying fee side effects.
+- Tests cover chunker/profile checks, council-signature policy,
+  replica floors/ceilings, retention ceilings, storage-class allowlists,
+  on-chain registration acceptance, and governance-policy rejections.
 
-## Бурыс өҙөлгән
+## Completion Matrix
 
-| Эш | Тасуирлама | Хужа | Статус |
-|-----|-------------|--------|--------|
-| V1 API скелеты | Өҫтәү I18NI000000019X I18NI000000020X тиклем. BLAKE3 үҙләштереү тикшерелгән һәм chunker реестр эҙләү индереү. | Ядро Инфра | ✅ Эш | Дөйөм ярҙамсылары (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) хәҙер `sorafs_manifest::validation`-та йәшәй. |
-| Сәйәсәт проводкаһы | Карта реестры сәйәсәте конфигы (`min_replicas`, срогы windows, рөхсәт итеүсе өлөшсәләр тотҡаһы) раҫлау индереүҙәр. | Идара итеү / Ядро Инфра | Сабыр — СОРАФС-215-тә күҙәтелгән |
-| I18NT000000006X интеграцияһы | Torii эсендә шылтыратыу валитаторы манифест тапшырыу юлы; ҡайтарыу структуралы I18NT000000000000Х хаталары тураһында етешһеҙлектәр. | Torii командаһы | Планлаштырылған — СОРАФС-216-ла күҙәтелә |
-| Хост контракт стаб | Килешеп инеү нөктәһен тәьмин итеү кире ҡаға, улар валидация хеш етешмәй; метрикаларҙы фашлай. | Аҡыллы килешәү командаһы | ✅ Эш | `RegisterPinManifest` хәҙер дөйөм валидаторҙы саҡыра (I18NI0000000027X/`ensure_pin_policy`) мутацияланған дәүләт һәм берәмек һынауҙары етешһеҙлектәре осраҡтарын ҡаплағансы. |
-| Һынауҙар | Өҫтәү өсөн берәмек һынауҙары өсөн валидатор + трибуна осраҡтар өсөн дөрөҫ булмаған манифесттар; интеграция һынауҙары I18NI000000029X. | QA Гильдия | 🟠 Алданы | Валидатор блогы һынауҙары сылбырлы кире ҡағыу һынауҙары менән бергә төшкән; тулы интеграция люкс һаман да көтөп. |
-| Доктар | Яңыртыу I18NI0000000300Х һәм I18NI000000031X бер тапҡыр валидатор ерҙәре; документ CLI ҡулланыу I18NI000000032X. | Доктар командаһы | Оҙата — DOCS-489-ҙа күҙәтелгән |
+| Area | Status | Evidence |
+|------|--------|----------|
+| Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
+| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
+| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
+| Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
-##
+## Operational Notes
 
-- Пин-концерт I18NT000000001X схемаһы финализацияһы (реф: SF-4 пункт юл картаһында).
-- Совет ҡултамғалы чанкер реестры конверттары (валитатор картаһы төҙөүҙе тәьмин итә
-  детерминистик).
-- Torii аутентификация ҡарарҙары өсөн асыҡ тапшырыу.
+- Manifest validation rejects unknown registered chunker profile IDs instead of
+  inferring layout from inline parameters.
+- Council-signature requirements are driven by governance configuration; when a
+  policy requires signatures, Torii requires `manifest_b64` so the full
+  governance envelope can be checked.
+- Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
+  tests aligned whenever adding validation cases.
+- Large-manifest performance should be measured in release rehearsals; cache only
+  deterministic digest results and never bypass validation.
 
-## Хәүефтәр һәм йомшартыуҙар
+## Remaining Rollout Evidence
 
-| Хәүеф | Һөҙөмтә | Йомшартыу |
-|-----|--------|-------------|
-| Torii араһында дивергент сәйәсәт интерпретация һәм контракт | Детерминистик булмаған ҡабул итеү. | Акция раҫлау йәшник + өҫтәү интеграция һынауҙары, тип сағыштырырға хост vs сылбырлы ҡарарҙар. |
-| Ҙур манифестар өсөн башҡарыу регрессияһы | Яйыраҡ тапшырыу | Йөк критерийы аша эталон; Ҡарап кэшлау асыҡ һеңдерелгән һөҙөмтәләр. |
-| Хата хәбәрҙәр дрейф | Оператор буталсыҡлығы | Norito хата кодтарын билдәләү; уларҙы I18NI000000033X-та документлаштыра. |
-
-## Ваҡыт һыҙығы Маҡсаттар
-
-- 1-се аҙна: ер I18NI000000034X скелет + блок һынауҙары.
-- 2-се аҙна: Wire I18NT000000011X тапшырыу юлы һәм CLI-ны валидациялау хаталарын өҫтөн ҡуйыу өсөн CLI-ны яңыртыу.
-- 3-сө аҙна: Ғәмәлгә ашырыу килешүе ҡармаҡтар, интеграция һынауҙары өҫтәү, docs яңыртыу.
-- 4-се аҙна: миграция баш китабына инеү, ҡулға алыу советы ҡул ҡуйыуы менән репетицияның аҙағынан аҙағына тиклем репетиция үткәреү.
-
-Был планға юл картаһында валидатор эше башланғас, һылтанма яһаласаҡ.
+1. Archive release-candidate logs for positive registration and governed-policy
+   rejection through Torii and on-chain execution.
+2. Attach OpenAPI/CLI examples that demonstrate the stable `sorafs_pin_*` labels
+   for common failures.
+3. Record any production performance baseline for large manifests in the
+   migration ledger before widening operator usage.

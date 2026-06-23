@@ -179,45 +179,51 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise CanaryError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise CanaryError(f"{path} does not exist") from error
+        raise CanaryError(f"{label} does not exist") from error
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
-        raise CanaryError(f"{path} must not be a symlink")
+        raise CanaryError(f"{label} must not be a symlink")
     if not stat.S_ISREG(mode):
-        raise CanaryError(f"{path} must be a regular file")
+        raise CanaryError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise CanaryError(f"{path} exceeds {max_bytes} byte JSON limit")
+        raise CanaryError(f"{label} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise CanaryError(f"{path} must be a regular file")
+            raise CanaryError(f"{label} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise CanaryError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise CanaryError(f"{label} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise CanaryError(f"{path} exceeds {max_bytes} byte JSON limit")
+            raise CanaryError(f"{label} exceeds {max_bytes} byte JSON limit")
         return raw
     except FileNotFoundError as error:
-        raise CanaryError(f"{path} does not exist") from error
+        raise CanaryError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise CanaryError(f"{path} must not be a symlink") from error
-        raise CanaryError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise CanaryError(f"{label} must not be a symlink") from error
+        raise CanaryError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -436,30 +442,35 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
-def _ensure_text_output_target(path: Path) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_iso_fixture_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _ensure_text_output_target(path: Path, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_iso_fixture_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise CanaryError(f"{path.parent} must be a directory") from error
+        raise CanaryError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise CanaryError(f"{path.parent} must not be a symlink")
+        raise CanaryError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise CanaryError(f"{path.parent} must be a directory")
+        raise CanaryError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise CanaryError(f"{path} must not be a symlink")
+            raise CanaryError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise CanaryError(f"{path} must be a regular file")
+            raise CanaryError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise CanaryError(f"{path} must not be hard-linked")
+            raise CanaryError(f"{label} must not be hard-linked")
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -471,19 +482,21 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise CanaryError(f"{current} must not be a symlink")
+            label = display_label or str(current)
+            raise CanaryError(f"{label} must not be a symlink")
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _ensure_text_output_target(path)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise CanaryError(f"{path.parent} must not be a symlink") from error
-        raise CanaryError(f"{path.parent} must be a directory") from error
+            raise CanaryError(f"{label} must not be a symlink") from error
+        raise CanaryError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -496,15 +509,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise CanaryError(f"{path} temp file must not be a symlink") from error
+                raise CanaryError(f"{label} temp file must not be a symlink") from error
             raise CanaryError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise CanaryError(f"{path} temp file must be a regular file")
+            raise CanaryError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise CanaryError(f"{path} temp file must not be hard-linked")
+            raise CanaryError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -527,12 +540,17 @@ def _write_text_output(path: Path, text: str) -> None:
         os.close(parent_fd)
 
 
-def _load_json(path: Path) -> Any:
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
     try:
-        raw = _read_regular_file(path, max_bytes=MAX_CONFIG_JSON_BYTES)
+        raw = _read_regular_file(
+            path,
+            max_bytes=MAX_CONFIG_JSON_BYTES,
+            display_label=label,
+        )
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise CanaryError(f"{path} is not UTF-8 JSON") from error
+        raise CanaryError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -540,7 +558,7 @@ def _load_json(path: Path) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise CanaryError(f"{path} is not valid JSON: {error}") from error
+        raise CanaryError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -557,7 +575,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise CanaryError(f"JSON contains non-finite numeric constant {value}")
+    raise CanaryError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -892,7 +910,7 @@ def _path_from_config(
     resolved_parent = candidate.parent.resolve()
     root = config_dir.resolve()
     if not resolved_parent.is_relative_to(root):
-        raise CanaryError(f"{label} relative paths must stay under {config_dir.resolve()}")
+        raise CanaryError(f"{label} relative paths must stay under config directory")
     return resolved_parent / candidate.name
 
 
@@ -2013,13 +2031,13 @@ def run(args: argparse.Namespace) -> int:
     if args.config is None:
         raise CanaryError("provide --config")
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_iso_fixture_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_iso_fixture_path(args.summary_out, "summary_out")
     config_path = args.config
     _reject_output_path_smuggling(config_path, "--config")
     if not args.plan_only:
         _reject_repository_iso_fixture_path(config_path, "config path")
-    config = _require_object(_load_json(config_path), "config")
+    config = _require_object(_load_json(config_path, display_label="config"), "config")
     resolved_config_path = config_path.resolve()
     provider, environment, stages, verify_config = build_stage_plans(
         resolved_config_path,
@@ -2075,7 +2093,7 @@ def run(args: argparse.Namespace) -> int:
         summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
         text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
         if args.summary_out is not None:
-            _write_text_output(args.summary_out, text)
+            _write_text_output(args.summary_out, text, display_label="summary_out")
         print(text, end="")
         return 0
 
@@ -2134,7 +2152,7 @@ def run(args: argparse.Namespace) -> int:
     summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0 if summary["ok"] else 1
 

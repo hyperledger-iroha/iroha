@@ -160,9 +160,15 @@ def _json_dumps(payload: dict[str, Any]) -> str:
 
 CONTROL_OUTPUT_REDACTION = "<unsafe-adb-output>"
 NON_UTF8_OUTPUT_REDACTION = "<non-utf8-adb-output>"
+ADB_SERIAL_REDACTION = "<redacted-adb-serial>"
 
 
-def _safe_detail(value: object, limit: int = 512) -> str:
+def _safe_detail(
+    value: object,
+    limit: int = 512,
+    *,
+    redact_tokens: Sequence[str] = (),
+) -> str:
     if isinstance(value, bytes):
         try:
             value = value.decode("utf-8")
@@ -178,6 +184,9 @@ def _safe_detail(value: object, limit: int = 512) -> str:
         return "<redacted-secret-output>"
     if device_lab._contains_control_character(text):
         return CONTROL_OUTPUT_REDACTION
+    for token in redact_tokens:
+        if token:
+            text = text.replace(token, ADB_SERIAL_REDACTION)
     if len(text) > limit:
         return text[:limit] + "...<truncated>"
     return text
@@ -505,9 +514,10 @@ def _validate_raw_status_ndjson(status_text: str, slot_id: str, errors: list[str
                 f"{line_no} contains duplicate JSON object key {device_lab._display_path(exc.key)}"
             )
             continue
-        except device_lab.NonFiniteJsonConstantError as exc:
+        except device_lab.NonFiniteJsonConstantError:
             errors.append(
-                f"telemetry/status.ndjson line {line_no} contains non-finite constant {exc.constant}"
+                f"telemetry/status.ndjson line {line_no} contains non-finite constant "
+                f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION}"
             )
             continue
         if not isinstance(status_event, dict):
@@ -690,11 +700,11 @@ def _run_latest_slot_query(
             timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        detail = _safe_detail(str(exc))
+        detail = _safe_detail(str(exc), redact_tokens=(serial or "",))
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to read latest raw slot from attached device{suffix}"]
     if result.returncode != 0:
-        detail = _safe_detail(result.stderr)
+        detail = _safe_detail(result.stderr, redact_tokens=(serial or "",))
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to read latest raw slot from attached device{suffix}"]
     latest_text = str(result.stdout)
@@ -745,11 +755,11 @@ def _run_raw_slot_tar_pull(
             timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        detail = _safe_detail(str(exc))
+        detail = _safe_detail(str(exc), redact_tokens=(serial or "",))
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to pull raw slot tar from attached device{suffix}"]
     if result.returncode != 0:
-        detail = _safe_detail(result.stderr)
+        detail = _safe_detail(result.stderr, redact_tokens=(serial or "",))
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to pull raw slot tar from attached device{suffix}"]
     data = bytes(result.stdout)

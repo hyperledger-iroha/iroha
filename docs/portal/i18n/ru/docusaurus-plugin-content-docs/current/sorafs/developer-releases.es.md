@@ -31,7 +31,7 @@ Recientes de la revisión de seguridad:
 - Дополнение к билету исправления (например, `governance/tickets/SF6-SR-2026.md`) и еще раз.
   лос-апробадоры инженерной безопасности и рабочей группы по инструментарию.
 - Проверка списка исправлений заметок об ошибках; Лос-предметы не могут быть заблокированы устройством разрешения.
-- Подготовьте журналы для хранения журналов безопасности (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).
+- Подготовьте журналы для хранения журналов безопасности (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`).
   объединение с пакетом манифеста.
 - Подтвердите, что команда фирмы, которая выбрасывает самолет, включает в себя соответствующий `--identity-token-provider` как
   `--identity-token-audience=<aud>` поясняет, что альканс де Фульсио был захвачен в качестве доказательства освобождения.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Сценарий реализует следующие проверки:
 
 - `cargo fmt --all -- --check` (рабочая область)
-- `cargo clippy --locked --all-targets` для `sorafs_car` (с функцией `cli`),
-  `sorafs_manifest` и `sorafs_chunker`
-- `cargo test --locked --all-targets` для ящиков с мисками
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Если вы еще не сделали этого, исправьте отступления от этикета. Лос-билды выпуска
 deben estar continuos con main; никаких исправлений в рамах выпуска.

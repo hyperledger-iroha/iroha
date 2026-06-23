@@ -228,7 +228,7 @@ _آخری جائزہ: 2026-01-19 -- اگلا شیڈول شدہ جائزہ: 2026-
   `crates/iroha_torii/src/da/ingest.rs` отпечаток пальца `/v1/da/ingest`
   проверяет тему کرتا ہے۔
 - Возможности потокового моделирования PDP/PoTR для проверки потока:
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ Потоки запросов PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ یہ Потоки запросов PoR/PDP/PoTR
   сценарии сбоев охватывают модель угроз میں بیان ہیں۔
 - Емкость для выдержки ремонта `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   Sumeragi замачивание матрицы `docs/source/sumeragi_soak_matrix.md` میں ہے

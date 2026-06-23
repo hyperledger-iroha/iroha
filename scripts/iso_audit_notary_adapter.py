@@ -454,19 +454,27 @@ def _read_regular_file(
             os.close(fd)
 
 
-def _ensure_input_directory(path: Path, label: str) -> None:
-    _reject_symlinked_existing_ancestors(path.parent)
+def _ensure_input_directory(
+    path: Path,
+    label: str,
+    *,
+    display_path: bool = True,
+) -> None:
+    display = f"{label} {path}" if display_path else label
+    _reject_symlinked_existing_ancestors(path.parent, display_label=display)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise AdapterError(f"{label} {path} does not exist") from error
+        raise AdapterError(f"{display} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise AdapterError(f"{label} {path} must not be a symlink")
+        raise AdapterError(f"{display} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
-        raise AdapterError(f"{label} {path} must be a directory")
+        raise AdapterError(f"{display} must be a directory")
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path, *, display_label: str | None = None
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -478,7 +486,8 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise AdapterError(f"{current} must not be a symlink")
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(f"{label} must not be a symlink")
 
 
 def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
@@ -751,58 +760,60 @@ def _ensure_output_directory(path: Path, label: str) -> None:
         raise AdapterError(
             f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path)
+    _reject_symlinked_existing_ancestors(path, display_label=label)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
-            raise AdapterError(f"{label} {path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
-            raise AdapterError(f"{label} {path} must be a directory")
+            raise AdapterError(f"{label} must be a directory")
         return
     path.mkdir(parents=True, exist_ok=True)
     mode = path.lstat().st_mode
     if stat.S_ISLNK(mode):
-        raise AdapterError(f"{label} {path} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(mode):
-        raise AdapterError(f"{label} {path} must be a directory")
+        raise AdapterError(f"{label} must be a directory")
 
 
-def _ensure_output_file_target(path: Path) -> None:
+def _ensure_output_file_target(path: Path, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else str(path)
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise AdapterError(f"{path} must not be a symlink")
+            raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise AdapterError(f"{path} must not be hard-linked")
+            raise AdapterError(f"{label} must not be hard-linked")
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
     if _path_is_repository_iso_fixture(str(path)):
         raise AdapterError(
-            "output path must not point to checked-in ISO fixture artifacts"
+            f"{label} must not point to checked-in ISO fixture artifacts"
         )
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise AdapterError(f"{path.parent} must be a directory") from error
+        raise AdapterError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise AdapterError(f"{path.parent} must not be a symlink")
+        raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise AdapterError(f"{path.parent} must be a directory")
-    _ensure_output_file_target(path)
+        raise AdapterError(f"{label} must be a directory")
+    _ensure_output_file_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path.parent} must not be a symlink") from error
-        raise AdapterError(f"{path.parent} must be a directory") from error
+            raise AdapterError(f"{label} must not be a symlink") from error
+        raise AdapterError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -815,15 +826,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise AdapterError(f"{path} temp file must not be a symlink") from error
+                raise AdapterError(f"{label} temp file must not be a symlink") from error
             raise AdapterError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise AdapterError(f"{path} temp file must be a regular file")
+            raise AdapterError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise AdapterError(f"{path} temp file must not be hard-linked")
+            raise AdapterError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -850,10 +861,21 @@ def _absolute_path_without_resolving_leaf(path: Path) -> Path:
     return path if path.is_absolute() else Path.cwd() / path
 
 
-def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
+def _load_json(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> Any:
     if max_bytes is None:
         max_bytes = MAX_AUDIT_EXPORT_JSON_BYTES
-    raw = _read_regular_file(path, max_bytes=max_bytes, limit_label="JSON")
+    label = display_label if display_label is not None else str(path)
+    raw = _read_regular_file(
+        path,
+        max_bytes=max_bytes,
+        limit_label="JSON",
+        path_label=display_label,
+    )
     try:
         value = json.loads(
             raw.decode("utf-8"),
@@ -861,9 +883,9 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
             parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError as error:
-        raise AdapterError(f"{path} is not UTF-8 JSON") from error
+        raise AdapterError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
-        raise AdapterError(f"{path} is not valid JSON: {error}") from error
+        raise AdapterError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -880,7 +902,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise AdapterError(f"JSON contains non-finite numeric constant {value}")
+    raise AdapterError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -974,8 +996,17 @@ def _reject_secret_looking_identifier(value: str, label: str) -> None:
         raise AdapterError(f"{label} must not contain secret-looking material")
 
 
-def _load_json_bytes(path: Path) -> tuple[Any, bytes]:
-    raw = _read_regular_file(path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
+def _load_json_bytes(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> tuple[Any, bytes]:
+    label = display_label if display_label is not None else str(path)
+    raw = _read_regular_file(
+        path,
+        max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+        path_label=display_label,
+    )
     try:
         value = json.loads(
             raw.decode("utf-8"),
@@ -983,9 +1014,9 @@ def _load_json_bytes(path: Path) -> tuple[Any, bytes]:
             parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError as error:
-        raise AdapterError(f"{path} is not UTF-8 JSON") from error
+        raise AdapterError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
-        raise AdapterError(f"{path} is not valid JSON: {error}") from error
+        raise AdapterError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value, raw
 
@@ -1258,7 +1289,11 @@ def _verify_persisted_record_source(
     path: Path,
     label: str,
 ) -> None:
-    value = _load_json(path, max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES)
+    value = _load_json(
+        path,
+        max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES,
+        display_label=label,
+    )
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must contain a JSON object")
     _require_exact_keys(value, PERSISTED_RECORD_KEYS, label)
@@ -1358,17 +1393,19 @@ def _verify_persisted_record_sources(
         return bool(records)
     if not store_dir.exists():
         if not allow_missing_record_sources:
-            raise AdapterError(f"{label}.store_dir {store_dir} does not exist")
+            raise AdapterError(f"{label}.store_dir does not exist")
         return bool(records)
-    _ensure_input_directory(store_dir, f"{label}.store_dir")
+    _ensure_input_directory(store_dir, f"{label}.store_dir", display_path=False)
     messages_dir = store_dir / RECORDS_DIR
     if not messages_dir.exists():
         if not allow_missing_record_sources:
-            raise AdapterError(
-                f"{label}.store_dir/{RECORDS_DIR} {messages_dir} does not exist"
-            )
+            raise AdapterError(f"{label}.store_dir/{RECORDS_DIR} does not exist")
         return bool(records)
-    _ensure_input_directory(messages_dir, f"{label}.store_dir/{RECORDS_DIR}")
+    _ensure_input_directory(
+        messages_dir,
+        f"{label}.store_dir/{RECORDS_DIR}",
+        display_path=False,
+    )
     missing_record_sources = False
     for offset, record in enumerate(records):
         if not isinstance(record, dict):
@@ -1380,7 +1417,7 @@ def _verify_persisted_record_sources(
         _verify_persisted_record_source(
             record,
             record_path,
-            f"{record_path}",
+            f"{label}.records[{offset}].source",
         )
     return missing_record_sources
 
@@ -1486,26 +1523,28 @@ def verify_anchor_file(
 ) -> VerifiedAnchor:
     """Verify one notary anchor against the export directory index file."""
 
+    anchor_label = "anchor source"
+    exported_index_label = "exported audit index"
     _reject_raw_output_path_smuggling(str(anchor_path), "anchor path")
     if _path_is_repository_iso_fixture(str(anchor_path)):
         raise AdapterError(
-            f"{anchor_path} anchor path must not point to checked-in ISO fixture artifacts"
+            f"{anchor_label} must not point to checked-in ISO fixture artifacts"
         )
-    anchor_value, raw = _load_json_bytes(anchor_path)
+    anchor_value, raw = _load_json_bytes(anchor_path, display_label=anchor_label)
     if not isinstance(anchor_value, dict):
-        raise AdapterError(f"{anchor_path} must contain a JSON object")
-    _reject_unknown_keys(anchor_value, ANCHOR_KEYS, str(anchor_path))
+        raise AdapterError(f"{anchor_label} must contain a JSON object")
+    _reject_unknown_keys(anchor_value, ANCHOR_KEYS, anchor_label)
     version = anchor_value.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != ANCHOR_VERSION:
-        raise AdapterError(f"{anchor_path} has unsupported anchor version")
-    anchor_sha256 = require_digest_matches(anchor_value, ANCHOR_DIGEST_FIELD, str(anchor_path))
+        raise AdapterError(f"{anchor_label} has unsupported anchor version")
+    anchor_sha256 = require_digest_matches(anchor_value, ANCHOR_DIGEST_FIELD, anchor_label)
 
     audit_index = verify_audit_index(anchor_value.get("audit_index"))
     index_sha256 = anchor_value.get(INDEX_DIGEST_FIELD)
     embedded_index_sha256 = audit_index.get(INDEX_DIGEST_FIELD)
     if index_sha256 != embedded_index_sha256:
         raise AdapterError(
-            f"{anchor_path} index_sha256 does not match embedded audit index digest"
+            f"{anchor_label} index_sha256 does not match embedded audit index digest"
         )
     anchor_record_count = anchor_value.get("record_count")
     if (
@@ -1513,25 +1552,29 @@ def verify_anchor_file(
         or not isinstance(anchor_record_count, int)
         or anchor_record_count < 0
     ):
-        raise AdapterError(f"{anchor_path} record_count must be a non-negative integer")
+        raise AdapterError(f"{anchor_label} record_count must be a non-negative integer")
     if anchor_record_count != audit_index.get("record_count"):
-        raise AdapterError(f"{anchor_path} record_count does not match embedded audit index")
-    store_dir = _record_store_dir(anchor_value, str(anchor_path))
+        raise AdapterError(f"{anchor_label} record_count does not match embedded audit index")
+    store_dir = _record_store_dir(anchor_value, anchor_label)
     if store_dir is not None and _path_is_repository_iso_fixture(str(store_dir)):
         raise AdapterError(
-            f"{anchor_path}.store_dir must not point to checked-in ISO fixture artifacts"
+            f"{anchor_label}.store_dir must not point to checked-in ISO fixture artifacts"
         )
     missing_record_sources = _verify_persisted_record_sources(
         audit_index,
         store_dir,
-        str(anchor_path),
+        f"{anchor_label}.audit_index",
         allow_missing_record_sources=allow_missing_record_sources,
     )
 
     index_file = export_dir / INDEX_FILE
-    exported_index = verify_audit_index(_load_json(index_file))
+    exported_index = verify_audit_index(
+        _load_json(index_file, display_label=exported_index_label)
+    )
     if exported_index != audit_index:
-        raise AdapterError(f"{anchor_path} embedded audit index differs from {index_file}")
+        raise AdapterError(
+            f"{anchor_label} embedded audit index differs from exported audit index"
+        )
 
     anchors_dir = export_dir / ANCHOR_DIR
     try:
@@ -1542,19 +1585,20 @@ def verify_anchor_file(
         expected_name = f"{index_sha256}.notary.json"
         if relative_anchor.name != expected_name:
             raise AdapterError(
-                f"{anchor_path} filename must be digest-addressed as {expected_name}"
+                f"{anchor_label} filename must be digest-addressed as {expected_name}"
             )
 
     latest = export_dir / LATEST_ANCHOR_FILE
     if anchor_path.resolve() == latest.resolve():
         digest_anchor = anchors_dir / f"{index_sha256}.notary.json"
         if not digest_anchor.exists():
-            raise AdapterError(f"{latest} has no digest-addressed peer {digest_anchor}")
+            raise AdapterError(f"{anchor_label} latest anchor has no digest-addressed peer")
         if _read_regular_file(
             digest_anchor,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+            path_label=f"{anchor_label} digest-addressed peer",
         ) != raw:
-            raise AdapterError(f"{latest} differs from digest-addressed peer {digest_anchor}")
+            raise AdapterError(f"{anchor_label} latest anchor differs from digest-addressed peer")
 
     return VerifiedAnchor(
         path=anchor_path,
@@ -1567,13 +1611,16 @@ def verify_anchor_file(
     )
 
 
-def discover_anchor_paths(export_dir: Path, all_anchors: bool) -> list[Path]:
+def discover_anchor_paths(
+    export_dir: Path, all_anchors: bool, *, display_label: str | None = None
+) -> list[Path]:
     """Return anchor paths to publish in deterministic order."""
 
     if all_anchors:
         anchors = sorted((export_dir / ANCHOR_DIR).glob("*.notary.json"))
         if not anchors:
-            raise AdapterError(f"{export_dir / ANCHOR_DIR} has no *.notary.json anchors")
+            label = display_label or "export_dir.anchors"
+            raise AdapterError(f"{label} has no *.notary.json anchors")
         return anchors
     return [export_dir / LATEST_ANCHOR_FILE]
 
@@ -2082,7 +2129,11 @@ def write_receipt(receipt_dir: Path, anchor: VerifiedAnchor, result: PublishResu
     _ensure_output_directory(receipt_dir, "receipt_dir")
     receipt = receipt_value(anchor, result)
     path = receipt_output_path(receipt_dir, anchor, result.endpoint)
-    _write_text_output(path, json.dumps(receipt, indent=2, sort_keys=False) + "\n")
+    _write_text_output(
+        path,
+        json.dumps(receipt, indent=2, sort_keys=False) + "\n",
+        display_label="receipt output",
+    )
     return path
 
 
@@ -2117,7 +2168,7 @@ def run(args: argparse.Namespace) -> int:
     response_limit_bytes = _require_positive_cli_int(
         args.response_limit_bytes, "--response-limit-bytes"
     )
-    _ensure_input_directory(args.export_dir, "export_dir")
+    _ensure_input_directory(args.export_dir, "export_dir", display_path=False)
     export_dir = args.export_dir
     endpoints = list(args.endpoint)
     for endpoint in endpoints:
@@ -2132,7 +2183,9 @@ def run(args: argparse.Namespace) -> int:
             anchor_path,
             allow_missing_record_sources=args.allow_missing_record_sources,
         )
-        for anchor_path in discover_anchor_paths(export_dir, args.all)
+        for anchor_path in discover_anchor_paths(
+            export_dir, args.all, display_label="export_dir.anchors"
+        )
     ]
     _reject_unused_anchor_overrides(args, anchors=anchors)
     if args.dry_run:
@@ -2147,9 +2200,14 @@ def run(args: argparse.Namespace) -> int:
     if not endpoints:
         raise AdapterError("at least one --endpoint is required unless --dry-run is set")
     _ensure_output_directory(receipt_dir, "receipt_dir")
+    receipt_offset = 0
     for anchor in anchors:
         for endpoint in endpoints:
-            _ensure_output_file_target(receipt_output_path(receipt_dir, anchor, endpoint))
+            _ensure_output_file_target(
+                receipt_output_path(receipt_dir, anchor, endpoint),
+                display_label=f"receipt_output[{receipt_offset}]",
+            )
+            receipt_offset += 1
 
     failures = 0
     receipts: list[str] = []

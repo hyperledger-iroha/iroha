@@ -8,18 +8,29 @@ source_last_modified: "2026-06-21T12:32:18+00:00"
 translation_last_reviewed: 2026-06-21
 ---
 
-> Translation sync note (2026-06-21): this locale temporarily mirrors the updated English canonical text so the SoraFS reputation API, SDK, CLI, and rollout docs stay accurate while a refreshed translation is pending.
+---
+title: SoraFS Provider Reputation Oracle
+summary: SFM-3 implementation status for reputation V1 scoring, proofs, Torii APIs, SDK helpers, observability, and remaining live publisher rollout.
+---
 
 # SoraFS Provider Reputation Oracle
+
+## Status
+
+SFM-3 has a deterministic local reputation V1 core: canonical Norito/JSON
+schemas, fixed-point scoring, trust-edge iteration, degradation flags, Merkle
+proofs, Governance DAG payload validation, local Torii publication/read APIs,
+CLI verification and publication helpers, SDK convenience clients, and
+observability assets. Remaining rollout work is deploying the live
+ingest/publisher service and archiving production evidence, not the local
+scoring, proof, API, CLI, SDK, or dashboard foundations.
 
 ## Goals & Scope
 - Produce deterministic, governance-auditable reputation scores for each SoraFS provider to inform routing, incentives, staking, and compliance decisions.
 - Combine operational metrics (PoR, PDP, PoTR, latency, disputes, settlement breaches) into a single score published weekly, with daily incremental updates.
 - Provide Merkle-verifiable snapshots, public APIs, and SDK tooling, while ensuring privacy and resilience.
 
-This specification completes **SFM-3 — Provider Reputation Oracle** and supersedes earlier drafts.
-
-## Architecture Overview
+## Target Architecture
 | Component | Responsibility | Notes |
 |-----------|----------------|-------|
 | Metrics ingest pipeline (`reputation_ingest`) | Streams PoR/PDP/PoTR verdicts, settlement logs, disputes, token violations from Governance DAG + telemetry exporters. | Validates payload signatures, persists raw events. |
@@ -210,7 +221,10 @@ CREATE TABLE reputation_snapshots (
     `304 Not Modified`.
   - Implemented locally: `GET /v1/sorafs/reputation/events/stream` provides
     live server-sent events for reputation snapshot publications.
-  - Remaining rollout: deployed ingest/publisher wiring.
+  - Implemented locally: accepted snapshots export Prometheus gauges/counters,
+    and the repository ships Grafana/alert assets for deployed publisher
+    health. Remaining rollout: deploy the ingest/publisher service and capture
+    live run evidence.
 - Implemented locally: WebSocket `/ws/reputation` emits `reputation_snapshot`
   JSON text frames for the optional `since`/`limit` backlog and for live
   snapshot publications. Lag notifications use `event = "lagged"` frames so
@@ -247,18 +261,23 @@ CREATE TABLE reputation_snapshots (
 - **Transparency dashboards**: Display scores, trend lines, and flags.
 
 ## Observability & Alerts
-- Metrics:
+- Torii publisher metrics implemented locally:
   - `sorafs_reputation_ingest_lag_seconds`
   - `sorafs_reputation_snapshot_age_seconds`
+  - `sorafs_reputation_snapshot_generated_at_unix`
+  - `sorafs_reputation_provider_count`
+  - `sorafs_reputation_low_score_providers`
   - `sorafs_reputation_score{provider_id}` (exported via Prometheus gauge with cardinality guard using top-N tracking)
   - `sorafs_reputation_threshold_crossings_total{level}`
+- Deployed scorer/publisher rollout metrics:
   - `sorafs_reputation_iteration_count`
   - `sorafs_reputation_penalty_applied_total{type}`
 - Logs: Structured `reputation_engine` logs with fields `snapshot_id`, `provider_id`, `score`, `penalties`, `iteration_count`.
 - Alerts:
-  - Ingest lag > 5 min (warning) / 15 min (critical).
-  - Snapshot age > 7 days.
-  - Score computation failure or non-convergence within 100 iterations.
+  - Snapshot age > 7 days (`SoraFSReputationSnapshotStale`).
+  - Ingest lag > 15 minutes (`SoraFSReputationIngestLagHigh`).
+  - Low-score provider presence or fresh low-score crossings (`SoraFSReputationLowScoreProviders`, `SoraFSReputationLowScoreCrossing`).
+  - Planned engine alert: score computation failure or non-convergence within 100 iterations.
   - Unexpected score jumps >0.25 within 24h (sanity check).
 
 ## Security & Compliance
@@ -289,13 +308,27 @@ CREATE TABLE reputation_snapshots (
    - Stage 2: enforce routing/incentive integration (threshold alerts active).
 7. Update documentation (`docs/source/sorafs/reputation_operator.md`, portal page, dashboards). Record status/roadmap update.
 
-## Implementation Checklist
-- [x] Specify ingestion sources, schemas, and verification.
-- [x] Define scoring algorithm, penalties, and smoothing.
-- [x] Document snapshot generation, Merkle proof, and publication.
-- [x] Detail API endpoints, CLI/SDK integrations, and authentication.
-- [x] Outline observability, metrics, alerts, and logs.
-- [x] Capture testing plan and rollout stages.
-- [x] Note governance/configuration controls and operator guides.
+## Rollout Status
 
-With this specification, teams can implement the SoraFS reputation oracle confidently, ensuring routing and governance decisions rely on transparent, auditable, and timely provider performance data.
+Completed local foundations:
+
+- Canonical reputation schemas, scoring, penalties, smoothing, trust-edge
+  iteration, snapshot validation, Merkle roots, and provider proofs.
+- Governance DAG payload validation and local filesystem publisher artifacts.
+- Torii latest, provider, snapshot, weights, events, SSE, and WebSocket surfaces.
+- CLI `reputation verify`, `publish`, `snapshot`, `fetch`, and `watch`.
+- JavaScript/TypeScript and Python convenience clients for reads, event polling,
+  and SSE consumption.
+- Scheduler consumption through `reputation_score_bps`.
+- Grafana dashboard and Prometheus alert rules for accepted snapshot health.
+
+Remaining production gates:
+
+- Deploy the live ingest/publisher service against production proof, dispute,
+  settlement, and reserve/rent event sources.
+- Capture live run evidence for snapshot freshness, ingest lag, low-score
+  handling, SSE/WebSocket event delivery, and routing/incentive consumption.
+- Publish governance-approved weights and the first production snapshot with
+  archived `.to`/JSON artifacts and proof replay evidence.
+- Exercise rollback/stale-snapshot procedures before routing or incentives rely
+  on scores in production.

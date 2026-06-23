@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-02-07
 გამოშვების არტეფაქტი არის რეპროდუცირებადი და აუდიტორული.
 
 ნაკადი ვარაუდობს, რომ თქვენ გაქვთ `sorafs_cli` ორობითი (აშენებული
-`--features cli`), წვდომა Torii საბოლოო წერტილზე პინი-რეესტრის ნებართვებით და
+`sorafs_orchestrator` Cargo target), წვდომა Torii საბოლოო წერტილზე პინი-რეესტრის ნებართვებით და
 OIDC რწმუნებათა სიგელები Sigstore-ისთვის. შეინახეთ ხანგრძლივი საიდუმლოებები (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii ჟეტონები) თქვენს CI სარდაფში; ადგილობრივ გაშვებებს შეუძლიათ მათი წყარო
 ჭურვის ექსპორტიდან.
@@ -29,7 +29,7 @@ OIDC რწმუნებათა სიგელები Sigstore-ისთ�
 ## წინაპირობები
 
 - კვანძი 18.18+ `npm` ან `pnpm`.
-- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli`-დან.
+- `sorafs_cli` `cargo run -p sorafs_orchestrator --bin sorafs_cli`-დან.
 - Torii URL, რომელიც ასახავს `/v1/sorafs/*`-ს, პლუს ავტორიტეტული ანგარიშის/პირადი გასაღების
   რომელსაც შეუძლია მანიფესტებისა და მეტსახელების წარდგენა.
 - OIDC გამომცემელი (GitHub Actions, GitLab, სამუშაო დატვირთვის იდენტიფიკაცია და ა.შ.)

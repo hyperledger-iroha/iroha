@@ -205,7 +205,7 @@ liste blanche pour les utilisateurs et les utilisateurs.**ضوابط**
   `crates/iroha_core/src/da/replay_cache.rs` (cache supplémentaire) et Torii pour
   `crates/iroha_torii/src/da/ingest.rs` الذي يمرر vérifie les empreintes digitales par `/v1/da/ingest`.
 - Le streaming PDP/PoTR est également disponible pour exploiter le flux de preuve
-  `crates/sorafs_car/tests/sorafs_cli.rs`, pour les projets PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, pour les projets PoR/PDP/PoTR
   الفشل المشار اليها في نموذج التهديدات.
 - Capacité de trempage de réparation موجودة في
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, pour le trempage Sumeragi

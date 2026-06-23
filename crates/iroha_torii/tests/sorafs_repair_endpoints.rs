@@ -21,7 +21,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_crypto::{KeyPair, PrivateKey, SignatureOf};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId,
     account::{Account, AccountId},
@@ -37,7 +37,8 @@ use norito::{codec::Encode, json};
 use sorafs_manifest::provider_advert::SignatureAlgorithm;
 use sorafs_manifest::repair::{
     AuditorSignatureV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairCauseV1,
+    RepairEvidenceV1, RepairManualCauseV1, RepairReportV1, RepairSlashProposalV1,
     RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
     RepairWorkerActionV1, RepairWorkerSignaturePayloadV1, SIGNED_AUDITOR_REQUEST_VERSION_V1,
     SignedAuditorRequestPayloadV1, SignedAuditorRequestV1,
@@ -61,9 +62,9 @@ fn repair_report(
             manifest_digest,
             provider_id,
             por_history_id: None,
-            cause: RepairCauseV1::Manual {
+            cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                 reason: "test".to_string(),
-            },
+            }),
             evidence_json: None,
             notes: None,
         },
@@ -92,18 +93,83 @@ fn sign_worker_action(
     checked_signature_of(worker_key.private_key(), &payload)
 }
 
-fn signed_auditor_report(report: RepairReportV1, nonce: u64) -> SignedAuditorRequestV1 {
-    SignedAuditorRequestV1 {
-        version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-        auditor_account: report.auditor_account.clone(),
+fn signed_auditor_report_with_key(
+    mut report: RepairReportV1,
+    nonce: u64,
+    auditor_key: &KeyPair,
+) -> SignedAuditorRequestV1 {
+    report.auditor_account = AccountId::new(auditor_key.public_key().clone()).to_string();
+    signed_auditor_request(
+        SignedAuditorRequestPayloadV1::RepairReport(report),
         nonce,
-        payload: SignedAuditorRequestPayloadV1::RepairReport(report),
+        auditor_key,
+    )
+}
+
+fn repair_slash_proposal(
+    ticket_id: RepairTicketId,
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    auditor_account: String,
+    submitted_at_unix: u64,
+) -> RepairSlashProposalV1 {
+    RepairSlashProposalV1 {
+        version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+        ticket_id,
+        provider_id,
+        manifest_digest,
+        auditor_account,
+        proposed_penalty_nano: 1,
+        submitted_at_unix,
+        rationale: "replayed auditor nonce must be rejected before scheduling".to_string(),
+        approval: None,
+    }
+}
+
+fn signed_auditor_slash(
+    mut proposal: RepairSlashProposalV1,
+    nonce: u64,
+    auditor_key: &KeyPair,
+) -> SignedAuditorRequestV1 {
+    proposal.auditor_account = AccountId::new(auditor_key.public_key().clone()).to_string();
+    signed_auditor_request(
+        SignedAuditorRequestPayloadV1::SlashProposal(proposal),
+        nonce,
+        auditor_key,
+    )
+}
+
+fn signed_auditor_request(
+    payload: SignedAuditorRequestPayloadV1,
+    nonce: u64,
+    auditor_key: &KeyPair,
+) -> SignedAuditorRequestV1 {
+    let public_key = {
+        let (algorithm, public_key) = auditor_key.public_key().to_bytes();
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        public_key.to_vec()
+    };
+    let auditor_account = match &payload {
+        SignedAuditorRequestPayloadV1::RepairReport(report) => report.auditor_account.clone(),
+        SignedAuditorRequestPayloadV1::SlashProposal(proposal) => proposal.auditor_account.clone(),
+    };
+    let mut envelope = SignedAuditorRequestV1 {
+        version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
+        auditor_account,
+        nonce,
+        payload,
         signature: AuditorSignatureV1 {
             algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![1u8; 32],
-            signature: vec![2u8; 64],
+            public_key,
+            signature: Vec::new(),
         },
-    }
+    };
+    let payload_bytes =
+        norito::to_bytes(&envelope.signature_payload()).expect("encode auditor payload");
+    let signature = Signature::try_new(auditor_key.private_key(), &payload_bytes)
+        .expect("sign auditor payload");
+    envelope.signature.signature = signature.payload().to_vec();
+    envelope
 }
 
 fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
@@ -252,10 +318,12 @@ async fn get_json(app: &Router, uri: &str) -> Vec<u8> {
         .to_vec()
 }
 
-async fn post_report(app: &Router, report: &RepairReportV1) -> RepairTaskRecordV1 {
+async fn post_raw_report_with_status(
+    app: &Router,
+    report: &RepairReportV1,
+) -> (StatusCode, Vec<u8>) {
     let body = json::to_vec(report).expect("encode repair report");
-    let response = post_json(app, "/v1/sorafs/audit/repair/report", body).await;
-    decode_record_body(&response)
+    post_json_with_status(app, "/v1/sorafs/audit/repair/report", body).await
 }
 
 async fn post_signed_report(app: &Router, envelope: &SignedAuditorRequestV1) -> RepairTaskRecordV1 {
@@ -343,10 +411,49 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
     );
     let app = torii.api_router_for_tests();
 
-    let signed_report_a = signed_auditor_report(report_a.clone(), 42);
+    let auditor_key = checked_repair_worker_key_fixture();
+    let (raw_status, raw_response) = post_raw_report_with_status(&app, &report_a).await;
+    assert_eq!(raw_status, StatusCode::BAD_REQUEST);
+    assert!(
+        String::from_utf8_lossy(&raw_response).contains("requires SignedAuditorRequestV1"),
+        "unexpected raw report response: {}",
+        String::from_utf8_lossy(&raw_response)
+    );
+    let signed_report_a = signed_auditor_report_with_key(report_a.clone(), 42, &auditor_key);
     let record = post_signed_report(&app, &signed_report_a).await;
     assert!(matches!(record.state, RepairTaskStateV1::Queued(_)));
-    let record = post_report(&app, &report_b).await;
+    let replay_body = json::to_vec(&signed_report_a).expect("encode signed auditor replay");
+    let (replay_status, replay_response) =
+        post_json_with_status(&app, "/v1/sorafs/audit/repair/report", replay_body).await;
+    assert_eq!(replay_status, StatusCode::BAD_REQUEST);
+    assert!(
+        String::from_utf8_lossy(&replay_response).contains("nonce replay rejected"),
+        "unexpected replay response: {}",
+        String::from_utf8_lossy(&replay_response)
+    );
+    let slash_replay = signed_auditor_slash(
+        repair_slash_proposal(
+            report_a.ticket_id.clone(),
+            report_a.evidence.manifest_digest,
+            provider_id,
+            signed_report_a.auditor_account.clone(),
+            report_a.submitted_at_unix + 1,
+        ),
+        42,
+        &auditor_key,
+    );
+    let slash_replay_body =
+        json::to_vec(&slash_replay).expect("encode signed auditor slash replay");
+    let (slash_replay_status, slash_replay_response) =
+        post_json_with_status(&app, "/v1/sorafs/audit/repair/slash", slash_replay_body).await;
+    assert_eq!(slash_replay_status, StatusCode::BAD_REQUEST);
+    assert!(
+        String::from_utf8_lossy(&slash_replay_response).contains("nonce replay rejected"),
+        "unexpected slash replay response: {}",
+        String::from_utf8_lossy(&slash_replay_response)
+    );
+    let signed_report_b = signed_auditor_report_with_key(report_b.clone(), 43, &auditor_key);
+    let record = post_signed_report(&app, &signed_report_b).await;
     assert!(matches!(record.state, RepairTaskStateV1::Queued(_)));
 
     let manifest_a_hex = hex::encode(report_a.evidence.manifest_digest);
@@ -567,7 +674,9 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
     );
     let app = torii.api_router_for_tests();
 
-    let record = post_report(&app, &report).await;
+    let auditor_key = checked_repair_worker_key_fixture();
+    let signed_report = signed_auditor_report_with_key(report.clone(), 7, &auditor_key);
+    let record = post_signed_report(&app, &signed_report).await;
     assert!(matches!(record.state, RepairTaskStateV1::Queued(_)));
 
     let manifest_hex = hex::encode(report.evidence.manifest_digest);

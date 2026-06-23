@@ -54,10 +54,10 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
      `docs/source/sorafs/proposals/` کے تحت `ChunkerProfileProposalV1` JSON بناتا ہے۔
    - CLI output شامل کریں:
      ```bash
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Fixtures، proposal، determinism report، اور registry updates پر مشتمل PR submit کریں۔

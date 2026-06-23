@@ -8,14 +8,13 @@ source_hash: 0b114fcc91d3b5cb3c23b64a73a2601e70547d1ac2f5e097400034d7ac3dee21
 source_last_modified: "2026-01-05T09:28:12.080400+00:00"
 translation_last_reviewed: 2026-02-07
 ---
-
-## SoraFS Node Storage Design (Draft)
+## SoraFS Node Storage Implementation Notes
 
 This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
 availability layer and dedicate a slice of local disk for storing and serving
 chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
 the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
+controls, and configuration plumbing implemented across the node and gateway
 code paths. Practical operator drills live in
 `sorafs/runbooks/sorafs_node_ops.md`.
 
@@ -130,9 +129,9 @@ Config plumbing:
 
 ### CLI Utilities
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
-backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+The `sorafs_node` crate also ships a thin CLI so operators can script
+ingestion/export drills against the persistent backend and compare local
+outputs with the Torii HTTP surface.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -152,7 +151,7 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 
 Both commands print a Norito JSON summary to stdout, making it easy to pipe into
 scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests/cli.rs:1】
 
 > HTTP parity
 >
@@ -178,8 +177,8 @@ payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tes
    - Spawn the PoR sampling worker and quota monitor.
 2. **Discovery / Adverts**:
    - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
+     them with the council-approved key, and publish via the configured
+     discovery channel.
 3. **Pin Workflow**:
    - Gateway receives a signed manifest (including chunk plan, PoR root, council
      signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
@@ -221,27 +220,31 @@ payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tes
   `POST /v1/sorafs/capacity/complete` to release reservations via
   `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
   snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+  queue the next order without polling. The current storage path ingests manifests through
+  `NodeHandle::ingest_manifest` and `sorafs-node ingest`, while orchestration can
+  use the `sorafs_cli storage prepare`/`storage pin` sequence; call the
+  completion hook after those ingestion steps succeed.【crates/iroha_torii/src/routing.rs:34922】【crates/sorafs_node/src/capacity.rs:87】【crates/sorafs_node/src/lib.rs:2168】【crates/sorafs_orchestrator/src/bin/sorafs_cli.rs:6160】
 - The embedded `TelemetryAccumulator` can be mutated through
   `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
   and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
   scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-### Integrations & Future Work
+### Integrations & Operational Hardening
 
 - **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
   (PoR success rate, disk utilisation). Admission policies can require minimum
   capacity or minimum PoR success rate before adverts are accepted.
 - **Client SDKs**: expose the new storage config (disk limits, alias) so
   management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
+- **Telemetry**: storage scheduler metrics now export through the existing
+  Prometheus/OpenTelemetry stack, including byte usage, queue depth, fetch
+  throughput, and PoR sample counters.
 - **Security**: run the storage module inside a dedicated async task pool with
   back-pressure and consider sandboxing chunk reads via io_uring or tokio's
   bounded pools to prevent malicious clients from exhausting resources.
 
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+This implementation keeps the storage module optional and deterministic while
+giving operators the knobs they need to participate in the SoraFS data
+availability layer. Outstanding rollout evidence is operational hardening:
+hosted deployment captures, governance policy tuning, and SDK management
+ergonomics.

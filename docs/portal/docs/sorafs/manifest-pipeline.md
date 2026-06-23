@@ -45,7 +45,7 @@ those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
 - Council signatures and optional metadata (e.g., build IDs).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

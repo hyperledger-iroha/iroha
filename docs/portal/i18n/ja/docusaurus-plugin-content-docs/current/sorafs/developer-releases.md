@@ -28,7 +28,7 @@ SoraFS のバイナリ（`sorafs_cli`, `sorafs_fetch`, helpers）と SDK クレ�
   添付し、Security Engineering と Tooling Working Group の承認者を記録します。
 - メモ内のリメディエーションチェックリストがクローズ済みであることを確認します。
   未解決項目がある場合はリリースをブロックします。
-- パリティハーネスのログ（`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`）を
+- パリティハーネスのログ（`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`）を
   マニフェストバンドルと一緒にアップロードできるよう準備します。
 - 実行予定の署名コマンドに `--identity-token-provider` と明示的な
   `--identity-token-audience=<aud>` が含まれていることを確認し、Fulcio のスコープが
@@ -49,9 +49,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 スクリプトは次の検証を行います:
 
 - `cargo fmt --all -- --check`（workspace）
-- `cargo clippy --locked --all-targets`（`sorafs_car` は `cli` feature を有効化）
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   および `sorafs_manifest`, `sorafs_chunker`
-- `cargo test --locked --all-targets`（同じクレート群）
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 いずれかが失敗した場合は、タグ付け前にリグレッションを修正します。
 リリースビルドは main と連続している必要があります。リリースブランチに

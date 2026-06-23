@@ -30,7 +30,7 @@ La porte de publication technique et les artefacts d'examen de sécurité captur
 - Lien du ticket de correction (مثلاً `governance/tickets/SF6-SR-2026.md`) منسلک کریں اور
   Ingénierie de sécurité et Groupe de travail sur l'outillage et les approbateurs de signature
 - Un mémo et une liste de contrôle de remédiation sont disponibles. les éléments non résolus sont libérés et bloqués
-- Journaux de faisceau de parité (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) ici
+- Journaux de faisceau de parité (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`) ici
   manifeste bundle کے ساتھ upload کرنے کے لیے تیار رہیں۔
 - Il s'agit d'une commande de signature `--identity-token-provider`.
   واضح `--identity-token-audience=<aud>` شامل ہو تاکہ Fulcio scope release proof میں capture ہو۔
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 یہ script درج ذیل assertions کرتا ہے :
 
 - `cargo fmt --all -- --check` (espace de travail)
-- `cargo clippy --locked --all-targets` `sorafs_car` pour (fonction `cli` pour)
-  `sorafs_manifest` et `sorafs_chunker`
-- `cargo test --locked --all-targets` pour les caisses
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Il s'agit d'un échec ou d'un marquage ou d'une régression. Release builds et main
 کے ساتھ continu رہنا چاہیے؛ publier des branches et corriger des erreurs de sélection cerise Porte

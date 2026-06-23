@@ -1,0 +1,61 @@
+groups:
+  - name: sorafs-orderbook
+    interval: 1m
+    rules:
+      - alert: SoraFSOrderbookMatchingLagHigh
+        expr: max by (cluster, tier) (torii_sorafs_orderbook_match_lag_seconds) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS orderbook matching lag is high"
+          description: |
+            Orderbook matching lag for cluster {{ $labels.cluster }} tier {{ $labels.tier }}
+            stayed above 2 seconds for 10 minutes. Check matcher queue depth,
+            contract submission latency, and price-feed freshness before accepting
+            additional order flow.
+      - alert: SoraFSOrderbookSettlementBacklogHigh
+        expr: (sum by (cluster) (torii_sorafs_orderbook_settlement_backlog) > 100) or (max by (cluster) (torii_sorafs_orderbook_oldest_settlement_age_seconds) > 900)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS settlement backlog is high"
+          description: |
+            Streaming settlement backlog for cluster {{ $labels.cluster }} exceeded
+            the configured backlog or age threshold. Drain receipt submission,
+            verify provider settlement workers, and pause new channels if the
+            queue continues to grow.
+      - alert: SoraFSOrderbookContractMirrorDivergence
+        expr: max by (cluster) (torii_sorafs_orderbook_contract_mirror_divergence) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS orderbook mirror diverged from contract state"
+          description: |
+            The off-chain matcher mirror for cluster {{ $labels.cluster }} disagrees
+            with contract state. Stop submitting fills from the mirror, replay the
+            canonical event log, and reconcile before resuming order matching.
+      - alert: SoraFSOrderbookApiErrorRatioHigh
+        expr: max by (route) (torii_sorafs_orderbook_api_error_ratio) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS orderbook API error ratio is high"
+          description: |
+            Orderbook API route {{ $labels.route }} reported an error ratio above
+            5% for 5 minutes. Inspect validation outcomes, signer failures, and
+            matcher availability before widening rollout.
+      - alert: SoraFSOrderbookEscrowRunwayLow
+        expr: min by (provider) (torii_sorafs_orderbook_escrow_runway_seconds) < 86400
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS orderbook escrow runway below one day"
+          description: |
+            Provider {{ $labels.provider }} has less than one day of escrow runway
+            for open orderbook settlement channels. Trigger top-up or channel
+            throttling before receipts can no longer settle cleanly.

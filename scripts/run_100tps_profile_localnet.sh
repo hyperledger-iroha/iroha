@@ -346,20 +346,29 @@ if [[ "${AUTO_SKIP_BUILD}" == true ]] \
   DEPLOY_ENV+=(SKIP_TOOL_BUILD=true)
 fi
 
+pid_is_running() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
 wait_for_pid_with_timeout() {
   local pid="$1"
   local timeout="$2"
   local label="$3"
   local started_at now
   started_at="$(date +%s)"
-  while kill -0 "$pid" 2>/dev/null; do
+  while pid_is_running "$pid"; do
     now="$(date +%s)"
     if (( now - started_at >= timeout )); then
       echo "Warning: ${label} exceeded ${timeout}s; terminating pid ${pid}" >&2
       kill -TERM "$pid" 2>/dev/null || true
       sleep 5
-      if kill -0 "$pid" 2>/dev/null; then
-        kill -KILL "$pid" 2>/dev/null || true
+      if pid_is_running "$pid"; then
+        echo "Warning: ${label} pid ${pid} is still running after TERM; leaving it visible" >&2
+        return 124
       fi
       wait "$pid" || true
       return 124

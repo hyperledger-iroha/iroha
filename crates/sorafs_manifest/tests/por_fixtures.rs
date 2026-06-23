@@ -3,6 +3,7 @@
 use std::fs;
 
 use sorafs_manifest::{
+    PotrReceiptV1, ProofStreamTier, RepairTaskRecordV1, RepairTaskStateV1,
     governance::{GovernanceLogNodeV1, GovernanceLogPayloadV1},
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
 };
@@ -47,11 +48,35 @@ fn audit_verdict_fixture_decodes_and_validates() {
 }
 
 #[test]
+fn potr_receipt_fixture_decodes_and_validates() {
+    let bytes = read_fixture(&format!("{FIXTURES_ROOT}/potr/receipt_v1.to"));
+    let receipt: PotrReceiptV1 =
+        norito::decode_from_bytes(&bytes).expect("PoTR receipt fixture should decode");
+    receipt.validate().expect("PoTR receipt must validate");
+    assert_eq!(receipt.tier, ProofStreamTier::Hot);
+    assert_eq!(receipt.manifest_digest, [0x42; 32]);
+    assert_eq!(receipt.provider_id, [0x10; 32]);
+}
+
+#[test]
+fn repair_task_fixture_decodes_and_validates() {
+    let bytes = read_fixture(&format!("{FIXTURES_ROOT}/repair/task_v1.to"));
+    let task: RepairTaskRecordV1 =
+        norito::decode_from_bytes(&bytes).expect("repair task fixture should decode");
+    task.validate().expect("repair task must validate");
+    assert!(matches!(task.state, RepairTaskStateV1::Queued(_)));
+    assert_eq!(task.manifest_digest, [0x42; 32]);
+    assert_eq!(task.provider_id, [0x10; 32]);
+}
+
+#[test]
 fn governance_node_fixture_wraps_por_proof() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/governance/node_v1.to"));
     let node: GovernanceLogNodeV1 =
         norito::decode_from_bytes(&bytes).expect("governance node should decode");
     node.validate().expect("governance node must validate");
+    node.verify_publisher_signature()
+        .expect("governance node signature must verify");
     match node.payload {
         GovernanceLogPayloadV1::PorProof(ref proof) => {
             proof.validate().expect("embedded proof must validate");

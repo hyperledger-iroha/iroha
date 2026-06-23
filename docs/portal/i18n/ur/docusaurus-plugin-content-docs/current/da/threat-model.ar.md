@@ -217,7 +217,7 @@ PDP/POTR چیلنجوں کا کسٹم یا جواب دیں۔
   `crates/iroha_core/src/da/replay_cache.rs` (کیشے منطق) اور Torii انضمام میں
   `crates/iroha_torii/src/da/ingest.rs` جو `/v1/da/ingest` کے ذریعے فنگر پرنٹ چیک کرتا ہے۔
 - PDP/POTR اسٹریمنگ تخروپن میں استعمال کی جاتی ہے ہارنس پروف اسٹریم کے ذریعے
-  `crates/sorafs_car/tests/sorafs_cli.rs` ، پور/PDP/POTR کی درخواست کے بہاؤ اور منظرناموں کا احاطہ کریں
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs` ، پور/PDP/POTR کی درخواست کے بہاؤ اور منظرناموں کا احاطہ کریں
   ناکامیوں نے خطرے کے ماڈل میں اشارہ کیا۔
 - صلاحیت اور مرمت کو بھگوانے کے نتائج میں ہیں
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` ، جبکہ Matrix Sumeragi کو بھگائیں

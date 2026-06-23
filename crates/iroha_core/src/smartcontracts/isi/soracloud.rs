@@ -43,6 +43,7 @@ use iroha_crypto::{
         bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1,
         bfv_full_bootstrap_execution_proof_statement_digest_with_witness_v1,
         bfv_full_bootstrap_output_residual_multiple_bound_v1,
+        bfv_full_bootstrap_proof_public_input_schema_v1,
         bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1,
         bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1,
         bfv_multiply_bounded_noise_output_bound, bfv_multiply_output_residual_multiple_bound,
@@ -54,6 +55,7 @@ use iroha_crypto::{
         bootstrap_ciphertext_registered_rns_exact_rounds,
         decode_bfv_full_bootstrap_native_proof_key_material_v1,
         decode_bfv_full_bootstrap_proof_key_artifact_v1,
+        encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1,
         full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1,
         full_bootstrap_ciphertext_registered_rns_exact_v1,
         full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1,
@@ -10253,8 +10255,17 @@ fn verify_soracloud_fhe_full_bootstrap_material_proof_profile(
     let Some(material) = bootstrap_key.full_bootstrap_material.as_ref() else {
         return Ok(());
     };
-    let expected_schema_digest =
-        Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1);
+    let expected_schema_artifact = encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+        params,
+        material.max_bootstrap_depth,
+        &bfv_full_bootstrap_proof_public_input_schema_v1(),
+    )
+    .map_err(|err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap material proof public-input schema artifact encoding failed: {err}"
+        ))
+    })?;
+    let expected_schema_digest = Hash::new(&expected_schema_artifact);
     let expected_verifier_key_material_commitment = proof
         .map(|proof| {
             proof
@@ -24261,8 +24272,6 @@ mod tests {
         params: &BfvParameters,
     ) -> BfvFullBootstrapCircuitMaterialV1 {
         let mut material = sample_full_bootstrap_material(params);
-        material.proof_public_input_schema_digest =
-            Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1);
         material.verifier_key_digest = Hash::new(b"soracloud-full-bootstrap-verifier-key-artifact");
         material.verifier_key_material_commitment =
             Hash::new(b"soracloud-full-bootstrap-verifier-key-material-commitment");
@@ -25784,8 +25793,6 @@ mod tests {
         let vk_commitment = [0x62; Hash::LENGTH];
         let proof = sample_fhe_full_bootstrap_material_proof(statement_hash, vk_commitment);
         let mut material = sample_full_bootstrap_material(&params);
-        material.proof_public_input_schema_digest =
-            Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1);
         material.verifier_key_material_commitment = Hash::prehashed(vk_commitment);
         let bootstrap_key = evaluation_keys
             .bootstrap_key
@@ -25827,7 +25834,7 @@ mod tests {
             Some(&proof),
         )
         .expect_err("schema digest drift must fail before proof verification");
-        assert_invalid_parameter_contains(err, "proof public-input schema digest");
+        assert_invalid_parameter_contains(err, "proof public-input schema artifact digest");
 
         let mut wrong_verifier_keys = evaluation_keys;
         wrong_verifier_keys

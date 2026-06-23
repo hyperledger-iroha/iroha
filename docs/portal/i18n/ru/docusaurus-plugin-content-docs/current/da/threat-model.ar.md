@@ -217,7 +217,7 @@ _اخر مراجعة: 19.01.2026 -- المراجعة القادمة المجدو
   `crates/iroha_core/src/da/replay_cache.rs` (кэш) или Torii
   `crates/iroha_torii/src/da/ingest.rs` Проверка отпечатка пальца `/v1/da/ingest`.
 - Для потоковой передачи PDP/PoTR используется протокол проверки потока.
-  `crates/sorafs_car/tests/sorafs_cli.rs`, а также подключение PoR/PDP/PoTR.
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, а также подключение PoR/PDP/PoTR.
   Он сказал, что в Нэнси-Айленде.
 - Возможность замачивания для ремонта и восстановления.
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, بينما مصفوفة, замачивание Sumeragi

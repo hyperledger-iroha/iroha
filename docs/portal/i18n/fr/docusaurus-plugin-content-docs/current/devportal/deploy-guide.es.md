@@ -16,13 +16,13 @@ Cubre la phase de construction/peluchage, l'empaquetado SoraFS, la firma de mani
 la promotion de l'alias, la vérification et les exercices de restauration pour chaque aperçu et sortie
 mer reproductible et vérifiable.
 
-Le flux suppose que vous avez le binaire `sorafs_cli` (construit avec `--features cli`), accés à
+Le flux suppose que vous avez le binaire `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), accés à
 un point de terminaison Torii avec autorisations de registre de broches et informations d'identification OIDC pour Sigstore. Garde secrète
 une grande vie (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, jetons de Torii) dans votre coffre-fort de CI ; las
 Les émissions locales peuvent être chargées à partir des exportations du shell.
 
 ## Prérequis- Nœud 18.18+ avec `npm` ou `pnpm`.
-- `sorafs_cli` à partir de `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` à partir de `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL de Torii qui expose `/v1/sorafs/*` mais un compte/clave privé d'autorité qui peut envoyer des manifestes et des alias.
 - Emisor OIDC (GitHub Actions, GitLab, Workload Identity, etc.) pour émettre un `SIGSTORE_ID_TOKEN`.
 - Facultatif : `examples/sorafs_cli_quickstart.sh` pour les essais à sec et `docs/source/sorafs_ci_templates.md` pour l'échafaudage des workflows de GitHub/GitLab.

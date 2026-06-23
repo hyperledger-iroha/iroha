@@ -77,7 +77,7 @@ Pour des définitions de champs détaillées, voir
 
 ## مرجع الأعلام CLI et SDK
 
-`sorafs_cli fetch` (عرض `crates/sorafs_car/src/bin/sorafs_cli.rs`) والمجمع
+`sorafs_cli fetch` (عرض `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) والمجمع
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) يشارك نفس الشيء
 سطح تكوين الأوركسترا. استخدم الأعلام التالية عند ظهورها
 التقاط preuves de déploiment أو لتجديد التركيبات القياسية :

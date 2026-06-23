@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/petal_stream.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: b94d279fdfb00a62f9b3bc46bc22f7ae4338e83f3e3ca5f69cb627605342b816
-source_last_modified: "2026-06-22T10:41:05.354119+00:00"
+source_hash: bcfdce89c1b464e445e4338b90f1ea2074bd4e57299539478847ce1886513402
+source_last_modified: "2026-06-22T11:19:04.282801+00:00"
 translation_last_reviewed: null
 title: Petal Stream Transport
 ---

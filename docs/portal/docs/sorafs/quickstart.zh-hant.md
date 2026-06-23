@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. 構建並簽署清單
 
 使用以下命令將塊計劃、別名和治理簽名包裝到清單中
-`sorafs-manifest-stub`。下面的命令展示了一個單文件有效負載；通過
+`sorafs_manifest_stub`。下面的命令展示了一個單文件有效負載；通過
 打包樹的目錄路徑（CLI 按字典順序遍歷）。
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

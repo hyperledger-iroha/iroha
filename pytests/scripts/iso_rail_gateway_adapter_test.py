@@ -4,6 +4,7 @@ import http.server
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -155,6 +156,52 @@ def capture_redirect_server(body=b"redirect"):
 
 
 class IsoRailGatewayAdapterTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-rail-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER._write_text_output(
+                    link / "receipt.json",
+                    "{}\n",
+                    display_label="receipt output",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("receipt output", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
+    def test_text_output_hardlinked_leaf_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-rail-output.json"
+            output = root / hidden
+            output.write_text("old\n", encoding="utf-8")
+            os.link(output, root / "peer.json")
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER._write_text_output(
+                    output,
+                    "{}\n",
+                    display_label="receipt output",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("receipt output", message)
+            self.assertIn("must not be hard-linked", message)
+            self.assertNotIn(str(output), message)
+            self.assertNotIn(hidden, message)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_rail_unknown_secret", "rail_unknown_secret"),
@@ -1010,6 +1057,64 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn(actual_sha256, stderr)
             self.assertFalse((inbox / "receipts").exists())
 
+    def test_malformed_source_paths_do_not_echo_paths_before_network_delivery(self):
+        def malformed_sidecar(inbox):
+            xml_path, _sidecar = write_message(inbox)
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            sidecar_path.write_text("{not-json\n", encoding="utf-8")
+            return xml_path, sidecar_path, "is not valid JSON", []
+
+        def oversized_xml(inbox):
+            xml_path, _sidecar = write_message(inbox)
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            return (
+                xml_path,
+                sidecar_path,
+                "byte payload limit",
+                ["--max-payload-bytes", str(len(SAMPLE_XML) - 1)],
+            )
+
+        def payload_mismatch(inbox):
+            xml_path, sidecar = write_message(inbox)
+            sidecar["payload_sha256"] = "1" * 64
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+            return xml_path, sidecar_path, "payload_sha256 mismatch", []
+
+        cases = (
+            ("malformed-sidecar", malformed_sidecar),
+            ("oversized-xml", oversized_xml),
+            ("payload-mismatch", payload_mismatch),
+        )
+        for name, arrange in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                hidden = f"hidden-rail-source-{name}"
+                inbox = root / hidden / "inbox"
+                inbox.mkdir(parents=True)
+                xml_path, sidecar_path, expected, extra_args = arrange(inbox)
+
+                with capture_server() as (base_url, requests):
+                    rc, stdout, stderr = run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            *extra_args,
+                        ]
+                    )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertEqual(requests, [])
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn(str(xml_path), stderr)
+                self.assertNotIn(str(sidecar_path), stderr)
+                self.assertFalse((inbox / "receipts").exists())
+
     def test_checked_in_xml_fixture_path_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1039,6 +1144,29 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             )
             self.assertFalse((inbox / "receipts").exists())
             self.assertFalse(receipt_dir.exists())
+
+    def test_checked_in_xml_fixture_diagnostic_does_not_echo_message_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-rail-fixture-path"
+            xml_path = root / hidden / "fixtures" / "iso20022" / "rail-status.xml"
+            xml_path.parent.mkdir(parents=True)
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER.verify_message_file(
+                    xml_path,
+                    max_payload_bytes=1024,
+                    allow_default_profile=False,
+                    allow_legacy_colr007=False,
+                )
+
+            message = str(caught.exception)
+            self.assertIn(
+                "message XML payload must not point to checked-in ISO XML fixtures",
+                message,
+            )
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(str(xml_path), message)
 
     def test_duplicate_rail_message_ids_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -1535,6 +1663,41 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn("token=rail-secret", stderr)
             self.assertFalse((inbox / "receipts").exists())
 
+    def test_inbox_dir_discovery_path_diagnostics_do_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            missing_dir = root / "missing-inbox"
+            inbox_file = root / "inbox-as-file"
+            inbox_file.write_text("not a directory\n", encoding="utf-8")
+            empty_dir = root / "empty-inbox"
+            empty_dir.mkdir()
+
+            cases = (
+                (missing_dir, "does not exist"),
+                (inbox_file, "must be a directory"),
+                (empty_dir, "has no *.xml gateway messages"),
+            )
+            for path, message in cases:
+                with self.subTest(path=path.name):
+                    with capture_server() as (base_url, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(path),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(requests, [])
+                    self.assertIn("inbox_dir", stderr)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(str(path), stderr)
+                    self.assertNotIn(path.name, stderr)
+
     def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
         cases = (
             ("timeout nan", "--timeout-secs", "nan", "positive finite number"),
@@ -1569,6 +1732,34 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertFalse((inbox / "receipts").exists())
 
+    def test_receipt_output_dir_path_diagnostics_do_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            receipt_file = inbox / "receipt-dir-as-file"
+            receipt_file.write_text("not a directory\n", encoding="utf-8")
+
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_file),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("receipt_dir", stderr)
+            self.assertIn("must be a directory", stderr)
+            self.assertNotIn(str(receipt_file), stderr)
+            self.assertNotIn(receipt_file.name, stderr)
+
     def test_symlinked_receipt_output_paths_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -1595,7 +1786,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt_dir), stderr)
+            self.assertNotIn(receipt_dir.name, stderr)
 
             receipt_dir.unlink()
             receipt_dir.mkdir()
@@ -1621,7 +1815,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_output[0]", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(receipt.name, stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
 
     def test_receipt_output_paths_reject_smuggled_segments_before_network_delivery(self):
@@ -1690,7 +1887,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_output[0]", stderr)
             self.assertIn("must not be hard-linked", stderr)
+            self.assertNotIn(str(receipt_path), stderr)
+            self.assertNotIn(receipt_path.name, stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
 
     def test_symlinked_receipt_output_ancestor_is_rejected_before_network_delivery(self):
@@ -1721,7 +1921,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt_dir), stderr)
+            self.assertNotIn(ancestor.name, stderr)
             self.assertFalse((target_dir / "nested").exists())
 
     def test_symlinked_inbox_dir_is_rejected_before_network_delivery(self):
@@ -1748,7 +1951,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("inbox_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(inbox), stderr)
+            self.assertNotIn(inbox.name, stderr)
 
     def test_symlinked_inbox_dir_ancestor_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1774,7 +1980,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("inbox_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(inbox), stderr)
+            self.assertNotIn(ancestor.name, stderr)
 
     def test_colr012_routes_to_standard_collateral_endpoint(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2025,7 +2234,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 )
 
             self.assertEqual(rc, 2)
-            self.assertIn("--message path", stderr)
+            self.assertIn("--message path must stay under --inbox-dir", stderr)
+            self.assertNotIn(str(outside_xml), stderr)
+            self.assertNotIn(str(inbox), stderr)
             self.assertEqual(requests, [])
 
     def test_explicit_message_paths_reject_smuggling_before_network_delivery(self):
@@ -2274,7 +2485,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_sidecar_json_surrogate_strings_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

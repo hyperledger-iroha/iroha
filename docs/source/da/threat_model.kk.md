@@ -205,7 +205,7 @@ _Соңғы қаралған: 2026-01-19 — Келесі жоспарланға
   `crates/iroha_torii/src/da/ingest.rs` ішіндегі Torii интеграциясы, ол
   саусақ ізін `/v1/da/ingest` арқылы тексереді.
 - PDP/PoTR ағынды модельдеулері ағынды тексеру жүйесі арқылы жүзеге асырылады
-  `crates/sorafs_car/tests/sorafs_cli.rs`, PoR/PDP/PoTR сұрау ағындарын қамтиды
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, PoR/PDP/PoTR сұрау ағындарын қамтиды
   және қателік үлгісінде анимацияланған сәтсіздік сценарийлері.
 - Сыйымдылық пен жөндеу нәтижелерін төмен түсіреді
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, ал кеңірек

@@ -1,107 +1,151 @@
 ---
-title: SoraFSゲートウェイ機能拒否ガイダンス
-summary: 能力拒否シナリオに関する運用者・開発者向けプレイブック（SF-5c）。
+title: SoraFS Gateway Capability Refusal Guidance
+summary: Operator and developer playbook for handling capability refusal scenarios (SF-5c).
 ---
 
-# SoraFSゲートウェイ機能拒否ガイダンス
+# SoraFS Gateway Capability Refusal Guidance
 
-本書はロードマップ項目 SF-5c の成果物のうち「運用者／開発者向けガイダンス」を提供します。SoraFS ゲートウェイ、SDK、周辺ツールがトラストレス配送を保護するために拒否経路をどのように検出・公開・是正すべきかをまとめています。内容は「docs/source/sorafs_gateway_capability_tests.md」の負荷試験マトリクスと「docs/source/sorafs_gateway_self_cert.md」のセルフサートキット案を補完します。
+This document promotes the SF-5c roadmap item deliverable “Publish operator/dev
+guidance” by documenting how SoraFS gateways, SDKs, and downstream tooling must
+detect, surface, and remediate refusal paths that protect trustless delivery.
+The guidance complements the negative test matrix in
+`docs/source/sorafs_gateway_capability_tests.md` and the self-certification kit
+captured in `docs/source/sorafs_gateway_self_cert.md`.
 
-## 想定読者と範囲
+## Audience & Scope
 
-- **運用者**: ゲートウェイやオーケストレーターを運用し、拒否挙動を決定的・可観測・監査可能にする責任を持つ人。
-- **開発者**: SDK/CLI を保守する、あるいは下流アプリに SoraFS エンドポイントを統合する人。
-- **QA/DevRel**: デプロイ前に拒否経路を行使する適合性試験とオンボーディングワークフローを整備するチーム。
+- **Operators** running gateways or orchestrators who must keep refusal behaviour
+  deterministic, observable, and auditable.
+- **Developers** maintaining SDKs/CLIs or integrating SoraFS endpoints into
+  downstream applications.
+- **QA/DevRel** teams wiring conformance suites and onboarding workflows that
+  exercise refusal paths before deployment.
 
-以下のカタログは API において安定させるべき拒否理由を列挙します。新たな拒否理由を導入する場合はロードマップの更新とフィクスチャの準備を事前に行ってください。
+The catalogue below enumerates the refusal reasons that MUST remain stable in
+the API surface. New refusal reasons require a roadmap update and matching
+fixtures before production rollout.
 
-## 拒否カタログ
+## Refusal Catalogue
 
-ゲートウェイは `docs/source/sorafs_gateway_capability_tests.md` に記載された JSON スキーマに従って拒否レスポンスを返し、`error` フィールドをテレメトリラベルとして再利用しなければなりません。下表は最小基準です。
+The gateway MUST encode refusals as JSON bodies matching the schema described in
+`docs/source/sorafs_gateway_capability_tests.md` and reuse the `error` field as
+the telemetry label. Table rows double as the minimum compliance expectation.
 
-| ID | HTTP | `error` コード | テレメトリラベル | 主な対処 | 参考資料 |
-|----|------|----------------|------------------|----------|----------|
-| C1 | 406 | `unsupported_chunker` | `unsupported_chunker` | 要求チャンクハンドルを SF-1 プロファイルに整合させ、マニフェストエイリアスを更新する。 | チャンクレジストリドキュメント、SF-1 成果物。 |
-| C2 | 412 | `manifest_variant_missing` | `manifest_variant_missing`, `alias_stale` | 後継マニフェストを公開するか、要求プロファイルにエイリアスを縛る。レジストリスナップショットを確認。 | Pin Registry 計画、エイリアスポリシー。 |
-| C3 | 412 | `admission_envelope_mismatch` | `governance_violation`, `alias_stale` | Torii で入場エンベロープを再生成し、ガバナンス署名を検証する。 | `docs/source/sorafs/pin_registry_validation_plan.md`。 |
-| C4 | 428 | `capability_grease_unsupported` | `capability_refusal` | 未サポート TLV を拒否するか、クライアント側で許可済み機能のみを交渉する。 | Capability GREASE RFC 草案。 |
-| C5 | 428 | `missing_dag_scope` | `capability_refusal` | `Sora-Dag-Scope` ヘッダーを付与するか、クライアントを更新する。オーケストレーター設定を見直す。 | チャンクレンジ仕様 (SF-5d)。 |
-| C6 | 406 | `unsupported_encoding` | `unsupported_encoding` | `Accept-Encoding` を落とすか、マニフェストで圧縮を許可する。 | マニフェストポリシードキュメント。 |
-| C7 | 422 | `proof_validation_failed` | `proof_validation_failed` | PoR/PoTR 証明を検証し、リプレイハーネスの出力で破損チャンクを調査する。 | リプレイハーネスガイド。 |
+| ID | HTTP | `error` code | Telemetry label(s) | Primary remediation | Cross-reference |
+|----|------|--------------|--------------------|---------------------|-----------------|
+| C1 | 406 | `unsupported_chunker` | `unsupported_chunker` | Align chunker handle with SF-1 profile list; refresh manifest alias. | Chunker registry docs, SF-1 deliverables. |
+| C2 | 412 | `manifest_variant_missing` | `manifest_variant_missing`, `alias_stale` | Publish successor manifest or pin alias to requested profile; verify registry snapshot. | Pin registry plan, alias policy. |
+| C3 | 412 | `admission_envelope_mismatch` | `governance_violation`, `alias_stale` | Validate the provider admission envelope and manifest council signatures with the current CLI tooling. | `docs/source/sorafs/pin_registry_validation_plan.md`. |
+| C4 | 428 | `capability_grease_unsupported` | `capability_refusal` | Reject unknown TLVs unless explicitly allowed; ensure client negotiated supported capabilities. | Capability GREASE policy. |
+| C5 | 428 | `missing_dag_scope` | `capability_refusal` | Add `Sora-Dag-Scope` header or upgrade client; configure orchestrator defaults. | Chunk-range spec (SF-5d). |
+| C6 | 406 | `unsupported_encoding` | `unsupported_encoding` | Drop `Accept-Encoding` requests or enable compression in manifest policy. | Manifest policy docs. |
+| C7 | 422 | `proof_validation_failed` | `proof_validation_failed` | Verify PoR/PoTR proofs; inspect harness replay output for corrupted chunks. | Replay harness guide. |
 
-ゲートウェイは `profile=sf1` や `provider_id=aa12` のような追加ラベルを付与しても構いませんが、上記の基本ラベルは必ず残し、ダッシュボードやアラートがデプロイ間で再利用できるようにします。
+Gateways MAY extend the table with additional telemetry labels (e.g.,
+`profile=sf1`, `provider_id=aa12`) but MUST retain the listed base labels so
+dashboards and alerts remain portable across deployments.
 
-## トラブルシューティングプレイブック
+## Troubleshooting Playbooks
 
-### 未サポートチャンクハンドル（C1）
+### Unsupported Chunker (`C1`)
 
-1. Torii が出力するリクエストログで `chunker_handle` ヒントを確認する。
-2. Pin Registry (`/v1/sorafs/pin/<cid>`) が返すマニフェストプロファイル一覧と突き合わせ、要求チャンクが存在するか検証する。
-3. 存在しない場合は `sorafs-manifest submit` で後継マニフェストを提出し、ガバナンス承認を待つ。
-4. ゲートウェイキャッシュが `alias_refresh_window` 内で更新されているかを確認し、`alias_hard_expiry` を超えている場合はエントリを破棄して再取得する。
+1. Inspect the request log entry for the `chunker_handle` hint emitted by Torii.
+2. Compare against the manifest profile list served by the Pin Registry
+   (`/v1/sorafs/pin/<cid>`). The manifest MUST include a chunker matching the
+   request.
+3. If the manifest is missing, publish a successor manifest via
+   `sorafs_cli manifest submit` and wait for governance approval.
+4. Confirm that the gateway cache refreshed within
+   `alias_refresh_window` (see `docs/source/sorafs_alias_policy.md`). If the
+   cache exceeded `alias_hard_expiry`, evict locally and re-request.
 
-### マニフェストバリアント欠如（C2）
+### Manifest Variant Missing (`C2`)
 
-1. `sorafs-manifest inspect` で要求プロファイルが存在するか確認。
-2. エイリアスが該当プロファイルを持たないマニフェストに紐付いている場合は後継マニフェストを提出し、レプリケーションオーダーを発行する。
-3. レジストリが `alias-proof-updated` SSE を配信しているか、ゲートウェイが購読できているかを確認。TLS や認証のドリフトで失敗する場合がある。
+1. Use `/v1/sorafs/pin/<cid>` to confirm the requested profile exists.
+2. If the alias already points at a manifest lacking the profile, submit a
+   successor manifest and trigger replication orders.
+3. Verify that registries broadcast `alias-proof-updated` SSE events and that
+   the gateway subscribed successfully. Missing events often indicate TLS or
+   auth drift.
 
-### 入場エンベロープ不一致（C3）
+### Admission Envelope Mismatch (`C3`)
 
-1. `sorafs-manifest attest --cid <cid>` で入場エンベロープを再生成。
-2. Norito ペイロードダイジェストがマニフェスト CID と一致するか確認し、乖離があればガバナンスログが古い可能性が高い。
-3. `sorafs-manifest verify` で議会署名を検証し、最新ローテーションの公開鍵と整合させる。
-4. エンベロープが失効したガバナンスエポックのものであれば、新しいスナップショットを取得しない限りゲートウェイは受け付けてはならない。
+1. Run `cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission verify --envelope=<envelope.to>` to validate the provider admission envelope. Include `--proposal`, `--advert`, or `--advert-body` sidecars when available so the tool checks the envelope binding.
+2. Run `cargo run -p sorafs_manifest --bin sorafs-validate -- admission --input <envelope.to>` to emit the SF-11 validation report and telemetry evidence.
+3. Confirm manifest council signatures with `sorafs_cli manifest verify-signature`, ensuring public
+   keys align with the latest rotation.
+4. If the envelope belongs to a revoked governance epoch, operators must fetch a
+   newer snapshot before the gateway accepts the manifest.
 
-### Capability GREASE／`Sora-Dag-Scope` 欠如（C4/C5）
+### Capability TLV GREASE / Missing Dag Scope (`C4`, `C5`)
 
-1. HTTP リクエストを捕捉し、クライアントが機能リストを広告しているか確認。
-2. GREASE TLV が含まれる場合は、クライアントが GREASE RFC で定義されたプレビューフラグを有効化しているか確認し、そうでなければ許可済み機能のみ送信するよう案内する。
-3. `Sora-Dag-Scope` が欠如している場合は、オーケストレーターや SDK の設定でヘッダーを自動付与する。付与できない場合は SDK の退行である。
+1. Capture the HTTP request to ensure the client advertises a capability list.
+2. If GREASE TLVs appear, confirm the client enabled the preview flag listed in
+   the GREASE RFC; if not, instruct the client to align with the published
+   manifest capability table.
+3. For missing `Sora-Dag-Scope`, update the orchestrator or SDK configuration to
+   inject the header automatically; failure to do so indicates SDK regression.
 
-### 未サポート圧縮（C6）
+### Unsupported Encoding (`C6`)
 
-1. Pin Registry スナップショットで `StreamEncodingPolicy` を確認。
-2. 圧縮が禁止されている場合は `compression` 機能を有効化した後継マニフェストを公開する。許可されている場合はクライアントの `Accept-Encoding` を調整する。
+1. Inspect the manifest `StreamEncodingPolicy` in the Pin Registry snapshot.
+2. If compression is disallowed, consider enabling the `compression` capability
+   and publishing a successor manifest. Otherwise, strip `Accept-Encoding` from
+   client requests or negotiate deflate/gzip explicitly.
 
-### 証明検証失敗（C7）
+### Proof Validation Failed (`C7`)
 
-1. `cargo test -p integration_tests sorafs_gateway_conformance` でリプレイハーネスを走らせ、負のフィクスチャで同じ失敗が再現するか確認。
-2. `fixtures/sorafs_gateway/conformance/proofs/*.norito` にある PoR トランスクリプトを検査し、改ざんがないか調べる。
-3. 上流に起因する破損であれば該当プロバイダーを隔離し、健全なレプリカへマニフェストエイリアスを切り替える。インシデント ID をガバナンスログに記録する。
+1. Run the replay harness (`cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`)
+   against the gateway; ensure the negative fixture reproduces the failure.
+2. Inspect the PoR transcript in
+   `fixtures/sorafs_gateway/conformance/proofs/*.norito` for tampering.
+3. If corruption originated upstream, quarantine the provider and rotate the
+   manifest alias to a healthy replica. Record incident IDs in governance logs.
 
-## 開発者の責務
+## Developer Responsibilities
 
-- SDK は `error`・`reason`・`details` をそのまま表面化し、通信エラーへ丸めてはならない。
-- 上記カタログに対応する型付きエラー列挙を提供し、`4xx` 拒否を決定的失敗として扱ってリトライバックオフを抑制する。
-- オートフェイルオーバーを提供する場合は、`unsupported_chunker` でかつ互換プロファイルが存在するときのみ別プロバイダーへの再試行を許可する。
-- クライアントライブラリも同じテレメトリラベルで拒否イベントを記録し、ゲートウェイ側との相関を容易にする。
-- 統合テストではセルフサートキットで配布されるフィクスチャを利用し、SDK とゲートウェイの挙動のずれを防ぐ。
+- SDKs MUST surface refusal responses verbatim, including `error`, `reason`, and
+  `details`, and avoid coercing failures into transport errors.
+- Provide typed error enums mirroring the catalogue above and ensure retries
+  treat `4xx` refusals as deterministic (no exponential backoff).
+- When SDKs expose automatic fallback, only retry against a different provider
+  if the refusal reason is `unsupported_chunker` and a matching profile exists.
+- Client libraries MUST log refusal events with the same telemetry labels so
+  operators can correlate gateway and client trends.
+- Integration tests SHOULD import the canonical fixtures referenced in the
+  self-certification kit to avoid drift between SDK and gateway behaviour.
 
-## コンプライアンスと監視
+## Compliance & Monitoring
 
-- ゲートウェイは `sorafs_gateway_refusals_total` をエクスポートし、少なくとも `reason` ラベルを保持する。可能なら `profile`、`provider_id`、`scope` も付与する。
-- アラート:
-  - `unsupported_chunker` が 5 分間で 25/min を超える場合は `critical` を発報。
-  - 1 時間移動平均を 2σ 以上超える拒否総数が観測された場合は `warning` を発報。
-- ログはベアラートークンやセッションシークレットをマスクし、監査要件を満たすよう 30 日以上保持する。
-- 同一種類の拒否が 15 分以上継続、またはトラフィックの 5% 以上に影響する場合はインシデントとして記録する。
-- デプロイ前に必ずリプレイハーネスの拒否スイートを CI で実行し、失敗した場合は昇格をブロックする。
+- Gateways MUST expose `sorafs_gateway_refusals_total` with at least the `reason`
+  label and SHOULD include `profile`, `provider_id`, and `scope`.
+- Alerts:
+  - Trigger `critical` alert if `unsupported_chunker` rates spike above
+    `threshold=25/minute` for five minutes.
+  - Trigger `warning` alert if total refusals exceed the moving one-hour mean by
+    more than two standard deviations.
+- Logs MUST redact bearer tokens and session secrets. Retain refusal logs for at
+  least 30 days to satisfy governance audits.
+- Operators MUST document refusals in incident runbooks when a refusal type
+  persists beyond 15 minutes or impacts more than 5% of traffic.
+- Ensure CI pipelines run the replay harness refusal suite before deployment;
+  failures block promotion.
 
-## 導入チェックリスト
+## Integration Checklist
 
-ゲートウェイまたは SDK のリリース前に以下を確認してください。
+Before onboarding a gateway or SDK release, confirm:
 
-1. リプレイハーネスの負のシナリオが決定的なステータスコードで成功する。
-2. セルフサートレポートに拒否件数と一致するテレメトリラベルが含まれる。
-3. ダッシュボードで拒否カウンターの基線とアラートが可視化されている。
-4. 運用ランブックが本ガイダンスを参照している。
-5. SDK リリースノートに拒否ハンドリングの変更が記載されている。
+1. Replay harness negative scenarios pass with deterministic status codes.
+2. `self-cert` report includes refusal counts with matching telemetry labels.
+3. Dashboards plot the refusal counters with baselines and alerts configured.
+4. Operator runbooks reference this document for remediation steps.
+5. Developers updated SDK release notes summarising any new refusal handling.
 
-## 変更管理
+## Change Management
 
-- 拒否コードや HTTP ステータスを変更する場合は以下を必ず実施する。
-  1. 本ガイドとテストマトリクスを更新する。
-  2. フィクスチャを再生成し、リプレイハーネスのカバレッジを更新する。
-  3. ガバナンス評議会から署名付きマニフェストの承認を得る。
-- 新しい拒否経路を本番導入する際は、ロードマップ項目 SF-5c の状態を最新化し、ドキュメント・テスト・テレメトリの乖離を防ぐ。
+- Any modification to refusal codes or HTTP statuses requires:
+  1. Update to this guidance document and the test matrix.
+  2. Regenerated fixtures and replay harness coverage.
+  3. Governance council approval with signed manifest.
+- Keep roadmap item SF-5c updated when new refusal paths are added or promoted
+  to production to avoid drift between the docs, tests, and telemetry.

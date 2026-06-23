@@ -218,3 +218,15 @@ groups:
             unexpected provider transfers. Check the latest `capacity_reconcile.py` run,
             compare the `/v1/sorafs/capacity/state` snapshot against the executed XOR
             ledger export, and block treasury approval until the mismatch is resolved.
+      - alert: SoraFSEgressCounterDrift
+        expr: torii_sorafs_egress_drift_ratio{source=~"gateway|orchestrator"} > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS egress counter drift detected"
+          description: |
+            Provider {{ $labels.provider }} has {{ $labels.source }} egress byte counters
+            more than 10% away from billing `RecordCapacityTelemetry.egress_bytes` for
+            10 minutes (ratio={{ printf "%.2f" $value }}). Reconcile gateway,
+            orchestrator, and billing windows before approving capacity settlement.

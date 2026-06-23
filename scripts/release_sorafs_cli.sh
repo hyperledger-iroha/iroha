@@ -263,7 +263,7 @@ if [[ -z "$cli_path" ]]; then
   cli_path="${workspace}/target/release/sorafs_cli"
   if [[ ! -x "$cli_path" ]]; then
     echo "Building sorafs_cli (release)..."
-    (cd "$workspace" && cargo build -p sorafs_car --features cli --bin sorafs_cli --release)
+    (cd "$workspace" && cargo build -p sorafs_orchestrator --bin sorafs_cli --release)
   fi
 else
   cli_path="$(abs_path "$cli_path")"

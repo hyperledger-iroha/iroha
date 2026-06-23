@@ -44,7 +44,7 @@ Los parámetros de configuración están configurados en las descripciones de la
 Готовность прямого режима теперь включает покрытие как в оркестраторе, так и в CLI-крейтах:- `direct_only_policy_rejects_soranet_only_providers` garantiza, что `TransportPolicy::DirectOnly` быстро падает, когда каждый кандидат advert поддерживает только реле SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` garantiza la utilización de Torii/QUIC, código de descarga y configuración de SoraNet сессии.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` en lugar de `docs/examples/sorafs_direct_mode_policy.json`, qué documentos están disponibles en el momento утилитами-хелперами.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` запускает `sorafs_cli fetch --transport-policy=direct-only` против мокнутого Torii gateway, previa prueba de humo para el registro regular, фиксирующих прямые транспорты.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` запускает `sorafs_cli fetch --transport-policy=direct-only` против мокнутого Torii gateway, previa prueba de humo para el registro regular, фиксирующих прямые транспорты.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` implementa el comando JSON y el marcador de programación para la implementación automática.
 
 Utilice estos datos antes de la publicación pública:

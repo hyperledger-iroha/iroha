@@ -44,7 +44,7 @@ Perillas de control del lado de la puerta de enlace `docs/examples/sorafs_gatewa
 Preparación en modo directo اب Orchestrator اور CLI cajas دونوں میں cobertura شامل کرتی ہے:- `direct_only_policy_rejects_soranet_only_providers` اس بات کو یقینی بناتا ہے کہ `TransportPolicy::DirectOnly` تیزی سے fail کرے جب ہر anuncio candidato صرف Soporte de retransmisiones SoraNet کرتا ہو۔【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` یہ یقینی بناتا ہے کہ Torii/QUIC transports موجود ہوں تو انہی کو استعمال کیا جائے اور SoraNet retransmite la sesión سے خارج رکھا جائے۔【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` analizar کرتا ہے تاکہ documentos auxiliares کے ساتھ alineados رہیں۔【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` کو se burló de la puerta de enlace Torii کے خلاف چلتا ہے، جو ambientes regulados کے لیے prueba de humo فراہم کرتا ہے جہاں pin de transporte directo ہوتے ہیں۔【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` کو se burló de la puerta de enlace Torii کے خلاف چلتا ہے، جو ambientes regulados کے لیے prueba de humo فراہم کرتا ہے جہاں pin de transporte directo ہوتے ہیں۔【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` اسی comando کو política JSON اور persistencia del marcador کے ساتھ wrap کرتا ہے تاکہ automatización de implementación ہو سکے۔
 
 Las actualizaciones publican کرنے سے پہلے suite enfocada چلائیں:

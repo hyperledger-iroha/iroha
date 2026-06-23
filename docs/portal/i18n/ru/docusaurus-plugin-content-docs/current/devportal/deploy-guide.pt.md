@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 продвижение псевдонима, проверка и инструкции по откату для предварительного просмотра и выпуска каждого файла
 сейчас воспроизводство и аудит.
 
-Предположим, что вы говорили о двоичном файле `sorafs_cli` (созданном из `--features cli`), доступ к
+Предположим, что вы говорили о двоичном файле `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), доступ к
 конечная точка Torii с разрешениями на регистрацию контактов и учетными данными OIDC для Sigstore. Охрана сегредос
 долгое время (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, токены Torii) в своем хранилище CI; как
 execucoes locais podem carrega-los a partir de Export do Shell.
@@ -24,7 +24,7 @@ execucoes locais podem carrega-los a partir de Export do Shell.
 ## Предварительные требования
 
 - Узел 18.18+ com `npm` или `pnpm`.
-- `sorafs_cli` и часть `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` и часть `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL-адрес Torii, который выставляет `/v1/sorafs/*`, чтобы получить конфиденциальную информацию/задать приватность авторизации, чтобы можно было отправить манифесты и псевдонимы.
 — Эмиссор OIDC (GitHub Actions, GitLab, удостоверение рабочей нагрузки и т. д.) для эмиттера `SIGSTORE_ID_TOKEN`.
 - Необязательно: `examples/sorafs_cli_quickstart.sh` для запуска и `docs/source/sorafs_ci_templates.md` для формирования рабочих процессов GitHub/GitLab.

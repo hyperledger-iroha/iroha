@@ -95,7 +95,11 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS = frozenset(
     ("device_family", "device_model", "device_codename")
 )
 ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS = frozenset(
-    ("device_fingerprint_sha256", "attestation_challenge_sha256")
+    (
+        "device_fingerprint_sha256",
+        "attestation_challenge_sha256",
+        "d2d_payment_transcript_sha256",
+    )
 )
 
 
@@ -235,6 +239,8 @@ RELEASE_BUNDLE_ALLOWED_ANDROID_SECTION_KEYS = frozenset(
         "missing_device_families",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
         "duplicate_bindings",
         "signed_evidence",
         "trusted_signer_public_key_sha256",
@@ -438,6 +444,8 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "missing_device_families",
             "covered_d2d_payment_transports",
             "missing_d2d_payment_transports",
+            "covered_d2d_payment_transports_by_family",
+            "missing_d2d_payment_transport_pairs",
             "duplicate_bindings",
             "signed_evidence",
             "min_signed_at_utc",
@@ -530,6 +538,15 @@ def _blocked_release_bundle_manifest(
             "missing_d2d_payment_transports": list(
                 readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
             ),
+            "covered_d2d_payment_transports_by_family": {
+                family: []
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+            "missing_d2d_payment_transport_pairs": [
+                {"device_family": family, "transport": transport}
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+                for transport in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
+            ],
             "duplicate_bindings": {},
             "slots": [],
             "signed_evidence": {},
@@ -801,11 +818,12 @@ def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str
                 readiness._duplicate_json_key_message(label, exc),  # type: ignore[attr-defined]
             )
         ]
-    except readiness.NonFiniteJsonConstantError as exc:  # type: ignore[attr-defined]
+    except readiness.NonFiniteJsonConstantError:  # type: ignore[attr-defined]
         return None, [
             _blocker(
                 f"{code_prefix}_invalid_json",
-                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+                f"{label} is not strict JSON: non-finite constant "
+                f"{readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} is not allowed",
             )
         ]
     if not isinstance(payload, dict):
@@ -1156,6 +1174,8 @@ def _check_android_signed_evidence_summary_shape(
             )
         ]
 
+    min_bound = _parsed_android_signed_bound(android, "min_signed_at_utc")
+    max_bound = _parsed_android_signed_bound(android, "max_signed_at_utc")
     for raw_slot, entry in signed_evidence_summary.items():
         slot, slot_blockers = _validate_android_manifest_slot(raw_slot)
         for blocker in slot_blockers:
@@ -1249,6 +1269,24 @@ def _check_android_signed_evidence_summary_shape(
                                     "+00:00",
                                     "Z",
                                 ),
+                            )
+                        )
+                    if min_bound is not None and parsed_timestamp < min_bound:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_signed_bounds_drift",
+                                "Android signed-evidence summary timestamp must not predate min_signed_at_utc",
+                                slot=display_slot,
+                                field="min_signed_at_utc",
+                            )
+                        )
+                    if max_bound is not None and parsed_timestamp > max_bound:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_signed_bounds_drift",
+                                "Android signed-evidence summary timestamp must not exceed max_signed_at_utc",
+                                slot=display_slot,
+                                field="max_signed_at_utc",
                             )
                         )
             elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS:
@@ -1391,6 +1429,22 @@ def _check_android_signed_evidence_summary_shape(
                     )
                 )
     return blockers
+
+
+def _parsed_android_signed_bound(
+    android: dict[str, Any],
+    field: str,
+) -> dt.datetime | None:
+    value = android.get(field)
+    if not isinstance(value, str) or device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
+        return None
+    parsed, parse_blocker = readiness.parse_utc_timestamp(
+        value,
+        f"Android readiness summary {field}",
+    )
+    if parse_blocker is not None:
+        return None
+    return parsed
 
 
 def _check_android_duplicate_bindings_summary_shape(
@@ -1549,7 +1603,10 @@ def _check_android_duplicate_bindings_summary_shape(
                     kagemusha = slot_kagemusha_by_slot.get(slot)
                     if not isinstance(kagemusha, dict):
                         continue
-                    if kagemusha.get(raw_field) == value_sha256:
+                    if value_sha256 in _android_duplicate_binding_slot_values(
+                        kagemusha,
+                        raw_field,
+                    ):
                         continue
                     blockers.append(
                         _blocker(
@@ -1595,6 +1652,91 @@ def _check_android_duplicate_bindings_summary_shape(
     return blockers
 
 
+def _android_duplicate_binding_slot_values(
+    kagemusha: dict[str, Any],
+    field: str,
+) -> set[str]:
+    values: set[str] = set()
+    value = kagemusha.get(field)
+    if (
+        isinstance(value, str)
+        and device_lab.SHA256_HEX_RE.fullmatch(value) is not None
+        and value != "0" * 64
+    ):
+        values.add(value)
+    if field != "d2d_payment_transcript_sha256":
+        return values
+    transcripts = kagemusha.get(device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if not isinstance(transcripts, dict):
+        return values
+    for entry in transcripts.values():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("sha256")
+        if (
+            isinstance(digest, str)
+            and device_lab.SHA256_HEX_RE.fullmatch(digest) is not None
+            and digest != "0" * 64
+        ):
+            values.add(digest)
+    return values
+
+
+def _expected_android_d2d_payment_transports_by_family() -> dict[str, list[str]]:
+    """Return the complete standard-family D2D transport matrix."""
+
+    return {
+        family: list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS)
+        for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    }
+
+
+def _android_d2d_payment_transports_by_family_is_shaped(value: Any) -> bool:
+    """Return whether a summary contains canonical D2D transport lists by family."""
+
+    if not isinstance(value, dict) or set(value) != set(
+        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    ):
+        return False
+    for transports in value.values():
+        if (
+            not isinstance(transports, list)
+            or transports != sorted(set(transports))
+            or any(
+                not isinstance(transport, str)
+                or transport not in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
+                for transport in transports
+            )
+        ):
+            return False
+    return True
+
+
+def _android_missing_d2d_payment_transport_pairs_are_shaped(value: Any) -> bool:
+    """Return whether missing D2D family/transport pairs are canonical objects."""
+
+    if not isinstance(value, list):
+        return False
+    seen: set[tuple[str, str]] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"device_family", "transport"}:
+            return False
+        family = item.get("device_family")
+        transport = item.get("transport")
+        if (
+            not isinstance(family, str)
+            or family not in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            or not isinstance(transport, str)
+            or transport not in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
+        ):
+            return False
+        key = (family, transport)
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
+
+
 def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str, Any]]:
     """Validate release-facing Android readiness summary lists."""
 
@@ -1627,6 +1769,32 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                     field=field,
                 )
             )
+    field = "covered_d2d_payment_transports_by_family"
+    field_ok = _android_d2d_payment_transports_by_family_is_shaped(
+        android.get(field)
+    )
+    list_fields_ok[field] = field_ok
+    if not field_ok:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_summary_android_d2d_transport_family_shape",
+                "Android readiness summary covered D2D transports by family must be canonical",
+                field=field,
+            )
+        )
+    field = "missing_d2d_payment_transport_pairs"
+    field_ok = _android_missing_d2d_payment_transport_pairs_are_shaped(
+        android.get(field)
+    )
+    list_fields_ok[field] = field_ok
+    if not field_ok:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_summary_android_d2d_transport_pair_shape",
+                "Android readiness summary missing D2D family/transport pairs must be canonical",
+                field=field,
+            )
+        )
     signed_evidence_summary = android.get("signed_evidence")
     slots = android.get("slots")
     validated_slots: list[str] = []
@@ -1955,6 +2123,37 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                             )
                 d2d_transcripts = kagemusha.get("d2d_payment_transcripts")
                 d2d_transcript_paths: dict[str, str] = {}
+                d2d_transcript_digests: dict[str, str] = {}
+                primary_d2d_path = kagemusha.get("d2d_payment_transcript_path")
+                primary_d2d_digest = kagemusha.get("d2d_payment_transcript_sha256")
+                if (
+                    isinstance(d2d_transport, str)
+                    and d2d_transport in device_lab.D2D_PAYMENT_TRANSPORTS
+                ):
+                    if isinstance(primary_d2d_path, str):
+                        primary_path_errors: list[str] = []
+                        primary_safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                            primary_d2d_path,
+                            primary_path_errors,
+                            "Android readiness summary Kagemusha slot primary D2D transcript path",
+                        )
+                        if (
+                            primary_safe_relative is not None
+                            and device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                primary_safe_relative,
+                                "handoff",
+                            )
+                        ):
+                            d2d_transcript_paths[
+                                primary_safe_relative
+                            ] = d2d_transport
+                    if (
+                        isinstance(primary_d2d_digest, str)
+                        and device_lab.SHA256_HEX_RE.fullmatch(primary_d2d_digest)
+                        is not None
+                        and primary_d2d_digest != "0" * 64
+                    ):
+                        d2d_transcript_digests[primary_d2d_digest] = d2d_transport
                 if d2d_transcripts is not None:
                     if not isinstance(d2d_transcripts, dict) or not d2d_transcripts:
                         blockers.append(
@@ -2039,6 +2238,39 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                     _blocker(
                                         "kagemusha_release_summary_android_slots_d2d_transcripts",
                                         "Android readiness summary Kagemusha slot D2D transcript sha256 must be non-zero lowercase sha256 hex",
+                                        slot=display_slot,
+                                        field=transport,
+                                    )
+                                )
+                            else:
+                                previous_transport = d2d_transcript_digests.get(
+                                    digest
+                                )
+                                if (
+                                    previous_transport is not None
+                                    and previous_transport != transport
+                                ):
+                                    blockers.append(
+                                        _blocker(
+                                            "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                            "Android readiness summary Kagemusha slot D2D transcript bindings must not reuse sha256 digests across transports",
+                                            slot=display_slot,
+                                            field=transport,
+                                        )
+                                    )
+                                else:
+                                    d2d_transcript_digests[digest] = transport
+                            if (
+                                transport == d2d_transport
+                                and (
+                                    binding["path"] != primary_d2d_path
+                                    or digest != primary_d2d_digest
+                                )
+                            ):
+                                blockers.append(
+                                    _blocker(
+                                        "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                        "Android readiness summary Kagemusha slot primary D2D transcript binding must match the primary path and digest",
                                         slot=display_slot,
                                         field=transport,
                                     )
@@ -2345,6 +2577,26 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
             _blocker(
                 "kagemusha_release_summary_android_d2d_transports",
                 "Android readiness summary missing_d2d_payment_transports must be empty",
+            )
+        )
+    if list_fields_ok.get("covered_d2d_payment_transports_by_family"):
+        if android.get(
+            "covered_d2d_payment_transports_by_family"
+        ) != _expected_android_d2d_payment_transports_by_family():
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_d2d_transports",
+                    "Android readiness summary must cover every required offline D2D transport for every standard device family",
+                )
+            )
+    if (
+        list_fields_ok.get("missing_d2d_payment_transport_pairs")
+        and android.get("missing_d2d_payment_transport_pairs") != []
+    ):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_summary_android_d2d_transports",
+                "Android readiness summary missing_d2d_payment_transport_pairs must be empty",
             )
         )
     if list_fields_ok.get("trusted_signer_public_key_sha256"):
@@ -3135,7 +3387,15 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                     "Android device-lab summary must cover the full standard matrix",
                 )
             )
+        duplicate_bindings = android.get("duplicate_bindings")
         blockers.extend(_check_android_duplicate_bindings_summary_shape(android))
+        if isinstance(duplicate_bindings, dict) and duplicate_bindings:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_duplicate_bindings_present",
+                    "Android duplicate-bindings summary must be empty for a production release",
+                )
+            )
         blockers.extend(_check_android_signed_evidence_summary_shape(android))
     for name, state in SUMMARY_REQUIRED_SECTION_STATES.items():
         section = _section(summary, name)
@@ -3299,6 +3559,14 @@ def _compare_android_summary_binding(
         "missing_d2d_payment_transports": (
             "kagemusha_release_summary_android_d2d_transports_drift",
             "Android D2D payment transport summary no longer matches validated device-lab evidence",
+        ),
+        "covered_d2d_payment_transports_by_family": (
+            "kagemusha_release_summary_android_d2d_transports_drift",
+            "Android per-family D2D payment transport summary no longer matches validated device-lab evidence",
+        ),
+        "missing_d2d_payment_transport_pairs": (
+            "kagemusha_release_summary_android_d2d_transports_drift",
+            "Android missing per-family D2D payment transport summary no longer matches validated device-lab evidence",
         ),
         "duplicate_bindings": (
             "kagemusha_release_summary_android_duplicate_bindings_drift",
@@ -3555,6 +3823,8 @@ def _compare_validated_sections(
     for field in (
         "missing_device_families",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
     ):
         blockers.extend(
             _compare_field(android_summary, android, "android_device_lab", field)
@@ -4873,6 +5143,8 @@ def _check_release_bundle_expected_android_summary_binding(
         "missing_device_families",
         "covered_d2d_payment_transports",
         "missing_d2d_payment_transports",
+        "covered_d2d_payment_transports_by_family",
+        "missing_d2d_payment_transport_pairs",
         "duplicate_bindings",
         "trusted_signer_public_key_sha256",
     ):
@@ -5880,6 +6152,32 @@ def _check_release_bundle_android_section_shape(
                     field=field,
                 )
             )
+    field = "covered_d2d_payment_transports_by_family"
+    field_ok = _android_d2d_payment_transports_by_family_is_shaped(
+        android.get(field)
+    )
+    list_fields_ok[field] = field_ok
+    if not field_ok:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_d2d_transport_family_shape",
+                "Kagemusha release bundle Android covered D2D transports by family must be canonical",
+                field=field,
+            )
+        )
+    field = "missing_d2d_payment_transport_pairs"
+    field_ok = _android_missing_d2d_payment_transport_pairs_are_shaped(
+        android.get(field)
+    )
+    list_fields_ok[field] = field_ok
+    if not field_ok:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_d2d_transport_pair_shape",
+                "Kagemusha release bundle Android missing D2D family/transport pairs must be canonical",
+                field=field,
+            )
+        )
 
     if list_fields_ok.get("covered_device_families"):
         expected_families = sorted(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
@@ -5920,6 +6218,26 @@ def _check_release_bundle_android_section_shape(
                 "Kagemusha release bundle Android missing_d2d_payment_transports must be empty",
             )
         )
+    if list_fields_ok.get("covered_d2d_payment_transports_by_family"):
+        if android.get(
+            "covered_d2d_payment_transports_by_family"
+        ) != _expected_android_d2d_payment_transports_by_family():
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_d2d_transports",
+                    "Kagemusha release bundle Android must cover every required offline D2D transport for every standard device family",
+                )
+            )
+    if (
+        list_fields_ok.get("missing_d2d_payment_transport_pairs")
+        and android.get("missing_d2d_payment_transport_pairs") != []
+    ):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_d2d_transports",
+                "Kagemusha release bundle Android missing_d2d_payment_transport_pairs must be empty",
+            )
+        )
     if list_fields_ok.get("trusted_signer_public_key_sha256"):
         signer_digests = android.get("trusted_signer_public_key_sha256")
         assert isinstance(signer_digests, list)
@@ -5948,6 +6266,14 @@ def _check_release_bundle_android_section_shape(
         _release_manifest_android_blocker(item)
         for item in _check_android_duplicate_bindings_summary_shape(android)
     )
+    duplicate_bindings = android.get("duplicate_bindings")
+    if isinstance(duplicate_bindings, dict) and duplicate_bindings:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_duplicate_bindings_present",
+                "Kagemusha release bundle Android duplicate_bindings must be empty",
+            )
+        )
     blockers.extend(
         _release_manifest_android_blocker(item)
         for item in _check_android_signed_evidence_summary_shape(android)
@@ -6436,6 +6762,14 @@ def build_release_bundle(
             ),
             "missing_d2d_payment_transports": android.get(
                 "missing_d2d_payment_transports",
+                [],
+            ),
+            "covered_d2d_payment_transports_by_family": android.get(
+                "covered_d2d_payment_transports_by_family",
+                {},
+            ),
+            "missing_d2d_payment_transport_pairs": android.get(
+                "missing_d2d_payment_transport_pairs",
                 [],
             ),
             "duplicate_bindings": android.get("duplicate_bindings", {}),

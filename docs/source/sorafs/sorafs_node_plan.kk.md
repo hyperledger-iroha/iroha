@@ -1,14 +1,3 @@
----
-lang: kk
-direction: ltr
-source: docs/source/sorafs/sorafs_node_plan.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: a42f39287fcb33f421b891f15ac9aef28a57826719ccfb388bd6eaa062a7a199
-source_last_modified: "2025-12-29T18:16:36.130900+00:00"
-translation_last_reviewed: 2026-02-07
----
-
 # SoraFS Node Prototype Implementation Plan (SF-3)
 
 SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii
@@ -123,14 +112,18 @@ Logs / events:
 - Documentation (`sorafs_node_storage.md`) updated to match implementation; operator guide drafted.
 - Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
 
-## Remaining integration tasks (M2 focus)
+## M2 Integration Status
 
-| Task | Description | Dependencies |
-|------|-------------|--------------|
-| PoR ingestion worker | Expand `NodeHandle::ingest_por_proof` to accept streamed proofs, persist them under `PorCoordinatorRuntime::storage`, and expose a Norito status endpoint (`/v1/sorafs/por/ingestion`). | `crates/iroha_torii/src/sorafs/por.rs`, `crates/sorafs_node/src/por.rs`. |
-| Challenge queue plumbing | Subscribe to the coordinator events emitted by `PorCoordinatorRuntime::run_epoch`, fan out challenges to storage workers, and ensure retries are idempotent across restarts. | Runtime wiring hooks introduced in `PorCoordinatorRuntime`. |
-| Governance telemetry | Emit `sorafs_por_ingest_backlog` + `sorafs_por_ingest_failures_total` metrics, thread them into the gateway dashboards, and document alert thresholds in `docs/source/sorafs_observability_plan.md`. | Observability plan + `crates/iroha_telemetry`. |
-| Operator tooling | Add a `sorafs-node ingest por --manifest <cid>` helper plus runbook updates so operators can replay proofs locally before submitting. | CLI additions under `crates/sorafs_node/src/bin/sorafs-node.rs`. |
+The M2 local implementation items are now represented by the runtime and CLI
+surfaces below. Remaining SF‑3 work is operational hardening: hosted rollout
+evidence, governance policy tuning, and SDK management ergonomics.
+
+| Capability | Status | References |
+|------------|--------|------------|
+| PoR ingestion worker and status endpoint | Implemented locally. | `crates/sorafs_node/src/lib.rs`, `crates/iroha_torii/src/sorafs/api.rs`, `crates/iroha_torii/src/routing.rs`. |
+| Challenge queue and replay plumbing | Implemented locally through `PorCoordinatorRuntime` storage interactions and operator replay. | `crates/sorafs_node/src/por.rs`, `crates/sorafs_node/src/bin/sorafs-node.rs`. |
+| Governance telemetry | Implemented locally for ingest backlog/failure counters and dashboard export. | `crates/iroha_telemetry/src/metrics.rs`, `docs/source/sorafs_observability_plan.md`. |
+| Operator tooling | Implemented locally with `sorafs-node ingest por` and runbook coverage. | `crates/sorafs_node/src/bin/sorafs-node.rs`, `docs/source/sorafs/runbooks/sorafs_node_ops.md`. |
 
 - ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now delegates to
   `sorafs_node::NodeHandle::por_ingestion_status`, returning backlog depth, the oldest epoch/deadline, and the
@@ -142,8 +135,8 @@ Logs / events:
   the HTTP API. Regression tests cover the new flow and the runbooks/portal docs describe the workflow for SREs
   preparing governance tickets.【crates/sorafs_node/src/bin/sorafs-node.rs:184】【crates/sorafs_node/tests/cli.rs:103】【docs/source/sorafs/runbooks/sorafs_node_ops.md:57】【docs/portal/docs/sorafs/node-operations.md:59】
 
-These items keep SF‑3 aligned with SF‑9 (PoR automation) and are being tracked in
-`roadmap.md` as part of the “deliver SoraFS tasks” call-out for March.
+These shipped items keep SF‑3 aligned with SF‑9 (PoR automation). Live rollout
+evidence and hosted governance archive hand-offs remain tracked in `roadmap.md`.
 
 ## Documentation & Ops Deliverables
 

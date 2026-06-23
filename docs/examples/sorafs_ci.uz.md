@@ -81,7 +81,7 @@ jobs:
 
 ## Eslatmalar
 
-- `sorafs_cli` yuguruvchida mavjud bo'lishi kerak (masalan, ushbu bosqichlardan oldin `cargo install --path crates/sorafs_car --features cli`).
+- `sorafs_cli` yuguruvchida mavjud bo'lishi kerak (masalan, ushbu bosqichlardan oldin `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli`).
 - Ish jarayoni aniq OIDC auditoriyasini taqdim etishi kerak (bu erda `sorafs`); Fulcio siyosatingizga mos kelish uchun `--identity-token-audience` sozlang.
 - Chiqarish quvuri boshqaruvni tekshirish uchun `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` va `artifacts/proof.json` arxivi kerak.
 - Deterministik namunaviy artefaktlar `fixtures/sorafs_manifest/ci_sample` da yashaydi; Agar sizga oltin manifestlar, bo'lak rejalar kerak bo'lsa yoki quvur liniyasini qayta hisoblamasdan JSON to'plami kerak bo'lganda ularni testlarga ko'chiring.

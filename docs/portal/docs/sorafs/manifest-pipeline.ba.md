@@ -57,7 +57,7 @@ I18NI000000020X өлөшләтә метамағлүмәттәрҙе идара �
 - Совет ҡултамғалары һәм факультатив метамағлүмәттәр (мәҫәлән, идентификаторҙар төҙөү).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

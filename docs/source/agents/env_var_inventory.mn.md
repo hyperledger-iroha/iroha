@@ -77,7 +77,7 @@ _Хамгийн сүүлд `python3 scripts/inventory_env_toggles.py --json docs
 
 ## CARGO_BIN_EXE_sorafs_cli (туршилт: 1)
 
-- тест: crates/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- тест: crates/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_tatch (туршилт: 1)
 
@@ -85,7 +85,7 @@ _Хамгийн сүүлд `python3 scripts/inventory_env_toggles.py --json docs
 
 ## CARGO_BIN_EXE_taikai_car (туршилт: 1)
 
-- тест: crates/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- тест: crates/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## АЧААНЫ_ХОГЫН_НЭР (бүтээгдэхүүн: 3)
 

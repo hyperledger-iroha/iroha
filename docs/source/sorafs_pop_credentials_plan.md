@@ -1,141 +1,86 @@
 ---
 title: Proof-of-Personhood Credential Pipeline
-summary: Final specification for SFM-4b1 covering enrollment, credential format, ZK proofs, rotation, APIs, and security.
+summary: SFM-4b1 implementation status for PoP credential foundations and the remaining issuer, verifier, and juror proof services.
 ---
 
 # Proof-of-Personhood Credential Pipeline
 
-## Goals & Scope
-- Issue, rotate, and revoke proof-of-personhood (PoP) credentials for juror participation in moderation panels and other governance workflows.
-- Provide selective-disclosure credentials with zero-knowledge membership proofs to protect juror privacy while ensuring eligibility.
-- Expose APIs, CLI tooling, and audit trails for enrollments, renewals, and revocations.
+## Current Status
 
-This specification completes **SFM-4b1 — POP credential pipeline**.
+SFM-4b1 is not shipped as a SoraFS proof-of-personhood credential service. The
+repository has reusable governance and policy-jury data structures that can bind
+future juror sortition to a PoP snapshot, but it does not contain the enrollment
+portal, credential issuer, credential registry, juror wallet, ZK membership
+proof generator, or SoraFS verifier service described by the original plan.
 
-## Architecture Overview
-| Component | Responsibility | Notes |
-|-----------|----------------|-------|
-| Enrollment portal (`pop_enroll`) | Guides candidates through identity verification and DID issuance. | Integrates with identity provider (KYC/attestation). |
-| Credential issuer (`pop_issuer`) | Signs credentials, updates commitment tree, publishes rollups to governance. | Multi-sig service operated by Identity WG + Governance. |
-| Credential registry | Stores Merkle commitment tree roots, revocation lists, event log. | Backed by Postgres + Governance DAG for public audit. |
-| Juror client tools (`sorafs pop`) | CLI/SDK for downloading credentials, generating proofs, syncing revocations. | Works offline except for revocation sync. |
-| Verification service (`pop_verifier`) | Validates proofs attached to sortition/vote payloads. | Embedded in sortition/voting services. |
+## Existing Foundations
 
-## Credential Format
-- Credential derived from BBS+ signature for selective disclosure (or CL signatures if preferred). Canonical Norito struct:
-  ```norito
-  struct PopCredentialV1 {
-      version: u8,
-      holder_did: String,
-      juror_weight: u32,
-      expiry_epoch: u32,
-      issuance_epoch: u32,
-      revocation_nonce: [u8; 16],
-      attributes: Metadata,          // optional region, language, expertise tags
-      issuer_signature: Signature,   // BBS+
-  }
-  ```
-- Commitment tree record stored as:
-  ```norito
-  struct PopCredentialCommitmentV1 {
-      version: u8,
-      merkle_root: Digest32,
-      valid_after_epoch: u32,
-      valid_until_epoch: u32,
-      revoked_nonces: Vec<[u8;16]>,
-      issuer_signature: Signature,
-  }
-  ```
+- `iroha_data_model::ministry::jury::PolicyJurySortitionV1` records a
+  `pop_snapshot_digest_blake2b_256` and juror `pop_identity` values for policy
+  jury draws.
+- `PolicyJurySortitionV1::validate` enforces committee size, duplicate juror
+  rejection, ordered waitlists, and valid failover references.
+- `docs/examples/ministry/policy_jury_roster_example.json` and
+  `docs/examples/ministry/policy_jury_sortition_example.json` provide example
+  roster and sortition payloads.
+- Governance ballot instructions and events can carry policy-jury votes, but
+  they are not a SoraFS PoP credential issuer or verifier.
 
-## Enrollment & Renewal Workflow
-1. Candidate completes identity checks via portal (leveraging Sora identity service; supports KYC or community attestation).
-2. Identity WG issues DID document referencing holder keys.
-3. Candidate signs enrollment request `PopEnrollmentRequestV1` and submits deposit (if required).
-4. `pop_issuer` generates credential, updates Merkle tree, publishes `PopCredentialCommitmentV1` to Governance DAG + Torii.
-5. Credential delivered encrypted (sealed box using holder public key). CLI `sorafs pop receive --case <id>` stores credential securely (local encrypted store).
-6. Renewal triggered 30 days prior to expiry; requires holder acknowledgement (`PopRenewalAckV1`) and optional revalidation. Revocation nonce rotated.
-7. Revocations handled by `PopCredentialRevokeV1` referencing nonce and reason; recipients sync via revocation feed.
+## Target Credential Model
 
-## Zero-Knowledge Proofs
-- Jurors generate `JurorProofV1`:
-  ```norito
-  struct JurorProofV1 {
-      case_id: Uuid,
-      credential_root: Digest32,
-      juror_commitment: Digest32, // hash of DID + nonce
-      merkle_proof: Vec<Digest32>,
-      zk_proof: Vec<u8>,          // Groth16 proof
-      expiry_epoch: u32,
-      signature: Signature,       // optional binding to juror key
-  }
-  ```
-- Proof circuit ensures:
-  - Credential included in root.
-  - Not revoked / not expired.
-  - Optional attribute constraints (region).
-  - Juror DID bound to proof.
-- Verification integrated into sortition service (SFM-4b) and voting backend.
-- CLI `sorafs pop prove --case <id>` generates proof offline using stored credential + latest commitment root.
+The production SoraFS credential stack still needs a credential format that
+binds:
 
-## APIs
-- `POST /v1/pop/enroll` — submit enrollment request (with DID + attestation).
-- `GET /v1/pop/manifest` — fetch latest commitment root and revocation list (versioned).
-- `GET /v1/pop/revocations?since=` — incremental updates.
-- `POST /v1/pop/renew` — ack renewal.
-- `POST /v1/pop/revoke` — governance/issuer endpoint to revoke credential.
-- `GET /v1/pop/status/{did}` — view credential metadata (authorized roles only).
-- All endpoints require mTLS + JWT scopes (`pop.enroll`, `pop.manage`, etc.).
+- holder DID or account identity;
+- juror eligibility class and optional regional or expertise attributes;
+- issuance and expiry epochs;
+- revocation nonce;
+- issuer signature;
+- commitment-tree root and revocation list version;
+- proof material that lets sortition and voting services verify membership
+  without exposing the holder identity.
 
-## CLI & SDK
-- `sorafs pop sync` — download latest commitment root + revocations.
-- `sorafs pop status` — show credential status, expiry, attributes.
-- `sorafs pop prove --case <uuid>` — generate proof file.
-- `sorafs pop revoke --nonce <hex>` (issuer).
-- SDK functions: `PopClient::fetch_manifest`, `::verify_proof`, `::generate_proof`.
+The specific signature scheme and ZK backend remain open implementation choices.
+When implemented, they must use deterministic Norito payloads, stable domain
+separation, and hardware-independent verification.
 
-## Storage & Audit
-- Credential store on holder device encrypted with passphrase + optional hardware token.
-- Issuer logs events in `pop_events` table (enrollment, renewal, revoke). Daily hash of events recorded in Governance DAG.
-- Commitment rollups pinned to IPFS for reproducibility.
-- Revocation list includes reason codes (pseudonymised).
+## Target Runtime Services
 
-## Observability & Alerts
-- Metrics:
-  - `sorafs_pop_enrollments_total{status}`
-  - `sorafs_pop_credentials_active`
-  - `sorafs_pop_revocations_total{reason}`
-  - `sorafs_pop_manifest_lag_seconds`
-  - `sorafs_pop_proof_verification_total{result}`
-- Alerts:
-  - Manifest update lag > 24h.
-  - High revocation spike.
-  - Proof verification failure rate >1%.
-- Logs: structured `pop_event`, `pop_revocation`, `pop_proof_request`.
+| Component | Responsibility | Local state |
+|-----------|----------------|-------------|
+| Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped. |
+| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Not shipped. |
+| Credential registry | Stores commitment roots, revocation updates, and event digests. | Not shipped. |
+| Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped. |
+| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Not shipped. |
 
-## Security & Privacy
-- Credentials never stored server-side; only commitments and hashed data.
-- Revocation list hashed; public output does not reveal DID.
-- Enrollment portal stores minimal PII; compliance with GDPR (erasure process).
-- Credential packages encrypted per holder; CLI enforces passphrase strength.
-- Issuer key managed via HSM with multi-signature approvals.
+Do not document `sorafs pop sync`, `sorafs pop status`,
+`sorafs pop prove`, or `sorafs pop revoke` as shipped commands until the CLI
+handlers and backing services exist.
 
-## Testing & Rollout
-- Unit tests for credential serialization, revocation, proof verification.
-- Integration tests using mock DID registry; ensure sortition accepts valid proofs and rejects revoked ones.
-- Fuzz tests on revocation list parsing.
-- Security testing: attempt replay of old proof, tampering with revocation data, forging credentials.
-- Rollout:
-  1. Implement issuer + registry; run staging with synthetic DIDs.
-  2. Release CLI/SDK; test offline proof generation.
-  3. Governance approves initial commitment root; publish to DAG.
-  4. Onboard pilot jurors; monitor metrics.
-  5. Full rollout before moderation panel launch.
+## Remaining Production Gates
 
-## Implementation Checklist
-- [x] Define credential and commitment schemas.
-- [x] Specify enrollment, renewal, revocation workflows.
-- [x] Document ZK proof generation/verification and API endpoints.
-- [x] Capture storage, audit, observability, and security requirements.
-- [x] Outline testing strategy and rollout plan.
+- Define `PopCredentialV1`, commitment-root, revocation, enrollment, renewal,
+  and proof payloads in the data model with Norito roundtrip tests.
+- Choose and implement the credential signature and membership-proof scheme with
+  deterministic verification.
+- Build the issuer and registry services, including key management, revocation
+  updates, commitment-root publication, and audit digests.
+- Build juror client storage, revocation sync, proof generation, and local
+  credential rotation.
+- Integrate proof verification with SoraFS moderation sortition and
+  commit-reveal voting.
+- Add negative tests for expired credentials, revoked nonces, wrong roots,
+  stale revocation lists, replayed proofs, and forged issuer signatures.
+- Publish operator and juror docs only after the service, CLI, and verifier
+  paths exist.
 
-With this specification, the Identity WG and governance platform can deploy the PoP credential pipeline that underpins juror sortition and other citizen-driven governance processes.
+## Validation
+
+Current validation is limited to the reusable policy-jury foundations:
+
+```sh
+cargo test -p iroha_data_model policy_jury
+```
+
+Add dedicated SFM-4b1 tests when the credential payloads and services land.

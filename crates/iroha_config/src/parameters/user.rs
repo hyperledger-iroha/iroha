@@ -21353,10 +21353,16 @@ pub struct SorafsStorage {
     pub pin: SorafsStoragePin,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
+    /// Optional publisher peer identifier used for signed Governance DAG blocks.
+    pub governance_dag_publisher_peer_id: Option<String>,
+    /// Optional Ed25519 signing-key path used for signed Governance DAG blocks.
+    pub governance_dag_signing_key_path: Option<PathBuf>,
 }
 
 impl Default for SorafsStorage {
     fn default() -> Self {
+        let governance_dag_signing_key_path =
+            defaults::sorafs::storage::governance_signing_key_path();
         Self {
             enabled: defaults::sorafs::storage::ENABLED,
             data_dir: defaults::sorafs::storage::data_dir(),
@@ -21370,6 +21376,9 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsStreamTokenConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
+            governance_dag_publisher_peer_id:
+                defaults::sorafs::storage::governance_publisher_peer_id(),
+            governance_dag_signing_key_path,
         }
     }
 }
@@ -21389,6 +21398,8 @@ impl SorafsStorage {
             stream_tokens: self.stream_tokens.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
+            governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
+            governance_dag_signing_key_path: self.governance_dag_signing_key_path,
         }
     }
 }
@@ -21490,6 +21501,10 @@ pub struct SorafsRepair {
     /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
     #[config(default = "defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO")]
     pub default_slash_penalty_nano: u128,
+    /// Per-auditor signed report/slash request rate (tokens/sec). None disables limiting.
+    pub auditor_rate_per_sec: Option<u32>,
+    /// Per-auditor signed report/slash request burst capacity. None disables limiting.
+    pub auditor_burst: Option<u32>,
 }
 
 impl Default for SorafsRepair {
@@ -21504,6 +21519,8 @@ impl Default for SorafsRepair {
             backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
             backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
             default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
+            auditor_rate_per_sec: defaults::sorafs::repair::AUDITOR_RATE_PER_SEC,
+            auditor_burst: defaults::sorafs::repair::AUDITOR_BURST,
         }
     }
 }
@@ -21520,6 +21537,14 @@ impl SorafsRepair {
             backoff_initial_secs: self.backoff_initial_secs.max(1),
             backoff_max_secs: self.backoff_max_secs.max(self.backoff_initial_secs.max(1)),
             default_slash_penalty_nano: self.default_slash_penalty_nano.max(1),
+            auditor_rate_per_sec: self
+                .auditor_rate_per_sec
+                .or(defaults::sorafs::repair::AUDITOR_RATE_PER_SEC)
+                .and_then(std::num::NonZeroU32::new),
+            auditor_burst: self
+                .auditor_burst
+                .or(defaults::sorafs::repair::AUDITOR_BURST)
+                .and_then(std::num::NonZeroU32::new),
         }
     }
 }
@@ -21588,6 +21613,8 @@ mod sorafs_repair_gc_tests {
             backoff_initial_secs: 0,
             backoff_max_secs: 0,
             default_slash_penalty_nano: 0,
+            auditor_rate_per_sec: Some(0),
+            auditor_burst: Some(0),
         };
         let actual = repair.parse();
         assert_eq!(actual.claim_ttl_secs, 1);
@@ -21597,6 +21624,18 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual.backoff_initial_secs, 1);
         assert_eq!(actual.backoff_max_secs, 1);
         assert_eq!(actual.default_slash_penalty_nano, 1);
+        assert_eq!(actual.auditor_rate_per_sec, None);
+        assert_eq!(actual.auditor_burst, None);
+
+        let default_repair = SorafsRepair::default().parse();
+        assert_eq!(
+            default_repair.auditor_rate_per_sec.map(|value| value.get()),
+            defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
+        );
+        assert_eq!(
+            default_repair.auditor_burst.map(|value| value.get()),
+            defaults::sorafs::repair::AUDITOR_BURST
+        );
 
         let gc = SorafsGc {
             enabled: true,

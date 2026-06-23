@@ -44,7 +44,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - `direct_only_policy_rejects_soranet_only_providers` يضمن أن `TransportPolicy::DirectOnly` يفشل بسرعة عندما يدعم كل advert مرشح مرحلات SoraNet فقط.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` يضمن استخدام نقل Torii/QUIC عند توفره واستبعاد مرحلات SoraNet من الجلسة.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` يحلل `docs/examples/sorafs_direct_mode_policy.json` لضمان بقاء الوثائق متوافقة مع أدوات المساعدة.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` يختبر `sorafs_cli fetch --transport-policy=direct-only` أمام بوابة Torii وهمية، موفرا اختبار smoke لبيئات منظمة تثبت النقل المباشر.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` يختبر `sorafs_cli fetch --transport-policy=direct-only` أمام بوابة Torii وهمية، موفرا اختبار smoke لبيئات منظمة تثبت النقل المباشر.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` يلف الأمر نفسه مع JSON السياسة وحفظ الـ scoreboard لأتمتة الإطلاق.
 
 شغّل المجموعة المركزة قبل نشر التحديثات:

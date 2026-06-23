@@ -9,100 +9,107 @@ source_last_modified: "2025-11-02T17:18:17.688536+00:00"
 translation_last_reviewed: 2026-01-22
 ---
 
-<!-- 日本語訳: docs/source/sorafs_gateway_dns_design_agenda.md -->
+# SoraFS Gateway & DNS Design Kickoff — Agenda Archive
 
-# SoraFS Gateway & DNS Design Kickoff — アジェンダ
+**Date:** 2025-03-03
+**Time:** 16:00–17:00 UTC (60 minutes)
+**Facilitator:** Networking TL
+**Meeting type:** Completed decision workshop (Zoom/Meet + shared notes doc)
 
-**日付:** 2025-03-03  
-**時間:** 16:00–17:00 UTC（60 分）  
-**ファシリテーター:** Networking TL  
-**会議種別:** 意思決定ワークショップ（Zoom/Meet + 共有ノート）
+This agenda is retained as the archival session plan. Decisions, owners, and
+close-out actions are recorded in
+`docs/source/sorafs_gateway_dns_design_minutes.md`; the current operator-facing
+summary remains in `docs/source/sorafs_gateway_dns_design_pre_read.md`.
 
-## 1. 参加者名簿
+## 1. Attendee Roster
 
-| 役割 | 名前 / エイリアス | 担当 |
-|------|-------------------|------|
-| Networking TL（ファシリテーター） | `networking.tl@soranet` | 成果重視の議論を主導し、決定事項を記録し、フォローアップを担当。 |
-| Ops リード | `ops.lead@soranet` | DNS 自動化、ロールアウトランブック、運用準備。 |
-| Storage チーム代表 | `storage.rep@sorafs` | マニフェスト統合、chunker フィクスチャ、クライアントオーケストレーションへの影響。 |
-| Tooling WG 代表 | `tooling.wg@sorafs` | コンフォーマンスハーネスの維持、CLI/ツール変更。 |
-| ガバナンス連絡役 | `governance@sora` | GAR ポリシー整合、エスカレーション経路、成果物アーカイブ。 |
-| QA ギルドリード | `qa.guild@sorafs` | テスト範囲計画、負荷スイート資源、回帰の責任者。 |
-| Docs/DevRel オブザーバー | `docs.devrel@sora` | オペレーターランブック、Docusaurus 更新、対外コミュニケーション。 |
-| Torii プラットフォーム代表 | `torii.platform@soranet` | API 統合、テレメトリパイプライン、設定面。 |
-| セキュリティエンジニアリング オブザーバー | `security@soranet` | GAR 強制の脅威モデリング、監査証跡要件。 |
+| Role | Name / Alias | Responsibilities |
+|------|--------------|------------------|
+| Networking TL (facilitator) | `networking.tl@soranet` | Drive outcome-focused discussion, capture decisions, own follow-ups. |
+| Ops Lead | `ops.lead@soranet` | DNS automation, rollout runbooks, operator readiness. |
+| Storage Team Rep | `storage.rep@sorafs` | Manifest integration, chunker fixtures, client orchestration impacts. |
+| Tooling WG Rep | `tooling.wg@sorafs` | Conformance harness maintenance, CLI/tooling changes. |
+| Governance Liaison | `governance@sora` | GAR policy alignment, escalation routing, artefact archival. |
+| QA Guild Lead | `qa.guild@sorafs` | Test coverage plan, load suite resources, regression ownership. |
+| Docs/DevRel Observer | `docs.devrel@sora` | Operator runbooks, Docusaurus updates, public comms. |
+| Torii Platform Rep | `torii.platform@soranet` | API integration, telemetry pipelines, config surfaces. |
+| Security Engineering Observer | `security@soranet` | GAR enforcement threat modelling, audit trail requirements. |
 
-> **アクション:** 2025-02-26 までに全参加者の可否を確認し、必要なら役割を差し替える。
+> **Archive status:** Attendance was confirmed by 2025-02-26 and the completed
+> roster is tracked in `docs/source/sorafs_gateway_dns_design_attendance.md`.
 
-## 2. 事前資料の確認（0–5 分）
-- 全員が以下を読んだことを確認:
+## 2. Pre-read Review (0–5 min)
+- Quick acknowledgement that everyone read:
   - `docs/source/sorafs_gateway_dns_design_pre_read.md`
   - `docs/source/sorafs_gateway_profile.md`
   - `docs/source/sorafs_gateway_conformance.md`
   - `docs/source/sorafs_gateway_deployment_handbook.md`
-- 回覧後に追加された資料があれば共有。
+- Highlight any new documents added since circulation.
 
-## 3. 決定論的 DNS の範囲（5–20 分）
-1. **ホスト導出ルール（5 分）:**
-   - 提案されている命名スキーム（`<capability>.<lane>.gateway.sora`）。
-   - ネームスペース予約の所有者と衝突対応。
-2. **別名証明 & TTL ポリシー（5 分）:**
-   - SF-4a 要件とキャッシュ済み証明の無効化フローの確認。
-3. **自動化パス（5 分）:**
-   - ツール選定: Terraform + RFC2136 vs Torii 管理。
-   - シークレット管理、監査ログ、GAR 連携。
-4. **決定事項の記録（5 分）:**
-   - 共有ノートに最終決定を記録。
-   - 決定事項をドキュメント／設定に反映する担当を割り当て。
+## 3. Deterministic DNS Scope (5–20 min)
+1. **Host Derivation Rules (5 min):**
+   - Proposed canonical naming scheme (`<capability>.<lane>.gateway.sora`).
+   - Ownership of namespace reservations and collision handling.
+2. **Alias Proof & TTL Policy (5 min):**
+   - Review SF-4a requirements, cached proof invalidation flow.
+3. **Automation Path (5 min):**
+   - Toolchain choice: Terraform + RFC2136 vs Torii-managed.
+   - Secrets management, audit logging, GAR linkage.
+4. **Decision Capture (5 min):**
+   - Record final decisions in the minutes.
+   - Assign owner to codify decisions in docs/config.
 
-## 4. ゲートウェイ強制とランタイム（20–40 分）
-1. **GAR ポリシーエンジン（8 分）:**
-   - 統合方式（ライブラリ vs Norito キャッシュ）。
-   - 設定ノブ、ロールアウト用トグル。
-2. **Trustless プロファイル整合（5 分）:**
-   - `sorafs_gateway_profile.md` の未解決項目を確認。
-3. **Direct モード & レート制限（4 分）:**
-   - マニフェスト能力の強制、denylist フック要件。
-4. **テレメトリ & アラート（8 分）:**
-   - 収集するメトリクス（`torii_sorafs_gar_violations_total`、レイテンシヒストグラム）。
-   - ガバナンス／当番へのアラートルーティング。
-5. **決定事項の記録（5 分）:**
-   - 受け入れ基準と実装 PR のオーナーを明文化。
+## 4. Gateway Enforcement & Runtime (20–40 min)
+1. **GAR Policy Engine (8 min):**
+   - Integration approach (library vs Norito cache).
+   - Config knobs, rollout toggles.
+2. **Trustless Profile Alignment (5 min):**
+   - Confirm the shipped `sorafs_gateway_profile.md` acceptance criteria and
+     any rollout evidence follow-ups.
+3. **Direct Mode & Rate Limiting (4 min):**
+   - Requirements for manifest capability enforcement, denylist hooks.
+4. **Telemetry & Alerts (8 min):**
+   - Metrics to capture (`torii_sorafs_gar_violations_total`, latency histograms).
+   - Alert routing to governance/on-call.
+5. **Decision Capture (5 min):**
+   - Record acceptance criteria and owners in the minutes.
 
-## 5. コンフォーマンスハーネス計画（40–50 分）
-1. **カバレッジ確認（5 分）:**
-   - `sorafs_gateway_conformance.md` に基づくリプレイ、ネガティブ、負荷スイート。
-2. **アテステーションパイプライン（3 分）:**
-   - Norito エンベロープ形式、`sorafs-gateway-cert` の責務。
-3. **リソース & タイムライン確認（2 分）:**
-   - QA ギルドの体制、Tooling WG のスケジュール、CI 統合。
+## 5. Conformance Harness Plan (40–50 min)
+1. **Coverage Review (5 min):**
+   - Replay, negative, and load suites per `sorafs_gateway_conformance.md`.
+2. **Attestation Pipeline (3 min):**
+   - Norito envelope format, `sorafs-gateway-cert` responsibilities.
+3. **Resource & Timeline Check (2 min):**
+   - QA Guild staffing, Tooling WG timelines, CI integration.
 
-## 6. 依存関係とロードマップ整合（50–55 分）
-- 決定事項をロードマップ項目（SF-4、SF-4a、SF-5、SF-5a）に紐づける。
-- SF-2/SF-3 の成果物に起因するブロッカーを洗い出す。
-- `status.md` と Docusaurus ポータルの更新が必要か確認。
+## 6. Dependencies & Roadmap Alignment (50–55 min)
+- Map decisions to roadmap items (SF-4, SF-4a, SF-5, SF-5a).
+- Identify blockers from SF-2/SF-3 deliverables.
+- Confirm required updates to `status.md` and Docusaurus portal.
 
-## 7. アクションレジスタ & 次のステップ（55–60 分）
-- 決定事項と未解決アクションを要約。
-- オーナー、期日、フォローアップのチェックポイントを割り当てる。
-- 会議ノートと成果物の公開計画を確認。
+## 7. Action Register & Next Steps (55–60 min)
+- Summarise decisions and outstanding actions.
+- Assign owners, due dates, and follow-up checkpoints.
+- Confirm publication plan for minutes, the outcome brief, and artefacts.
 
-## 8. 事前作業チェックリスト（オーナー）
+## 8. Pre-work Checklist (Completed)
 
-| タスク | オーナー | 期限 | メモ |
-|--------|----------|------|------|
-| 参加者の可否確認 | Networking TL | 2025-02-26 | `docs/source/sorafs_gateway_dns_design_invite.txt` のテンプレートを使用。 |
-| アジェンダと事前資料の配布 | Networking TL | 2025-02-27 | アジェンダ + 事前資料を 1 通にまとめて送付。 |
-| GAR メトリクスの現状スナップショット収集 | Ops リード / Torii 代表 | 2025-02-28 | `scripts/telemetry/run_schema_diff.sh` の派生版を実行（アクション項目参照）。 |
-| 図の準備（DNS フロー、ポリシーエンジン） | Tooling WG / セキュリティ | 2025-03-01 | `docs/source/images/sorafs_gateway_kickoff/` に格納。 |
-| メモ文書のドラフト | Docs/DevRel | 2025-02-28 | 決定事項／アクションのアウトラインを用意。 |
+| Task | Owner | Due | Notes |
+|------|-------|-----|-------|
+| Confirm attendee availability | Networking TL | 2025-02-26 | Use template in `docs/source/sorafs_gateway_dns_design_invite.txt`. |
+| Circulate agenda & pre-read | Networking TL | 2025-02-27 | Bundle agenda + pre-read in single email. |
+| Gather current GAR metric snapshot | Ops Lead / Torii Rep | 2025-02-28 | Run `scripts/telemetry/run_schema_diff.sh` variant (see action item). |
+| Prepare diagrams (DNS flow, policy engine) | Tooling WG / Security | 2025-03-01 | Store under `docs/source/images/sorafs_gateway_kickoff/`. |
+| Publish note-taking doc | Docs/DevRel | 2025-02-28 | Completed; decisions/actions are now in the minutes. |
 
-## 9. 会議後フォローアップ・テンプレート
-- **24 時間以内:** ノートとアクションレジスタをロードマップ／ステータスへ公開。
-- **48 時間以内:** 参照ドキュメントを決定事項で更新。
-- **72 時間以内:** 実装 Issue/PR を起票し、進捗確認をスケジュール。
+## 9. Post-meeting Close-out
+- **Within 24h:** Published notes + action register to roadmap/status.
+- **Within 48h:** Updated referenced docs with agreed decisions.
+- **Within 72h:** Filed implementation issues/PRs and scheduled progress checks.
 
 ---
 
-調整や追加議題がある場合は、この文書にコメントするか `networking.tl@soranet` に連絡する。
-会議を意思決定に集中させるため、変更はセッション 24 時間前までに凍結すること。
+This agenda is archived. Update
+`docs/source/sorafs_gateway_dns_design_minutes.md` for corrections to decisions
+or action ownership, and update the outcome brief when the shipped gateway/DNS
+surface changes.

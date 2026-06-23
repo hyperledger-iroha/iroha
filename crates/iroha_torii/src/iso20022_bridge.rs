@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
     path::{Path, PathBuf},
@@ -862,6 +862,7 @@ const ISO_AUDIT_EXPORT_ANCHOR_VERSION: u64 = 1;
 const ISO_AUDIT_EXPORT_ANCHOR_DIR: &str = "anchors";
 const ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE: &str = "latest.notary.json";
 const ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD: &str = "anchor_sha256";
+const ISO4217_MAX_MINOR_UNITS: u8 = 4;
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)
@@ -884,15 +885,20 @@ fn load_profile_catalog(
         }
     }
 
+    let mut override_profile_ids = HashSet::new();
     for override_profile in &config.profiles {
         let profile = convert_config_profile(override_profile, global_policy)?;
+        if !override_profile_ids.insert(profile.id.to_ascii_lowercase()) {
+            eyre::bail!(
+                "iso_bridge profile overrides must not contain duplicate profile id `{}`",
+                profile.id
+            );
+        }
         catalog.insert(profile.id.clone(), profile);
     }
 
-    let default_id = config.default_profile.trim();
-    if default_id.is_empty() {
-        eyre::bail!("iso_bridge default_profile must not be empty");
-    }
+    let default_id =
+        require_trimmed_non_empty("iso_bridge default_profile", &config.default_profile)?;
     if !catalog.contains_key(default_id) {
         eyre::bail!("iso_bridge default_profile `{default_id}` is not configured");
     }
@@ -904,10 +910,8 @@ fn convert_config_profile(
     config: &actual::IsoBridgeProfile,
     global_policy: Option<EmbeddedSignaturePolicy>,
 ) -> eyre::Result<TradfiRailProfile> {
-    let id = config.id.trim();
-    if id.is_empty() {
-        eyre::bail!("iso_bridge profile id must not be empty");
-    }
+    let id = require_trimmed_non_empty("iso_bridge profile id", &config.id)?;
+    require_trimmed_non_empty(&format!("iso_bridge profile `{id}` rail"), &config.rail)?;
     let rail = TradfiRail::parse(&config.rail).ok_or_else(|| {
         eyre::eyre!(
             "iso_bridge profile `{id}` has unknown rail `{}`",
@@ -936,38 +940,38 @@ fn convert_config_profile(
         "revoked_certificate_sha256",
         &config.revoked_certificate_sha256,
     )?;
-    let required_reference_datasets = config
-        .required_reference_datasets
-        .iter()
-        .map(|dataset| {
-            ReferenceDatasetRequirement::parse(dataset).ok_or_else(|| {
-                eyre::eyre!("iso_bridge profile `{id}` has unknown reference dataset `{dataset}`")
-            })
-        })
-        .collect::<eyre::Result<Vec<_>>>()?;
+    let required_reference_datasets =
+        normalise_required_reference_datasets(id, &config.required_reference_datasets)?;
     let message_profiles = config
         .message_profiles
         .iter()
         .map(|message| convert_config_message_profile(id, message))
         .collect::<eyre::Result<Vec<_>>>()?;
+    validate_profile_message_entries(id, &message_profiles)?;
     let mut signature_public_key_sha256_pins = normalise_profile_sha256_pins(
         id,
         "signature_public_key_sha256_pins",
         &config.signature_public_key_sha256_pins,
     )?;
     append_unique_sha256_pins(
+        id,
+        "signature_public_key_sha256_pins",
         &mut signature_public_key_sha256_pins,
+        "trusted_public_key_sha256",
         &trusted_public_key_sha256,
-    );
+    )?;
     let mut x509_trust_anchor_sha256_pins = normalise_profile_sha256_pins(
         id,
         "x509_trust_anchor_sha256_pins",
         &config.x509_trust_anchor_sha256_pins,
     )?;
     append_unique_sha256_pins(
+        id,
+        "x509_trust_anchor_sha256_pins",
         &mut x509_trust_anchor_sha256_pins,
+        "trusted_certificate_sha256",
         &trusted_certificate_sha256,
-    );
+    )?;
     let x509_required_certificate_policy_oids = normalise_profile_oid_literals(
         id,
         "x509_required_certificate_policy_oids",
@@ -1002,20 +1006,71 @@ fn convert_config_profile(
     })
 }
 
+fn normalise_required_reference_datasets(
+    profile_id: &str,
+    values: &[String],
+) -> eyre::Result<Vec<ReferenceDatasetRequirement>> {
+    let mut datasets = Vec::new();
+    for dataset in values {
+        require_trimmed_non_empty(
+            &format!("iso_bridge profile `{profile_id}` required_reference_datasets entry"),
+            dataset,
+        )?;
+        let requirement = ReferenceDatasetRequirement::parse(dataset).ok_or_else(|| {
+            eyre::eyre!(
+                "iso_bridge profile `{profile_id}` has unknown reference dataset `{dataset}`"
+            )
+        })?;
+        if datasets.contains(&requirement) {
+            eyre::bail!(
+                "iso_bridge profile `{profile_id}` required_reference_datasets entries must be duplicate-free"
+            );
+        }
+        datasets.push(requirement);
+    }
+    Ok(datasets)
+}
+
+fn validate_profile_message_entries(
+    profile_id: &str,
+    message_profiles: &[MessageProfile],
+) -> eyre::Result<()> {
+    let mut seen = BTreeSet::new();
+    for profile in message_profiles {
+        let key = (profile.message_type.to_ascii_lowercase(), profile.direction);
+        if !seen.insert(key) {
+            eyre::bail!(
+                "iso_bridge profile `{profile_id}` message_profiles entries must be unique by message_type and direction"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn convert_config_message_profile(
     profile_id: &str,
     config: &actual::IsoMessageProfile,
 ) -> eyre::Result<MessageProfile> {
-    let message_type = config.message_type.trim();
-    if message_type.is_empty() {
-        eyre::bail!("iso_bridge profile `{profile_id}` has an empty message_type");
-    }
+    let message_type = require_trimmed_non_empty(
+        &format!("iso_bridge profile `{profile_id}` message_type"),
+        &config.message_type,
+    )?;
+    require_trimmed_non_empty(
+        &format!("iso_bridge profile `{profile_id}` message `{message_type}` direction"),
+        &config.direction,
+    )?;
     let direction = MessageDirection::parse(&config.direction).ok_or_else(|| {
         eyre::eyre!(
             "iso_bridge profile `{profile_id}` message `{message_type}` has unknown direction `{}`",
             config.direction
         )
     })?;
+    require_trimmed_non_empty(
+        &format!(
+            "iso_bridge profile `{profile_id}` message `{message_type}` structured_address_mode"
+        ),
+        &config.structured_address_mode,
+    )?;
     let structured_address_mode =
         StructuredAddressMode::parse(&config.structured_address_mode).ok_or_else(|| {
             eyre::eyre!(
@@ -1023,25 +1078,20 @@ fn convert_config_message_profile(
                 config.structured_address_mode
             )
         })?;
-    let amount_minor_units = config
-        .amount_minor_units
-        .iter()
-        .map(|entry| {
-            let currency = normalise_currency(&entry.currency);
-            if !ivm::iso20022::validate_identifier(IdentifierKind::Currency, &currency) {
-                eyre::bail!(
-                    "iso_bridge profile `{profile_id}` message `{message_type}` has invalid currency `{}`",
-                    entry.currency
-                );
-            }
-            Ok((currency, entry.minor_units))
-        })
-        .collect::<eyre::Result<BTreeMap<_, _>>>()?;
+    let amount_minor_units =
+        normalise_amount_minor_units(profile_id, message_type, &config.amount_minor_units)?;
+    let versions = normalise_message_versions(profile_id, message_type, &config.versions)?;
+    let business_services = normalise_business_services(
+        profile_id,
+        message_type,
+        &config.business_services,
+        config.require_business_service,
+    )?;
     Ok(MessageProfile {
         message_type: message_type.to_owned(),
         direction,
-        versions: config.versions.clone(),
-        business_services: config.business_services.clone(),
+        versions,
+        business_services,
         require_app_header: config.require_app_header,
         require_business_service: config.require_business_service,
         require_uetr: config.require_uetr,
@@ -1051,7 +1101,121 @@ fn convert_config_message_profile(
     })
 }
 
+fn normalise_message_versions(
+    profile_id: &str,
+    message_type: &str,
+    values: &[String],
+) -> eyre::Result<Vec<String>> {
+    if values.is_empty() {
+        eyre::bail!(
+            "iso_bridge profile `{profile_id}` message `{message_type}` requires at least one versions entry"
+        );
+    }
+    values
+        .iter()
+        .map(|version| {
+            if version.trim().is_empty() || version.trim() != version {
+                eyre::bail!(
+                    "iso_bridge profile `{profile_id}` message `{message_type}` versions entries must be non-empty trimmed strings"
+                );
+            }
+            Ok(version.clone())
+        })
+        .collect::<eyre::Result<Vec<_>>>()
+        .and_then(|versions| {
+            let mut seen = HashSet::new();
+            for version in &versions {
+                if !seen.insert(version.to_ascii_lowercase()) {
+                    eyre::bail!(
+                        "iso_bridge profile `{profile_id}` message `{message_type}` versions entries must be duplicate-free"
+                    );
+                }
+            }
+            Ok(versions)
+        })
+}
+
+fn normalise_business_services(
+    profile_id: &str,
+    message_type: &str,
+    values: &[String],
+    require_business_service: bool,
+) -> eyre::Result<Vec<String>> {
+    if require_business_service && values.is_empty() {
+        eyre::bail!(
+            "iso_bridge profile `{profile_id}` message `{message_type}` requires at least one business_services entry"
+        );
+    }
+    values
+        .iter()
+        .map(|service| {
+            if service.trim().is_empty() || service.trim() != service {
+                eyre::bail!(
+                    "iso_bridge profile `{profile_id}` message `{message_type}` business_services entries must be non-empty trimmed strings"
+                );
+            }
+            Ok(service.clone())
+        })
+        .collect::<eyre::Result<Vec<_>>>()
+        .and_then(|services| {
+            let mut seen = HashSet::new();
+            for service in &services {
+                if !seen.insert(service.to_ascii_lowercase()) {
+                    eyre::bail!(
+                        "iso_bridge profile `{profile_id}` message `{message_type}` business_services entries must be duplicate-free"
+                    );
+                }
+            }
+            Ok(services)
+        })
+}
+
+fn normalise_amount_minor_units(
+    profile_id: &str,
+    message_type: &str,
+    values: &[actual::IsoCurrencyMinorUnit],
+) -> eyre::Result<BTreeMap<String, u8>> {
+    let mut amount_minor_units = BTreeMap::new();
+    for entry in values {
+        require_trimmed_non_empty(
+            &format!(
+                "iso_bridge profile `{profile_id}` message `{message_type}` amount_minor_units currency"
+            ),
+            &entry.currency,
+        )?;
+        let currency = normalise_currency(&entry.currency);
+        if !ivm::iso20022::validate_identifier(IdentifierKind::Currency, &currency) {
+            eyre::bail!(
+                "iso_bridge profile `{profile_id}` message `{message_type}` has invalid currency `{}`",
+                entry.currency
+            );
+        }
+        if entry.minor_units > ISO4217_MAX_MINOR_UNITS {
+            eyre::bail!(
+                "iso_bridge profile `{profile_id}` message `{message_type}` currency `{currency}` minor_units must be at most {ISO4217_MAX_MINOR_UNITS}"
+            );
+        }
+        if amount_minor_units
+            .insert(currency.clone(), entry.minor_units)
+            .is_some()
+        {
+            eyre::bail!(
+                "iso_bridge profile `{profile_id}` message `{message_type}` amount_minor_units contains duplicate currency `{currency}`"
+            );
+        }
+    }
+    Ok(amount_minor_units)
+}
+
+fn require_trimmed_non_empty<'a>(label: &str, value: &'a str) -> eyre::Result<&'a str> {
+    if value.is_empty() || value.trim() != value {
+        eyre::bail!("{label} must be a non-empty trimmed string");
+    }
+    Ok(value)
+}
+
 fn parse_signature_policy(value: &str) -> eyre::Result<EmbeddedSignaturePolicy> {
+    require_trimmed_non_empty("ISO embedded signature policy", value)?;
     EmbeddedSignaturePolicy::parse(value)
         .ok_or_else(|| eyre::eyre!("unknown ISO embedded signature policy `{value}`"))
 }
@@ -1086,13 +1250,23 @@ fn normalise_profile_sha256_pins(
     Ok(normalized)
 }
 
-fn append_unique_sha256_pins(target: &mut Vec<String>, aliases: &[String]) {
+fn append_unique_sha256_pins(
+    profile_id: &str,
+    target_field: &str,
+    target: &mut Vec<String>,
+    alias_field: &str,
+    aliases: &[String],
+) -> eyre::Result<()> {
     let mut seen = target.iter().cloned().collect::<HashSet<_>>();
     for alias in aliases {
-        if seen.insert(alias.clone()) {
-            target.push(alias.clone());
+        if !seen.insert(alias.clone()) {
+            eyre::bail!(
+                "iso_bridge profile `{profile_id}` fields `{target_field}` and `{alias_field}` must not overlap"
+            );
         }
+        target.push(alias.clone());
     }
+    Ok(())
 }
 
 fn normalise_profile_oid_literals(
@@ -1103,15 +1277,19 @@ fn normalise_profile_oid_literals(
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
     for value in values {
-        let candidate = value.trim().to_owned();
+        let candidate = require_trimmed_non_empty(
+            &format!("iso_bridge profile `{profile_id}` {field} entry"),
+            value,
+        )?;
         if !is_valid_oid_literal(&candidate) {
             eyre::bail!(
                 "iso_bridge profile `{profile_id}` {field} entries must be dotted numeric OIDs"
             );
         }
-        if seen.insert(candidate.clone()) {
-            normalized.push(candidate);
+        if !seen.insert(candidate.to_owned()) {
+            eyre::bail!("iso_bridge profile `{profile_id}` {field} entries must be duplicate-free");
         }
+        normalized.push(candidate.to_owned());
     }
     Ok(normalized)
 }
@@ -1129,7 +1307,10 @@ fn normalise_profile_crl_der_base64(
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
     for value in values {
-        let candidate = value.trim();
+        let candidate = require_trimmed_non_empty(
+            &format!("iso_bridge profile `{profile_id}` {field} entry"),
+            value,
+        )?;
         let der = BASE64_STANDARD.decode(candidate).map_err(|_| {
             eyre::eyre!("iso_bridge profile `{profile_id}` {field} entries must be base64 DER CRLs")
         })?;
@@ -1141,9 +1322,10 @@ fn normalise_profile_crl_der_base64(
         parse_x509_crl_der(&der).map_err(|_| {
             eyre::eyre!("iso_bridge profile `{profile_id}` {field} entries must parse as DER CRLs")
         })?;
-        if seen.insert(sha256_hex(&der)) {
-            normalized.push(BASE64_STANDARD.encode(&der));
+        if !seen.insert(sha256_hex(&der)) {
+            eyre::bail!("iso_bridge profile `{profile_id}` {field} entries must be duplicate-free");
         }
+        normalized.push(BASE64_STANDARD.encode(&der));
     }
     Ok(normalized)
 }
@@ -1161,7 +1343,10 @@ fn normalise_profile_ocsp_response_der_base64(
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
     for value in values {
-        let candidate = value.trim();
+        let candidate = require_trimmed_non_empty(
+            &format!("iso_bridge profile `{profile_id}` {field} entry"),
+            value,
+        )?;
         let der = BASE64_STANDARD.decode(candidate).map_err(|_| {
             eyre::eyre!(
                 "iso_bridge profile `{profile_id}` {field} entries must be base64 DER OCSP responses"
@@ -1177,9 +1362,10 @@ fn normalise_profile_ocsp_response_der_base64(
                 "iso_bridge profile `{profile_id}` {field} entries must parse as DER OCSP responses"
             )
         })?;
-        if seen.insert(sha256_hex(&der)) {
-            normalized.push(BASE64_STANDARD.encode(&der));
+        if !seen.insert(sha256_hex(&der)) {
+            eyre::bail!("iso_bridge profile `{profile_id}` {field} entries must be duplicate-free");
         }
+        normalized.push(BASE64_STANDARD.encode(&der));
     }
     Ok(normalized)
 }
@@ -1365,12 +1551,6 @@ impl Iso20022BridgeRuntime {
             .message_profile(message_type, MessageDirection::Inbound)
             .ok_or(MsgError::UnknownMessageType)?;
         self.require_profile_reference_data(profile)?;
-        let definition_id =
-            message_definition_id(parsed, message_type).ok_or(MsgError::ValidationFailed)?;
-        if !message_profile.allows_version(definition_id) {
-            return Err(MsgError::UnknownMessageType);
-        }
-        let business_message_id = business_message_id(parsed).map(ToOwned::to_owned);
         if message_profile.require_app_header
             && (app_header_business_message_id(parsed).is_none()
                 || app_header_message_definition_id(parsed).is_none()
@@ -1378,10 +1558,17 @@ impl Iso20022BridgeRuntime {
         {
             return Err(MsgError::MissingField("AppHdr"));
         }
+        let definition_id =
+            message_definition_id(parsed, message_type).ok_or(MsgError::ValidationFailed)?;
+        if !message_profile.allows_version(definition_id) {
+            return Err(MsgError::UnknownMessageType);
+        }
+        let business_message_id = business_message_id(parsed).map(ToOwned::to_owned);
         let business_service = business_service(parsed).map(ToOwned::to_owned);
         if message_profile.require_business_service {
             let service = business_service
                 .as_deref()
+                .filter(|service| !service.trim().is_empty())
                 .ok_or_else(|| MsgError::MissingField("AppHdr/BizSvc"))?;
             if !message_profile.allows_business_service(service) {
                 return Err(MsgError::InvalidValue {
@@ -1389,13 +1576,13 @@ impl Iso20022BridgeRuntime {
                     kind: InvalidValueKind::Enum,
                 });
             }
-        } else if let Some(service) = business_service.as_deref()
-            && !message_profile.allows_business_service(service)
-        {
-            return Err(MsgError::InvalidValue {
-                field: "AppHdr/BizSvc".to_owned(),
-                kind: InvalidValueKind::Enum,
-            });
+        } else if let Some(service) = business_service.as_deref() {
+            if service.trim().is_empty() || !message_profile.allows_business_service(service) {
+                return Err(MsgError::InvalidValue {
+                    field: "AppHdr/BizSvc".to_owned(),
+                    kind: InvalidValueKind::Enum,
+                });
+            }
         }
         let uetr = uetr(parsed).map(ToOwned::to_owned);
         if message_profile.require_uetr && uetr.is_none() {
@@ -2747,7 +2934,7 @@ impl Iso20022BridgeRuntime {
         }
         let has_unstructured_address = parsed
             .iter()
-            .any(|(field, _)| field.ends_with("/PstlAdr/AdrLine") || field.contains("/AdrLine["));
+            .any(|(field, _)| is_unstructured_postal_address_field(field));
         if has_unstructured_address {
             return Err(MsgError::InvalidValue {
                 field: "PstlAdr/AdrLine".to_owned(),
@@ -3948,6 +4135,13 @@ fn field_matches_suffix(field: &str, suffix: &str) -> bool {
         || field
             .strip_suffix(suffix)
             .is_some_and(|prefix| prefix.ends_with('/'))
+}
+
+fn is_unstructured_postal_address_field(field: &str) -> bool {
+    matches!(field, "AdrLine" | "PstlAdr/AdrLine")
+        || field.starts_with("AdrLine[")
+        || field.ends_with("/AdrLine")
+        || field.contains("/AdrLine[")
 }
 
 fn has_embedded_signature_marker(parsed: &ParsedMessage) -> bool {
@@ -12498,6 +12692,22 @@ mod tests {
         )
     }
 
+    fn remove_xml_element(payload: &str, tag: &str) -> String {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        let start = payload
+            .find(&open)
+            .unwrap_or_else(|| panic!("fixture must contain <{tag}>"));
+        let close_start = payload[start..]
+            .find(&close)
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("fixture must contain </{tag}>"));
+        let end = close_start + close.len();
+        let mut stripped = payload.to_owned();
+        stripped.replace_range(start..end, "");
+        stripped
+    }
+
     fn data_pdu_with_app_header(
         business_message_id: &str,
         msg_def_id: &str,
@@ -13365,6 +13575,40 @@ mod tests {
     }
 
     #[test]
+    fn runtime_from_config_rejects_overlapping_xml_signature_pin_aliases() {
+        let public_pin = test_p256_public_key_pin();
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256 = vec![public_pin];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("overlapping public-key pin aliases must fail configuration"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("must not overlap"),
+            "unexpected public-key overlap error: {err:?}"
+        );
+
+        let certificate_pin = "ab".repeat(32);
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_trust_anchor_sha256_pins = vec![certificate_pin.clone()];
+        profile.trusted_certificate_sha256 = vec![certificate_pin];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("overlapping certificate pin aliases must fail configuration"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("must not overlap"),
+            "unexpected certificate overlap error: {err:?}"
+        );
+    }
+
+    #[test]
     fn runtime_from_config_rejects_noncanonical_xml_signature_revocation_pin() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -13378,6 +13622,597 @@ mod tests {
 
         assert!(
             err.to_string().contains("revoked_certificate_sha256"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_empty_message_version_allowlist() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.message_profiles[0].versions.clear();
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("message profiles with no accepted versions must fail configuration"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("requires at least one versions entry"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_blank_message_version_entries() {
+        for version in ["", " ", " pacs.008.001.08", "pacs.008.001.08 "] {
+            let mut config = sample_config();
+            let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+            profile.message_profiles[0].versions = vec![version.to_owned()];
+            config.profiles.push(profile);
+
+            let err = match Iso20022BridgeRuntime::from_config(&config) {
+                Ok(_) => panic!("blank or padded version allowlist entries must fail"),
+                Err(err) => err,
+            };
+
+            assert!(
+                err.to_string().contains("non-empty trimmed strings"),
+                "unexpected error for {version:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_message_version_entries() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.message_profiles[0].versions =
+            vec!["pacs.008.001.08".to_owned(), "PACS.008.001.08".to_owned()];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate version allowlist entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("versions entries must be duplicate-free"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_required_business_service_without_allowlist() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.message_profiles[0].business_services.clear();
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("required BizSvc profile with no allowlist must fail configuration"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("requires at least one business_services entry"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_blank_business_service_allowlist_entries() {
+        for service in ["", " ", " swift.cbprplus.02", "swift.cbprplus.02 "] {
+            let mut config = sample_config();
+            let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+            profile.message_profiles[0].business_services = vec![service.to_owned()];
+            config.profiles.push(profile);
+
+            let err = match Iso20022BridgeRuntime::from_config(&config) {
+                Ok(_) => panic!("blank or padded BizSvc allowlist entries must fail"),
+                Err(err) => err,
+            };
+
+            assert!(
+                err.to_string().contains("non-empty trimmed strings"),
+                "unexpected error for {service:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_business_service_allowlist_entries() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.message_profiles[0].business_services = vec![
+            "swift.cbprplus.02".to_owned(),
+            "SWIFT.CBPRPLUS.02".to_owned(),
+        ];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate BizSvc allowlist entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("business_services entries must be duplicate-free"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_currency_minor_unit_entries() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.message_profiles[0].amount_minor_units = vec![
+            actual::IsoCurrencyMinorUnit {
+                currency: "usd".to_owned(),
+                minor_units: 2,
+            },
+            actual::IsoCurrencyMinorUnit {
+                currency: "USD".to_owned(),
+                minor_units: 3,
+            },
+        ];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate minor-unit currency entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("duplicate currency `USD`"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_excessive_currency_minor_units() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.message_profiles[0].amount_minor_units = vec![actual::IsoCurrencyMinorUnit {
+            currency: "USD".to_owned(),
+            minor_units: 5,
+        }];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("excessive fiat minor-unit precision must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("minor_units must be at most 4"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_default_profile_id() {
+        let mut config = sample_config();
+        config.default_profile = " generic-iso20022".to_owned();
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("padded default profile id must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("iso_bridge default_profile must be a non-empty trimmed string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_profile_identity_fields() {
+        let cases: [(&str, fn(&mut actual::IsoBridgeProfile), &str); 3] = [
+            (
+                "profile id",
+                |profile: &mut actual::IsoBridgeProfile| profile.id = " padded-profile".to_owned(),
+                "iso_bridge profile id must be a non-empty trimmed string",
+            ),
+            (
+                "rail",
+                |profile: &mut actual::IsoBridgeProfile| {
+                    profile.rail = " swift-cbpr-plus".to_owned();
+                },
+                "rail must be a non-empty trimmed string",
+            ),
+            (
+                "embedded signature policy",
+                |profile: &mut actual::IsoBridgeProfile| {
+                    profile.embedded_signature_policy = Some(" reject-unsupported".to_owned());
+                },
+                "ISO embedded signature policy must be a non-empty trimmed string",
+            ),
+        ];
+
+        for (name, mutate, expected) in cases {
+            let mut config = sample_config();
+            let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+            mutate(&mut profile);
+            config.profiles.push(profile);
+
+            let err = match Iso20022BridgeRuntime::from_config(&config) {
+                Ok(_) => panic!("padded {name} must fail"),
+                Err(err) => err,
+            };
+
+            assert!(
+                err.to_string().contains(expected),
+                "unexpected error for {name}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_message_profile_fields() {
+        let cases: [(&str, fn(&mut actual::IsoMessageProfile), &str); 4] = [
+            (
+                "message_type",
+                |message: &mut actual::IsoMessageProfile| {
+                    message.message_type = " pacs.008".to_owned();
+                },
+                "message_type must be a non-empty trimmed string",
+            ),
+            (
+                "direction",
+                |message: &mut actual::IsoMessageProfile| {
+                    message.direction = " inbound".to_owned();
+                },
+                "direction must be a non-empty trimmed string",
+            ),
+            (
+                "structured_address_mode",
+                |message: &mut actual::IsoMessageProfile| {
+                    message.structured_address_mode = " permissive".to_owned();
+                },
+                "structured_address_mode must be a non-empty trimmed string",
+            ),
+            (
+                "minor unit currency",
+                |message: &mut actual::IsoMessageProfile| {
+                    message.amount_minor_units = vec![actual::IsoCurrencyMinorUnit {
+                        currency: " USD".to_owned(),
+                        minor_units: 2,
+                    }];
+                },
+                "amount_minor_units currency must be a non-empty trimmed string",
+            ),
+        ];
+
+        for (name, mutate, expected) in cases {
+            let mut config = sample_config();
+            let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+            mutate(&mut profile.message_profiles[0]);
+            config.profiles.push(profile);
+
+            let err = match Iso20022BridgeRuntime::from_config(&config) {
+                Ok(_) => panic!("padded {name} must fail"),
+                Err(err) => err,
+            };
+
+            assert!(
+                err.to_string().contains(expected),
+                "unexpected error for {name}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_reference_dataset_requirements() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.required_reference_datasets = vec![" bic-lei".to_owned()];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("padded reference dataset ids must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("required_reference_datasets entry must be a non-empty trimmed string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_x509_policy_oid_entries() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_required_certificate_policy_oids = vec![format!("{TEST_X509_POLICY_OID} ")];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("padded X.509 policy OID entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "x509_required_certificate_policy_oids entry must be a non-empty trimmed string"
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_x509_policy_oid_entries() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_required_certificate_policy_oids = vec![
+            TEST_X509_POLICY_OID.to_owned(),
+            TEST_X509_POLICY_OID.to_owned(),
+        ];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate X.509 policy OID entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_required_certificate_policy_oids entries must be duplicate-free"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_x509_crl_der_entries() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_crl_der_base64 = vec![format!("{TEST_X509_CRL_EMPTY_DER_B64} ")];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("padded X.509 CRL DER entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_crl_der_base64 entry must be a non-empty trimmed string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_x509_crl_der_entries() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_crl_der_base64 = vec![
+            TEST_X509_CRL_EMPTY_DER_B64.to_owned(),
+            TEST_X509_CRL_EMPTY_DER_B64.to_owned(),
+        ];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate X.509 CRL DER entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_crl_der_base64 entries must be duplicate-free"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_malformed_x509_crl_der_entries() {
+        for der in [
+            vec![0x02, 0x01, 0x00],
+            vec![0x30, 0x00],
+            vec![0x30, 0x03, 0x02, 0x01, 0x00],
+            vec![0x30, 0x81, 0x00],
+        ] {
+            let mut config = sample_config();
+            let mut profile = signed_message_profile("require-verified");
+            profile.x509_crl_der_base64 = vec![BASE64_STANDARD.encode(der)];
+            config.profiles.push(profile);
+
+            let err = match Iso20022BridgeRuntime::from_config(&config) {
+                Ok(_) => panic!("malformed X.509 CRL DER entries must fail"),
+                Err(err) => err,
+            };
+
+            assert!(
+                err.to_string()
+                    .contains("x509_crl_der_base64 entries must parse as DER CRLs"),
+                "unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_too_many_x509_crl_der_entries() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_crl_der_base64 = vec!["not-base64".to_owned(); XMLDSIG_MAX_X509_CRLS + 1];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("over-limit X.509 CRL DER entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_crl_der_base64 must not contain more than"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_padded_x509_ocsp_response_der_entries() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_ocsp_response_der_base64 = vec![format!("{} ", fixture.response_der_base64)];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("padded X.509 OCSP response DER entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_ocsp_response_der_base64 entry must be a non-empty trimmed string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_x509_ocsp_response_der_entries() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_ocsp_response_der_base64 = vec![
+            fixture.response_der_base64.clone(),
+            fixture.response_der_base64,
+        ];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate X.509 OCSP response DER entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_ocsp_response_der_base64 entries must be duplicate-free"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_malformed_x509_ocsp_response_der_entries() {
+        for der in [
+            vec![0x02, 0x01, 0x00],
+            vec![0x30, 0x00],
+            vec![0x30, 0x03, 0x02, 0x01, 0x00],
+            vec![
+                0x30, 0x16, 0x0A, 0x01, 0x01, 0xA0, 0x11, 0x30, 0x0F, 0x06, 0x09, 0x2B, 0x06, 0x01,
+                0x05, 0x05, 0x07, 0x30, 0x01, 0x01, 0x04, 0x02, 0x30, 0x00,
+            ],
+        ] {
+            let mut config = sample_config();
+            let mut profile = signed_message_profile("require-verified");
+            profile.x509_ocsp_response_der_base64 = vec![BASE64_STANDARD.encode(der)];
+            config.profiles.push(profile);
+
+            let err = match Iso20022BridgeRuntime::from_config(&config) {
+                Ok(_) => panic!("malformed X.509 OCSP response DER entries must fail"),
+                Err(err) => err,
+            };
+
+            assert!(
+                err.to_string().contains(
+                    "x509_ocsp_response_der_base64 entries must parse as DER OCSP responses"
+                ),
+                "unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_too_many_x509_ocsp_response_der_entries() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.x509_ocsp_response_der_base64 =
+            vec!["not-base64".to_owned(); XMLDSIG_MAX_X509_OCSP_RESPONSES + 1];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("over-limit X.509 OCSP response DER entries must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("x509_ocsp_response_der_base64 must not contain more than"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_override_profile_ids() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.008", "pacs.008.001.08"));
+        config
+            .profiles
+            .push(live_message_profile("pacs.008", "pacs.008.001.08"));
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate override profile ids must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("duplicate profile id `pacs.008-live-test`"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_reference_dataset_requirements() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile.required_reference_datasets = vec!["bic-lei".to_owned(), "BIC_LEI".to_owned()];
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate reference dataset requirements must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("required_reference_datasets entries must be duplicate-free"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_from_config_rejects_duplicate_message_profile_family_direction() {
+        let mut config = sample_config();
+        let mut profile = live_message_profile("pacs.008", "pacs.008.001.08");
+        profile
+            .message_profiles
+            .push(profile.message_profiles[0].clone());
+        config.profiles.push(profile);
+
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("duplicate message family/direction profiles must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("message_profiles entries must be unique by message_type and direction"),
             "unexpected error: {err:?}"
         );
     }
@@ -13490,6 +14325,31 @@ mod tests {
 
         assert_eq!(metadata.business_service(), Some("swift.cbprplus.02"));
         assert_eq!(metadata.business_message_id(), Some("HDR-009"));
+    }
+
+    #[test]
+    fn live_profile_rejects_empty_required_business_service() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(live_message_profile("pacs.008", "pacs.008.001.08"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("pacs.008-live-test"))
+            .expect("custom profile");
+        let parsed = parse_message(
+            "pacs.008",
+            b"DataPDU/AppHdr/BizMsgIdr=HDR-EMPTY-SVC\nDataPDU/AppHdr/MsgDefIdr=pacs.008.001.08\nDataPDU/AppHdr/CreDt=2025-01-01T12:00:00Z\nDataPDU/AppHdr/BizSvc=\nMsgId=m-profile\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect_err("empty BizSvc must not satisfy required business service policy");
+
+        assert!(matches!(err, MsgError::MissingField("AppHdr/BizSvc")));
     }
 
     #[test]
@@ -18785,6 +19645,242 @@ mod tests {
     }
 
     #[test]
+    fn live_rail_profile_xsd_fixtures_reject_missing_required_app_header_members() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let base_payload = live_pacs008_xml(
+            "SWIFT-MISSING-BAH",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174220",
+        );
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+
+        for tag in ["BizMsgIdr", "MsgDefIdr", "CreDt"] {
+            let payload = remove_xml_element(&base_payload, tag);
+            let parsed = parse_message("pacs.008", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("missing-{tag} fixture parses: {err:?}"));
+            let err = runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(
+                matches!(err, MsgError::MissingField("AppHdr")),
+                "missing {tag} returned {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_missing_required_business_service() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let cases = vec![
+            (
+                "fedwire-funds",
+                "pacs.008",
+                remove_xml_element(
+                    &live_pacs008_xml(
+                        "FEDWIRE-MISSING-SVC",
+                        "pacs.008.001.08",
+                        "fedwire.funds.01",
+                        "USD",
+                        "10.00",
+                        "123e4567-e89b-12d3-a456-426614174221",
+                    ),
+                    "BizSvc",
+                ),
+            ),
+            (
+                "sepa-sct-inst",
+                "pacs.008",
+                remove_xml_element(
+                    &live_pacs008_xml(
+                        "SEPA-MISSING-SVC",
+                        "pacs.008.001.10",
+                        "sepa.sct.inst",
+                        "EUR",
+                        "10.00",
+                        "123e4567-e89b-12d3-a456-426614174222",
+                    ),
+                    "BizSvc",
+                ),
+            ),
+            (
+                "securities-csd",
+                "pacs.009",
+                remove_xml_element(
+                    &live_pacs009_xml(
+                        "SECURITIES-MISSING-SVC",
+                        "pacs.009.001.10",
+                        "securities.csd.cash",
+                    ),
+                    "BizSvc",
+                ),
+            ),
+        ];
+
+        for (profile_id, message_type, payload) in cases {
+            let parsed = parse_message(message_type, payload.as_bytes()).unwrap_or_else(|err| {
+                panic!("{profile_id} missing-service fixture parses: {err:?}")
+            });
+            let profile = runtime
+                .resolve_profile(Some(profile_id))
+                .unwrap_or_else(|| panic!("{profile_id} profile"));
+            let err = runtime
+                .validate_profile_submission(profile, message_type, &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(
+                matches!(err, MsgError::MissingField("AppHdr/BizSvc")),
+                "{profile_id} returned {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_empty_required_business_service() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = live_pacs008_xml(
+            "FEDWIRE-EMPTY-SVC",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174223",
+        )
+        .replace("<BizSvc>fedwire.funds.01</BizSvc>", "<BizSvc></BizSvc>");
+        let parsed = parse_message("pacs.008", payload.as_bytes())
+            .expect("empty-service XML fixture parses");
+        let profile = runtime
+            .resolve_profile(Some("fedwire-funds"))
+            .expect("fedwire profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("empty BizSvc must not satisfy live rail service policy");
+
+        assert!(matches!(err, MsgError::MissingField("AppHdr/BizSvc")));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_unstructured_postal_address_lines() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = live_pacs008_xml(
+            "SWIFT-UNSTRUCTURED-ADDRESS",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174230",
+        )
+        .replace(
+            "<DbtrAcct>",
+            "<Dbtr><PstlAdr><AdrLine>flat address line</AdrLine></PstlAdr></Dbtr>\n        <DbtrAcct>",
+        );
+        let parsed =
+            parse_message("pacs.008", payload.as_bytes()).expect("unstructured-address XML parses");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("live profiles require structured postal addresses");
+
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                field,
+                kind: InvalidValueKind::Enum
+            } if field == "PstlAdr/AdrLine"
+        ));
+    }
+
+    #[test]
+    fn live_profile_rejects_exact_unstructured_postal_address_field() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "pacs.008",
+            b"DataPDU/AppHdr/BizMsgIdr=SWIFT-UNSTRUCTURED-ADDRESS-FIELD\nDataPDU/AppHdr/MsgDefIdr=pacs.008.001.08\nDataPDU/AppHdr/CreDt=2025-01-01T12:00:00Z\nDataPDU/AppHdr/BizSvc=swift.cbprplus.02\nMsgId=m-profile\nUETR=123e4567-e89b-12d3-a456-426614174232\nIntrBkSttlmAmt=10.00\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=MARKDEFF\nPstlAdr/AdrLine=flat address line",
+        )
+        .expect("exact unstructured address field parses");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, b"profile payload")
+            .expect_err("live profiles reject exact unstructured address fields");
+
+        assert!(matches!(
+            err,
+            MsgError::InvalidValue {
+                field,
+                kind: InvalidValueKind::Enum
+            } if field == "PstlAdr/AdrLine"
+        ));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_oversized_supplementary_data() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let oversized = "A".repeat(2100);
+        let payload = live_pacs008_xml(
+            "FEDWIRE-OVERSIZED-SUPPLEMENTARY",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174231",
+        )
+        .replace(
+            "</CdtTrfTxInf>",
+            &format!(
+                "<SplmtryData><Envelope>{oversized}</Envelope></SplmtryData>\n      </CdtTrfTxInf>"
+            ),
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes())
+            .expect("oversized supplementary XML parses");
+        let profile = runtime
+            .resolve_profile(Some("fedwire-funds"))
+            .expect("fedwire profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("fedwire profile caps supplementary data");
+
+        assert!(matches!(
+            err,
+            MsgError::TooManyOccurrences {
+                field: "SplmtryData",
+                max: 2048,
+                actual
+            } if actual > 2048
+        ));
+    }
+
+    #[test]
     fn live_rail_profile_xsd_fixtures_reject_version_and_amount_drift() {
         let (config, _reference_files) = sample_config_with_live_reference_data();
         let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -18930,6 +20026,32 @@ mod tests {
             "123e4567-e89b-12d3-a456-426614174000 ",
         ] {
             assert!(!is_valid_uetr(bad_uetr), "{bad_uetr} must be invalid");
+        }
+    }
+
+    #[test]
+    fn unstructured_postal_address_detector_matches_exact_indexed_and_xml_paths() {
+        for field in [
+            "AdrLine",
+            "AdrLine[0]",
+            "PstlAdr/AdrLine",
+            "Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Dbtr/PstlAdr/AdrLine",
+            "Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Dbtr/PstlAdr/AdrLine[0]",
+        ] {
+            assert!(
+                is_unstructured_postal_address_field(field),
+                "expected {field} to be treated as an unstructured address"
+            );
+        }
+        for field in [
+            "PstlAdr/Ctry",
+            "Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Dbtr/PstlAdr/Ctry",
+            "NotAdrLine",
+        ] {
+            assert!(
+                !is_unstructured_postal_address_field(field),
+                "expected {field} to remain allowed"
+            );
         }
     }
 

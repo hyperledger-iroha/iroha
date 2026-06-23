@@ -46,6 +46,8 @@ max_attempts = 3
 worker_concurrency = 4
 backoff_initial_secs = 5
 backoff_max_secs = 60
+auditor_rate_per_sec = 4
+auditor_burst = 16
 
 [sorafs.gc]
 enabled = false

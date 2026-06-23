@@ -71,7 +71,7 @@ CLI وSDKs والرسم حتى متابعة كل عقدة لنقل حتمية و
 
 ## مرجع أعلام CLI وSDK
 
-`sorafs_cli fetch` (راجع `crates/sorafs_car/src/bin/sorafs_cli.rs`) والواجهة
+`sorafs_cli fetch` (راجع `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) والواجهة
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) اشترك في
 سطح إعداد المُنسِّق نفسه. استخدم الأعلام التالي عند التقاط الفساد أو
 إعادة تشغيل الـ التركيبات القياسية:

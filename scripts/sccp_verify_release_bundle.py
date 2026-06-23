@@ -91,6 +91,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
     ),
     "contract-smoke": (
+        "scripts/sccp_bsc_groth16_material.test.mjs",
         "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
         "scripts/sccp_tron_taira_xor_deploy.test.mjs",
         "scripts/sccp_taira_xor_contract.test.mjs",
@@ -103,6 +104,10 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
 }
 CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS = (
     "fail 0",
+    "materialize rejects zkeys that fail Powers-of-Tau verification",
+    "materialize refuses stale transcript materialize commands without PTAU binding",
+    "proof-self-test rejects witness calculators that accept adversarial assignments",
+    "finalize-attestations refuses production blockers after signed request matching",
     "BSC route-config requires explicit post-deploy evidence for production-ready manifests",
     "route manifest draft binds deployment evidence, verifier material, and TAIRA burn-record contract",
     "TAIRA XOR SCCP burn-record contract compiles as IVM ZK proved artifact",
@@ -273,12 +278,15 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             "def _sccp_launch_scope_constant_gate_inventory_errors",
             "def _ethereum_launch_policy_documentation_gate_inventory_errors",
             "def _sccp_public_discovery_documentation_gate_inventory_errors",
+            "def _bsc_groth16_material_documentation_gate_inventory_errors",
             "\"launch_scope_constant_gate\"",
             "\"ethereum_launch_policy_documentation_gate\"",
             "\"public_discovery_documentation_gate\"",
+            "\"bsc_groth16_material_documentation_gate\"",
             "SCCP launch-scope source inventory must pin",
             "SCCP Ethereum launch-policy documentation source inventory must pin",
             "SCCP public discovery documentation source inventory must pin",
+            "BSC Groth16 material documentation source inventory must pin",
         ),
     ),
     (
@@ -287,12 +295,15 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             "def test_release_readiness_report_guards_launch_scope_constant_gate_inventory",
             "def test_release_readiness_report_guards_ethereum_launch_policy_documentation_gate_inventory",
             "def test_release_readiness_report_guards_public_discovery_documentation_gate_inventory",
+            "def test_release_readiness_report_guards_bsc_groth16_material_documentation_gate_inventory",
             "def test_release_readiness_report_blocks_missing_launch_scope_source_gate",
             "def test_release_readiness_report_blocks_missing_ethereum_launch_policy_documentation_gate",
             "def test_release_readiness_report_blocks_missing_public_discovery_documentation_gate",
+            "def test_release_readiness_report_blocks_missing_bsc_groth16_material_documentation_gate",
             "launch_scope_constant_gate",
             "ethereum_launch_policy_documentation_gate",
             "public_discovery_documentation_gate",
+            "bsc_groth16_material_documentation_gate",
         ),
     ),
     (
@@ -300,7 +311,9 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_launch_scope_constant_inventory",
             "def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation",
+            "def test_release_bundle_verifier_guards_bsc_groth16_material_documentation",
             "def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate",
+            "def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_documentation_inventory_gate",
             "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
             "def test_release_bundle_verifier_rejects_launch_scope_domain_drift",
         ),
@@ -455,6 +468,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Ethereum launch-policy selector source inventory",
     "Ethereum launch-policy documentation source inventory",
     "public discovery documentation source inventory",
+    "BSC Groth16 material documentation source inventory",
     "Ethereum no-proxy data-collection source inventory",
     "Ethereum inbound adversarial source inventory",
     "BSC inbound adversarial source inventory",
@@ -781,6 +795,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "ethereum_launch_policy_selector_gate",
     "ethereum_launch_policy_documentation_gate",
     "public_discovery_documentation_gate",
+    "bsc_groth16_material_documentation_gate",
     "ethereum_data_collection_no_proxy_gate",
     "ethereum_inbound_adversarial_gate",
     "bsc_inbound_adversarial_gate",
@@ -4881,6 +4896,21 @@ SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
     ),
 )
 SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = ()
+BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS = (
+    (
+        "docs/source/bridge_proofs.md",
+        (
+            "The BSC destination leg also requires real Groth16 circuit, proving-key, and",
+            "Production materialization runs `snarkjs zkey verify",
+            "--ptau <powersOfTau28_hez_final_22.ptau>",
+            "The materializer no longer accepts signed production attestations directly.",
+            "`semanticSccpCircuit`, `circuitSecurity`, `trustedSetup`, and",
+            "Transcript command logs, when supplied, must show",
+            "adversarial witness evidence",
+            "groth16-material proof-self-test",
+        ),
+    ),
+)
 SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_retired_network_surface_test.py",
@@ -7538,7 +7568,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "proofArtifactBytes must be at least 65536 bytes",
             "provingKeyBytes must be at least 65536 bytes",
             "verifierKeyBytes must be at least 128 bytes",
-            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "crossSdkParityBytes must be at least 128 bytes",
             "nativeProverSelfTestBytes must be at least 128 bytes",
             "implementationBytes must be at least 1024 bytes",
             "WebAssembly.compile(bytes)",
@@ -12878,6 +12908,19 @@ def _sccp_public_discovery_documentation_inventory_errors(
     return errors
 
 
+def _bsc_groth16_material_documentation_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for BSC Groth16 material operator docs."""
+
+    if inventory is None:
+        inventory = BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="BSC Groth16 material documentation",
+    )
+
+
 def _sccp_retired_network_surface_guard_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
     forbidden_markers: tuple[str, ...] | None = None,
@@ -17833,6 +17876,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum launch-policy selector source inventory must pin the EthereumMainnetLane selector and negative cross-lane policy tests.",
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
+            "- BSC Groth16 material documentation source inventory must pin PTAU-bound zkey verification, attestation request and finalize flow, and proof self-test operator steps before public bundle readiness can pass.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
@@ -23127,6 +23171,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_launch_policy_selector_inventory_errors())
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
     errors.extend(_sccp_public_discovery_documentation_inventory_errors())
+    errors.extend(_bsc_groth16_material_documentation_inventory_errors())
     errors.extend(_sccp_retired_network_surface_guard_inventory_errors())
     errors.extend(_ethereum_core_range_finality_binding_inventory_errors())
     errors.extend(_ethereum_core_message_replay_guard_inventory_errors())
@@ -23525,6 +23570,36 @@ def _public_verifier_summary_artifacts(
     return public_artifacts, errors
 
 
+def _public_verifier_summary_errors(value: Any) -> tuple[list[str], list[str]]:
+    """Return public-safe verifier errors plus validation errors."""
+
+    label = "strict verifier summary"
+    field = "errors"
+    if not isinstance(value, list):
+        return [], [f"{label} {field} must be a list"]
+    public_errors: list[str] = []
+    validation_errors: list[str] = []
+    seen_public_errors: set[str] = set()
+    seen_validation_errors: set[str] = set()
+    for blocker in value:
+        blocker_error = _public_blocker_text_blocker(blocker, label, field)
+        if blocker_error is not None:
+            if blocker_error not in seen_validation_errors:
+                validation_errors.append(blocker_error)
+                seen_validation_errors.add(blocker_error)
+            continue
+        assert isinstance(blocker, str)
+        if blocker in seen_public_errors:
+            duplicate_error = f"{label} {field} must not contain duplicate strings"
+            if duplicate_error not in seen_validation_errors:
+                validation_errors.append(duplicate_error)
+                seen_validation_errors.add(duplicate_error)
+            continue
+        public_errors.append(blocker)
+        seen_public_errors.add(blocker)
+    return public_errors, validation_errors
+
+
 def _public_verifier_summary_payload(summary: Any) -> dict[str, Any]:
     """Return a fail-closed public strict-verifier summary payload."""
 
@@ -23561,17 +23636,11 @@ def _public_verifier_summary_payload(summary: Any) -> dict[str, Any]:
     if "errors" not in summary:
         errors.append(f"{label} errors missing")
     else:
-        summary_error_field_errors = _public_blocker_list_field_errors(
-            label,
-            summary,
-            "errors",
-            allow_empty=True,
+        public_errors, summary_error_field_errors = _public_verifier_summary_errors(
+            raw_errors
         )
-        if summary_error_field_errors:
-            errors.extend(summary_error_field_errors)
-        else:
-            assert isinstance(raw_errors, list)
-            errors.extend(raw_errors)
+        errors.extend(public_errors)
+        errors.extend(summary_error_field_errors)
 
     verified = summary.get("verified")
     if type(verified) is not bool:

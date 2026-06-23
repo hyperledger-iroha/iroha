@@ -35,13 +35,15 @@ use sorafs_car::{
     por_json::{proof_to_value, sample_to_map},
 };
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
+    BLAKE3_256_MULTIHASH_CODE, DagCodecId, GovernanceDagBlockV1, GovernanceDagHeadV1,
+    GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder, ManifestV1,
     ManualPorChallengeV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
     PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
     REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
     ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
     StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
+    validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::tempdir;
 
@@ -2135,6 +2137,7 @@ fn fetch_command_streams_payload_via_gateway() {
         .arg(format!("--manifest-id={manifest_id_hex}"))
         .arg("--chunker-handle=sorafs.sf1@1.0.0")
         .arg("--telemetry-region=test-region")
+        .arg("--profile=cold")
         .arg("--max-peers=1")
         .arg("--retry-budget=2")
         .arg(format!("--provider={provider_arg}"))
@@ -2160,6 +2163,10 @@ fn fetch_command_streams_payload_via_gateway() {
         stdout_json.get("telemetry_region").and_then(Value::as_str),
         Some("test-region")
     );
+    assert_eq!(
+        stdout_json.get("cache_state").and_then(Value::as_str),
+        Some("cold")
+    );
 
     let assembled = fs::read(&output_path).expect("read assembled payload");
     assert_eq!(assembled, payload);
@@ -2183,6 +2190,14 @@ fn fetch_command_streams_payload_via_gateway() {
     assert_eq!(
         summary_json.get("telemetry_region").and_then(Value::as_str),
         Some("test-region")
+    );
+    assert_eq!(
+        summary_json.get("cache_profile").and_then(Value::as_str),
+        Some("cold")
+    );
+    assert_eq!(
+        summary_json.get("cache_state").and_then(Value::as_str),
+        Some("cold")
     );
     let reports = summary_json
         .get("provider_reports")
@@ -3604,6 +3619,1109 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
     assert_eq!(
         summary_disk_json.get("total_items").and_then(Value::as_u64),
         Some(2)
+    );
+}
+
+fn governance_fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("fixtures/sorafs_manifest/governance")
+}
+
+fn parse_cli_json_stdout(output: &[u8]) -> Value {
+    from_slice(output).expect("CLI stdout should be JSON")
+}
+
+fn governance_dag_build_key_hex() -> String {
+    "cd".repeat(32)
+}
+
+fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&Path>) -> Value {
+    let root = governance_fixture_root();
+    let key_hex = governance_dag_build_key_hex();
+    let mut command = sorafs_cli_cmd();
+    command
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", build_dir.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999");
+    if let Some(path) = summary_path {
+        command.arg(format!("--summary-out={}", path.display()));
+    }
+    let build_assert = command.assert().success();
+    parse_cli_json_stdout(&build_assert.get_output().stdout)
+}
+
+#[test]
+fn governance_dag_list_and_show_validate_fixture() {
+    let root = governance_fixture_root();
+    let node = root.join("node_v1.to");
+
+    let list_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("list")
+        .arg(format!("--root={}", root.display()))
+        .arg("--format=json")
+        .assert()
+        .success();
+    let list_json = parse_cli_json_stdout(&list_assert.get_output().stdout);
+    assert_eq!(
+        list_json.get("artifact_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(list_json.get("node_count").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        list_json.get("valid_node_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    let artifacts = list_json
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .expect("artifacts");
+    assert_eq!(
+        artifacts[0]
+            .get("validation_status")
+            .and_then(Value::as_str),
+        Some("Ok")
+    );
+    assert_eq!(
+        artifacts[0]
+            .get("node")
+            .and_then(|node| node.get("payload_kind"))
+            .and_then(Value::as_str),
+        Some("por_proof")
+    );
+
+    let show_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("show")
+        .arg(format!("--node={}", node.display()))
+        .arg("--format=json")
+        .assert()
+        .success();
+    let show_json = parse_cli_json_stdout(&show_assert.get_output().stdout);
+    assert_eq!(
+        show_json.get("validation_code").and_then(Value::as_str),
+        Some("SFS-OK-000")
+    );
+    assert_eq!(
+        show_json
+            .get("node")
+            .and_then(|node| node.get("node_cid"))
+            .and_then(Value::as_str),
+        Some("bafygovernancelognode")
+    );
+}
+
+#[test]
+fn governance_dag_verify_rejects_unexpected_head() {
+    let root = governance_fixture_root();
+    let assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("verify")
+        .arg(format!("--root={}", root.display()))
+        .arg("--require-chain")
+        .arg("--head-cid=wrong-head")
+        .assert()
+        .failure();
+    let json = parse_cli_json_stdout(&assert.get_output().stdout);
+    assert_eq!(json.get("ok").and_then(Value::as_bool), Some(false));
+    let errors = json
+        .get("errors")
+        .and_then(Value::as_array)
+        .expect("errors");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.get("kind").and_then(Value::as_str) == Some("head_cid")),
+        "expected head_cid failure in {errors:?}"
+    );
+}
+
+#[test]
+fn governance_dag_verify_and_export_fixture_archive() {
+    let root = governance_fixture_root();
+    let verify_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("verify")
+        .arg(format!("--root={}", root.display()))
+        .arg("--head-cid=bafygovernancelognode")
+        .assert()
+        .success();
+    let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
+    assert_eq!(verify_json.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        verify_json
+            .get("head_cids")
+            .and_then(Value::as_array)
+            .and_then(|heads| heads.first())
+            .and_then(Value::as_str),
+        Some("bafygovernancelognode")
+    );
+
+    let tempdir = tempdir().expect("tempdir");
+    let export_dir = tempdir.path().join("export");
+    let export_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("export")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", export_dir.display()))
+        .arg("--head-cid=bafygovernancelognode")
+        .assert()
+        .success();
+    let export_json = parse_cli_json_stdout(&export_assert.get_output().stdout);
+    assert_eq!(
+        export_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.export.v1")
+    );
+    let exported_node = export_dir.join("nodes/node_v1.to");
+    let exported_sidecar = export_dir.join("nodes/node_v1.to.blake3");
+    assert!(exported_node.exists(), "exported node missing");
+    assert!(exported_sidecar.exists(), "exported sidecar missing");
+    let sidecar = fs::read_to_string(&exported_sidecar).expect("read sidecar");
+    let exported_bytes = fs::read(&exported_node).expect("read exported node");
+    assert_eq!(
+        sidecar.trim(),
+        hex_encode(blake3_hash(&exported_bytes).as_bytes())
+    );
+    assert!(
+        export_dir.join("manifest.json").exists(),
+        "manifest missing"
+    );
+}
+
+#[test]
+fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let summary_path = tempdir.path().join("build-summary.json");
+    let key_hex = governance_dag_build_key_hex();
+
+    let build_json = build_governance_dag_fixture_archive(&build_dir, Some(&summary_path));
+    assert_eq!(
+        build_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.build.v1")
+    );
+    assert_eq!(
+        build_json.get("block_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        build_json.get("generated_at").and_then(Value::as_u64),
+        Some(1_700_000_999)
+    );
+
+    let head_path = build_dir.join("head.to");
+    let head_sidecar = build_dir.join("head.to.blake3");
+    assert!(head_path.exists(), "head.to missing");
+    assert!(head_sidecar.exists(), "head sidecar missing");
+    let head_bytes = fs::read(&head_path).expect("read generated head");
+    assert_eq!(
+        fs::read_to_string(&head_sidecar)
+            .expect("read head sidecar")
+            .trim(),
+        hex_encode(blake3_hash(&head_bytes).as_bytes())
+    );
+    let head: GovernanceDagHeadV1 =
+        decode_from_bytes(&head_bytes).expect("decode generated governance DAG head");
+    assert_eq!(
+        head.head_signature.algorithm,
+        GovernanceSignatureAlgorithm::Ed25519
+    );
+    assert_eq!(head.block_count, 1);
+
+    let blocks = build_json
+        .get("blocks")
+        .and_then(Value::as_array)
+        .expect("blocks");
+    let block_path = build_dir.join(
+        blocks[0]
+            .get("path")
+            .and_then(Value::as_str)
+            .expect("block path"),
+    );
+    let block_bytes = fs::read(&block_path).expect("read generated block");
+    let block: GovernanceDagBlockV1 =
+        decode_from_bytes(&block_bytes).expect("decode generated governance DAG block");
+    assert_eq!(
+        block.block_signature.algorithm,
+        GovernanceSignatureAlgorithm::Ed25519
+    );
+    validate_governance_dag_head_against_chain_v1(&head, &[block])
+        .expect("generated governance DAG block/head chain validates");
+
+    let manifest = fs::read_to_string(build_dir.join("manifest.json")).expect("read manifest");
+    assert!(
+        !manifest.contains(&key_hex),
+        "runtime signing seed must not be persisted"
+    );
+    let summary = fs::read_to_string(&summary_path).expect("read summary");
+    assert_eq!(manifest, summary);
+}
+
+#[test]
+fn governance_dag_build_fixture_archive_writes_car_segment() {
+    let root = governance_fixture_root();
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let car_path = tempdir.path().join("governance-dag.car");
+    let car_plan_path = tempdir.path().join("governance-dag-plan.json");
+    let key_hex = governance_dag_build_key_hex();
+
+    let build_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", build_dir.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999")
+        .arg(format!("--car-out={}", car_path.display()))
+        .arg(format!("--car-plan-out={}", car_plan_path.display()))
+        .assert()
+        .success();
+    let build_json = parse_cli_json_stdout(&build_assert.get_output().stdout);
+    let car_summary = build_json
+        .get("car_archive")
+        .and_then(Value::as_object)
+        .expect("car archive summary");
+    assert_eq!(
+        car_summary.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.car.v1")
+    );
+    assert_eq!(
+        car_summary.get("output_car").and_then(Value::as_str),
+        Some(car_path.to_str().expect("utf8 car path"))
+    );
+    assert_eq!(
+        car_summary.get("chunk_plan_path").and_then(Value::as_str),
+        Some(car_plan_path.to_str().expect("utf8 car plan path"))
+    );
+    assert_eq!(
+        car_summary.get("file_count").and_then(Value::as_u64),
+        Some(4)
+    );
+
+    let car_bytes = fs::read(&car_path).expect("read governance DAG CAR");
+    assert_eq!(
+        car_summary.get("car_size").and_then(Value::as_u64),
+        Some(car_bytes.len() as u64)
+    );
+    let car_digest_hex = hex_encode(blake3_hash(&car_bytes).as_bytes());
+    assert_eq!(
+        car_summary.get("car_digest_hex").and_then(Value::as_str),
+        Some(car_digest_hex.as_str())
+    );
+    let plan_bytes = fs::read(&car_plan_path).expect("read governance DAG CAR plan");
+    let plan_json: Value = from_slice(&plan_bytes).expect("chunk plan json");
+    assert!(
+        plan_json
+            .as_array()
+            .is_some_and(|chunks| !chunks.is_empty()),
+        "CAR chunk plan should contain at least one chunk: {plan_json:?}"
+    );
+
+    let files = car_summary
+        .get("files")
+        .and_then(Value::as_array)
+        .expect("car files");
+    let file_paths = files
+        .iter()
+        .map(|file| {
+            file.get("path")
+                .and_then(Value::as_str)
+                .expect("file path")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(file_paths.iter().any(|path| path == "head.to"));
+    assert!(file_paths.iter().any(|path| path == "head.to.blake3"));
+    assert!(
+        file_paths
+            .iter()
+            .any(|path| path.starts_with("blocks/") && path.ends_with(".to"))
+    );
+    assert!(
+        file_paths
+            .iter()
+            .any(|path| path.starts_with("blocks/") && path.ends_with(".to.blake3"))
+    );
+}
+
+#[test]
+fn governance_dag_verify_build_accepts_generated_blocks_and_head() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let summary_path = tempdir.path().join("verify-build-summary.json");
+    let build_json = build_governance_dag_fixture_archive(&build_dir, None);
+    let head_cid_hex = build_json
+        .get("head_block_cid_hex")
+        .and_then(Value::as_str)
+        .expect("head cid hex");
+
+    let verify_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("verify-build")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--head-cid=hex:{head_cid_hex}"))
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
+    assert_eq!(
+        verify_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.build.verify.v1")
+    );
+    assert_eq!(verify_json.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        verify_json.get("block_file_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        verify_json.get("block_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        verify_json
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(head_cid_hex)
+    );
+    assert!(
+        verify_json
+            .get("warnings")
+            .and_then(Value::as_array)
+            .is_some_and(|warnings| warnings.is_empty()),
+        "generated snapshot should have no warnings: {verify_json:?}"
+    );
+    let summary = fs::read_to_string(&summary_path).expect("read verify-build summary");
+    let summary_json: Value = from_slice(summary.as_bytes()).expect("summary json");
+    assert_eq!(summary_json, verify_json);
+}
+
+#[test]
+fn governance_dag_verify_build_rejects_tampered_block_snapshot() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let build_json = build_governance_dag_fixture_archive(&build_dir, None);
+    let blocks = build_json
+        .get("blocks")
+        .and_then(Value::as_array)
+        .expect("blocks");
+    let block_path = build_dir.join(
+        blocks[0]
+            .get("path")
+            .and_then(Value::as_str)
+            .expect("block path"),
+    );
+    let block_bytes = fs::read(&block_path).expect("read generated block");
+    let mut block: GovernanceDagBlockV1 =
+        decode_from_bytes(&block_bytes).expect("decode generated governance DAG block");
+    block.block_cid[0] ^= 0x55;
+    let tampered_bytes = to_bytes(&block).expect("encode tampered block");
+    fs::write(&block_path, &tampered_bytes).expect("write tampered block");
+    fs::write(
+        block_path.with_extension("to.blake3"),
+        format!("{}\n", hex_encode(blake3_hash(&tampered_bytes).as_bytes())),
+    )
+    .expect("write tampered sidecar");
+
+    let verify_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("verify-build")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg("--require-sidecars")
+        .assert()
+        .failure();
+    let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
+    assert_eq!(verify_json.get("ok").and_then(Value::as_bool), Some(false));
+    let errors = verify_json
+        .get("errors")
+        .and_then(Value::as_array)
+        .expect("errors");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.get("kind").and_then(Value::as_str) == Some("head_chain")),
+        "expected head_chain failure in {errors:?}"
+    );
+}
+
+#[test]
+fn governance_dag_rebuild_head_recreates_signed_head_from_blocks() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let rebuilt_head_path = tempdir.path().join("rebuilt-head.to");
+    let summary_path = tempdir.path().join("rebuild-head-summary.json");
+    let build_json = build_governance_dag_fixture_archive(&build_dir, None);
+    let key_hex = governance_dag_build_key_hex();
+
+    let rebuild_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("rebuild-head")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--head-out={}", rebuilt_head_path.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999")
+        .arg("--require-sidecars")
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    let rebuild_json = parse_cli_json_stdout(&rebuild_assert.get_output().stdout);
+    assert_eq!(
+        rebuild_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.head.rebuild.v1")
+    );
+    assert_eq!(
+        rebuild_json.get("block_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        rebuild_json
+            .get("head_block_cid_hex")
+            .and_then(Value::as_str),
+        build_json.get("head_block_cid_hex").and_then(Value::as_str)
+    );
+
+    let original_head = fs::read(build_dir.join("head.to")).expect("read original head");
+    let rebuilt_head = fs::read(&rebuilt_head_path).expect("read rebuilt head");
+    assert_eq!(
+        rebuilt_head, original_head,
+        "same blocks, signer, and timestamp should rebuild identical head bytes"
+    );
+    assert_eq!(
+        fs::read_to_string(rebuilt_head_path.with_extension("to.blake3"))
+            .expect("read rebuilt head sidecar")
+            .trim(),
+        hex_encode(blake3_hash(&rebuilt_head).as_bytes())
+    );
+    let summary = fs::read_to_string(&summary_path).expect("read rebuild summary");
+    let summary_json: Value = from_slice(summary.as_bytes()).expect("summary json");
+    assert_eq!(summary_json, rebuild_json);
+}
+
+#[test]
+fn governance_dag_rebuild_head_rejects_tampered_block_snapshot() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let rebuilt_head_path = tempdir.path().join("rebuilt-head.to");
+    let build_json = build_governance_dag_fixture_archive(&build_dir, None);
+    let blocks = build_json
+        .get("blocks")
+        .and_then(Value::as_array)
+        .expect("blocks");
+    let block_path = build_dir.join(
+        blocks[0]
+            .get("path")
+            .and_then(Value::as_str)
+            .expect("block path"),
+    );
+    let block_bytes = fs::read(&block_path).expect("read generated block");
+    let mut block: GovernanceDagBlockV1 =
+        decode_from_bytes(&block_bytes).expect("decode generated governance DAG block");
+    block.block_cid[0] ^= 0x33;
+    let tampered_bytes = to_bytes(&block).expect("encode tampered block");
+    fs::write(&block_path, &tampered_bytes).expect("write tampered block");
+    fs::write(
+        block_path.with_extension("to.blake3"),
+        format!("{}\n", hex_encode(blake3_hash(&tampered_bytes).as_bytes())),
+    )
+    .expect("write tampered sidecar");
+
+    sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("rebuild-head")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--head-out={}", rebuilt_head_path.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={}", governance_dag_build_key_hex()))
+        .arg("--generated-at=1700000999")
+        .arg("--require-sidecars")
+        .assert()
+        .failure();
+    assert!(
+        !rebuilt_head_path.exists(),
+        "rebuild-head must not write a head for invalid blocks"
+    );
+}
+
+#[test]
+fn governance_dag_mirror_build_and_query_generated_snapshot() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let index_path = tempdir.path().join("mirror-index.json");
+    let build_json = build_governance_dag_fixture_archive(&build_dir, None);
+    let head_cid_hex = build_json
+        .get("head_block_cid_hex")
+        .and_then(Value::as_str)
+        .expect("head cid hex");
+
+    let mirror_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-build")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", index_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--head-cid=hex:{head_cid_hex}"))
+        .assert()
+        .success();
+    let mirror_json = parse_cli_json_stdout(&mirror_assert.get_output().stdout);
+    assert_eq!(
+        mirror_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.mirror.v1")
+    );
+    assert_eq!(
+        mirror_json.get("block_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        mirror_json
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(head_cid_hex)
+    );
+    let disk_index = fs::read_to_string(&index_path).expect("read mirror index");
+    let disk_index_json: Value = from_slice(disk_index.as_bytes()).expect("disk mirror index json");
+    assert_eq!(disk_index_json, mirror_json);
+
+    let block = mirror_json
+        .get("blocks")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.first())
+        .expect("indexed block");
+    let block_cid_hex = block
+        .get("block_cid_hex")
+        .and_then(Value::as_str)
+        .expect("block cid hex");
+    let node_cid_hex = block
+        .get("node_cid_hex")
+        .and_then(Value::as_str)
+        .expect("node cid hex");
+
+    let head_query = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-query")
+        .arg(format!("--index={}", index_path.display()))
+        .arg("--head")
+        .arg("--format=json")
+        .assert()
+        .success();
+    let head_query_json = parse_cli_json_stdout(&head_query.get_output().stdout);
+    assert_eq!(
+        head_query_json.get("found").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        head_query_json
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(head_cid_hex)
+    );
+
+    let block_query = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-query")
+        .arg(format!("--index={}", index_path.display()))
+        .arg(format!("--block-cid=hex:{block_cid_hex}"))
+        .arg("--format=json")
+        .assert()
+        .success();
+    let block_query_json = parse_cli_json_stdout(&block_query.get_output().stdout);
+    assert_eq!(
+        block_query_json.get("found").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        block_query_json
+            .get("block")
+            .and_then(|block| block.get("block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(block_cid_hex)
+    );
+
+    let node_query = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-query")
+        .arg(format!("--index={}", index_path.display()))
+        .arg(format!("--node-cid=hex:{node_cid_hex}"))
+        .arg("--format=json")
+        .assert()
+        .success();
+    let node_query_json = parse_cli_json_stdout(&node_query.get_output().stdout);
+    assert_eq!(
+        node_query_json.get("found").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        node_query_json
+            .get("block")
+            .and_then(|block| block.get("node_cid_hex"))
+            .and_then(Value::as_str),
+        Some(node_cid_hex)
+    );
+}
+
+#[test]
+fn governance_dag_mirror_query_rejects_unknown_block_cid() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let index_path = tempdir.path().join("mirror-index.json");
+    build_governance_dag_fixture_archive(&build_dir, None);
+
+    sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-build")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", index_path.display()))
+        .assert()
+        .success();
+
+    let missing_query = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-query")
+        .arg(format!("--index={}", index_path.display()))
+        .arg(format!("--block-cid=hex:{}", "00".repeat(32)))
+        .arg("--format=json")
+        .assert()
+        .failure();
+    let missing_json = parse_cli_json_stdout(&missing_query.get_output().stdout);
+    assert_eq!(
+        missing_json.get("found").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        matches!(
+            missing_json.get("block"),
+            Some(value) if matches!(value, Value::Null)
+        ),
+        "missing block query should return a null block: {missing_json:?}"
+    );
+}
+
+#[test]
+fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
+    let root = governance_fixture_root();
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let car_path = tempdir.path().join("governance-dag.car");
+    let car_plan_path = tempdir.path().join("governance-dag-plan.json");
+    let index_path = tempdir.path().join("mirror-index.json");
+    let checkpoint_path = tempdir.path().join("checkpoint.json");
+    let key_hex = governance_dag_build_key_hex();
+
+    let build_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", build_dir.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999")
+        .arg(format!("--car-out={}", car_path.display()))
+        .arg(format!("--car-plan-out={}", car_plan_path.display()))
+        .assert()
+        .success();
+    let build_json = parse_cli_json_stdout(&build_assert.get_output().stdout);
+    let head_cid_hex = build_json
+        .get("head_block_cid_hex")
+        .and_then(Value::as_str)
+        .expect("head cid hex");
+
+    sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-build")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", index_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--head-cid=hex:{head_cid_hex}"))
+        .assert()
+        .success();
+
+    let checkpoint_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", checkpoint_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--head-cid=hex:{head_cid_hex}"))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--mirror-index={}", index_path.display()))
+        .arg("--generated-at=1700001999")
+        .assert()
+        .success();
+    let checkpoint_json = parse_cli_json_stdout(&checkpoint_assert.get_output().stdout);
+    assert_eq!(
+        checkpoint_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.checkpoint.v1")
+    );
+    assert_eq!(
+        checkpoint_json.get("generated_at").and_then(Value::as_u64),
+        Some(1_700_001_999)
+    );
+    assert_eq!(
+        checkpoint_json
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(head_cid_hex)
+    );
+    assert_eq!(
+        checkpoint_json
+            .get("verification")
+            .and_then(|verification| verification.get("ok"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let car_bytes = fs::read(&car_path).expect("read checkpoint CAR");
+    let car_digest_hex = hex_encode(blake3_hash(&car_bytes).as_bytes());
+    assert_eq!(
+        checkpoint_json
+            .get("car_archive")
+            .and_then(|car| car.get("car_size"))
+            .and_then(Value::as_u64),
+        Some(car_bytes.len() as u64)
+    );
+    assert_eq!(
+        checkpoint_json
+            .get("car_archive")
+            .and_then(|car| car.get("blake3"))
+            .and_then(Value::as_str),
+        Some(car_digest_hex.as_str())
+    );
+
+    let index_bytes = fs::read(&index_path).expect("read checkpoint mirror index");
+    let index_digest_hex = hex_encode(blake3_hash(&index_bytes).as_bytes());
+    assert_eq!(
+        checkpoint_json
+            .get("mirror_index")
+            .and_then(|index| index.get("schema"))
+            .and_then(Value::as_str),
+        Some("sorafs.governance_dag.mirror.v1")
+    );
+    assert_eq!(
+        checkpoint_json
+            .get("mirror_index")
+            .and_then(|index| index.get("blake3"))
+            .and_then(Value::as_str),
+        Some(index_digest_hex.as_str())
+    );
+
+    let disk_checkpoint = fs::read_to_string(&checkpoint_path).expect("read checkpoint file");
+    let disk_checkpoint_json: Value =
+        from_slice(disk_checkpoint.as_bytes()).expect("checkpoint json");
+    assert_eq!(disk_checkpoint_json, checkpoint_json);
+}
+
+#[test]
+fn governance_dag_checkpoint_rejects_bad_mirror_index_schema() {
+    let tempdir = tempdir().expect("tempdir");
+    let build_dir = tempdir.path().join("build");
+    let index_path = tempdir.path().join("mirror-index.json");
+    let checkpoint_path = tempdir.path().join("checkpoint.json");
+    build_governance_dag_fixture_archive(&build_dir, None);
+    fs::write(&index_path, r#"{"schema":"not.sorafs"}"#).expect("write bad mirror index");
+
+    sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", checkpoint_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--mirror-index={}", index_path.display()))
+        .assert()
+        .failure();
+    assert!(
+        !checkpoint_path.exists(),
+        "checkpoint must not be written when mirror index schema is invalid"
+    );
+}
+
+fn build_governance_dag_checkpoint_fixture(
+    base: &Path,
+) -> (PathBuf, PathBuf, PathBuf, PathBuf, String) {
+    let root = governance_fixture_root();
+    let build_dir = base.join("build");
+    let car_path = base.join("governance-dag.car");
+    let car_plan_path = base.join("governance-dag-plan.json");
+    let index_path = base.join("mirror-index.json");
+    let checkpoint_path = base.join("checkpoint.json");
+    let key_hex = governance_dag_build_key_hex();
+
+    let build_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", build_dir.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999")
+        .arg(format!("--car-out={}", car_path.display()))
+        .arg(format!("--car-plan-out={}", car_plan_path.display()))
+        .assert()
+        .success();
+    let build_json = parse_cli_json_stdout(&build_assert.get_output().stdout);
+    let head_cid_hex = build_json
+        .get("head_block_cid_hex")
+        .and_then(Value::as_str)
+        .expect("head cid hex")
+        .to_string();
+
+    sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("mirror-build")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", index_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--head-cid=hex:{head_cid_hex}"))
+        .assert()
+        .success();
+
+    sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint")
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", checkpoint_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--head-cid=hex:{head_cid_hex}"))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--mirror-index={}", index_path.display()))
+        .arg("--generated-at=1700001999")
+        .assert()
+        .success();
+
+    (
+        build_dir,
+        car_path,
+        index_path,
+        checkpoint_path,
+        head_cid_hex,
+    )
+}
+
+#[test]
+fn governance_dag_checkpoint_verify_accepts_recorded_artifacts() {
+    let tempdir = tempdir().expect("tempdir");
+    let (build_dir, car_path, index_path, checkpoint_path, head_cid_hex) =
+        build_governance_dag_checkpoint_fixture(tempdir.path());
+    let summary_path = tempdir.path().join("checkpoint-verify-summary.json");
+
+    let verify_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint-verify")
+        .arg(format!("--checkpoint={}", checkpoint_path.display()))
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--mirror-index={}", index_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
+    assert_eq!(
+        verify_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.checkpoint.verify.v1")
+    );
+    assert_eq!(verify_json.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        verify_json
+            .get("expected_head_cid_hex")
+            .and_then(Value::as_str),
+        Some(head_cid_hex.as_str())
+    );
+    assert_eq!(
+        verify_json
+            .get("root")
+            .and_then(|root| root.get("ok"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        verify_json
+            .get("head")
+            .and_then(|head| head.get("digest_ok"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        verify_json
+            .get("car_archive")
+            .and_then(|car| car.get("ok"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        verify_json
+            .get("mirror_index")
+            .and_then(|index| index.get("ok"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let summary = fs::read_to_string(&summary_path).expect("read checkpoint verify summary");
+    let summary_json: Value = from_slice(summary.as_bytes()).expect("checkpoint verify json");
+    assert_eq!(summary_json, verify_json);
+}
+
+#[test]
+fn governance_dag_checkpoint_verify_rejects_tampered_car() {
+    let tempdir = tempdir().expect("tempdir");
+    let (build_dir, car_path, index_path, checkpoint_path, _) =
+        build_governance_dag_checkpoint_fixture(tempdir.path());
+    fs::write(&car_path, b"tampered governance dag car").expect("tamper CAR");
+
+    let verify_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint-verify")
+        .arg(format!("--checkpoint={}", checkpoint_path.display()))
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--mirror-index={}", index_path.display()))
+        .arg("--require-sidecars")
+        .assert()
+        .failure();
+    let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
+    assert_eq!(verify_json.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        verify_json
+            .get("car_archive")
+            .and_then(|car| car.get("digest_ok"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    let errors = verify_json
+        .get("errors")
+        .and_then(Value::as_array)
+        .expect("errors");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.get("kind").and_then(Value::as_str) == Some("car_archive_digest")),
+        "expected CAR digest failure in {errors:?}"
+    );
+}
+
+#[test]
+fn governance_dag_checkpoint_recover_rebuilds_mirror_index() {
+    let tempdir = tempdir().expect("tempdir");
+    let (build_dir, car_path, index_path, checkpoint_path, head_cid_hex) =
+        build_governance_dag_checkpoint_fixture(tempdir.path());
+    fs::remove_file(&index_path).expect("remove original mirror index");
+    let recovered_index_path = tempdir.path().join("recovered-mirror-index.json");
+    let summary_path = tempdir.path().join("checkpoint-recover-summary.json");
+
+    let recover_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint-recover")
+        .arg(format!("--checkpoint={}", checkpoint_path.display()))
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", recovered_index_path.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg("--require-sidecars")
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    let recover_json = parse_cli_json_stdout(&recover_assert.get_output().stdout);
+    assert_eq!(
+        recover_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.checkpoint.recover.v1")
+    );
+    assert_eq!(recover_json.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        recover_json
+            .get("recovered_mirror_index")
+            .and_then(|index| index.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(head_cid_hex.as_str())
+    );
+
+    let recovered = fs::read_to_string(&recovered_index_path).expect("read recovered index");
+    let recovered_json: Value = from_slice(recovered.as_bytes()).expect("recovered index json");
+    assert_eq!(
+        recovered_json.get("schema").and_then(Value::as_str),
+        Some("sorafs.governance_dag.mirror.v1")
+    );
+    assert_eq!(
+        recovered_json
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(head_cid_hex.as_str())
+    );
+    let summary = fs::read_to_string(&summary_path).expect("read recovery summary");
+    let summary_json: Value = from_slice(summary.as_bytes()).expect("recovery summary json");
+    assert_eq!(summary_json, recover_json);
+}
+
+#[test]
+fn governance_dag_checkpoint_recover_rejects_tampered_car_without_writing_index() {
+    let tempdir = tempdir().expect("tempdir");
+    let (build_dir, car_path, _index_path, checkpoint_path, _) =
+        build_governance_dag_checkpoint_fixture(tempdir.path());
+    fs::write(&car_path, b"tampered governance dag car").expect("tamper CAR");
+    let recovered_index_path = tempdir.path().join("recovered-mirror-index.json");
+
+    let recover_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("checkpoint-recover")
+        .arg(format!("--checkpoint={}", checkpoint_path.display()))
+        .arg(format!("--root={}", build_dir.display()))
+        .arg(format!("--out={}", recovered_index_path.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg("--require-sidecars")
+        .assert()
+        .failure();
+    let recover_json = parse_cli_json_stdout(&recover_assert.get_output().stdout);
+    assert_eq!(recover_json.get("ok").and_then(Value::as_bool), Some(false));
+    assert!(
+        !recovered_index_path.exists(),
+        "checkpoint recovery must not write a mirror index for invalid inputs"
+    );
+    let errors = recover_json
+        .get("errors")
+        .and_then(Value::as_array)
+        .expect("errors");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.get("kind").and_then(Value::as_str) == Some("car_archive_digest")),
+        "expected CAR digest failure in {errors:?}"
     );
 }
 

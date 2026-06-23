@@ -221,7 +221,7 @@ _Վերջին վերանայումը՝ 2026-01-19 — Հաջորդ պլանավ�
   Torii ինտեգրումը `crates/iroha_torii/src/da/ingest.rs`-ում, որը կապում է
   մատնահետքի ստուգում `/v1/da/ingest`-ի միջոցով:
 - PDP/PoTR հոսքային սիմուլյացիաներն իրականացվում են ապացույց-հոսքի զրահի միջոցով
-  `crates/sorafs_car/tests/sorafs_cli.rs`, որը ծածկում է PoR/PDP/PoTR հարցումների հոսքերը
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, որը ծածկում է PoR/PDP/PoTR հարցումների հոսքերը
   և ձախողման սցենարները, որոնք անիմացիոն են սպառնալիքի մոդելում:
 - Հզորության և վերանորոգման ներծծման արդյունքները ապրում են տակ
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, մինչդեռ ավելի լայն

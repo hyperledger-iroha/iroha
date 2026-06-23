@@ -9,17 +9,17 @@ source_last_modified: "2026-01-03T18:07:57.685904+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: SoraFS Gateway & DNS Design Kickoff — Agenda
-summary: Session flow, attendee roster, and decision checkpoints for the 2025-03-03 kickoff.
----
+# SoraFS Gateway & DNS Design Kickoff — Agenda Archive
 
-# SoraFS Gateway & DNS Design Kickoff — Agenda
+**Date:** 2025-03-03
+**Time:** 16:00–17:00 UTC (60 minutes)
+**Facilitator:** Networking TL
+**Meeting type:** Completed decision workshop (Zoom/Meet + shared notes doc)
 
-**Date:** 2025-03-03  
-**Time:** 16:00–17:00 UTC (60 minutes)  
-**Facilitator:** Networking TL  
-**Meeting type:** Decision workshop (Zoom/Meet + shared notes doc)
+This agenda is retained as the archival session plan. Decisions, owners, and
+close-out actions are recorded in
+`docs/source/sorafs_gateway_dns_design_minutes.md`; the current operator-facing
+summary remains in `docs/source/sorafs_gateway_dns_design_pre_read.md`.
 
 ## 1. Attendee Roster
 
@@ -35,7 +35,8 @@ summary: Session flow, attendee roster, and decision checkpoints for the 2025-03
 | Torii Platform Rep | `torii.platform@soranet` | API integration, telemetry pipelines, config surfaces. |
 | Security Engineering Observer | `security@soranet` | GAR enforcement threat modelling, audit trail requirements. |
 
-> **Action:** Confirm availability with each attendee by 2025-02-26; replace roles as needed if conflicts arise.
+> **Archive status:** Attendance was confirmed by 2025-02-26 and the completed
+> roster is tracked in `docs/source/sorafs_gateway_dns_design_attendance.md`.
 
 ## 2. Pre-read Review (0–5 min)
 - Quick acknowledgement that everyone read:
@@ -55,7 +56,7 @@ summary: Session flow, attendee roster, and decision checkpoints for the 2025-03
    - Toolchain choice: Terraform + RFC2136 vs Torii-managed.
    - Secrets management, audit logging, GAR linkage.
 4. **Decision Capture (5 min):**
-   - Record final decisions in shared notes.
+   - Record final decisions in the minutes.
    - Assign owner to codify decisions in docs/config.
 
 ## 4. Gateway Enforcement & Runtime (20–40 min)
@@ -63,14 +64,15 @@ summary: Session flow, attendee roster, and decision checkpoints for the 2025-03
    - Integration approach (library vs Norito cache).
    - Config knobs, rollout toggles.
 2. **Trustless Profile Alignment (5 min):**
-   - Confirm outstanding items from `sorafs_gateway_profile.md`.
+   - Confirm the shipped `sorafs_gateway_profile.md` acceptance criteria and
+     any rollout evidence follow-ups.
 3. **Direct Mode & Rate Limiting (4 min):**
    - Requirements for manifest capability enforcement, denylist hooks.
 4. **Telemetry & Alerts (8 min):**
    - Metrics to capture (`torii_sorafs_gar_violations_total`, latency histograms).
    - Alert routing to governance/on-call.
 5. **Decision Capture (5 min):**
-   - Document acceptance criteria & owner for implementation PRs.
+   - Record acceptance criteria and owners in the minutes.
 
 ## 5. Conformance Harness Plan (40–50 min)
 1. **Coverage Review (5 min):**
@@ -88,9 +90,9 @@ summary: Session flow, attendee roster, and decision checkpoints for the 2025-03
 ## 7. Action Register & Next Steps (55–60 min)
 - Summarise decisions and outstanding actions.
 - Assign owners, due dates, and follow-up checkpoints.
-- Confirm publication plan for meeting notes and artefacts.
+- Confirm publication plan for minutes, the outcome brief, and artefacts.
 
-## 8. Pre-work Checklist (Owners)
+## 8. Pre-work Checklist (Completed)
 
 | Task | Owner | Due | Notes |
 |------|-------|-----|-------|
@@ -98,13 +100,16 @@ summary: Session flow, attendee roster, and decision checkpoints for the 2025-03
 | Circulate agenda & pre-read | Networking TL | 2025-02-27 | Bundle agenda + pre-read in single email. |
 | Gather current GAR metric snapshot | Ops Lead / Torii Rep | 2025-02-28 | Run `scripts/telemetry/run_schema_diff.sh` variant (see action item). |
 | Prepare diagrams (DNS flow, policy engine) | Tooling WG / Security | 2025-03-01 | Store under `docs/source/images/sorafs_gateway_kickoff/`. |
-| Draft note-taking doc | Docs/DevRel | 2025-02-28 | Provide outline for decisions/actions. |
+| Publish note-taking doc | Docs/DevRel | 2025-02-28 | Completed; decisions/actions are now in the minutes. |
 
-## 9. Post-meeting Follow-up Template
-- **Within 24h:** Publish notes + action register to roadmap/status.
-- **Within 48h:** Update all referenced docs with agreed decisions.
-- **Within 72h:** File implementation issues/PRs and schedule progress checks.
+## 9. Post-meeting Close-out
+- **Within 24h:** Published notes + action register to roadmap/status.
+- **Within 48h:** Updated referenced docs with agreed decisions.
+- **Within 72h:** Filed implementation issues/PRs and scheduled progress checks.
 
 ---
 
-For adjustments or additional agenda items, comment directly on this document or ping `networking.tl@soranet`. All changes must be frozen 24 hours before the session to keep the meeting focused on decision outcomes.
+This agenda is archived. Update
+`docs/source/sorafs_gateway_dns_design_minutes.md` for corrections to decisions
+or action ownership, and update the outcome brief when the shipped gateway/DNS
+surface changes.

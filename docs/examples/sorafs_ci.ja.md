@@ -64,7 +64,7 @@ jobs:
 
 ## ノート
 
-- `sorafs_cli` は runner で利用可能である必要があります (例: `cargo install --path crates/sorafs_car --features cli` を事前に実行)。
+- `sorafs_cli` は runner で利用可能である必要があります (例: `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` を事前に実行)。
 - Workflow は明示的な OIDC audience (ここでは `sorafs`) を提供する必要があります。`--identity-token-audience` を Fulcio ポリシーに合わせて調整してください。
 - Release pipeline は `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, `artifacts/proof.json` を governance レビューのためにアーカイブします。
 - 決定的なサンプル artefacts は `fixtures/sorafs_manifest/ci_sample` にあります。golden manifests, chunk plans, bundle JSON が必要な場合は pipeline を再計算せずにテストへコピーしてください。

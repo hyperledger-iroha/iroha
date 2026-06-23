@@ -6743,6 +6743,10 @@ pub struct SorafsRepair {
     pub backoff_max_secs: u64,
     /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
     pub default_slash_penalty_nano: u128,
+    /// Per-auditor signed report/slash request rate (tokens/sec).
+    pub auditor_rate_per_sec: Option<NonZeroU32>,
+    /// Per-auditor signed report/slash request burst capacity.
+    pub auditor_burst: Option<NonZeroU32>,
 }
 
 impl Default for SorafsRepair {
@@ -6757,6 +6761,9 @@ impl Default for SorafsRepair {
             backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
             backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
             default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
+            auditor_rate_per_sec: defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
+                .and_then(NonZeroU32::new),
+            auditor_burst: defaults::sorafs::repair::AUDITOR_BURST.and_then(NonZeroU32::new),
         }
     }
 }
@@ -6845,6 +6852,10 @@ pub struct SorafsStorage {
     pub stream_tokens: SorafsTokenConfig,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
+    /// Optional publisher peer identifier used for signed Governance DAG blocks.
+    pub governance_dag_publisher_peer_id: Option<String>,
+    /// Optional Ed25519 signing-key path used for signed Governance DAG blocks.
+    pub governance_dag_signing_key_path: Option<PathBuf>,
     /// Authentication and rate limits for manifest pin submissions.
     pub pin: SorafsStoragePin,
 }
@@ -6864,6 +6875,8 @@ pub struct SorafsStoragePin {
 
 impl Default for SorafsStorage {
     fn default() -> Self {
+        let governance_dag_signing_key_path =
+            defaults::sorafs::storage::governance_signing_key_path();
         Self {
             enabled: defaults::sorafs::storage::ENABLED,
             data_dir: defaults::sorafs::storage::data_dir(),
@@ -6876,6 +6889,9 @@ impl Default for SorafsStorage {
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsTokenConfig::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
+            governance_dag_publisher_peer_id:
+                defaults::sorafs::storage::governance_publisher_peer_id(),
+            governance_dag_signing_key_path,
             pin: SorafsStoragePin::default(),
         }
     }

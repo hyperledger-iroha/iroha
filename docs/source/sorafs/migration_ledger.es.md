@@ -8,34 +8,26 @@ source_hash: 335591734454cabeb39826a2cb6ddf778e5bd3e488641d2e90e5bb6079bc75df
 source_last_modified: "2025-11-02T04:40:40.138255+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
+# SoraFS Migration Ledger
 
-# Ledger de migracion SoraFS
+This ledger mirrors the migration change log captured in the SoraFS
+Architecture RFC. Entries are grouped by milestone and list the effective window,
+impacted teams, and required actions. Updates to the migration plan MUST modify
+both this file and the RFC (`docs/source/sorafs_architecture_rfc.md`) to keep
+downstream consumers aligned.
 
-Este ledger espeja el change log de migracion capturado en el RFC de
-Arquitectura SoraFS. Las entradas se agrupan por hito y listan la ventana
-efectiva, equipos impactados y acciones requeridas. Las actualizaciones al plan
-de migracion DEBEN modificar tanto este archivo como el RFC
-(`docs/source/sorafs_architecture_rfc.md`) para mantener alineados a los
-consumidores downstream.
+| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
+|-----------|------------------|----------------|----------------|--------------|--------|
+| M1 | Weeks 7–12 | CI enforces deterministic fixtures; local tooling exposes explicit expectation flags; staging alias proof evidence is archived outside this repo. | Docs, Storage, Governance | Keep fixtures signed, keep release checklists using `--car-digest`/`--root-cid`, and attach fresh staging alias evidence to rollout tickets. | Local controls implemented; external evidence tracked in governance archive. |
 
-| Hito | Ventana efectiva | Resumen de cambios | Equipos impactados | Acciones | Estado |
-|------|------------------|-------------------|--------------------|----------|--------|
-| M1 | Semanas 7-12 | CI impone fixtures deterministas; pruebas de alias disponibles en staging; el tooling expone flags de expectativa explicita. | Docs, Storage, Governance | Asegurar que los fixtures sigan firmados, registrar aliases en el registro staging, actualizar checklists de release con enforcement `--car-digest/--root-cid`. | ⏳ Pendiente |
+Governance control plane minutes referencing these milestones are stored under
+`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
+when notable events occur (e.g., new alias registrations, registry incident
+retrospectives) to provide an auditable paper trail.
 
-Las minutas del control plane de governance que referencian estos hitos se
-almacenan bajo `docs/source/sorafs/`. Los equipos deben agregar bullets con
-fecha bajo cada fila cuando ocurran eventos notables (p. ej., nuevos registros
-de alias, retrospectivas de incidentes del registro) para proveer un rastro
-auditado.
+## Recent Updates
 
-## Actualizaciones recientes
-
-- 2025-11-01 — Se circulo `migration_roadmap.md` al council de governance y a
-  listas de operadores para revision; se espera sign-off en la proxima sesion
-  del council (ref: follow-up `docs/source/sorafs/council_minutes_2025-10-29.md`).
-- 2025-11-02 — El ISI de registro de Pin Registry ahora aplica validacion
-  compartida de chunker/politica via helpers `sorafs_manifest`, manteniendo
-  alineados los caminos on-chain con los checks de Torii.
-- 2026-02-13 — Se agregaron fases de rollout de provider advert (R0–R3) al
-  ledger y se publicaron los dashboards y guia de operadores asociados
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and operator lists for review; repository implementation status is now tracked by the dated ledger entries below and external sign-off evidence remains in the governance archive.
+- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy validation via `sorafs_manifest` helpers, keeping on-chain paths aligned with Torii checks.
+- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and published the associated dashboards and operator guidance (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2026-06-22 — Refreshed the M1 status to separate implemented local fixture/expectation-flag controls from external staging alias and governance evidence required for live rollout sign-off.

@@ -76,7 +76,7 @@ ID: آرکسٹریٹر ٹوننگ
 
 ## حوالہ سی ایل آئی اور ایس ڈی کے جھنڈے
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` دیکھیں) اور انٹرفیس
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` دیکھیں) اور انٹرفیس
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) شیئرز
 فارمیٹر سیٹنگ خود ہی۔ لانچ کے ثبوتوں پر قبضہ کرتے وقت درج ذیل جھنڈوں کا استعمال کریں یا
 معیاری فکسچر کو دوبارہ شروع کرنا:

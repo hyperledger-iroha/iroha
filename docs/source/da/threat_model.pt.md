@@ -205,7 +205,7 @@ coloca provedores maliciosos na lista de permissões ou suprime alertas.
   a integração Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia o
   verificações de impressões digitais por meio de `/v1/da/ingest`.
 - Simulações de streaming PDP/PoTR são exercidas por meio do equipamento de fluxo de prova em
-  `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de solicitação PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobrindo fluxos de solicitação PoR/PDP/PoTR
   e cenários de falha animados no modelo de ameaça.
 - Os resultados de absorção de capacidade e reparo permanecem abaixo
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, enquanto o mais amplo

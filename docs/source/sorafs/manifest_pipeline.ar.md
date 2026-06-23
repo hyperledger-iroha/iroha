@@ -49,7 +49,7 @@ translation_last_reviewed: 2026-01-30
 ### البدء السريع للـ CLI
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 تطبع الأداة ملخصات chunks وتفاصيل المانيفست؛ وعند توفير `--manifest-out` و/أو `--car-out`
@@ -139,7 +139,7 @@ sorafs-fetch   --plan=chunk_fetch_specs.json   --gateway-provider=name=gw-a,prov
 يطابق توقعات المانيفست قبل كتابة المخرجات — مفيد لاختبارات CI السريعة التي تريد التأكد من أن الأوركسترايتور لم
 يُسقط أو يُعيد ترتيب chunks بصمت.
 
-إذا كان لديك بالفعل تقرير JSON تم إنشاؤه بواسطة `sorafs-manifest-stub`، فمرره مباشرة عبر
+إذا كان لديك بالفعل تقرير JSON تم إنشاؤه بواسطة `sorafs_manifest_stub`، فمرره مباشرة عبر
 `--manifest-report=docs.report.json`. ستعيد CLI الخاصة بـ fetch استخدام الحقول المضمنة
 `chunk_fetch_specs` و`payload_digest_hex` و`payload_len`، لذلك لا تحتاج لإدارة ملفات خطة أو تحقق منفصلة.
 

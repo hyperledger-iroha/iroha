@@ -7740,6 +7740,8 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
     public var chunker: ToriiSoraFsChunkerHandle?
     public var pinPolicy: ToriiSoraFsPinPolicy?
     public var manifestDigestHex: String?
+    public var manifestBase64: String?
+    public var manifestBytes: Data?
     public var chunkDigestSha3_256Hex: String?
     public var contentLength: UInt64?
     public var submittedEpoch: UInt64?
@@ -7751,6 +7753,8 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
                 chunker: ToriiSoraFsChunkerHandle? = nil,
                 pinPolicy: ToriiSoraFsPinPolicy? = nil,
                 manifestDigestHex: String? = nil,
+                manifestBase64: String? = nil,
+                manifestBytes: Data? = nil,
                 chunkDigestSha3_256Hex: String? = nil,
                 contentLength: UInt64? = nil,
                 submittedEpoch: UInt64? = nil,
@@ -7761,6 +7765,8 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
         self.chunker = chunker
         self.pinPolicy = pinPolicy
         self.manifestDigestHex = manifestDigestHex
+        self.manifestBase64 = manifestBase64
+        self.manifestBytes = manifestBytes
         self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
         self.contentLength = contentLength
         self.submittedEpoch = submittedEpoch
@@ -7774,6 +7780,7 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
         case chunker
         case pinPolicy = "pin_policy"
         case manifestDigestHex = "manifest_digest_hex"
+        case manifestBase64 = "manifest_b64"
         case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
         case contentLength = "content_length"
         case submittedEpoch = "submitted_epoch"
@@ -7797,6 +7804,11 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
             pinPolicy: try pinPolicy.normalized(),
             manifestDigestHex: try ToriiSoraFsPinValidation.digest(manifestDigestHex,
                                                                    field: "manifest_digest_hex"),
+            manifestBase64: try ToriiSoraFsPinValidation.optionalManifestPayload(
+                manifestBase64: manifestBase64,
+                manifestBytes: manifestBytes
+            ),
+            manifestBytes: nil,
             chunkDigestSha3_256Hex: try ToriiSoraFsPinValidation.digest(
                 chunkDigestSha3_256Hex,
                 field: "chunk_digest_sha3_256_hex"
@@ -7828,6 +7840,7 @@ fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equat
     var chunkerMultihashCode: UInt32
     var pinPolicy: ToriiSoraFsPinPolicy
     var manifestDigestHex: String
+    var manifestBase64: String?
     var chunkDigestSha3_256Hex: String
     var contentLength: UInt64
     var submittedEpoch: UInt64
@@ -7860,6 +7873,7 @@ fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equat
         self.chunkerMultihashCode = chunkerMultihashCode
         self.pinPolicy = pinPolicy
         self.manifestDigestHex = manifestDigestHex
+        self.manifestBase64 = request.manifestBase64
         self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
         self.contentLength = contentLength
         self.submittedEpoch = submittedEpoch
@@ -7877,6 +7891,7 @@ fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equat
         case chunkerMultihashCode = "chunker_multihash_code"
         case pinPolicy = "pin_policy"
         case manifestDigestHex = "manifest_digest_hex"
+        case manifestBase64 = "manifest_b64"
         case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
         case contentLength = "content_length"
         case submittedEpoch = "submitted_epoch"
@@ -8018,6 +8033,22 @@ fileprivate enum ToriiSoraFsPinValidation {
             throw ToriiClientError.invalidPayload("\(field) must be valid non-empty base64.")
         }
         return decoded.base64EncodedString()
+    }
+
+    static func optionalManifestPayload(manifestBase64: String?, manifestBytes: Data?) throws -> String? {
+        if manifestBase64 != nil, manifestBytes != nil {
+            throw ToriiClientError.invalidPayload("manifest_b64 and manifest_bytes are mutually exclusive.")
+        }
+        if let manifestBase64 {
+            return try requiredBase64(manifestBase64, field: "manifest_b64")
+        }
+        guard let manifestBytes else {
+            return nil
+        }
+        guard !manifestBytes.isEmpty else {
+            throw ToriiClientError.invalidPayload("manifest_bytes must be non-empty.")
+        }
+        return manifestBytes.base64EncodedString()
     }
 
     static func storageClass(_ storageClass: ToriiSoraFsStorageClass?) throws -> ToriiSoraFsStorageClass {

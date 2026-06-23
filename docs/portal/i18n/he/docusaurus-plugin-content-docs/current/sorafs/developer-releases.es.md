@@ -31,7 +31,7 @@ recientes de la revisión de seguridad:
 - Adjunta el enlace del ticket de remediación (por ejemplo, `governance/tickets/SF6-SR-2026.md`) y anota
   los aprobadores de Security Engineering y del Tooling Working Group.
 - Verifica que la List de remediación del memo esté cerrada; los ítems sin resolver bloquean el lanzamiento.
-- הכנה למען סוביר לוס לוגים דל רתום דה פארידאד (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- הכנה למען סוביר לוס לוגים דל רתום דה פארידאד (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   junto con el bundle del manifest.
 - אישור que el comando de firma que planeas ejecutar incluya tanto `--identity-token-provider` como
   un `--identity-token-audience=<aud>` explícito para que el alcance de Fulcio quede capturado en la evidencia del release.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 התסריט הממש את התוצאות הבאות:
 
 - `cargo fmt --all -- --check` (סביבת עבודה)
-- `cargo clippy --locked --all-targets` עבור `sorafs_car` (עם תכונה `cli`),
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` עבור ארגזי esos mismos
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 אם יש לך רקע, יש צורך בתקשורת. Los builds de release
 deben estar continuos con main; אין hagas cherry-pick de fixes en ramas de release.

@@ -8,6 +8,9 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use ed25519_dalek::{
+    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
+};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -16,13 +19,17 @@ use thiserror::Error;
 
 use crate::{
     chunker_registry,
-    provider_advert::{CapabilityType, StakePointer},
+    provider_advert::{CapabilityType, SignatureAlgorithm, StakePointer},
 };
 
 /// Schema version for [`CapacityDeclarationV1`].
 pub const CAPACITY_DECLARATION_VERSION_V1: u8 = 1;
 /// Schema version for [`ReplicationOrderV1`].
 pub const REPLICATION_ORDER_VERSION_V1: u8 = 1;
+/// Schema version for [`SignedReplicationOrderV1`].
+pub const SIGNED_REPLICATION_ORDER_VERSION_V1: u8 = 1;
+/// Domain string included in canonical [`SignedReplicationOrderV1`] signing bytes.
+pub const REPLICATION_ORDER_SIGNATURE_DOMAIN_V1: &str = "sorafs.replication_order.signature.v1";
 /// Schema version for [`CapacityTelemetryV1`].
 pub const CAPACITY_TELEMETRY_VERSION_V1: u8 = 1;
 /// Schema version for [`CapacityDisputeV1`].
@@ -411,6 +418,134 @@ impl ReplicationOrderV1 {
         }
 
         Ok(())
+    }
+}
+
+/// Signature attached to a governance-issued replication order.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct ReplicationOrderSignatureV1 {
+    /// Signature algorithm.
+    pub algorithm: SignatureAlgorithm,
+    /// Governance issuer public key.
+    pub public_key: Vec<u8>,
+    /// Raw signature bytes.
+    pub signature: Vec<u8>,
+}
+
+impl ReplicationOrderSignatureV1 {
+    fn validate(&self) -> Result<(), SignedReplicationOrderValidationError> {
+        if self.public_key.is_empty() || self.signature.is_empty() {
+            return Err(SignedReplicationOrderValidationError::InvalidSignature);
+        }
+        Ok(())
+    }
+}
+
+/// Signed governance envelope for a replication order.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct SignedReplicationOrderV1 {
+    /// Schema version (`SIGNED_REPLICATION_ORDER_VERSION_V1`).
+    pub version: u8,
+    /// Replication order being authorized.
+    pub order: ReplicationOrderV1,
+    /// Governance signature over the canonical order signing payload.
+    pub signature: ReplicationOrderSignatureV1,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct ReplicationOrderSigningPayloadV1 {
+    domain: String,
+    version: u8,
+    order: ReplicationOrderV1,
+}
+
+impl From<&SignedReplicationOrderV1> for ReplicationOrderSigningPayloadV1 {
+    fn from(envelope: &SignedReplicationOrderV1) -> Self {
+        Self {
+            domain: REPLICATION_ORDER_SIGNATURE_DOMAIN_V1.to_owned(),
+            version: envelope.version,
+            order: envelope.order.clone(),
+        }
+    }
+}
+
+impl SignedReplicationOrderV1 {
+    /// Validates the signed replication-order envelope structure.
+    pub fn validate(&self) -> Result<(), SignedReplicationOrderValidationError> {
+        if self.version != SIGNED_REPLICATION_ORDER_VERSION_V1 {
+            return Err(SignedReplicationOrderValidationError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        self.order
+            .validate()
+            .map_err(SignedReplicationOrderValidationError::Order)?;
+        self.signature.validate()?;
+        Ok(())
+    }
+
+    /// Returns canonical Norito bytes signed by the governance issuer.
+    ///
+    /// The payload excludes `signature` so signers and verifiers use stable bytes
+    /// before and after the signature is attached.
+    pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        norito::to_bytes(&ReplicationOrderSigningPayloadV1::from(self))
+    }
+
+    /// Verifies an Ed25519 signature over the canonical order signing payload.
+    pub fn verify_signature(&self) -> Result<(), ReplicationOrderSignatureVerificationError> {
+        match self.signature.algorithm {
+            SignatureAlgorithm::Ed25519 => {}
+            other => {
+                return Err(
+                    ReplicationOrderSignatureVerificationError::UnsupportedAlgorithm(other),
+                );
+            }
+        }
+
+        if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(
+                ReplicationOrderSignatureVerificationError::InvalidPublicKeyLength {
+                    length: self.signature.public_key.len(),
+                },
+            );
+        }
+        if self.signature.signature.len() != SIGNATURE_LENGTH {
+            return Err(
+                ReplicationOrderSignatureVerificationError::InvalidSignatureLength {
+                    length: self.signature.signature.len(),
+                },
+            );
+        }
+
+        let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
+        public_key.copy_from_slice(&self.signature.public_key);
+        let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|err| {
+            ReplicationOrderSignatureVerificationError::InvalidPublicKey {
+                reason: err.to_string(),
+            }
+        })?;
+
+        let mut signature = [0u8; SIGNATURE_LENGTH];
+        signature.copy_from_slice(&self.signature.signature);
+        let signature = DalekSignature::from_bytes(&signature);
+
+        let payload_bytes = self.signature_payload_bytes().map_err(|err| {
+            ReplicationOrderSignatureVerificationError::PayloadEncoding {
+                reason: err.to_string(),
+            }
+        })?;
+        verifying_key
+            .verify(&payload_bytes, &signature)
+            .map_err(
+                |err| ReplicationOrderSignatureVerificationError::Verification {
+                    reason: err.to_string(),
+                },
+            )
     }
 }
 
@@ -856,6 +991,61 @@ pub enum ReplicationOrderValidationError {
     MetadataInvalid { index: usize, source: MetadataError },
 }
 
+/// Errors raised when validating signed replication-order envelopes.
+#[derive(Debug, Error)]
+pub enum SignedReplicationOrderValidationError {
+    /// Signed replication order version is not supported by this validator.
+    #[error("unsupported signed replication order version: {found}")]
+    UnsupportedVersion {
+        /// Observed signed-envelope version.
+        found: u8,
+    },
+    /// Embedded replication order failed validation.
+    #[error("replication order validation failed: {0}")]
+    Order(ReplicationOrderValidationError),
+    /// Signature key material or signature bytes are empty.
+    #[error("replication order signature missing key or signature bytes")]
+    InvalidSignature,
+}
+
+/// Errors raised while verifying a signed replication-order signature.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ReplicationOrderSignatureVerificationError {
+    /// Signature algorithm is not supported by this validator.
+    #[error("unsupported replication order signature algorithm: {0:?}")]
+    UnsupportedAlgorithm(SignatureAlgorithm),
+    /// Ed25519 public key length is invalid.
+    #[error("ed25519 replication order public key must be 32 bytes, got {length}")]
+    InvalidPublicKeyLength {
+        /// Observed public key byte length.
+        length: usize,
+    },
+    /// Ed25519 signature length is invalid.
+    #[error("ed25519 replication order signature must be 64 bytes, got {length}")]
+    InvalidSignatureLength {
+        /// Observed signature byte length.
+        length: usize,
+    },
+    /// Public key bytes could not be parsed.
+    #[error("invalid replication order ed25519 public key: {reason}")]
+    InvalidPublicKey {
+        /// Underlying parser diagnostic.
+        reason: String,
+    },
+    /// Canonical signature payload could not be encoded.
+    #[error("failed to encode replication order signature payload: {reason}")]
+    PayloadEncoding {
+        /// Underlying Norito diagnostic.
+        reason: String,
+    },
+    /// Signature verification failed.
+    #[error("replication order signature verification failed: {reason}")]
+    Verification {
+        /// Underlying Ed25519 diagnostic.
+        reason: String,
+    },
+}
+
 /// Errors raised for assignment validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AssignmentError {
@@ -992,9 +1182,63 @@ impl From<ChunkerAliasError> for ChunkerCommitmentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
 
     fn provider_id(seed: u8) -> [u8; 32] {
         [seed; 32]
+    }
+
+    fn base_replication_order() -> ReplicationOrderV1 {
+        ReplicationOrderV1 {
+            version: REPLICATION_ORDER_VERSION_V1,
+            order_id: [0xAB; 32],
+            manifest_cid: vec![0x01, 0x55],
+            manifest_digest: [0x10; 32],
+            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+            target_replicas: 2,
+            assignments: vec![
+                ReplicationAssignmentV1 {
+                    provider_id: provider_id(0x01),
+                    slice_gib: 50,
+                    lane: Some("global".to_owned()),
+                },
+                ReplicationAssignmentV1 {
+                    provider_id: provider_id(0x02),
+                    slice_gib: 50,
+                    lane: None,
+                },
+            ],
+            issued_at: 1_700_000_000,
+            deadline_at: 1_700_000_600,
+            sla: ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 300,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 98_000,
+            },
+            metadata: vec![],
+        }
+    }
+
+    fn sign_replication_order(
+        order: ReplicationOrderV1,
+        seed: &[u8; 32],
+    ) -> SignedReplicationOrderV1 {
+        let signing_key = SigningKey::from_bytes(seed);
+        let mut envelope = SignedReplicationOrderV1 {
+            version: SIGNED_REPLICATION_ORDER_VERSION_V1,
+            order,
+            signature: ReplicationOrderSignatureV1 {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                signature: vec![0; 64],
+            },
+        };
+        let payload_bytes = envelope
+            .signature_payload_bytes()
+            .expect("encode replication order signing payload");
+        let signature = signing_key.sign(&payload_bytes);
+        envelope.signature.signature = signature.to_bytes().to_vec();
+        envelope
     }
 
     fn base_declaration() -> CapacityDeclarationV1 {
@@ -1089,35 +1333,60 @@ mod tests {
 
     #[test]
     fn replication_order_validation_checks_assignments() {
-        let order = ReplicationOrderV1 {
-            version: REPLICATION_ORDER_VERSION_V1,
-            order_id: [0xAB; 32],
-            manifest_cid: vec![0x01, 0x55],
-            manifest_digest: [0x10; 32],
-            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
-            target_replicas: 2,
-            assignments: vec![
-                ReplicationAssignmentV1 {
-                    provider_id: provider_id(0x01),
-                    slice_gib: 50,
-                    lane: Some("global".to_owned()),
-                },
-                ReplicationAssignmentV1 {
-                    provider_id: provider_id(0x02),
-                    slice_gib: 50,
-                    lane: None,
-                },
-            ],
-            issued_at: 1_700_000_000,
-            deadline_at: 1_700_000_600,
-            sla: ReplicationOrderSlaV1 {
-                ingest_deadline_secs: 300,
-                min_availability_percent_milli: 99_000,
-                min_por_success_percent_milli: 98_000,
-            },
-            metadata: vec![],
-        };
+        let order = base_replication_order();
         assert!(order.validate().is_ok());
+    }
+
+    #[test]
+    fn signed_replication_order_payload_excludes_signature() {
+        let envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+        let payload_bytes = envelope
+            .signature_payload_bytes()
+            .expect("encode signed order payload");
+        let payload: ReplicationOrderSigningPayloadV1 =
+            norito::decode_from_bytes(&payload_bytes).expect("decode signing payload");
+        assert_eq!(payload.domain, REPLICATION_ORDER_SIGNATURE_DOMAIN_V1);
+
+        let mut different_signature = envelope.clone();
+        different_signature.signature.signature = vec![0xBB; 64];
+
+        assert_eq!(
+            payload_bytes,
+            different_signature
+                .signature_payload_bytes()
+                .expect("encode signed order payload")
+        );
+
+        let mut different_order = envelope.clone();
+        different_order.order.deadline_at += 1;
+        assert_ne!(
+            envelope
+                .signature_payload_bytes()
+                .expect("encode signed order payload"),
+            different_order
+                .signature_payload_bytes()
+                .expect("encode signed order payload")
+        );
+    }
+
+    #[test]
+    fn signed_replication_order_verifies_ed25519_signature() {
+        let envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+
+        envelope
+            .verify_signature()
+            .expect("signed replication order verifies");
+    }
+
+    #[test]
+    fn signed_replication_order_rejects_tampered_order() {
+        let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+        envelope.order.deadline_at += 1;
+
+        assert!(matches!(
+            envelope.verify_signature(),
+            Err(ReplicationOrderSignatureVerificationError::Verification { .. })
+        ));
     }
 
     #[test]

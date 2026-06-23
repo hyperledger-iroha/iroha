@@ -9,11 +9,6 @@ source_last_modified: "2026-01-22T15:38:30.711825+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: SoraFS Gateway TLS & ECH Operator Guide
-summary: Configuration, telemetry, playbooks, and compliance requirements for SF-5b certificate automation.
----
-
 # SoraFS Gateway TLS & ECH Operator Guide
 
 ## Scope
@@ -25,8 +20,10 @@ configuring ACME/ECH, understanding telemetry, meeting governance obligations,
 and executing the approved incident playbooks.
 
 The guidance assumes the gateway includes the automation controller in
-`iroha_torii::sorafs::gateway` and that `cargo xtask sorafs-self-cert` is
-available on the bastion host.
+`iroha_torii::sorafs::gateway` and that the repository
+`scripts/sorafs_gateway_self_cert.sh` wrapper is available on the bastion host.
+The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
+`cargo run -p xtask --bin xtask -- ...` when `cargo xtask` is not installed.
 
 ## Quick Start Checklist
 
@@ -38,8 +35,8 @@ available on the bastion host.
    thresholds.
 3. Deploy or enable the `sorafs-gateway-acme@<environment>.service` unit so the
    automation controller runs continuously.
-4. Run `cargo xtask sorafs-self-cert --check-tls` to capture a baseline
-   attestation bundle and verify headers/metrics.
+4. Run `scripts/sorafs_gateway_self_cert.sh` to capture a baseline attestation
+   bundle and verify headers/metrics.
 5. Publish telemetry dashboards and alerts for the metrics in the **Telemetry
    Reference** section and subscribe the on-call rotation.
 6. Upload the incident playbooks to your runbook tooling (PagerDuty, Notion) and
@@ -54,7 +51,7 @@ available on the bastion host.
 | ACME account credentials stored in `sorafs_gateway_tls/` sealed secrets (KMS/Vault) | Required for manual orders, revocation, and renewing automation tokens. |
 | Offline copy of the latest `torii.sorafs_gateway` config bundle | Lets operators patch `ech_enabled`, host lists, or retry timing without waiting on config-management pipelines. |
 | Access to governance manifests (`manifest_signatures.json`, GAR envelopes) | Needed when publishing updated certificate fingerprints or rotating canonical host mappings. |
-| `cargo xtask` toolchain on the bastion host | Provides `sorafs-gateway-attest`/`sorafs-self-cert` checks used in verification steps. |
+| Repository checkout with Cargo/xtask access on the bastion host | Provides the self-cert wrapper, `sorafs-gateway-attest`, and `sorafs-gateway-probe` checks used in verification steps. |
 | Playbook template stored in incident tooling (PagerDuty/Notion) | Ensures the checklists in this guide are one click away during an incident. |
 
 ### Secrets & File Layout
@@ -76,6 +73,16 @@ available on the bastion host.
   cargo xtask soradns-acme-plan \
     --name docs.sora \
     --json-out fixtures/sorafs_gateway/acme_san/docs.sora.san.json
+  ```
+
+  For Taira Soracloud browser gateway hosts, render the same plan with the Mon
+  pretty suffix so the bind-time order covers the exact public host:
+
+  ```bash
+  cargo xtask soradns-acme-plan \
+    --name solswap-indexer.sora \
+    --pretty-suffix mon.taira.sora.net \
+    --json-out fixtures/sorafs_gateway/acme_san/solswap-indexer.sora.mon.san.json
   ```
 
   Reuse the `san` entries when templating manual ACME orders and attach the JSON
@@ -155,7 +162,9 @@ self-cert bundle once the new settings deploy.
    integration:
 
    ```bash
-   cargo xtask sorafs-self-cert --check-tls \
+   scripts/sorafs_gateway_self_cert.sh \
+     --signing-key /etc/iroha/sorafs_gateway_tls/gateway_attestor.hex \
+     --signer gateway-ops@operator \
      --gateway https://gateway.example.com \
      --out artifacts/sorafs_gateway_self_cert
    ```
@@ -320,7 +329,7 @@ with Nexus governance:
   bundle, attestation fingerprint) to the governance council.
 - **Policy logging:** retain GAR violation logs for at least 180 days and
   include them in quarterly compliance reports.
-- **Attestation retention:** archive every `cargo xtask sorafs-self-cert`
+- **Attestation retention:** archive every `scripts/sorafs_gateway_self_cert.sh`
   output under `artifacts/sorafs_gateway_tls/<YYYYMMDD>/` and grant auditors
   read-only access.
 - **Config change management:** record `torii.sorafs_gateway` changes in your
@@ -335,7 +344,7 @@ with Nexus governance:
 |------------|--------------------|-----------|-------|
 | GAR alignment | Updated GAR manifest, signed certificate fingerprint bundle, incident/change ticket link. | 3 years | Governance liaison |
 | Policy logging | `torii_sorafs_gar_violations_total` exports, structured log excerpts, Alertmanager notifications. | 180 days | Observability |
-| Attestation retention | `cargo xtask sorafs-self-cert` JSON report, TLS header snapshot, OpenSSL fingerprint output. | 3 years | Gateway operations |
+| Attestation retention | Self-cert JSON report, TLS header snapshot, OpenSSL fingerprint output. | 3 years | Gateway operations |
 | Change management | Config diff (`torii.sorafs_gateway`), approval record, deployment timestamp. | 2 years | Change manager |
 | Drill documentation | Drill tracker entry, participant list, follow-up issues. | 2 years | Chaos coordinator |
 | ECH toggle events | Config change log, signed bulletin to SDK/ops mailing list, telemetry snapshot before/after. | 2 years | Developer experience |
@@ -391,8 +400,8 @@ with Nexus governance:
    ```bash
    scripts/sorafs_gateway_self_cert.sh \
      --gateway https://gateway.example \
-     --cert /etc/iroha/sorafs_gateway_tls/fullchain.pem \
-     --ech-config /etc/iroha/sorafs_gateway_tls/ech.json \
+     --signing-key /etc/iroha/sorafs_gateway_tls/gateway_attestor.hex \
+     --signer gateway-ops@operator \
      --out artifacts/sorafs_gateway_self_cert
    ```
 2. Confirm telemetry recovered:
@@ -476,5 +485,5 @@ After every drill:
   upgrades to ensure schema changes are reflected.
 - **Self-cert integration:** the TLS automation flow invokes the self-cert kit
   after each renewal. `sorafs_gateway_tls_automation.yml` calls
-  `cargo xtask sorafs-self-cert --check-tls` before notifying operators, making
+  `scripts/sorafs_gateway_self_cert.sh` before notifying operators, making
   TLS/ECH validation part of the automated rollout.

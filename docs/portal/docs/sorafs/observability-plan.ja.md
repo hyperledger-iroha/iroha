@@ -11,161 +11,223 @@ translation_last_reviewed: 2026-01-30
 
 ---
 id: observability-plan
-title: SoraFS 可観測性とSLO計画
-sidebar_label: 可観測性とSLOs
-description: SoraFS の gateway、ノード、マルチソース・オーケストレーター向けのテレメトリスキーマ、ダッシュボード、エラーバジェット方針。
+title: SoraFS Observability & SLO Plan
+sidebar_label: Observability & SLOs
+description: Telemetry schema, dashboards, and error-budget policy for SoraFS gateways, nodes, and the multi-source orchestrator.
 ---
 
-:::note 正規ソース
-このページは `docs/source/sorafs_observability_plan.md` で管理されている計画を反映しています。旧 Sphinx セットが完全に移行されるまで、両方のコピーを同期してください。
+:::note Canonical Source
 :::
 
-## 目的
-- gateway、ノード、マルチソース・オーケストレーターのメトリクスと構造化イベントを定義する。
-- Grafana ダッシュボード、アラート閾値、検証フックを提供する。
-- エラーバジェットとカオスドリルの方針とあわせて SLO 目標を定める。
+## Objectives
+- Define metrics and structured events for gateways, nodes, and the multi-source orchestrator.
+- Provide Grafana dashboards, alert thresholds, and validation hooks.
+- Establish SLO targets alongside error-budget and chaos-drill policies.
 
-## メトリクス・カタログ
+## Metric Catalogue
 
-### Gateway サーフェス
+### Gateway surfaces
 
-| メトリクス | 種類 | ラベル | 備考 |
-|-----------|------|--------|------|
-| `sorafs_gateway_active` | ゲージ (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | `SorafsGatewayOtel` から出力され、endpoint/method の組み合わせ別に進行中の HTTP 操作を追跡する。 |
-| `sorafs_gateway_responses_total` | カウンタ | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | 完了した gateway リクエストごとに 1 回インクリメントされる。`result` ∈ {`success`,`error`,`dropped`}。 |
-| `sorafs_gateway_ttfb_ms_bucket` | ヒストグラム | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | gateway 応答の time-to-first-byte レイテンシ。Prometheus の `_bucket/_sum/_count` としてエクスポートされる。 |
-| `sorafs_gateway_proof_verifications_total` | カウンタ | `profile_version`, `result`, `error_code` | リクエスト時に収集される証明検証結果 (`result` ∈ {`success`,`failure`}). |
-| `sorafs_gateway_proof_duration_ms_bucket` | ヒストグラム | `profile_version`, `result`, `error_code` | PoR レシートの検証レイテンシ分布。 |
-| `telemetry::sorafs.gateway.request` | 構造化イベント | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | リクエスト完了ごとに Loki/Tempo 相関のために発行される構造化ログ。 |
-| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | カウンタ | 既存ラベルセット | 既存ダッシュボード用に保持される Prometheus メトリクス。新しい OTLP シリーズと併せて出力される。 |
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | Emitted via `SorafsGatewayOtel`; tracks in-flight HTTP operations per endpoint/method combination. |
+| `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Every completed gateway request increments once; `result` ∈ {`success`,`error`,`dropped`}. |
+| `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Time-to-first-byte latency for gateway responses; exported as Prometheus `_bucket/_sum/_count`. |
+| `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Proof verification outcomes captured at request time (`result` ∈ {`success`,`failure`}). |
+| `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Verification latency distribution for PoR receipts. |
+| `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Structured log emitted on every request completion for Loki/Tempo correlation. |
 
-`telemetry::sorafs.gateway.request` イベントは OTEL カウンタを構造化ペイロードで反映し、Loki/Tempo の相関に向けて `endpoint`, `method`, `variant`, `status`, `error_code`, `duration_ms` を露出する。一方でダッシュボードは SLO 追跡のため OTLP シリーズを消費する。
+`telemetry::sorafs.gateway.request` events mirror the OTEL counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Loki/Tempo correlation while dashboards consume the OTLP series for SLO tracking.
 
-### Proof-health テレメトリ
+### Proof-health telemetry
 
-| メトリクス | 種類 | ラベル | 備考 |
-|-----------|------|--------|------|
-| `torii_sorafs_proof_health_alerts_total` | カウンタ | `provider_id`, `trigger`, `penalty` | `RecordCapacityTelemetry` が `SorafsProofHealthAlert` を発行するたびに増加する。`trigger` は PDP/PoTR/Both の失敗を区別し、`penalty` は担保が実際にスラッシュされたかクールダウンで抑止されたかを示す。 |
-| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | ゲージ | `provider_id` | 問題のテレメトリウィンドウ内で報告された最新の PDP/PoTR カウント。プロバイダーが方針をどれだけ超過したかを定量化できる。 |
-| `torii_sorafs_proof_health_penalty_nano` | ゲージ | `provider_id` | 直近アラートでスラッシュされた Nano-XOR 量（クールダウンが抑止した場合はゼロ）。 |
-| `torii_sorafs_proof_health_cooldown` | ゲージ | `provider_id` | ブール型ゲージ（`1` = アラートがクールダウンで抑止）で、追従アラートが一時的にミュートされていることを示す。 |
-| `torii_sorafs_proof_health_window_end_epoch` | ゲージ | `provider_id` | アラートに紐づくテレメトリウィンドウのエポック。Norito アーティファクトと突合できるようにする。 |
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `torii_sorafs_proof_health_alerts_total` | Counter | `provider_id`, `trigger`, `penalty` | Increments every time `RecordCapacityTelemetry` emits a `SorafsProofHealthAlert`. `trigger` distinguishes PDP/PoTR/Both failures, while `penalty` captures whether collateral was actually slashed or suppressed by cooldown. |
+| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Gauge | `provider_id` | Latest PDP/PoTR counts reported inside the offending telemetry window so teams can quantify how far providers overshot policy. |
+| `torii_sorafs_proof_health_penalty_nano` | Gauge | `provider_id` | Nano-XOR amount slashed on the last alert (zero when cooldown suppressed enforcement). |
+| `torii_sorafs_proof_health_cooldown` | Gauge | `provider_id` | Boolean gauge (`1` = alert suppressed by cooldown) to surface when follow-up alerts are temporarily muted. |
+| `torii_sorafs_proof_health_window_end_epoch` | Gauge | `provider_id` | Epoch recorded for the telemetry window tied to the alert so operators can correlate against Norito artefacts. |
 
-これらのフィードは Taikai viewer ダッシュボードの proof-health 行を駆動し
-(`dashboards/grafana/taikai_viewer.json`)、CDN オペレーターにアラート量、PDP/PoTR
-トリガー比率、ペナルティ、プロバイダー別クールダウン状態をリアルタイムで
-可視化する。
+These feeds now power the Taikai viewer dashboard’s proof-health row
+(`dashboards/grafana/taikai_viewer.json`), giving CDN operators live visibility
+into alert volumes, PDP/PoTR trigger mix, penalties, and cooldown state per
+provider.
 
-同じメトリクスで Taikai viewer の 2 つのアラートルールを支える。
-`SorafsProofHealthPenalty` は
-`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` が
-直近 15 分で増加したときに発火し、`SorafsProofHealthCooldown` は
-プロバイダーが 5 分間クールダウン状態のままの場合に警告する。両アラートは
-`dashboards/alerts/taikai_viewer_rules.yml` にあり、PoR/PoTR の執行が強まるたびに
-SRE が即座に状況を把握できる。
+The same metrics now back two Taikai viewer alert rules:
+`SorafsProofHealthPenalty` fires whenever
+`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` increases in
+the last 15 minutes, while `SorafsProofHealthCooldown` raises a warning if a
+provider remains in cooldown for five minutes. Both alerts live in
+`dashboards/alerts/taikai_viewer_rules.yml` so SREs receive immediate context
+whenever PoR/PoTR enforcement escalates.
 
-### オーケストレーター・サーフェス
+### Orchestrator surfaces
 
-| メトリクス / イベント | 種類 | ラベル | 生成元 | 備考 |
-|----------------------|------|--------|----------|------|
-| `sorafs_orchestrator_active_fetches` | ゲージ | `manifest_id`, `region` | `FetchMetricsCtx` | 進行中のセッション数。 |
-| `sorafs_orchestrator_fetch_duration_ms` | ヒストグラム | `manifest_id`, `region` | `FetchMetricsCtx` | ミリ秒単位の期間ヒストグラム。1 ms から 30 s のバケット。 |
-| `sorafs_orchestrator_fetch_failures_total` | カウンタ | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | 理由: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
-| `sorafs_orchestrator_retries_total` | カウンタ | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | リトライ理由を区別 (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
-| `sorafs_orchestrator_provider_failures_total` | カウンタ | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | セッション単位の無効化/失敗カウントを記録する。 |
-| `sorafs_orchestrator_chunk_latency_ms` | ヒストグラム | `manifest_id`, `provider_id` | `FetchMetricsCtx` | chunk ごとの fetch レイテンシ分布（ms）。throughput/SLO 分析向け。 |
-| `sorafs_orchestrator_bytes_total` | カウンタ | `manifest_id`, `provider_id` | `FetchMetricsCtx` | manifest/provider ごとの配信バイト数。PromQL の `rate()` で throughput を導出。 |
-| `sorafs_orchestrator_stalls_total` | カウンタ | `manifest_id`, `provider_id` | `FetchMetricsCtx` | `ScoreboardConfig::latency_cap_ms` を超える chunk 数をカウント。 |
-| `telemetry::sorafs.fetch.lifecycle` | 構造化イベント | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | ジョブのライフサイクル（start/complete）を Norito JSON ペイロードで表現。 |
-| `telemetry::sorafs.fetch.retry` | 構造化イベント | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | プロバイダーのリトライ連続に対して発行。`attempts` はインクリメンタルな再試行回数（≥ 1）。 |
-| `telemetry::sorafs.fetch.provider_failure` | 構造化イベント | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | プロバイダーが失敗閾値を超えたときに発行。 |
-| `telemetry::sorafs.fetch.error` | 構造化イベント | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | 失敗終端レコード。Loki/Splunk 取り込みに適した形式。 |
-| `telemetry::sorafs.fetch.stall` | 構造化イベント | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | chunk レイテンシが設定上限を超えたときに発行（stall カウンタのミラー）。 |
+| Metric / Event | Type | Labels | Producer | Notes |
+|----------------|------|--------|----------|-------|
+| `sorafs_orchestrator_active_fetches` | Gauge | `manifest_id`, `region` | `FetchMetricsCtx` | Sessions currently in-flight. |
+| `sorafs_orchestrator_fetch_duration_ms` | Histogram | `manifest_id`, `region` | `FetchMetricsCtx` | Duration histogram in milliseconds; 1 ms→30 s buckets. |
+| `sorafs_orchestrator_fetch_failures_total` | Counter | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Reasons: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
+| `sorafs_orchestrator_retries_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Distinguishes retry causes (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
+| `sorafs_orchestrator_provider_failures_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Captures session-level disablement / failure tallies. |
+| `sorafs_orchestrator_chunk_latency_ms` | Histogram | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Per-chunk fetch latency distribution (ms) for throughput/SLO analysis. |
+| `sorafs_orchestrator_bytes_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Bytes delivered per manifest/provider; derive throughput via `rate()` in PromQL. |
+| `sorafs_orchestrator_stalls_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Counts chunks exceeding `ScoreboardConfig::latency_cap_ms`. |
+| `telemetry::sorafs.fetch.lifecycle` | Structured event | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Mirrors job lifecycle (start/complete) with Norito JSON payload. |
+| `telemetry::sorafs.fetch.retry` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | Emitted per provider retry streak; `attempts` counts incremental retries (≥ 1). |
+| `telemetry::sorafs.fetch.provider_failure` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Surfaced when a provider crosses the failure threshold. |
+| `telemetry::sorafs.fetch.error` | Structured event | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Terminal failure record, friendly to Loki/Splunk ingestion. |
+| `telemetry::sorafs.fetch.stall` | Structured event | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Raised when chunk latency breaches the configured cap (mirrors stall counters). |
 
-### ノード / レプリケーション・サーフェス
+### Node / replication surfaces
 
-| メトリクス | 種類 | ラベル | 備考 |
-|-----------|------|--------|------|
-| `sorafs_node_capacity_utilisation_pct` | ヒストグラム | `provider_id` | ストレージ利用率（%）の OTEL ヒストグラム（`_bucket/_sum/_count` としてエクスポート）。 |
-| `sorafs_node_por_success_total` | カウンタ | `provider_id` | スケジューラのスナップショットから導出した PoR 成功サンプルの単調カウンタ。 |
-| `sorafs_node_por_failure_total` | カウンタ | `provider_id` | PoR 失敗サンプルの単調カウンタ。 |
-| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | ゲージ | `provider` | 既存の Prometheus ゲージ（使用バイト数、キュー深度、PoR in-flight 数）。 |
-| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | ゲージ | `provider` | 容量/uptime 成功データを容量ダッシュボードに反映。 |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ゲージ | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` のポーリング時にバックログ深度と累積失敗カウンタをエクスポートし、"PoR Stalls" パネル/アラートに供給する。 |
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | OTEL histogram of storage utilisation percentage (exported as `_bucket/_sum/_count`). |
+| `sorafs_node_por_success_total` | Counter | `provider_id` | Monotonic counter for successful PoR samples, derived from scheduler snapshots. |
+| `sorafs_node_por_failure_total` | Counter | `provider_id` | Monotonic counter for failed PoR samples. |
+| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Existing Prometheus gauges for bytes used, queue depth, PoR inflight counts. |
+| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
 
-### Proof of Timely Retrieval (PoTR) と chunk SLA
+### Governance DAG publication
 
-| メトリクス | 種類 | ラベル | 生成元 | 備考 |
-|-----------|------|--------|----------|------|
-| `sorafs_potr_deadline_ms` | ヒストグラム | `tier`, `provider` | PoTR coordinator | デッドライン余裕のミリ秒（正 = 達成）。 |
-| `sorafs_potr_failures_total` | カウンタ | `tier`, `provider`, `reason` | PoTR coordinator | 理由: `expired`, `missing_proof`, `corrupt_proof`. |
-| `sorafs_chunk_sla_violation_total` | カウンタ | `provider`, `manifest_id`, `reason` | SLA monitor | chunk 配信が SLO を満たさない場合に発火（レイテンシ、成功率）。 |
-| `sorafs_chunk_sla_violation_active` | ゲージ | `provider`, `manifest_id` | SLA monitor | アクティブな違反ウィンドウ中に切り替わるブールゲージ（0/1）。 |
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_governance_dag_publish_total` | Counter | `payload_kind`, `result`, `sink` | Local SF-12 publication attempts for settlement, repair, GC, reconciliation, and reputation evidence. |
+| `sorafs_governance_dag_published_bytes_total` | Counter | `payload_kind`, `sink` | Successfully written Norito payload bytes for Governance DAG publication sinks. |
+| `sorafs_governance_dag_last_publish_timestamp_seconds` | Gauge | `payload_kind`, `sink` | Unix timestamp of the last successful local publication. |
+| `sorafs_governance_dag_backlog`, `sorafs_governance_dag_head_age_seconds` | Gauge | `sink` | Reserved for publisher, mirror, and public-head workers; dashboard panels are checked in before IPFS/IPNS rollout. |
 
-## SLO 目標
+`dashboards/grafana/sorafs_governance_dag.json` visualizes publication
+outcomes, published bytes, backlog, head age, and last-success age. The
+filesystem publisher emits local outcomes today; public IPFS/IPNS head emission
+remains an SF-12 rollout gate.
 
-- gateway の trustless availability: **99.9%**（HTTP 2xx/304 応答）。
-- trustless TTFB P95: hot tier ≤ 120 ms, warm tier ≤ 300 ms.
-- 証明の成功率: 1 日あたり ≥ 99.5%.
-- オーケストレーター成功（chunk 完了）: ≥ 99%.
+### Repair & SLA
 
-## ダッシュボードとアラート
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_repair_tasks_total` | Counter | `status` | OTEL counter for repair task transitions. |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | OTEL histogram for repair lifecycle latency. |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | OTEL histogram of queued tasks per provider (snapshot-style). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of the oldest queued task age (seconds). |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | OTEL counter for lease expiries (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | OTEL counter for slash proposal transitions. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for task transitions. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Prometheus histogram for repair lifecycle latency. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued tasks per provider. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Prometheus gauge for the oldest queued task age (seconds). |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for lease expiries. |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Prometheus counter for slash proposal transitions. |
 
-1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — trustless availability、TTFB P95、拒否内訳、PoR/PoTR 失敗を OTEL メトリクスで追跡。
-2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — multi-source 負荷、リトライ、プロバイダー障害、stall バーストをカバー。
-3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — 匿名化 relay バケット、抑制ウィンドウ、collector 健全性を `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, `soranet_privacy_poll_errors_total{provider}` で可視化。
+Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `ticket_id`, `manifest`, `provider` on repair events; `outcome` on slash proposals) so metrics and audit artefacts can be correlated deterministically.
 
-アラートバンドル:
+### Retention & GC
 
-- `dashboards/alerts/sorafs_gateway_rules.yml` — gateway 可用性、TTFB、証明失敗スパイク。
-- `dashboards/alerts/sorafs_fetch_rules.yml` — オーケストレーターの失敗/リトライ/stall。`scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, `dashboards/alerts/tests/soranet_policy_rules.test.yml` で検証。
-- `dashboards/alerts/soranet_privacy_rules.yml` — プライバシー劣化スパイク、抑制アラーム、collector idle 検出、collector 無効化アラート (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
-- `dashboards/alerts/soranet_policy_rules.yml` — `sorafs_orchestrator_brownouts_total` に接続された匿名性 brownout アラーム。
-- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer の drift/ingest/CEK lag アラームと、`torii_sorafs_proof_health_*` に基づく SoraFS proof-health の penalty/cooldown アラート。
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_gc_runs_total` | Counter | `result` | OTEL counter for GC sweeps, emitted by the embedded node. |
+| `sorafs_gc_evictions_total` | Counter | `reason` | OTEL counter for evicted manifests grouped by reason. |
+| `sorafs_gc_bytes_freed_total` | Counter | `reason` | OTEL counter for bytes freed grouped by reason. |
+| `sorafs_gc_blocked_total` | Counter | `reason` | OTEL counter for evictions blocked by active repairs or policy. |
+| `torii_sorafs_gc_runs_total` | Counter | `result` | Prometheus counter for GC sweeps (success/error). |
+| `torii_sorafs_gc_evictions_total` | Counter | `reason` | Prometheus counter for evicted manifests grouped by reason. |
+| `torii_sorafs_gc_bytes_freed_total` | Counter | `reason` | Prometheus counter for bytes freed grouped by reason. |
+| `torii_sorafs_gc_blocked_total` | Counter | `reason` | Prometheus counter for blocked evictions grouped by reason. |
+| `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
+| `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
 
-## トレーシング戦略
+### Reconciliation
 
-- OpenTelemetry をエンドツーエンドで採用:
-  - gateway はリクエスト ID、manifest digest、token hash を付与した OTLP spans（HTTP）を出力する。
-  - オーケストレーターは `tracing` + `opentelemetry` を使って fetch 試行の spans をエクスポートする。
-  - 組み込み SoraFS ノードは PoR チャレンジとストレージ操作の spans をエクスポートする。全コンポーネントで共通の trace ID を `x-sorafs-trace` 経由で伝播する。
-- `SorafsFetchOtel` はオーケストレーターのメトリクスを OTLP ヒストグラムに橋渡しし、`telemetry::sorafs.fetch.*` イベントはログ中心のバックエンド向けに軽量 JSON ペイロードを提供する。
-- Collectors: Prometheus/Loki/Tempo（Tempo 推奨）と並行して OTEL collectors を実行する。Jaeger 互換エクスポータは任意。
-- 高カーディナリティの操作はサンプリングする（成功パス 10%、失敗 100%）。
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
+| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
+| `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
+| `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
 
-## TLS テレメトリ調整 (SF-5b)
+### Proof of Timely Retrieval (PoTR) & chunk SLA
 
-- メトリクスの整合:
-  - TLS 自動化は `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}`, `sorafs_gateway_tls_ech_enabled` を出力する。
-  - これらのゲージを Gateway Overview ダッシュボードの TLS/Certificates パネルに追加する。
-- アラート連携:
-  - TLS 期限アラート（残り ≤ 14 日）が発火したら trustless availability SLO と相関させる。
-  - ECH 無効化は TLS と availability 両方のパネルを参照する二次アラートを発行する。
-- Pipeline: TLS 自動化ジョブは gateway メトリクスと同じ Prometheus スタックへ出力し、SF-5b 連携で重複計装を排除する。
+| Metric | Type | Labels | Producer | Notes |
+|--------|------|--------|----------|-------|
+| `sorafs_potr_deadline_ms` | Histogram | `tier`, `provider` | PoTR coordinator | Deadline slack in milliseconds (positive = met). |
+| `sorafs_potr_failures_total` | Counter | `tier`, `provider`, `reason` | PoTR coordinator | Reasons: `expired`, `missing_proof`, `corrupt_proof`. |
+| `sorafs_chunk_sla_violation_total` | Counter | `provider`, `manifest_id`, `reason` | SLA monitor | Fired when chunk delivery misses SLO (latency, success rate). |
+| `sorafs_chunk_sla_violation_active` | Gauge | `provider`, `manifest_id` | SLA monitor | Boolean gauge (0/1) toggled during active breach window. |
 
-## メトリクス命名とラベル規約
+## SLO Targets
 
-- メトリクス名は Torii と gateway で使われる既存の `torii_sorafs_*` または `sorafs_*` プレフィックスに従う。
-- ラベルセットを標準化:
+- Gateway trustless availability: **99.9 %** (HTTP 2xx/304 responses).
+- Trustless TTFB P95: hot tier ≤ 120 ms, warm tier ≤ 300 ms.
+- Proof success rate: ≥ 99.5 % per day.
+- Orchestrator success (chunk completion): ≥ 99 %.
+
+## Dashboards & Alerting
+
+1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
+2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
+3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
+4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom, egress byte/drift reconciliation, repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
+5. **Governance DAG Publication** (`dashboards/grafana/sorafs_governance_dag.json`) — tracks SF-12 local publication health while public IPFS/IPNS workers are still pending.
+
+Alert bundles:
+
+- `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
+- `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure, egress counter drift, repair SLA/backlog/lease-expiry, and GC stall/blocked/error alerts for retention sweeps.
+- `dashboards/alerts/sorafs_governance_dag_rules.yml` — local Governance DAG publication failures, backlog, stale head, and missing recent publication alerts.
+- `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
+- `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
+- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.
+
+## Tracing Strategy
+
+- Adopt OpenTelemetry end-to-end:
+  - Gateways emit OTLP spans (HTTP) annotated with request IDs, manifest digests, and token hashes.
+  - The orchestrator uses `tracing` + `opentelemetry` to export spans for fetch attempts.
+  - Embedded SoraFS nodes export spans for PoR challenges and storage operations. All components share a common trace ID propagated via `x-sorafs-trace`.
+- `SorafsFetchOtel` bridges orchestrator metrics into OTLP histograms while `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log-centric backends.
+- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo (Tempo preferred). Jaeger API exporters remain optional.
+- High-cardinality operations should be sampled (10 % for success paths, 100 % for failures).
+
+## TLS Telemetry Coordination (SF-5b)
+
+- Metric alignment:
+  - TLS automation ships `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}`, and `sorafs_gateway_tls_ech_enabled`.
+  - Include these gauges in the Gateway Overview dashboard under the TLS/Certificates panel.
+- Alert linkage:
+  - When TLS expiry alerts fire (≤ 14 days remaining) correlate with the trustless availability SLO.
+  - ECH disablement emits a secondary alert referencing both TLS and availability panels.
+- Pipeline: the TLS automation job exports to the same Prometheus stack as gateway metrics; coordination with SF-5b ensures deduplicated instrumentation.
+
+## Metric Naming & Label Conventions
+
+- Metric names follow the existing `torii_sorafs_*` or `sorafs_*` prefixes used by Torii and the gateway.
+- Label sets are standardised:
   - `result` → HTTP outcome (`success`, `refused`, `failed`).
-  - `reason` → 拒否/エラーコード (`unsupported_chunker`, `timeout`, etc.).
-  - `provider` → 16 進エンコードの provider 識別子。
-  - `manifest` → 正規 manifest digest（高カーディナリティ時はトリム）。
-  - `tier` → 宣言的な tier ラベル (`hot`, `warm`, `archive`).
-- テレメトリ出力ポイント:
-  - gateway メトリクスは `torii_sorafs_*` 配下にあり、`crates/iroha_core/src/telemetry.rs` の規約を再利用する。
-  - オーケストレーターは `sorafs_orchestrator_*` メトリクスと `telemetry::sorafs.fetch.*` イベント（lifecycle, retry, provider failure, error, stall）を発行し、manifest digest、job ID、region、provider 識別子を付与する。
-  - ノードは `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, `torii_sorafs_por_*` を出力する。
-- Observability と連携して Prometheus 命名ドキュメントにメトリクス・カタログを登録し、ラベル・カーディナリティの期待値（provider/manifests 上限）を含める。
+  - `reason` → refusal/error code (`unsupported_chunker`, `timeout`, etc.).
+  - `status` → repair task state (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
+  - `outcome` → repair lease or latency outcome (`requeued`, `escalated`, `completed`, `failed`).
+  - `provider` → hex-encoded provider identifier.
+  - `manifest` → canonical manifest digest (trimmed when high-cardinality).
+  - `tier` → declarative tier labels (`hot`, `warm`, `archive`).
+- Telemetry emission points:
+  - Gateway metrics live under `torii_sorafs_*` and reuse conventions from `crates/iroha_core/src/telemetry.rs`.
+  - The orchestrator emits `sorafs_orchestrator_*` metrics and `telemetry::sorafs.fetch.*` events (lifecycle, retry, provider failure, error, stall) tagged with manifest digest, job ID, region, and provider identifiers.
+  - Nodes surface `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, and `torii_sorafs_por_*`.
+  - Governance DAG publication metrics use the `sorafs_governance_dag_*` prefix with bounded `payload_kind`, `result`, and `sink` labels; do not attach manifest, account, or path labels.
+- Coordinate with Observability to register the metric catalogue in the shared Prometheus naming doc, including label cardinality expectations (provider/manifests upper bounds).
 
-## データパイプライン
+## Data Pipeline
 
-- Collectors は各コンポーネントと同居し、OTLP を Prometheus（メトリクス）と Loki/Tempo（ログ/トレース）へエクスポートする。
-- オプションの eBPF（Tetragon）が gateway/ノードの低レベルトレースを拡張する。
-- Torii と組み込みノードには `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` を使用し、オーケストレーターは `install_sorafs_fetch_otlp_exporter` を呼び続ける。
+- Collectors deploy alongside each component, exporting OTLP to Prometheus (metrics) and Loki/Tempo (logs/traces).
+- Optional eBPF (Tetragon) enriches low-level tracing for gateways/nodes.
+- Use `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` for Torii and embedded nodes; the orchestrator continues to call `install_sorafs_fetch_otlp_exporter`.
 
-## 検証フック
+## Validation Hooks
 
-- CI で `scripts/telemetry/test_sorafs_fetch_alerts.sh` を実行し、Prometheus アラートルールが stall メトリクスとプライバシー抑制チェックに同期していることを確認する。
-- Grafana ダッシュボードはバージョン管理（`dashboards/grafana/`）に置き、パネル変更時にスクリーンショット/リンクを更新する。
-- カオスドリルは `scripts/telemetry/log_sorafs_drill.sh` で結果を記録し、`scripts/telemetry/validate_drill_log.sh` で検証する（[運用プレイブック](operations-playbook.md) 参照）。
+- Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` during CI to ensure Prometheus alert rules remain in lockstep with stall metrics and privacy suppression checks.
+- Keep Grafana dashboards under version control (`dashboards/grafana/`) and update screenshots/links when panels change.
+- Chaos drills log outcomes via `scripts/telemetry/log_sorafs_drill.sh`; validation leverages `scripts/telemetry/validate_drill_log.sh` (see the [Operations Playbook](operations-playbook.md)).

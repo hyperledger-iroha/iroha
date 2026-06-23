@@ -30,7 +30,7 @@ SoraFS хоёртын файлууд (`sorafs_cli`, `sorafs_fetch`, туслах
 - Засах тасалбарын холбоосыг (жишээ нь, `governance/tickets/SF6-SR-2026.md`) хавсаргаж, гарын үсэг зурсныг тэмдэглэ.
   Аюулгүй байдлын инженер, багаж хэрэгслийн ажлын хэсгийн зөвшөөрлөөр .
 - Санамжид байгаа засварын хяналтын хуудас хаагдсан эсэхийг шалгах; шийдэгдээгүй зүйлс хувилбарыг блоклодог.
-- Паритын логуудыг байршуулахад бэлтгэ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Паритын логуудыг байршуулахад бэлтгэ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   манифест багцын хажууд.
 - Ажиллуулахаар төлөвлөж буй гарын үсэг зурах тушаалдаа `--identity-token-provider` болон тодорхой кодыг хоёуланг нь агуулна.
   `--identity-token-audience=<aud>` тиймээс Fulcio хамрах хүрээг суллах нотлох баримтад оруулсан болно.
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Скрипт нь дараахь мэдэгдлийг гүйцэтгэдэг.
 
 - `cargo fmt --all -- --check` (ажлын талбар)
-- `sorafs_car`-д зориулсан `cargo clippy --locked --all-targets` (`cli` онцлогтой),
-  `sorafs_manifest`, `sorafs_chunker`
-- Эдгээр хайрцагт зориулсан `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Хэрэв ямар нэг алхам амжилтгүй болбол шошго хийхээсээ өмнө регрессийг засаарай. Хувилбарын бүтэц нь байх ёстой
 голтой тасралтгүй; суллах мөчрүүдэд засваруудыг бүү сонго. Хаалга

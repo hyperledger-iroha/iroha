@@ -25,7 +25,7 @@ yoxlanıla bilən izi saxlamaq üçün cədvəldəki hər bir əmrin nəticəsi.
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | Bütün testlər keçir; `vectors` paritet testi uğurla keçdi. | Kanonik qurğuların tərtib edilməsini və Rust tətbiqinə uyğunluğunu təsdiq edir. |
 | 2 | `ci/check_sorafs_fixtures.sh` | Skript 0-dan çıxır; aşağıda açıqlanan həzmləri bildirir. | Armaturların təmiz şəkildə bərpa olunduğunu və imzaların bağlı qaldığını yoxlayır. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` üçün giriş reyestr deskriptoruna (`profile_id=1`) uyğun gəlir. | Reyestr metadatasının sinxron qalmasını təmin edir. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` üçün giriş reyestr deskriptoruna (`profile_id=1`) uyğun gəlir. | Reyestr metadatasının sinxron qalmasını təmin edir. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regenerasiya `--allow-unsigned` olmadan uğurla həyata keçirilir; manifest və imza faylları dəyişməz. | Parça sərhədləri və manifestlər üçün determinizm sübutunu təmin edir. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript qurğuları ilə Rust JSON arasında heç bir fərq olmadığını bildirir. | Könüllü köməkçi; iş vaxtları arasında pariteti təmin edin (skript Tooling WG tərəfindən saxlanılır). |
 

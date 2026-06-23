@@ -252,7 +252,7 @@ whitelist de providers maliciosos, ou suprime alertas.
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia checks de
   fingerprint via `/v1/da/ingest`.
 - As simulacoes de streaming PDP/PoTR sao exercitadas via o harness proof-stream
-  em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
   PoR/PDP/PoTR e cenarios de falha animados no modelo de ameacas.
 - Resultados de capacity e repair soak vivem em
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, enquanto a matriz de soak

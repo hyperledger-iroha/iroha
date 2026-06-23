@@ -28,7 +28,7 @@ SoraFS ሁለትዮሽ (`sorafs_cli`፣ `sorafs_fetch`፣ ረዳቶች) እና �
 - የማሻሻያ ትኬት ማገናኛን (ለምሳሌ `governance/tickets/SF6-SR-2026.md`) ያያይዙ እና መቋረጥን ያስተውሉ
   ከደህንነት ምህንድስና እና ከመሳሪያ ስራ ቡድን አጽዳቂዎች።
 - በማስታወሻው ውስጥ ያለው የማገገሚያ ዝርዝር መዘጋቱን ያረጋግጡ; ያልተፈቱ ነገሮች ልቀቱን ያግዱታል።
-- የተመጣጣኝ መታጠቂያ ምዝግብ ማስታወሻዎችን ለመስቀል ያዘጋጁ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- የተመጣጣኝ መታጠቂያ ምዝግብ ማስታወሻዎችን ለመስቀል ያዘጋጁ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   ከአንጸባራቂው ጥቅል ጋር።
 - ለማስኬድ ያቀዱትን የፊርማ ትዕዛዝ ያረጋግጡ `--identity-token-provider` እና ግልጽ
   `--identity-token-audience=<aud>` ስለዚህ Fulcio scope የሚለቀቀው ማስረጃ ውስጥ ተያዘ.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ስክሪፕቱ የሚከተሉትን ማረጋገጫዎች ይፈጽማል፡-
 
 - `cargo fmt --all -- --check` (የስራ ቦታ)
-- `cargo clippy --locked --all-targets` ለ `sorafs_car` (ከ`cli` ባህሪ ጋር)
-  `sorafs_manifest`፣ እና `sorafs_chunker`
-- `cargo test --locked --all-targets` ለእነዚያ ተመሳሳይ ሳጥኖች
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 ማንኛውም እርምጃ ካልተሳካ፣ መለያ ከመስጠትዎ በፊት ተሃድሶውን ያስተካክሉት። የመልቀቂያ ግንባታዎች መሆን አለባቸው
 ከዋናው ጋር ቀጣይነት ያለው; ወደ መልቀቂያ ቅርንጫፎች የቼሪ-አስተካክል አይምረጡ. በሩ

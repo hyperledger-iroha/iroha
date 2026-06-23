@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Manifest qurun və imzalayın
 
 Parça planını, ləqəbləri və idarəetmə imzalarını istifadə edərək manifestə sarın
-`sorafs-manifest-stub`. Aşağıdakı əmr bir fayllı yükü nümayiş etdirir; keçmək
+`sorafs_manifest_stub`. Aşağıdakı əmr bir fayllı yükü nümayiş etdirir; keçmək
 ağacı paketləmək üçün qovluq yolu (CLI onu leksikoqrafik olaraq gəzir).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

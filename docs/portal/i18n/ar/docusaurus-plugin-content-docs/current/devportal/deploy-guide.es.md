@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 الترويج للاسم المستعار والتحقق وتدريبات التراجع حتى يتم معاينة كل إصدار وإصداره
 البحر قابل للتكرار وقابل للتدقيق.
 
-يفترض التدفق أن لديه الثنائي `sorafs_cli` (الذي تم إنشاؤه باستخدام `--features cli`)، قم بالوصول إلى
+يفترض التدفق أن لديه الثنائي `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target)، قم بالوصول إلى
 نقطة نهاية Torii مع أذونات تسجيل الدبوس، وبيانات الاعتماد OIDC لـ Sigstore. حراسة الأسرار
 لحياة طويلة (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، الرموز المميزة لـ Torii) في قبو CI؛ لاس
 يمكن تنفيذ عمليات التنفيذ المحلية من خلال صادرات Shell.
@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-02-07
 ## المتطلبات الأساسية
 
 - العقدة 18.18+ مع `npm` أو `pnpm`.
-- `sorafs_cli` من `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` من `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - عنوان URL الخاص بـ Torii الذي يعرض `/v1/sorafs/*` يحتوي على حساب/مفتاح خاص للمصدر يمكنك من خلاله إرسال البيانات والاسم المستعار.
 - Emisor OIDC (GitHub Actions وGitLab وهوية عبء العمل وما إلى ذلك) لإصدار `SIGSTORE_ID_TOKEN`.
 - اختياري: `examples/sorafs_cli_quickstart.sh` للتشغيل الجاف و`docs/source/sorafs_ci_templates.md` لدعم سير العمل في GitHub/GitLab.

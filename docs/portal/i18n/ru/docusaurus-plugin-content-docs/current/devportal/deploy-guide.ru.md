@@ -12,12 +12,12 @@ translation_last_reviewed: 2026-02-07
 
 Этот плейбук переводит пункты дорожной карты **DOCS-7** (публикация SoraFS) и **DOCS-8** (контакт автоматизации в CI/CD) в практическую процедуру для разработчиков портала. Он соответствует фазе build/lint, упаковке SoraFS, подписанию манифестов через Sigstore, продвижению псевдонимов, проверке и откате тренировок, чтобы каждый предварительный просмотр и выпуск были воспроизводимыми и аудируемыми.
 
-Поток предполагает, что у вас есть бинарник `sorafs_cli` (собранный с `--features cli`), доступ к конечной точке Torii с правами pin-реестра и учетные данные OIDC для Sigstore. Долгоживущие секреты (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, токены Torii) хранятся в хранилище CI; локальные запуски могут захватывать их из экспорта в оболочку.
+Поток предполагает, что у вас есть бинарник `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), доступ к конечной точке Torii с правами pin-реестра и учетные данные OIDC для Sigstore. Долгоживущие секреты (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, токены Torii) хранятся в хранилище CI; локальные запуски могут захватывать их из экспорта в оболочку.
 
 ## Предварительные условия
 
 - Узел 18.18+ с `npm` или `pnpm`.
-- `sorafs_cli` из `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` из `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - URL Torii, который предоставляет `/v1/sorafs/*`, а также учетную запись/приватный ключ, способные отправлять манифесты и псевдонимы.
 - Эмитент OIDC (GitHub Actions, GitLab, идентификатор рабочей нагрузки и т. п.) для выпуска `SIGSTORE_ID_TOKEN`.
 - Опционально: `examples/sorafs_cli_quickstart.sh` для пробного запуска и `docs/source/sorafs_ci_templates.md` для шаблонов рабочих процессов GitHub/GitLab.

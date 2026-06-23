@@ -59,10 +59,10 @@ Helpers de CLI:
 
 ```bash
 # Listagem JSON de todos os descritores registrados (ids, handles, aliases, multihash)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 
 # Emitir metadados para um perfil default candidato (handle canonico + aliases)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
@@ -138,12 +138,12 @@ metadados CAR e provas PoR continuem consistentes:
 
 ```bash
 # Validar metadados de chunk + PoR com o novo perfil
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf2@1.0.0 \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Gerar manifest + CAR e capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -152,7 +152,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reexecutar usando o plano de fetch salvo (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

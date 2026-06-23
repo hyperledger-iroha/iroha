@@ -76,7 +76,7 @@ Sidebar_label: ضبط المُنسِّق
 
 ## Обновление CLI и SDK
 
-`sorafs_cli fetch` (راجع `crates/sorafs_car/src/bin/sorafs_cli.rs`)
+`sorafs_cli fetch` (راجع `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`)
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`)
 سطح إعداد المُنسِّق نفسه. استخدم الأعلام التالية عند التقاط أدلة الإطلاق أو
 Результаты предстоящих матчей:

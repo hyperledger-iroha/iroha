@@ -231,7 +231,7 @@ la liste blanche prouve des malicios ou des alertes suprêmes.
   et l'intégration Torii en `crates/iroha_torii/src/da/ingest.rs`, qui enhebra las
   vérifications des empreintes digitales à travers le `/v1/da/ingest`.
 - Les simulations de streaming PDP/PoTR sont exécutées via le faisceau proof-stream
-  en `crates/sorafs_car/tests/sorafs_cli.rs`, cubriendo flux de sollicitude
+  en `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cubriendo flux de sollicitude
   PoR/PDP/PoTR et scénarios de chute animés dans le modèle de mesures.
 - Les résultats de capacité et de réparation trempent viven en
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, pendant que la matrice de

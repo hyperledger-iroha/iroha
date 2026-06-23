@@ -82,7 +82,7 @@ CLI, SDK и автоматизация для того, чтобы ничего 
 
 ## Ссылка на флаги CLI и SDK
 
-`sorafs_cli fetch` (voir `crates/sorafs_car/src/bin/sorafs_cli.rs`) и оболочка
+`sorafs_cli fetch` (voir `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) и оболочка
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) часть мема
 поверхность конфигурации оркестратора. Utilisez les flags suivants lors de la
 захватить превентивные меры по развертыванию или обновить канонические светильники:

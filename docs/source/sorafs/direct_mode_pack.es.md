@@ -83,7 +83,7 @@ orquestador y CLI:
   documentacion se mantiene alineada con los helpers.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
 - `fetch_command_respects_direct_transports` ejerce `sorafs_cli fetch
   --transport-policy=direct-only` contra un gateway Torii mockeado, dando un
-  smoke test para entornos regulados que pinnean transportes directos.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+  smoke test para entornos regulados que pinnean transportes directos.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` envuelve el mismo comando con el
   policy JSON y persistencia del scoreboard para automatizacion de rollout.
 

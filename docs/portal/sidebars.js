@@ -59,6 +59,7 @@ const sidebars = {
         'sorafs/developer-releases',
         'sorafs/developer-sdk-index',
         'sorafs/developer-sdk-rust',
+        'sorafs/reference-sdk/errors',
         'sorafs/orchestrator-ops',
         'sorafs/staging-manifest-playbook',
         'sorafs/dispute-revocation-runbook',

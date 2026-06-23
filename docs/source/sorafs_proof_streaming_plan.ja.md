@@ -9,58 +9,62 @@ source_last_modified: "2025-11-02T18:05:35.356355+00:00"
 translation_last_reviewed: 2026-01-22
 ---
 
-<!-- 日本語訳: docs/source/sorafs_proof_streaming_plan.md -->
+# SoraFS Proof Streaming & Monitoring Status
 
-# SoraFS 証明ストリーミング／監視計画（ドラフト）
+## Goals
 
-## 目標
+- Provide streaming APIs in CLI/SDK to request/verify PoR samples and PoTR (deadline proofs).
+- Emit observability data for proof success/failure, latency, and provider responses.
+- Integrate with orchestrator and gateway telemetry.
 
-- CLI/SDK に PoR サンプルと PoTR（期限証明）のリクエスト／検証用ストリーミング API を提供する。
-- 証明の成功／失敗、レイテンシ、プロバイダ応答の観測データを出力する。
-- オーケストレーターおよびゲートウェイのテレメトリと統合する。
+> **Status (Jun 2026):** `sorafs_cli proof stream` streams PoR samples, replays
+> cached PoTR receipts, writes deterministic governance-evidence bundles, and
+> fails closed on gateway or local verification failures. Torii exposes the
+> `/v1/sorafs/proof/stream` NDJSON endpoint with Prometheus counters,
+> histograms, and in-flight gauges. PDP request construction and committed
+> `fixtures/sorafs_manifest/pdp/` validator fixtures are schema-ready, but
+> Torii intentionally rejects `proof_kind=pdp` until the SF-13 provider
+> protocol, live provider signatures, and CDC commitment verification land.
 
-> **ステータス（2026年3月）:** `sorafs_cli proof stream` は PoR サンプルをストリーミングし、
-> キャッシュ済み PoTR レシートを構造化メトリクス付きでリプレイできる
-> （`docs/source/sorafs_proof_streaming.md`）。
-> PDP ストリーミングは SF-13 の CDC コミットメントと並行してロードマップ上に残り、
-> PoTR のライブプローブは SF-14 のプロバイダ・プロトコル拡張で提供する。
-> Prometheus のエクスポートは SF-7 のテレメトリ・デリバラブルと同時に出荷予定。
-> 最新の設計レビュー決定は `docs/source/sorafs_proof_streaming_minutes_20250305.md` を参照。
-
-## API コンセプト
+## API Concepts
 
 - `ProofStreamRequest`:
   - `manifest_digest`
   - `provider_id`
   - `sample_count`
   - `nonce`
-- `ProofStreamResponse`（ストリーミング項目）:
-  - `sample_index`, `chunk_index`, `proof`, `verification_status`, `latency_ms`。
+- `ProofStreamResponse` (streamed items):
+  - `sample_index`, `chunk_index`, `proof`, `verification_status`, `latency_ms`.
 
-CLI コマンド（ドラフト）:
-- `sorafs stream-por --manifest manifest.to --provider <id> --samples 128`
-- `sorafs stream-potr --manifest manifest.to --provider <id> --deadline 90s`
+CLI commands:
+- `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=por --samples=128`
+- `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=potr --deadline-ms=90000`
 
-SDK 機能:
-- Rust の async iterator（`ProofStream`）。
-- TS の Promise ベース API（`sorafsSDK.proof.streamPor({...})`）。
-- Go のコンテキストマネージャ。
+Operator features:
+- `sorafs_cli proof stream` reads NDJSON, verifies PoR samples locally, and
+  records a summary JSON blob for CI/governance archives.
+- `--governance-evidence-dir` copies the manifest, metadata, and proof summary
+  into a deterministic evidence directory.
+- `--max-failures` and `--max-verification-failures` let rehearsals tolerate a
+  bounded number of expected failures; defaults remain fail-closed.
 
-## テレメトリ
+## Telemetry
 
-- Counters: `sorafs_proof_stream_success_total`, `sorafs_proof_stream_failure_total{reason}`
-- Histograms: `sorafs_proof_stream_latency_ms_bucket`
-- Gauges: `sorafs_proof_stream_inflight`
+- Counters: `torii_sorafs_proof_stream_events_total{kind,result,reason}`
+- Histograms: `torii_sorafs_proof_stream_latency_ms_bucket{kind}`
+- Gauges: `torii_sorafs_proof_stream_inflight{kind}`
 
-## 統合ポイント
+## Integration Points
 
-- ゲートウェイの `POST /proof/{manifest_cid}`（PoR）と将来の PoTR API。
-- チャンク取得後に証明を要求するオーケストレーター。
-- 証明ストリーミングのスモークテストを実行する CI パイプライン。
+- Gateway endpoint `POST /v1/sorafs/proof/stream` handles PoR streams and PoTR receipt replay; PDP requests return unsupported until SF-13.
+- Orchestrator and CLI request proofs after chunk fetch and archive the summary
+  alongside manifests, signatures, and CAR summaries.
+- CI pipelines can gate on the CLI summary blob when Prometheus export is not
+  available.
 
-## スキーマ整合（SF-13 PDP & SF-14 PoTR）
+## Schema Alignment (PoR/PoTR and SF-13 PDP)
 
-- **統一リクエスト封筒。**
+- **Unified request envelope.**
   ```norito
   struct ProofStreamRequestV1 {
       manifest_digest: Hash,
@@ -75,11 +79,10 @@ SDK 機能:
   enum ProofKind { Por, Pdp, Potr }
   enum ProofTier { Hot, Warm, Archive }
   ```
-  このスキーマにより、オーケストレーターと CLI は PoR（SF-9）、PDP（SF-13）、PoTR
-  （SF-14）のリクエストを分岐せずに扱える。PDP リクエストは `proof_kind=Pdp`、
-  `sample_count`、`tier` を必須とする。PoTR リクエストは `deadline_ms` を必須とし、
-  `sample_count` は省略する。
-- **ストリーミング応答項目。**
+  This schema allows the orchestrator and CLI to route requests for PoR, PoTR, and PDP
+  (SF-13) without diverging code paths. PDP requests must set `proof_kind=Pdp`, `sample_count`, and
+  `tier`. PoTR requests MUST set `deadline_ms` and omit `sample_count`.
+- **Streaming response items.**
   ```norito
   struct ProofStreamItemV1 {
       manifest_digest: Hash,
@@ -94,48 +97,47 @@ SDK 機能:
       trace_id: Option<Uuid>,
   }
   ```
-  - PoTR では `sample_index` は `None` で、`receipt` に SF-14 の署名済み期限証明を格納する。
-  - PDP では `receipt` が PDP 計画で定義される CDC ベースのコミットメント証明を参照し、
-    `Sora-PDP-Proof` フィールド（コミットメントルート、チャレンジソルト）を含む。
-  - PoR は標準チャンク証明と Merkle パスを格納する。
-- **テレメトリフック。** 各ストリーミング項目は前述のカウンタ／ヒストグラムに反映される。
-  PDP 失敗は共通の `FailureReason` を通じて SF-13 のスラッシングパイプラインへ伝播する。
+  - For PoTR, `sample_index` is `None` and `receipt` carries the signed deadline proof (`PotrReceiptV1`).
+  - For PDP, `receipt` references the CDC-based commitment proof defined in the PDP plan and includes the
+    `Sora-PDP-Proof` fields (commitment root, challenge salt).
+  - PoR items encode standard chunk proofs with Merkle path.
+- **Telemetry hooks.** Each streamed item feeds into the counters/histograms previously listed. PDP
+  failures propagate to the SF-13 slashing pipeline via the shared `FailureReason`.
 
-## Failure Reason タクソノミ
+## Failure Reason Taxonomy
 
-- `timeout` — オーケストレーター期限（PoR/PDP）内に応答がない、または PoTR SLA 違反。
-- `invalid_proof` — 検証失敗（ハッシュ不一致、Merkle パス不正、PDP コミットメント不一致）。
-- `admission_mismatch` — マニフェスト／アドミッション不整合でプロバイダが拒否。
-- `token_exhausted` — ストリーム中にトークン枯渇。
-- `provider_unreachable` — 伝送エラー（接続拒否、TLS 失敗）。
-- `orchestrator_aborted` — クライアント／オーケストレーターがストリームを中断。
-- `unsupported_capability` — 要求された証明種別／ティアをプロバイダが未対応。
+- `timeout` — provider failed to respond within the orchestrator deadline (PoR/PDP) or breached PoTR SLA.
+- `invalid_proof` — verification failed (hash mismatch, invalid Merkle path, PDP commitment mismatch).
+- `admission_mismatch` — provider rejected request due to manifest/admission inconsistency.
+- `token_exhausted` — stream token quota exceeded mid-stream.
+- `provider_unreachable` — transport errors (connection refused, TLS failure).
+- `orchestrator_aborted` — client/orchestrator cancelled the stream.
+- `unsupported_capability` — provider lacks requested proof kind/tier.
 
-これらの列挙値はオーケストレーション・テレメトリ（`failure_reason` ラベル）と共有され、
-ダッシュボードとアラートの一貫性を保つ。CLI/SDK はこれらをユーザー向けエラーメッセージと
-終了コードにマップする。
+These enumerations are shared with the orchestration telemetry (`failure_reason` label) so dashboards and
+alerting remain consistent. The CLI/SDK map them to user-facing error messages and exit codes.
 
-## トランスポート方針
+## Transport Decision
 
-- **主要メカニズム: HTTP/2 ストリーミング。**
-  - ゲートウェイは `POST /v1/proof/stream` を公開し、`ProofStreamRequestV1` を受け取り、
-    `application/x-ndjson` 本体で応答する（行ごとに `ProofStreamItemV1`）。HTTP/2 でチャンク
-    フェッチと多重化でき、既存のゲートウェイ基盤と整合する。
-  - フロー制御でバックプレッシャを扱う。ゲートウェイは 64 件以上をバッファしない。
-  - 応答には `Sora-Trace-Id` ヘッダを付与し、オーケストレーターが OpenTelemetry スパンと
-    相関できるようにする。
-- **任意の gRPC エンドポイント。**
-  - `sorafs.proof.v1.ProofStreamService/StreamProofs` は双方向ストリームを返し、gRPC を使う環境
-    （内部テスト、SDK 統合）に向けて提供する。HTTP のセマンティクスを踏襲し、
-    Norito ペイロードを共用する。
-- **非ゴール。** WebSocket は不要と判断する。HTTP/2 ストリーミングで双方向要件を満たし、
-  既存の mTLS ゲートウェイと同等のセキュリティ姿勢を維持する。
-- **CLI/SDK 実装。**
-  - Rust の async iterator は NDJSON を読み取り、`trace_id` を検証して検証パイプラインに供給する。
-  - TypeScript SDK はランタイムに応じて `ReadableStream` または `AsyncGenerator` を使用し、
-    Node/CDN ビルドは fetch ストリーミング（WHATWG）に依存する。
-  - Go SDK は HTTP レスポンスボディをデコーダで包み、コンテキストキャンセルを尊重する
-    チャネル経由で項目を返す。
+- **Primary mechanism: HTTP/2-friendly NDJSON streaming.**
+  - Gateways expose `POST /v1/sorafs/proof/stream` accepting `ProofStreamRequestV1` and responding with a
+    `application/x-ndjson` body (`ProofStreamItemV1` per line). HTTP/2 allows multiplexing alongside chunk
+    fetches and integrates with existing gateway infrastructure.
+  - Back-pressure is handled via flow control; gateways MUST not buffer more than 64 items before blocking.
+  - Each response includes `Sora-Trace-Id` header so the orchestrator can correlate with OpenTelemetry spans.
+- **Optional gRPC endpoint.**
+  - `sorafs.proof.v1.ProofStreamService/StreamProofs` returning a bidirectional stream for environments that
+    already use gRPC (internal testing, SDK integration). This mirrors the HTTP semantics and reuses the same
+    Norito payloads under the hood.
+- **Non-goals.** WebSocket transport is deemed unnecessary; HTTP/2 streaming satisfies bidirectional needs
+  and keeps security posture aligned with existing MTLS gateways.
+- **CLI implementation.**
+  - The Rust CLI reads NDJSON lines, emits or suppresses per-item events,
+    verifies PoR samples, enforces failure budgets, and writes the final
+    metrics summary.
+  - SDK streaming helpers should preserve the same request/response schema and
+    failure taxonomy as they are added.
 
-これらの決定により、証明ストリーミングは SF-13/SF-14 と整合し、決定論的なエラーコードを
-公開しつつ、SoraFS ゲートウェイで既に強化済みのトランスポートを活用できる。
+These decisions keep proof streaming coherent with the current PoR/PoTR surface
+and SF-13 PDP deliverables, expose deterministic error codes, and reuse
+transport already hardened in SoraFS gateways.

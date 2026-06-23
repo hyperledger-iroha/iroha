@@ -634,6 +634,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteScalars.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTags.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialOwnerTag.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/LocalZkAssetMerklePathProvider.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PastaPoseidonNodeHasher.java",
@@ -849,6 +850,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionToriiException.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionUsageRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/SignedTransaction.kt",
@@ -1061,8 +1063,10 @@ WORKFLOW_REQUIRED_PATHS = SOURCE_PATHS + (
 SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "javascript/iroha_js/src/crypto.js",
@@ -1200,6 +1204,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-block-height-vectors",
     ),
     (
+        "JavaScript package dist recursive spend Pallas opening vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-pallas-opening-vectors",
+    ),
+    (
+        "JavaScript package dist recursive spend raw lineage key vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-raw-lineage-key-vectors",
+    ),
+    (
         "JavaScript/Python native output header negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers",
     ),
@@ -1290,6 +1302,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Android Java lineage witness append availability probe negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe",
+    ),
+    (
+        "JVM/Android hop evidence shape negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-hop-evidence-shape",
     ),
     (
         "Kotlin/JVM and Android Java note amount vector negative control",
@@ -1390,6 +1406,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "SDK verify-result trailing-field vector negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors",
+    ),
+    (
+        "SDK verify lineage-record preflight negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-lineage-record-preflight",
     ),
     (
         "SDK lineage-witness trailing-field vector negative control",
@@ -1552,12 +1572,28 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist",
     ),
     (
+        "JavaScript package dist accumulator digest self-check exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-self-check-exactness",
+    ),
+    (
         "JavaScript package dist terminal accumulator digest denylist negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist",
     ),
     (
         "JavaScript package dist accumulator material denylist negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-material-denylist",
+    ),
+    (
+        "JavaScript package dist accumulator material self-check exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-material-self-check-exactness",
+    ),
+    (
+        "JavaScript package dist prefixed accumulator material denylist negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-prefixed-accumulator-material-denylist",
+    ),
+    (
+        "JavaScript package dist suffixed accumulator material denylist negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-suffixed-accumulator-material-denylist",
     ),
     (
         "JavaScript package dist prefixed accumulator digest denylist negative control",
@@ -2072,6 +2108,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage",
     ),
     (
+        "Mobile confidential witness codec coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-witness-codecs",
+    ),
+    (
         "Mobile offline readiness coverage negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage",
     ),
@@ -2138,6 +2178,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JVM SDK Android harness script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-harness-script",
+    ),
+    (
+        "JVM SDK direct javac harness script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-direct-javac-harness-script",
     ),
     (
         "JVM SDK test ordering workflow negative control",
@@ -2487,6 +2531,18 @@ def require_contains(texts, relative, needles, label, errors):
     text = texts[relative]
     for needle in needles:
         require(needle in text, f"{label} missing {needle}", errors)
+
+
+def first_lines_for_labels(message, labels):
+    lines = message.splitlines()
+    detected = []
+    seen = set()
+    for label in labels:
+        if label in seen:
+            continue
+        seen.add(label)
+        detected.append(next(line for line in lines if label in line))
+    return detected
 
 
 def require_tuple_contains(texts, relative, tuple_name, needles, label, errors):
@@ -3215,6 +3271,61 @@ def check_javascript_sdk_script(errors):
         "Kagemusha JavaScript SDK script must run recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, Torii canonical auth/subscription/Connect/ISO alias exactness, verifier-key exactness, identifier receipt exactness, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
         errors,
     )
+    for fragment, label in (
+        ("|buildKagemusha", "JavaScript SDK transaction-builder focused selector"),
+        (
+            "  test/transactionBuilder.test.js",
+            "JavaScript SDK transaction-builder test file",
+        ),
+        (
+            "|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives",
+            "JavaScript SDK privacy native focused selectors",
+        ),
+        ("  test/privacyNative.test.js", "JavaScript SDK privacy native test file"),
+        (
+            "|offline cash configuration snapshot requires cached issuer key and ABI",
+            "JavaScript SDK offline cash focused selector",
+        ),
+        (
+            "  test/offlineCashLifecycle.test.js",
+            "JavaScript SDK offline cash test file",
+        ),
+        (
+            "|canonical request signing: rejects padded auth fields",
+            "JavaScript SDK canonical request focused selector",
+        ),
+        (
+            "  test/canonicalRequest.test.js",
+            "JavaScript SDK canonical request test file",
+        ),
+        (
+            "|streamEvents rejects unsupported production backend event filters before fetch"
+            "|streamEvents rejects malformed verifying key event names before fetch"
+            "|streamEvents rejects malformed proof event hashes before fetch",
+            "JavaScript SDK event-filter focused selectors",
+        ),
+        ("  test/toriiClient.test.js", "JavaScript SDK event-filter test file"),
+        (
+            "|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags",
+            "JavaScript SDK verifier-key focused selectors",
+        ),
+        (
+            "  test/instructionBuilders.test.js",
+            "JavaScript SDK verifier-key test file",
+        ),
+        (
+            "|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|"
+            "encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|"
+            "encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|"
+            "verifyIdentifierResolutionReceipt matches shared receipt vectors",
+            "JavaScript SDK identifier receipt focused selectors",
+        ),
+        (
+            "  test/toriiClient.identifier.test.js",
+            "JavaScript SDK identifier receipt test file",
+        ),
+    ):
+        require(fragment in script, label, errors)
 
 
 def check_js_parity_meta_test(errors):
@@ -3224,6 +3335,33 @@ def check_js_parity_meta_test(errors):
         "JavaScript recursive Kagemusha parity meta-test must pin SDK parity negative controls",
         errors,
     )
+    for fragment, label in (
+        (
+            "Kagemusha SDK parity expectedModes must not contain duplicates",
+            "JavaScript recursive Kagemusha parity meta-test must reject duplicate SDK parity modes",
+        ),
+        (
+            'guard.matchAll(/^if mode == "(--negative-control[^"]*)":/gmu)',
+            "JavaScript recursive Kagemusha parity meta-test must parse implemented SDK parity modes",
+        ),
+        (
+            "Kagemusha SDK parity expectedModes must equal implemented guard modes",
+            "JavaScript recursive Kagemusha parity meta-test must require expected SDK parity modes to equal implemented modes",
+        ),
+        (
+            "Kagemusha production readiness expectedModes must not contain duplicates",
+            "JavaScript recursive Kagemusha parity meta-test must reject duplicate production readiness modes",
+        ),
+        (
+            "workflow negative-control helper rejects duplicate expected modes",
+            "JavaScript recursive Kagemusha parity meta-test must test workflow negative-control duplicate rejection",
+        ),
+        (
+            "workflow expected negative-control modes must not contain duplicates",
+            "JavaScript recursive Kagemusha parity meta-test must reject duplicate workflow negative-control modes",
+        ),
+    ):
+        require(fragment in text, label, errors)
     for _label, command in SDK_PARITY_NEGATIVE_CONTROL_COMMANDS:
         prefix = f"{SDK_PARITY_MAIN_COMMAND} "
         mode = command[len(prefix):] if command.startswith(prefix) else command
@@ -3396,6 +3534,26 @@ def check_c_bridge(texts, errors):
             "mismatched claim account must fail before transaction encoding",
         ),
         "Rust native claim identifier account binding",
+        errors,
+    )
+    require_regex(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        r"let private_key = parse_private_key\(key_slice\)\?;\s*"
+        r"let receipt = parse_identifier_receipt_bytes\(receipt_ptr, receipt_len\)\?;\s*"
+        r"validate_identifier_claim_account\(&account, &receipt\)\?;\s*"
+        r"let \(signed_bytes, hash_bytes\) = encode_instruction_transaction\(",
+        "Rust native claim identifier transaction account binding",
+        errors,
+    )
+    require_regex(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        r"let private_key = parse_private_key_with_algorithm\(key_slice, algorithm\)\?;\s*"
+        r"let receipt = parse_identifier_receipt_bytes\(receipt_ptr, receipt_len\)\?;\s*"
+        r"validate_identifier_claim_account\(&account, &receipt\)\?;\s*"
+        r"let \(signed_bytes, hash_bytes\) = encode_instruction_transaction\(",
+        "Rust native claim identifier algorithm transaction account binding",
         errors,
     )
 
@@ -4213,7 +4371,7 @@ def check_recursive_compact_surface(texts, errors):
             "normalizeKagemushaRecursiveCompactVerifierOutput",
             "invalidKagemushaVerifierOutput",
             "copyKagemushaNativeArchiveOutput",
-            "length <= CUnsignedLong(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes)",
+            "guard length <= CUnsignedLong(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes)",
             "return try Self.copyKagemushaNativeArchiveOutput(",
             "kagemushaRecursiveSpendCompactPaymentTokenFromBundleFn",
             "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection",
@@ -4539,9 +4697,12 @@ def check_recursive_compact_surface(texts, errors):
     require_block_contains(
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
-        "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(\n                    validRecursiveCompactInput,\n                    validRecursiveCompactInput,\n                    -1L,",
+        'assertIllegalArgumentContains("blockHeight must be non-negative") {\n'
+        "            KagemushaRecursiveCompactPaymentTokenProver\n"
+        "                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
         "assertIllegalArgumentContains(\"blockHeight must not be null\")",
         (
+            "-1L",
             "blockHeight must be non-negative",
             "Long.MAX_VALUE",
             '"9223372036854775808"',
@@ -4597,9 +4758,14 @@ def check_recursive_compact_surface(texts, errors):
     require_block_contains(
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-        ".verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(\n                    validRecursiveCompactInput, validRecursiveCompactInput, -1L)",
+        "assertThrows(\n"
+        '        "blockHeight must be non-negative",\n'
+        "        () ->\n"
+        "            KagemushaRecursiveCompactPaymentTokenProver\n"
+        "                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
         "    assertThrows(\n        \"blockHeight must not be null\",",
         (
+            "-1L",
             "blockHeight must be non-negative",
             "Long.MAX_VALUE",
             '"9223372036854775808"',
@@ -4861,6 +5027,22 @@ def check_recursive_compact_surface(texts, errors):
             "lineageVerifierRecord is only valid for reserved-lineage bundles",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"init_bundle\")",
             "sharedRecursiveSpendArchive(FixtureAbi.ABI7, \"append_bundle\")",
+        ),
+        "Android Java typed recursive spend verify lineage-record preflight tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            "assertThrows(\n"
+            "        \"lineageVerifierRecord is required for reserved-lineage bundles\",\n"
+            "        () ->\n"
+            "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
+            "assertThrows(\n"
+            "        \"lineageVerifierRecord is only valid for reserved-lineage bundles\",\n"
+            "        () ->\n"
+            "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
         ),
         "Android Java typed recursive spend verify lineage-record preflight tests",
         errors,
@@ -5651,12 +5833,14 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             errors,
         )
     require(
-        (
-            'java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java'
-            in script
-        )
-        and "KagemushaRecursiveSpendProverTest.java" in script,
-        "Kagemusha JVM SDK script must compile the Android recursive spend harness with project sourcepath",
+        "javac \\\n"
+        '  -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \\\n'
+        '  -d "${JAVA_OUT}" \\\n'
+        "  java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java\n"
+        'java -ea -cp "${JAVA_OUT}" \\\n'
+        "  org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest"
+        in script,
+        "Kagemusha JVM SDK script must directly compile and run the Android recursive spend harness with javac",
         errors,
     )
     require(
@@ -5713,6 +5897,19 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains",
         errors,
     )
+    for test_class in (
+        "org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest",
+        "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
+        "org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests",
+        "org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests",
+        "org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
+        "org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
+    ):
+        require(
+            test_class in script,
+            f"Kagemusha JVM SDK script must run Android harness {test_class}",
+            errors,
+        )
     for test_class in (
         "org.hyperledger.iroha.android.client.NoritoRpcClientTests",
         "org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests",
@@ -6123,6 +6320,77 @@ def check_mobile_confidential_note_coverage(texts, errors):
                 "U128_OVERFLOW",
                 "other-chain",
                 "ciphertext",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
+            "Kotlin confidential witness codecs",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
+            "Android Java confidential witness codecs",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID",
+                "CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT",
+                "CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF",
+                "CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID",
+                "CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT",
+                "CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF",
+                "CONFIDENTIAL_TREE_CAPACITY_V2",
+                "CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2",
+                "CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3",
+                "TRANSFER_PUBLIC_INPUTS_SCHEMA",
+                "UNSHIELD_PUBLIC_INPUTS_SCHEMA",
+                "buildConfidentialTransferProofRequestV1",
+                "buildConfidentialUnshieldProofRequestV1",
+                "encodeTransferWitness",
+                "encodeUnshieldWitness",
+                "treeCommitments must not be empty",
+                "treeCommitments must not exceed",
+                "publicAmount",
+                "unshieldChange",
+                "leafIndex must reference treeCommitments",
+                "rho duplicates inputs",
+                "validateVkRef",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+            "Kotlin privacy confidential witness codec tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+            "Android Java privacy confidential witness codec tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "typedConfidentialWitnessBuildersEncodeNativeReadyRequests",
+                "typedConfidentialWitnessBuildersRejectAmbiguousShapes",
+                "buildConfidentialTransferProofRequestV1",
+                "buildConfidentialUnshieldProofRequestV1",
+                "buildConfidentialTransferVerifyRequestV1",
+                "buildConfidentialUnshieldVerifyRequestV1",
+                "halo2-ipa-pasta:confidential_unshield_v3",
+                "halo2-ipa-pasta:confidential_transfer_v2",
+                "encodeTransferWitness",
+                "encodeUnshieldWitness",
+                "treeCommitments",
+                "transferOutputs",
+                "rootHint",
             ),
             label,
             errors,
@@ -9361,7 +9629,14 @@ def check_javascript(texts, errors):
             "lineageVerifierRecord is required",
             "lineageVerifierRecord",
             'bundle: sharedRecursiveSpendArchive("init_bundle")',
+            "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+            "        bundle: sharedRecursiveSpendArchive(\"init_bundle\"),\n"
+            "      })",
             'bundle: sharedRecursiveSpendAbi7Archive("append_bundle")',
+            "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+            "        bundle: sharedRecursiveSpendAbi7Archive(\"append_bundle\"),\n"
+            "        lineageVerifierRecord: verifierRecord,\n"
+            "      })",
         ),
         "JavaScript typed recursive spend verify lineage-record preflight tests",
         errors,
@@ -9380,7 +9655,7 @@ def check_javascript(texts, errors):
             '"7 "',
             '" 7"',
             '"18446744073709551616"',
-            "-0",
+            "    -0,\n",
         ),
         "JavaScript typed recursive spend blockHeight test vectors",
         errors,
@@ -10053,6 +10328,72 @@ def check_javascript(texts, errors):
     require_block_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
+        "test(\"package dist Kagemusha recursive spend typed requests reject malformed amount vectors before native dispatch\", () => {",
+        "  for (const amount of packageDistInvalidPositiveU128Amounts) {",
+        (
+            "package dist Kagemusha recursive spend typed requests reject malformed amount vectors before native dispatch",
+            "packageDistInvalidPositiveU128Amounts",
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "String(1n << 128n)",
+        ),
+        "JavaScript package dist recursive spend note amount vector coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "buildKagemushaRecursiveSpendableNoteDescriptor",
+        ),
+        "JavaScript package dist recursive spend note amount helper coverage",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        "  const packageDistInvalidPublicAmounts = [",
+        "  for (const publicAmount of packageDistInvalidPublicAmounts) {",
+        (
+            "packageDistInvalidPublicAmounts",
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "String(1n << 128n)",
+        ),
+        "JavaScript package dist recursive spend public amount vector coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            'public_amount: "0007"',
+            "/publicAmount|positive decimal/",
+        ),
+        "JavaScript package dist recursive spend public amount snake-case coverage",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
         "test(\"package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch\", () => {",
         "test(\"package dist Kagemusha recursive spend redeem rejects missing lineage material before native dispatch\", () => {",
         (
@@ -10067,7 +10408,7 @@ def check_javascript(texts, errors):
             '"7 "',
             '" 7"',
             '"18446744073709551616"',
-            "-0",
+            "    -0,\n",
             'block_height: "0007"',
         ),
         "JavaScript package dist recursive spend blockHeight vector coverage",
@@ -10080,6 +10421,13 @@ def check_javascript(texts, errors):
         "  const blockHeightEncoders = [",
         (
             "encodeKagemushaRecursiveSpendVerifyRequest({",
+            "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+            "        bundle: sharedRecursiveSpendAbi6Archive(\"init_bundle\"),\n"
+            "      })",
+            "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+            "        bundle: sharedRecursiveSpendAbi7Archive(\"append_bundle\"),\n"
+            "        lineageVerifierRecord: previousLineageVerifierRecord,\n"
+            "      })",
             "encodeKagemushaRecursiveSpendRedeemRequest({",
             "lineageVerifierRecord is required",
             "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs",
@@ -10130,6 +10478,20 @@ def check_javascript(texts, errors):
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
+        (r"\b[A-Za-z0-9_]*(?:lineageDigest",),
+        "JavaScript package dist accumulator digest prefix denial",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (r"\b[A-Za-z0-9_]*(?:lineageAccumulator",),
+        "JavaScript package dist accumulator material prefix denial",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
         (
             "package declarations keep accumulator digests native-owned",
             "PACKAGE_DECLARATION_TEXTS",
@@ -10138,19 +10500,56 @@ def check_javascript(texts, errors):
             "kotodama-compiler.d.ts",
             "for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS)",
             "accumulatorDigestDeclarationPattern",
-            "accumulatorMaterialDeclarationPattern",
             r"\b[A-Za-z0-9_]*(?:lineageDigest",
-            r"\b[A-Za-z0-9_]*(?:lineageAccumulator",
+            "lineageDigestV1",
+            "LineageDigestBytes",
+            "lineage_digest_v1",
+            "aggregationTranscriptDigestV1",
+            "AggregationTranscriptDigestBytes",
+            "aggregation_transcript_digest_bytes",
+            "fixedWindowTableScheduleDigestV1",
+            "FixedWindowTableScheduleDigestBytes",
+            "fixed_window_table_schedule_digest_bytes",
+            "fixedWindowSharedTableManifestDigestV1",
+            "FixedWindowSharedTableManifestDigestBytes",
+            "fixed_window_shared_table_manifest_digest_bytes",
+            "fixedWindowTableBaseDigestV1",
+            "FixedWindowTableBaseDigestBytes",
+            "fixed_window_table_base_digest_bytes",
+            "verifierWitnessBatchDigestV1",
+            "VerifierWitnessBatchDigestBytes",
+            "verifier_witness_batch_digest_bytes",
+            "recursiveProofChainDigestV1",
+            "RecursiveProofChainDigestBytes",
+            "recursive_proof_chain_digest_bytes",
+            "proofChainDigestV1",
+            "ProofChainDigestBytes",
+            "proof_chain_digest_bytes",
+            "transitionProfileBindingDigestV1",
+            "TransitionProfileBindingDigestBytes",
+            "transition_profile_binding_digest_bytes",
+            "appendOpeningPreflightDigestV1",
+            "AppendOpeningPreflightDigestBytes",
+            "append_opening_preflight_digest_bytes",
+            "appendBoundaryDigestV1",
+            "AppendBoundaryDigestBytes",
+            "append_boundary_digest_bytes",
+            "recursiveVerifierScalarProjectionDigestV1",
+            "RecursiveVerifierScalarProjectionDigestBytes",
+            "recursive_verifier_scalar_projection_digest_bytes",
+            "previousAccumulatorDigestV1",
+            "PreviousAccumulatorDigestBytes",
+            "previous_accumulator_digest_v1",
+            "resultingAccumulatorDigestV1",
+            "ResultingAccumulatorDigestBytes",
+            "resulting_accumulator_digest_bytes",
             "terminalAccumulatorDigest",
             "terminalAccumulatorDigestV1",
-            "terminalAccumulator",
-            "terminalAccumulatorV1",
             "walletRecursiveProofChainDigest",
             "walletRecursiveProofChainDigestBytes",
-            "walletRecursiveProofChain",
-            "walletRecursiveProofChainBytes",
-            "lineageAccumulatorState",
-            "recursiveAccumulatorStateBytes",
+            "accumulatorDigestV1",
+            "AccumulatorDigestBytes",
+            "accumulator_digest_bytes",
             "lineageDigest|LineageDigest|lineage_digest",
             "aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest",
             "fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest",
@@ -10166,24 +10565,301 @@ def check_javascript(texts, errors):
             "previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest",
             "resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest",
             "accumulatorDigest|AccumulatorDigest|accumulator_digest",
+            "${name}: recursive accumulator digests must remain native-owned",
+        ),
+        "JavaScript package dist accumulator digest declaration coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            '"lineageDigestV1",',
+            '"LineageDigestBytes",',
+            '"lineage_digest_v1",',
+            '"aggregationTranscriptDigestV1",',
+            '"AggregationTranscriptDigestBytes",',
+            '"aggregation_transcript_digest_bytes",',
+            '"fixedWindowTableScheduleDigestV1",',
+            '"FixedWindowTableScheduleDigestBytes",',
+            '"fixed_window_table_schedule_digest_bytes",',
+            '"fixedWindowSharedTableManifestDigestV1",',
+            '"FixedWindowSharedTableManifestDigestBytes",',
+            '"fixed_window_shared_table_manifest_digest_bytes",',
+            '"fixedWindowTableBaseDigestV1",',
+            '"FixedWindowTableBaseDigestBytes",',
+            '"fixed_window_table_base_digest_bytes",',
+            '"verifierWitnessBatchDigestV1",',
+            '"VerifierWitnessBatchDigestBytes",',
+            '"verifier_witness_batch_digest_bytes",',
+            '"recursiveProofChainDigestV1",',
+            '"RecursiveProofChainDigestBytes",',
+            '"recursive_proof_chain_digest_bytes",',
+            '"proofChainDigestV1",',
+            '"ProofChainDigestBytes",',
+            '"proof_chain_digest_bytes",',
+            '"transitionProfileBindingDigestV1",',
+            '"TransitionProfileBindingDigestBytes",',
+            '"transition_profile_binding_digest_bytes",',
+            '"appendOpeningPreflightDigestV1",',
+            '"AppendOpeningPreflightDigestBytes",',
+            '"append_opening_preflight_digest_bytes",',
+            '"appendBoundaryDigestV1",',
+            '"AppendBoundaryDigestBytes",',
+            '"append_boundary_digest_bytes",',
+            '"recursiveVerifierScalarProjectionDigestV1",',
+            '"RecursiveVerifierScalarProjectionDigestBytes",',
+            '"recursive_verifier_scalar_projection_digest_bytes",',
+            '"previousAccumulatorDigestV1",',
+            '"PreviousAccumulatorDigestBytes",',
+            '"previous_accumulator_digest_v1",',
+            '"resultingAccumulatorDigestV1",',
+            '"ResultingAccumulatorDigestBytes",',
+            '"resulting_accumulator_digest_bytes",',
+            '"terminalAccumulatorDigest",',
+            '"terminalAccumulatorDigestV1",',
+            '"TerminalAccumulatorDigest",',
+            '"terminal_accumulator_digest",',
+            '"terminal_accumulator_digest_v1",',
+            '"walletRecursiveProofChainDigest",',
+            '"walletRecursiveProofChainDigestBytes",',
+            '"wallet_recursive_proof_chain_digest",',
+            '"wallet_recursive_proof_chain_digest_bytes",',
+            '"accumulatorDigestV1",',
+            '"AccumulatorDigestBytes",',
+            '"accumulator_digest_bytes",',
+        ),
+        "JavaScript package dist accumulator digest declaration exact self-check entries",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package declarations keep accumulator digests native-owned",
+            "PACKAGE_DECLARATION_TEXTS",
+            "connect.browser.d.ts",
+            "nexus-app.d.ts",
+            "kotodama-compiler.d.ts",
+            "for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS)",
+            "accumulatorMaterialDeclarationPattern",
+            r"\b[A-Za-z0-9_]*(?:lineageAccumulator",
+            "terminalAccumulator",
+            "terminalAccumulatorV1",
+            "walletRecursiveProofChain",
+            "walletRecursiveProofChainBytes",
+            "WalletRecursiveProofChain",
+            "WalletRecursiveProofChainBytes",
+            "recursiveProofChainBytes",
+            "inputTerminalAccumulator",
+            "staleWalletRecursiveProofChain",
+            "nativeAppendAccumulatorState",
+            "publicProofChainBytes",
+            "privateAccumulatorState",
+            "externalRecursiveAccumulatorBytes",
+            "aggregationTranscript",
+            "AggregationTranscriptBytes",
+            "aggregation_transcript_v1",
+            "fixedWindowTableSchedule",
+            "FixedWindowTableScheduleBytes",
+            "fixed_window_table_schedule_v1",
+            "fixedWindowSharedTableManifest",
+            "FixedWindowSharedTableManifestBytes",
+            "fixed_window_shared_table_manifest_v1",
+            "fixedWindowTableBase",
+            "FixedWindowTableBaseBytes",
+            "fixed_window_table_base_v1",
+            "verifierWitnessBatch",
+            "VerifierWitnessBatchBytes",
+            "verifier_witness_batch_v1",
+            "proofChain",
+            "ProofChainState",
+            "proof_chain_bytes",
+            "appendAccumulator",
+            "AppendAccumulatorState",
+            "append_accumulator_bytes",
+            "recursiveAccumulator",
+            "recursiveAccumulatorV1",
+            "recursive_accumulator_bytes",
+            "transitionProfileBinding",
+            "TransitionProfileBindingBytes",
+            "transition_profile_binding_v1",
+            "appendOpeningPreflight",
+            "AppendOpeningPreflightBytes",
+            "append_opening_preflight_v1",
+            "recursiveVerifierScalarProjection",
+            "RecursiveVerifierScalarProjectionBytes",
+            "recursive_verifier_scalar_projection_v1",
+            "previousAccumulator",
+            "PreviousAccumulatorBytes",
+            "previous_accumulator_v1",
+            "resultingAccumulator",
+            "ResultingAccumulatorBytes",
+            "resulting_accumulator_v1",
+            "lineageAccumulatorState",
+            "LineageAccumulatorState",
+            "lineage_accumulator_state",
+            "recursiveAccumulatorState",
+            "RecursiveAccumulatorState",
+            "recursive_accumulator_state",
+            "recursiveAccumulatorStateBytes",
+            "recursive_accumulator_state_bytes",
+            "accumulatorSnapshot",
+            "AccumulatorSnapshotBytes",
+            "accumulator_snapshot_v1",
+            "recursiveSnapshot",
+            "RecursiveSnapshotBytes",
+            "recursive_snapshot_v1",
+            "lineageSnapshot",
+            "LineageSnapshotBytes",
+            "lineage_snapshot_v1",
+            "proofState",
+            "ProofStateBytes",
+            "proof_state_v1",
+            "recursiveProofState",
+            "RecursiveProofStateBytes",
+            "recursive_proof_state_v1",
+            "lineageProofState",
+            "LineageProofStateBytes",
+            "lineage_proof_state_v1",
+            "accumulatorState",
+            "AccumulatorStateBytes",
+            "accumulator_state_v1",
             "lineageAccumulator|LineageAccumulator|lineage_accumulator",
+            "aggregationTranscript|AggregationTranscript|aggregation_transcript",
+            "fixedWindowTableSchedule|FixedWindowTableSchedule|fixed_window_table_schedule",
+            "fixedWindowSharedTableManifest|FixedWindowSharedTableManifest|fixed_window_shared_table_manifest",
+            "fixedWindowTableBase|FixedWindowTableBase|fixed_window_table_base",
+            "verifierWitnessBatch|VerifierWitnessBatch|verifier_witness_batch",
             "recursiveProofChain|RecursiveProofChain|recursive_proof_chain",
+            "proofChain|ProofChain|proof_chain",
             "appendAccumulator|AppendAccumulator|append_accumulator",
             "recursiveAccumulator|RecursiveAccumulator|recursive_accumulator",
             "terminalAccumulator|TerminalAccumulator|terminal_accumulator",
-            "walletRecursiveProofChain|wallet_recursive_proof_chain",
+            "walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain",
+            "transitionProfileBinding|TransitionProfileBinding|transition_profile_binding",
+            "appendOpeningPreflight|AppendOpeningPreflight|append_opening_preflight",
+            "recursiveVerifierScalarProjection|RecursiveVerifierScalarProjection|recursive_verifier_scalar_projection",
+            "previousAccumulator|PreviousAccumulator|previous_accumulator",
+            "resultingAccumulator|ResultingAccumulator|resulting_accumulator",
+            "accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot",
+            "recursiveSnapshot|RecursiveSnapshot|recursive_snapshot",
+            "lineageSnapshot|LineageSnapshot|lineage_snapshot",
+            "proofState|ProofState|proof_state",
+            "recursiveProofState|RecursiveProofState|recursive_proof_state",
+            "lineageProofState|LineageProofState|lineage_proof_state",
             "accumulatorState|AccumulatorState|accumulator_state",
-            "${name}: recursive accumulator digests must remain native-owned",
             "${name}: recursive accumulator material must remain native-owned",
         ),
-        "JavaScript package dist accumulator digest declaration coverage",
+        "JavaScript package dist accumulator material declaration coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            '"terminalAccumulator",',
+            '"terminalAccumulatorV1",',
+            '"TerminalAccumulator",',
+            '"terminal_accumulator",',
+            '"terminal_accumulator_v1",',
+            '"walletRecursiveProofChain",',
+            '"walletRecursiveProofChainBytes",',
+            '"WalletRecursiveProofChain",',
+            '"WalletRecursiveProofChainBytes",',
+            '"wallet_recursive_proof_chain",',
+            '"wallet_recursive_proof_chain_bytes",',
+            '"recursiveProofChainBytes",',
+            '"inputTerminalAccumulator",',
+            '"staleWalletRecursiveProofChain",',
+            '"nativeAppendAccumulatorState",',
+            '"publicProofChainBytes",',
+            '"privateAccumulatorState",',
+            '"externalRecursiveAccumulatorBytes",',
+            '"aggregationTranscript",',
+            '"AggregationTranscriptBytes",',
+            '"aggregation_transcript_v1",',
+            '"fixedWindowTableSchedule",',
+            '"FixedWindowTableScheduleBytes",',
+            '"fixed_window_table_schedule_v1",',
+            '"fixedWindowSharedTableManifest",',
+            '"FixedWindowSharedTableManifestBytes",',
+            '"fixed_window_shared_table_manifest_v1",',
+            '"fixedWindowTableBase",',
+            '"FixedWindowTableBaseBytes",',
+            '"fixed_window_table_base_v1",',
+            '"verifierWitnessBatch",',
+            '"VerifierWitnessBatchBytes",',
+            '"verifier_witness_batch_v1",',
+            '"proofChain",',
+            '"ProofChainState",',
+            '"proof_chain_bytes",',
+            '"appendAccumulator",',
+            '"AppendAccumulatorState",',
+            '"append_accumulator_bytes",',
+            '"recursiveAccumulator",',
+            '"recursiveAccumulatorV1",',
+            '"recursive_accumulator_bytes",',
+            '"transitionProfileBinding",',
+            '"TransitionProfileBindingBytes",',
+            '"transition_profile_binding_v1",',
+            '"appendOpeningPreflight",',
+            '"AppendOpeningPreflightBytes",',
+            '"append_opening_preflight_v1",',
+            '"recursiveVerifierScalarProjection",',
+            '"RecursiveVerifierScalarProjectionBytes",',
+            '"recursive_verifier_scalar_projection_v1",',
+            '"previousAccumulator",',
+            '"PreviousAccumulatorBytes",',
+            '"previous_accumulator_v1",',
+            '"resultingAccumulator",',
+            '"ResultingAccumulatorBytes",',
+            '"resulting_accumulator_v1",',
+            '"lineageAccumulatorState",',
+            '"LineageAccumulatorState",',
+            '"lineage_accumulator_state",',
+            '"recursiveAccumulatorState",',
+            '"RecursiveAccumulatorState",',
+            '"recursive_accumulator_state",',
+            '"recursiveAccumulatorStateBytes",',
+            '"recursive_accumulator_state_bytes",',
+            '"accumulatorSnapshot",',
+            '"AccumulatorSnapshotBytes",',
+            '"accumulator_snapshot_v1",',
+            '"recursiveSnapshot",',
+            '"RecursiveSnapshotBytes",',
+            '"recursive_snapshot_v1",',
+            '"lineageSnapshot",',
+            '"LineageSnapshotBytes",',
+            '"lineage_snapshot_v1",',
+            '"proofState",',
+            '"ProofStateBytes",',
+            '"proof_state_v1",',
+            '"recursiveProofState",',
+            '"RecursiveProofStateBytes",',
+            '"recursive_proof_state_v1",',
+            '"lineageProofState",',
+            '"LineageProofStateBytes",',
+            '"lineage_proof_state_v1",',
+            '"accumulatorState",',
+            '"AccumulatorStateBytes",',
+            '"accumulator_state_v1",',
+        ),
+        "JavaScript package dist accumulator material declaration exact self-check entries",
         errors,
     )
     require_not_regex(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
-        r"accumulatorDigestDeclarationPattern\s*=\s*/[\s\S]*\)\s*\\b/u",
+        r"accumulatorDigestDeclarationPattern\s*=\s*/[^\n]*\)\s*\\b/u",
         "JavaScript package dist accumulator digest suffix denial",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        r"accumulatorMaterialDeclarationPattern\s*=\s*/[^\n]*\)\s*\\b/u",
+        "JavaScript package dist accumulator material suffix denial",
         errors,
     )
 
@@ -10522,6 +11198,8 @@ def check_javascript(texts, errors):
             "lineage_verifier_key",
             "lineage_proving_key_archive",
             "exposedVerifierKey[0] = 0",
+            "exposedProvingKey[0] = 0",
+            "directArtifacts.lineageProvingKeyArchive[0]",
             "assert.notStrictEqual(",
             "package declarations mark Kagemusha lineage key artifacts readonly",
             "readonly lineageVerifierKey: Buffer;",
@@ -10587,6 +11265,8 @@ def check_javascript(texts, errors):
             "const previousOpeningsWithoutLineageRecord =",
             "previousProofOpenEnvelopes are only valid for lineage append output",
             "exposedVerifierKey[0] = 0",
+            "exposedProvingKey[0] = 0",
+            "jsLineageArtifacts.lineageProvingKeyArchive",
             "assert.notStrictEqual(",
         ),
         "JavaScript source lineage key artifact copy tests",
@@ -10603,9 +11283,41 @@ def check_javascript(texts, errors):
             "lineage_verifier_key",
             "verifier_opening_len",
             "exposedVerifierKey[0] = 0",
+            "exposedProvingKey[0] = 0",
+            "artifacts.lineageProvingKeyArchive[0]",
             "assert.notStrictEqual(",
         ),
         "JavaScript browser lineage key artifact tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+            "semantic previous proofs cannot select Reserved-lineage output",
+            "unknown-kagemusha-recursive-spend-circuit",
+            "Number.NaN,\n    ],",
+            "1n,\n    ],",
+            "new Number(1),\n    ],",
+        ),
+        "JavaScript recursive spend append output helper tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+            "semantic previous proofs cannot select Reserved-lineage output",
+            "unknown-kagemusha-recursive-spend-circuit",
+            "[Number.NaN, 1n, new Number(1)]",
+        ),
+        "JavaScript package dist recursive spend append output helper tests",
         errors,
     )
 
@@ -10861,6 +11573,21 @@ def check_python(texts, errors):
         "Python Connect tests must pin native codec fail-closed behavior, SID/preview bootstrap exactness, and exact wallet signature algorithms",
         errors,
     )
+    for test_name, label in (
+        (
+            "test_generate_connect_sid_matches_deterministic_vector",
+            "Python Connect SID deterministic vector exactness test",
+        ),
+        (
+            "test_bootstrap_connect_preview_session_rejects_bad_options_before_registration",
+            "Python Connect preview bootstrap bad-options exactness test",
+        ),
+        (
+            "test_connect_sign_result_ok_rejects_confusable_algorithms",
+            "Python Connect wallet signature confusable algorithm exactness test",
+        ),
+    ):
+        require(test_name in python_connect_tests, label, errors)
     init = "python/iroha_python/src/iroha_python/__init__.py"
     wrapper = "python/iroha_python/src/iroha_python/kagemusha.py"
     tx_wrapper = "python/iroha_python/src/iroha_python/tx.py"
@@ -10971,6 +11698,22 @@ def check_python(texts, errors):
     )
     require_contains(texts, wrapper, REQUIRED_PYTHON_PUBLIC_METHODS, "Python SDK", errors)
     require_contains(texts, init, REQUIRED_PYTHON_PUBLIC_METHODS, "Python package re-exports", errors)
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+            "semantic previous proofs cannot select Reserved-lineage output",
+            "unknown-kagemusha-recursive-spend-circuit",
+            'float("nan")',
+            'float("inf")',
+            'float("-inf")',
+        ),
+        "Python recursive spend append output helper tests",
+        errors,
+    )
     require_contains(
         texts,
         wrapper,
@@ -11511,7 +12254,10 @@ def check_python(texts, errors):
         (
             "KagemushaRecursiveSpendVerifyRequest(",
             'match="lineage_verifier_record is required"',
+            'match="lineage_verifier_record is required for reserved-lineage bundles",',
             'match="lineage_verifier_record is only valid"',
+            "bundle=_shared_recursive_spend_abi7_archive(\"append_bundle\"),\n"
+            "            lineage_verifier_record=verifier_record,",
             "danglingVerifyLineageRecord",
             "danglingRedeemLineageRecord",
             '_shared_recursive_spend_archive("init_bundle")',
@@ -11536,6 +12282,7 @@ def check_python(texts, errors):
             "instructions=(instruction,)",
             "_archive_bytes_named(private_key, \"private_key\")",
             "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
+            "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
         ),
         "Python Kagemusha instruction transaction builder",
         errors,
@@ -11778,11 +12525,22 @@ def check_python(texts, errors):
             "_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
             "halo2/kzg",
             "not-bytes",
-            "FrozenInstanceError",
+            "from dataclasses import FrozenInstanceError",
             "proving_key[:] =",
             "init_artifacts.lineage_proving_key_archive =",
         ),
         "Python native output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "proving_key[:] = b\"\\x00\" * len(proving_key)",
+            "assert init_artifacts.lineage_proving_key_archive == init_proving_key_archive",
+            "init_artifacts.lineage_proving_key_archive = b\"mutated\"",
+        ),
+        "Python lineage key artifact copy tests",
         errors,
     )
     require_regex(
@@ -12098,6 +12856,14 @@ def check_swift(texts, errors):
         "Swift typed recursive spend request codec tests",
         errors,
     )
+    require_regex(
+        texts,
+        request_codecs_test,
+        r'previousBundle: Self\.sharedRecursiveSpendArchive\(abi: \.abi7, name: "append_bundle"\)[\s\S]*?previousLineageVerifierRecord: Self\.sampleVerifierRecord\(\)[\s\S]*?\.invalidField\("previousLineageVerifierRecord"\)',
+        "Swift typed recursive spend request codec tests",
+        errors,
+        flags=re.S,
+    )
     require_contains(
         texts,
         request_codecs_test,
@@ -12368,7 +13134,11 @@ def check_swift(texts, errors):
         texts,
         request_codecs_test,
         "        for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32)] {",
-        '        assertRedeemRequestInvalidField("changeOutput") {',
+        '        assertRedeemRequestInvalidField("changeOutput") {\n'
+        '            try KagemushaRecursiveSpendRedeemRequest(\n'
+        '                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),\n'
+        "                recipient: Self.sampleRecipient(),\n"
+        '                publicAmount: "6"',
         (
             "Data(repeating: 1, count: 31)",
             "Data(repeating: 0, count: 32)",
@@ -13729,7 +14499,7 @@ def check_java_kotlin(texts, errors):
     require_regex(
         texts,
         kotlin_request_codecs,
-        r"KagemushaRecursiveSpendProver\.canSelectAppendOutputCircuitId\([\s\S]*?\"outputProofCircuitId is not valid for the previous bundle\"[\s\S]*?val suppliedLineageKeyMaterial =",
+        r"val previousSummary = KagemushaRecursiveSpendRequestCodecs\.decodeBundle\(previousBundleArchive\)(?:(?!val suppliedLineageKeyMaterial =)[\s\S])*?KagemushaRecursiveSpendProver\.canSelectAppendOutputCircuitId\((?:(?!val suppliedLineageKeyMaterial =)[\s\S])*?\"outputProofCircuitId is not valid for the previous bundle\"(?:(?!val suppliedLineageKeyMaterial =)[\s\S])*?val suppliedLineageKeyMaterial =",
         "Kotlin typed recursive spend append output selection before lineage-key selection",
         errors,
         flags=re.S,
@@ -13951,7 +14721,7 @@ def check_java_kotlin(texts, errors):
     require_regex(
         texts,
         java_request_codecs,
-        r"KagemushaRecursiveSpendProver\.canSelectAppendOutputCircuitId\([\s\S]*?\"outputProofCircuitId is not valid for the previous bundle\"\);[\s\S]*?final boolean suppliedLineageKeyMaterial =",
+        r"final SpendBundleSummary previousSummary = decodeBundle\(this\.previousBundle\);(?:(?!final boolean suppliedLineageKeyMaterial =)[\s\S])*?KagemushaRecursiveSpendProver\.canSelectAppendOutputCircuitId\((?:(?!final boolean suppliedLineageKeyMaterial =)[\s\S])*?\"outputProofCircuitId is not valid for the previous bundle\"\);(?:(?!final boolean suppliedLineageKeyMaterial =)[\s\S])*?final boolean suppliedLineageKeyMaterial =",
         "Android Java typed recursive spend append output selection before lineage-key selection",
         errors,
         flags=re.S,
@@ -14070,6 +14840,34 @@ def check_java_kotlin(texts, errors):
             "sampleVerifierRecord()",
         ),
         "Android Java typed recursive spend append previous-lineage record and proof-opening selection tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "verified fold record bundle rejects adversarial hop continuity and public input shapes",
+            "exactly 9 single-row",
+            "rootAfter must differ",
+            "rootBefore must equal previous hop rootAfter",
+            "chainId does not match",
+            "asset does not match",
+        ),
+        "Kotlin/JVM typed hop evidence shape and binding tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "typedEvidenceHelpersRejectAdversarialHopBindings",
+            "exactly 9 single-row",
+            "rootAfter must differ",
+            "rootBefore must equal previous hop rootAfter",
+            "chainId does not match",
+            "asset does not match",
+        ),
+        "Android Java typed hop evidence shape and binding tests",
         errors,
     )
     require_block_contains(
@@ -16208,6 +17006,13 @@ def check_java_kotlin(texts, errors):
                 "syntheticKagemushaRecordBundleArchive",
                 "syntheticPallasOpenEnvelopesArchive",
                 "previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive()",
+                "package dist Kagemusha recursive spend typed requests reject malformed Pallas opening archives before native dispatch",
+                "malformedPallasOpenEnvelopes",
+                "Buffer.from([1, 2, 3])",
+                'syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72)',
+                "syntheticPallasOpenEnvelopesArchive(2)",
+                "syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false })",
+                "malformedPreviousProofOpenEnvelopes",
             ),
             "JavaScript dist typed recursive spend Pallas preflight tests",
         ),
@@ -16224,6 +17029,36 @@ def check_java_kotlin(texts, errors):
         ),
     ):
         require_contains(texts, relative, needles, label, errors)
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
+            "package dist accepted init raw lineage proving key without verifier key",
+            "package dist accepted init raw lineage verifier key without proving key",
+            "package dist accepted init raw lineage key profile mismatch",
+            "package dist accepted append raw lineage keys without previous proof openings",
+            "package dist accepted append raw lineage proving key without verifier key",
+            "package dist accepted append raw lineage verifier key without proving key",
+            "package dist accepted append raw lineage key profile mismatch",
+            "lineageProvingKeyArchive: appendProvingKey",
+            "lineageProvingKeyArchive: initProvingKey",
+        ),
+        "JavaScript dist typed recursive spend raw lineage key request tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation",
+            "malformedPreviousLineageRecordBeforeOpeningsPackageDist",
+            "previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2)",
+            "package dist checked previous-proof openings before parsing previous lineage record",
+        ),
+        "JavaScript package dist previous-lineage record parse ordering tests",
+        errors,
+    )
     require_contains(
         texts,
         kotlin_test,
@@ -16775,10 +17610,15 @@ def check_csharp(texts, errors):
             "public byte[] NoritoBytes =>",
             "NormalizeRecursiveCompactVerifierOutput",
             "invalid boolean output",
+            "KagemushaRecursiveSpendVerifyResult",
+            "DecodeVerifyResult",
+            "LineageWitnessHasReservedPreviousProof",
             "KagemushaRecursiveSpendLineageKeyArtifacts",
             "LineageKeyArtifactsForInit",
             "LineageKeyArtifactsForAppend",
+            "ValidateVerifyLineagePreflight",
             "ValidateLineageKeyArtifacts",
+            "ValidateRedeemChangeOutputBytes",
             "IsSupportedLineageKeyArtifactOpeningLen",
             "IsCompactPaymentTokenProverAvailable",
             "IsRecursiveAggregationProofBundleProverAvailable",
@@ -16809,10 +17649,14 @@ def check_csharp(texts, errors):
             "RecursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1",
             "RecursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1",
             "RecursiveSpendBundleWireName",
+            "RecursiveSpendVerifyResultWireName",
+            "RecursiveSpendLineageWitnessWireName",
             "RecursiveSpendAccumulatorDomain",
             '"kagemusha-recursive-aggregation-v1"',
             '"kagemusha-recursive-spend-lineage-v1"',
             '"iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1"',
+            '"iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1"',
+            '"iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1"',
             '"iroha:kagemusha:v1:recursive-spend-accumulator"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile-digest"',
@@ -16868,11 +17712,23 @@ def check_csharp(texts, errors):
         (
             "KagemushaRecursiveSpendBundleSummary",
             "KagemushaRecursiveSpendableNoteSummary",
+            "KagemushaRecursiveSpendVerifyResult",
+            "DecodeVerifyResult",
+            "LineageWitnessHasReservedPreviousProof",
             "DecodeBundleSummary",
             "KagemushaNoritoArchivePayload",
+            "ReadBundleBoolPayload",
+            "ReadLineagePreviousRecursiveProofCircuitId",
             "ReadBundleAccumulatorSummary",
+            "ReadBundleChainIdPayload",
             "ReadBundleRecursiveProofCircuitId",
             "RecursiveAggregationProofPublicInputsWireName",
+            'ReadBundleField(payload, ref offset, flags, "chainId")',
+            "chainId has trailing bytes",
+            "verifyResult has trailing bytes",
+            "lineageWitness has trailing bytes",
+            "lineageWitness.previousRecursiveProofs",
+            "lineageWitness.previousRecursiveProofs.verifierKeyId",
             "recursiveProof.publicInputs",
             "recursiveProof.publicInputsHash",
             "ReadBundleProofBoxBackend",
@@ -16905,6 +17761,16 @@ def check_csharp(texts, errors):
         errors,
     )
     csharp_text = texts[relative]
+    chain_id_start = csharp_text.index("private static string ReadBundleChainIdPayload")
+    chain_id_end = csharp_text.index(
+        "private static string ReadBundleRecursiveProofCircuitId",
+        chain_id_start,
+    )
+    require(
+        "catch (ArgumentException)" not in csharp_text[chain_id_start:chain_id_end],
+        "C# recursive spend bundle chainId decoder must reject raw string payloads",
+        errors,
+    )
     if "if (archive.Length > NativeArchiveMaxBytes)" in csharp_text and "var bytes = archive.ToArray();" in csharp_text:
         require(
             csharp_text.index("if (archive.Length > NativeArchiveMaxBytes)")
@@ -16995,17 +17861,40 @@ def check_csharp(texts, errors):
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
         (
             "RecursiveSpendBundleSummaryDecoderReadsSharedBundleArchives",
+            "RecursiveSpendVerifyResultDecoderReadsSharedArchivesAndRejectsTrailingFields",
+            "RecursiveSpendLineageWitnessDecoderRejectsTrailingFields",
             "RecursiveSpendBundleSummaryDecoderRejectsAdversarialProofAttachmentAndHopCount",
+            "RecursiveSpendBundleSummaryDecoderRejectsCanonicalShapeDriftAndTrailingFields",
             "SharedRecursiveSpendArchive(\"init_bundle\")",
             "SharedRecursiveSpendArchive(\"append_bundle\")",
+            "SharedRecursiveSpendArchive(\"verify_result\")",
+            "SharedRecursiveSpendAbi7Archive(\"verify_result\")",
+            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\")",
+            "DecodeVerifyResult",
+            "LineageWitnessHasReservedPreviousProof",
+            "RecursiveSpendVerifyResultWithTrailingField",
+            "RecursiveSpendLineageWitnessWithTrailingField",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofsField",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofField",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
             "DecodeBundleSummary",
+            "AssertBundleSummaryRejects",
             "RecursiveSpendBundleWithPayloadTextReplaced",
             "RecursiveSpendBundleWithEmptyProofBytes",
+            "RecursiveSpendBundleWithProofBoxField",
             "RecursiveSpendBundleWithRecursiveProofField",
             "RecursiveSpendBundleWithAccumulatorField",
             "RecursiveSpendBundleWithCurrentNoteField",
             "RecursiveSpendBundleWithEqualCurrentNoteNullifier",
+            "RecursiveSpendBundleWithTopLevelTrailingField",
+            "RecursiveSpendBundleWithAccumulatorTrailingField",
+            "RecursiveSpendBundleWithCurrentNoteTrailingField",
+            "RecursiveSpendBundleWithCurrentNoteAmountTrailingField",
+            "RecursiveSpendBundleWithRecursiveProofTrailingField",
+            "RecursiveSpendBundleWithVerifierKeyIdTrailingField",
+            "RecursiveSpendBundleWithProofBoxTrailingField",
             "KagemushaNumericAmountPayload(0)",
+            "KagemushaNoritoString(\"prod-chain-id\")",
             "RebuildKagemushaNoritoFrameLike",
             "KagemushaNoritoPayload",
             "KagemushaFixedArrayPayload(0x01, 15)",
@@ -17032,6 +17921,16 @@ def check_csharp(texts, errors):
             "bundle.current_note.note_commitment",
             "bundle.current_note.spend_nullifier",
             "bundle.current_note.amount",
+            "bundle has trailing bytes",
+            "accumulator has trailing bytes",
+            "currentNote has trailing bytes",
+            "recursiveProof has trailing bytes",
+            "verifierKeyId has trailing bytes",
+            "proof has trailing bytes",
+            "verifyResult has trailing bytes",
+            "lineageWitness has trailing bytes",
+            "lineageWitness.previousRecursiveProofs",
+            "lineageWitness.previousRecursiveProofs.verifierKeyId",
             "RecursiveSpendLineageWitnesslessMaxHopsV1 + 1u",
             "compact Norito layout",
             "initialRoot[0] ^= 0xff",
@@ -17111,6 +18010,113 @@ def check_csharp(texts, errors):
             "RecursiveSpendBundleWithPayloadTextReplaced",
         ),
         "C# recursive spend bundle proof-backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "KagemushaNoritoString(\"prod-chain-id\")",
+            "chainId",
+            "RecursiveSpendBundleWithAccumulatorField",
+        ),
+        "C# recursive spend bundle chainId canonical-shape guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendBundleWithProofBoxField",
+            "KagemushaNoritoString(\"halo2/kzg\")",
+            "bundle.proof_backend",
+        ),
+        "C# recursive spend bundle proof-box backend guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendBundleWithTopLevelTrailingField",
+            "RecursiveSpendBundleWithAccumulatorTrailingField",
+            "RecursiveSpendBundleWithCurrentNoteTrailingField",
+            "RecursiveSpendBundleWithCurrentNoteAmountTrailingField",
+            "RecursiveSpendBundleWithRecursiveProofTrailingField",
+            "RecursiveSpendBundleWithVerifierKeyIdTrailingField",
+            "RecursiveSpendBundleWithProofBoxTrailingField",
+            "RecursiveSpendBundleWithTopLevelTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithAccumulatorTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithCurrentNoteTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithCurrentNoteAmountTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithRecursiveProofTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithVerifierKeyIdTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithProofBoxTrailingField(initBundleArchive)",
+            "bundle has trailing bytes",
+            "accumulator has trailing bytes",
+            "currentNote has trailing bytes",
+            "bundle.current_note.amount",
+            "recursiveProof has trailing bytes",
+            "verifierKeyId has trailing bytes",
+            "proof has trailing bytes",
+        ),
+        "C# recursive spend bundle trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendNativeVerifyLineagePreflightRejectsMissingOrDanglingRecordBeforeNativeBridge",
+            "ValidateVerifyLineagePreflight",
+            "KagemushaRecursiveSpendNative.Verify(\n                malformedRequestArchive,",
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            "lineageVerifierRecord is only valid for reserved-lineage bundles",
+            "KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,\n                hasLineageVerifierRecord: false",
+            "KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,\n                hasLineageVerifierRecord: true",
+            'Assert.Equal("requestArchive", semanticThenArchiveValidation.ParamName)',
+            'Assert.Equal("requestArchive", reservedThenArchiveValidation.ParamName)',
+        ),
+        "C# recursive spend verify lineage-record preflight tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendVerifyResultDecoderReadsSharedArchivesAndRejectsTrailingFields",
+            "SharedRecursiveSpendArchive(\"verify_result\")",
+            "SharedRecursiveSpendAbi7Archive(\"verify_result\")",
+            "RecursiveSpendVerifyResultWithTrailingField",
+            "RecursiveSpendVerifyResultWithTrailingField())).Message",
+            "DecodeVerifyResult",
+            "verifyResult has trailing bytes",
+            "4011u",
+            "13622u",
+        ),
+        "C# recursive spend verify-result trailing-field guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendLineageWitnessDecoderRejectsTrailingFields",
+            "LineageWitnessHasReservedPreviousProof",
+            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\")",
+            "RecursiveSpendLineageWitnessWithTrailingField",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofsField",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofField",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField",
+            "RecursiveSpendLineageWitnessWithTrailingField(),",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofsField(),",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofField(),",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),",
+            "lineageWitness has trailing bytes",
+            "lineageWitness.previousRecursiveProofs",
+            "lineageWitness.previousRecursiveProofs.verifierKeyId",
+        ),
+        "C# recursive spend lineage-witness trailing-field guard tests",
         errors,
     )
     require_contains(
@@ -17248,8 +18254,11 @@ def check_csharp(texts, errors):
             "string? currentNoteAmount",
             "bool hasChangeOutput",
             "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            publicAmount,\n            currentNoteAmount,\n            hasChangeOutput)",
+            "ReadOnlySpan<byte> changeOutput",
+            "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            publicAmount,\n            currentNoteAmount,\n            changeOutput)",
             "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord)",
             "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord,\n            publicAmount,\n            currentNoteAmount,\n            hasChangeOutput)",
+            "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord,\n            publicAmount,\n            currentNoteAmount,\n            changeOutput)",
             "KagemushaRecursiveSpendRedeemInstructionArchive",
         ),
         "C# Kagemusha recursive redeem transaction builder",
@@ -17273,10 +18282,16 @@ def check_csharp(texts, errors):
             "malformedRequestArchive",
             "Assert.Empty(builder.Instructions)",
             "changeOutput is required when publicAmount is less than current note amount",
+            "changeOutput must be exactly 32 bytes",
+            "changeOutput must be non-zero",
+            "changeOutput: shortChangeOutput",
+            "changeOutput: zeroChangeOutput",
+            "changeOutput: validChangeOutput",
             "lineageWitness is required for this bundle",
             "lineageVerifierRecord is required for reserved-lineage bundles",
             'Assert.Equal("requestArchive", exactAmount.ParamName)',
             'Assert.Equal("requestArchive", lineageAndAmount.ParamName)',
+            'Assert.Equal("requestArchive", lineageAmountAndTypedChange.ParamName)',
             "Assert.Equal(archive, instruction.Payload)",
             'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
             'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
@@ -17287,6 +18302,27 @@ def check_csharp(texts, errors):
             "new byte[65]",
         ),
         "C# Kagemusha instruction transaction builder tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendNativeRedeemChangeOutputPreflightRejectsInvalidFixed32BytesBeforeNativeBridge",
+            "ValidateRedeemChangeOutputBytes(shortChangeOutput)",
+            "ValidateRedeemChangeOutputBytes(zeroChangeOutput)",
+            "ValidateRedeemChangeOutputBytes(validChangeOutput)",
+            "Enumerable.Repeat((byte)0x01, 31).ToArray()",
+            "new byte[32]",
+            "changeOutput: shortChangeOutput",
+            "changeOutput: zeroChangeOutput",
+            "changeOutput: validChangeOutput",
+            "changeOutput must be exactly 32 bytes",
+            "changeOutput must be non-zero",
+            'Assert.Contains("changeOutput must be non-zero", zeroChangeOutputError.Message);',
+            'Assert.Equal("requestArchive", validBytesThenArchiveValidation.ParamName)',
+        ),
+        "C# recursive spend redeem change-output fixed32 tests",
         errors,
     )
     require_contains(
@@ -17722,7 +18758,26 @@ def check_sdk_accumulator_digest_is_native_owned(texts, errors):
         r"\b[A-Za-z0-9_]*TerminalAccumulator",
         r"\b[A-Za-z0-9_]*terminal_accumulator",
         r"\b[A-Za-z0-9_]*walletRecursiveProofChain",
+        r"\b[A-Za-z0-9_]*WalletRecursiveProofChain",
         r"\b[A-Za-z0-9_]*wallet_recursive_proof_chain",
+        r"\b[A-Za-z0-9_]*accumulatorSnapshot",
+        r"\b[A-Za-z0-9_]*AccumulatorSnapshot",
+        r"\b[A-Za-z0-9_]*accumulator_snapshot",
+        r"\b[A-Za-z0-9_]*recursiveSnapshot",
+        r"\b[A-Za-z0-9_]*RecursiveSnapshot",
+        r"\b[A-Za-z0-9_]*recursive_snapshot",
+        r"\b[A-Za-z0-9_]*lineageSnapshot",
+        r"\b[A-Za-z0-9_]*LineageSnapshot",
+        r"\b[A-Za-z0-9_]*lineage_snapshot",
+        r"\b[A-Za-z0-9_]*proofState",
+        r"\b[A-Za-z0-9_]*ProofState",
+        r"\b[A-Za-z0-9_]*proof_state",
+        r"\b[A-Za-z0-9_]*recursiveProofState",
+        r"\b[A-Za-z0-9_]*RecursiveProofState",
+        r"\b[A-Za-z0-9_]*recursive_proof_state",
+        r"\b[A-Za-z0-9_]*lineageProofState",
+        r"\b[A-Za-z0-9_]*LineageProofState",
+        r"\b[A-Za-z0-9_]*lineage_proof_state",
         r"\b[A-Za-z0-9_]*accumulatorState",
         r"\b[A-Za-z0-9_]*AccumulatorState",
         r"\b[A-Za-z0-9_]*accumulator_state",
@@ -17940,6 +18995,12 @@ def check_offline_doc_native_owned_accumulator_boundary(texts, errors):
         "scalar-projection",
         "previous/resulting accumulator digests",
         "SDKs must not derive, supply, or patch accumulator state themselves",
+        "generic proof-state (`proofState`, `ProofState`, `proof_state`)",
+        "recursive/lineage proof-state, aggregation-transcript, fixed-window table-schedule/shared-manifest/table-base",
+        "transition-profile binding",
+        "append-opening preflight",
+        "recursive verifier scalar-projection",
+        "previous/resulting accumulator aliases as native-owned accumulator bytes",
     )
     for needle in required:
         require(
@@ -18209,8 +19270,18 @@ if mode == "--negative-control":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            'JavaScript native availability gate missing typeof native.kagemushaRecursiveSpendTransitionProfileAppend !== "function"'
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: SDK surface drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected SDK surface drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, (expected,)):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK surface drift was not detected")
 
@@ -18228,8 +19299,20 @@ if mode == "--negative-control-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "javascript/iroha_js/src/crypto.js"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: SDK workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected SDK workflow path drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: workflow path drift was not detected")
 
@@ -18247,8 +19330,20 @@ if mode == "--negative-control-native-manifest-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "crates/connect_norito_bridge/Cargo.toml"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: native manifest workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected native manifest workflow path drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native manifest workflow path drift was not detected")
 
@@ -18266,8 +19361,20 @@ if mode == "--negative-control-sdk-negative-controls-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow must run the SDK parity "
+            "JavaScript browser helper negative control"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: SDK negative-control workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected SDK negative-control workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK negative-control workflow drift was not detected")
 
@@ -18285,8 +19392,20 @@ if mode == "--negative-control-sdk-negative-controls-comment-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow must run the SDK parity "
+            "JavaScript browser helper negative control"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: commented SDK parity workflow command drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected commented SDK parity workflow command drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: commented SDK parity workflow command drift was not detected")
 
@@ -18304,8 +19423,17 @@ if mode == "--negative-control-sdk-main-guard-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the main SDK parity guard"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: SDK main guard workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected SDK main guard workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK main guard workflow drift was not detected")
 
@@ -18324,8 +19452,17 @@ if mode == "--negative-control-bytecode-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must reject tracked Python bytecode artifacts"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: tracked Python bytecode workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected tracked Python bytecode workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: tracked Python bytecode workflow drift was not detected")
 
@@ -18343,8 +19480,17 @@ if mode == "--negative-control-native-bridge-job-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must define the native bridge test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: native bridge workflow job drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected native bridge workflow job drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native bridge workflow job drift was not detected")
 
@@ -18362,8 +19508,17 @@ if mode == "--negative-control-native-bridge-runner-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run native bridge tests on Ubuntu"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: native bridge workflow runner drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected native bridge workflow runner drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native bridge workflow runner drift was not detected")
 
@@ -18381,8 +19536,17 @@ if mode == "--negative-control-native-bridge-cache-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must cache Rust artifacts for native bridge tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: native bridge Rust cache drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected native bridge Rust cache drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native bridge Rust cache drift was not detected")
 
@@ -18470,7 +19634,8 @@ if mode == "--negative-control-native-bridge-test-workflow":
                 + ", ".join(missing)
             )
         print("negative control rejected native bridge test workflow drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native bridge test workflow drift was not detected")
 
@@ -18493,12 +19658,15 @@ if mode == "--negative-control-native-bridge-windowed-record-order-workflow":
         run_checks(texts)
     except ParityError as error:
         message = str(error)
-        if "windowed-record bridge test before the heavyweight recursive compact adversarial test" not in message:
+        expected = "windowed-record bridge test before the heavyweight recursive compact adversarial test"
+        expected_labels = (expected,)
+        if expected not in message:
             raise SystemExit(
                 "negative control failed: native bridge windowed-record order drift was not detected"
             )
         print("negative control rejected native bridge windowed-record order drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: native bridge windowed-record order drift was not detected"
@@ -18518,8 +19686,17 @@ if mode == "--negative-control-native-bridge-needs-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload benchmark job must wait for the native bridge test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: native bridge workflow dependency drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected native bridge workflow dependency drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: native bridge workflow dependency drift was not detected")
 
@@ -18537,8 +19714,17 @@ if mode == "--negative-control-python-sdk-job-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must define the Python SDK test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK workflow job drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK workflow job drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK workflow job drift was not detected")
 
@@ -18556,8 +19742,17 @@ if mode == "--negative-control-python-sdk-runner-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run Python SDK tests on Ubuntu"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK workflow runner drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK workflow runner drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK workflow runner drift was not detected")
 
@@ -18575,8 +19770,17 @@ if mode == "--negative-control-python-sdk-setup-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must set up Python for Python SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK setup workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK setup workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK setup workflow drift was not detected")
 
@@ -18594,8 +19798,17 @@ if mode == "--negative-control-python-sdk-version-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must pin Python 3.11 for Python SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK version drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK version drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK version drift was not detected")
 
@@ -18617,8 +19830,17 @@ if mode == "--negative-control-python-sdk-setup-order-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must set up Python before running Python SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK setup ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK setup ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK setup ordering drift was not detected")
 
@@ -18647,8 +19869,17 @@ if mode == "--negative-control-python-sdk-rust-cache-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must cache Rust artifacts for Python native builds"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK Rust cache drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK Rust cache drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK Rust cache drift was not detected")
 
@@ -18670,8 +19901,17 @@ if mode == "--negative-control-python-sdk-timeout-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must allow 45 minutes for Python native builds"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK timeout drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK timeout drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK timeout drift was not detected")
 
@@ -18685,8 +19925,17 @@ if mode == "--negative-control-python-sdk-version-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must print the initial and rebuilt venv Python versions"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK version script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK version script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK version script drift was not detected")
 
@@ -18704,8 +19953,17 @@ if mode == "--negative-control-python-sdk-override-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must keep the documented Python override variable"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK override drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK override drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK override drift was not detected")
 
@@ -18719,8 +19977,17 @@ if mode == "--negative-control-python-sdk-resolver-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must resolve Python 3.11 before falling back to python3"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK resolver drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK resolver drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK resolver drift was not detected")
 
@@ -18734,8 +20001,17 @@ if mode == "--negative-control-python-sdk-major-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must reject non-Python-3.11 runtimes"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK major script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK major script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK major script drift was not detected")
 
@@ -18749,8 +20025,17 @@ if mode == "--negative-control-python-sdk-venv-rebuild-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must remove stale venvs before rebuilding"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK stale venv rebuild drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK stale venv rebuild drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK stale venv rebuild drift was not detected")
 
@@ -18764,8 +20049,17 @@ if mode == "--negative-control-python-sdk-native-build-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must build the native extension with the selected Python"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK native build script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK native build script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK native build script drift was not detected")
 
@@ -18779,8 +20073,17 @@ if mode == "--negative-control-python-sdk-venv-activation-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must activate the selected venv before maturin"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK venv activation drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK venv activation drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK venv activation drift was not detected")
 
@@ -18794,8 +20097,17 @@ if mode == "--negative-control-python-sdk-bytecode-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must not write bytecode cache files during tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK bytecode script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK bytecode script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK bytecode script drift was not detected")
 
@@ -18809,8 +20121,17 @@ if mode == "--negative-control-python-sdk-test-filter-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run tests/offline_cash_test.py"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK test filter drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK test filter drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
 
@@ -18824,13 +20145,22 @@ if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run the ABI-7 archive fixture native guard"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK ABI-7 fixture native guard drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK ABI-7 fixture native guard drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK ABI-7 fixture native guard drift was not detected")
 
 if mode == "--negative-control-abi7-sdk-manifest-coverage":
-    first_message = None
+    detected_messages = []
     for target, needles in ABI7_SDK_MANIFEST_COVERAGE.items():
         original = read(target)
         for needle in needles:
@@ -18857,8 +20187,9 @@ if mode == "--negative-control-abi7-sdk-manifest-coverage":
                         "for the wrong reason: "
                         + message.splitlines()[0]
                     )
-                if first_message is None:
-                    first_message = message
+                expected = f"ABI-7 SDK fixture manifest coverage missing {target}: {needle}"
+                expected_labels = (expected,)
+                detected_messages.append(first_lines_for_labels(message, expected_labels)[0])
                 continue
             finally:
                 text_overrides.pop(target, None)
@@ -18868,10 +20199,11 @@ if mode == "--negative-control-abi7-sdk-manifest-coverage":
                 + ": "
                 + needle
             )
-    if first_message is None:
+    if not detected_messages:
         raise SystemExit("negative control failed: ABI-7 SDK fixture manifest coverage drift was not detected")
     print("negative control rejected ABI-7 SDK fixture manifest coverage drift")
-    print(first_message.splitlines()[0])
+    for detected_message in detected_messages:
+        print(detected_message)
     raise SystemExit(0)
 
 if mode == "--negative-control-python-connect-runner-coverage":
@@ -18884,40 +20216,73 @@ if mode == "--negative-control-python-connect-runner-coverage":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run tests/testconnect_codec.py"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python Connect runner coverage drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python Connect runner coverage drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python Connect runner coverage drift was not detected")
 
 if mode == "--negative-control-python-connect-test-exactness":
     target = "python/iroha_python/tests/testconnect_codec.py"
     original = read(target)
-    mutated = original.replace(
-        "test_generate_connect_sid_matches_deterministic_vector",
-        "test_generate_connect_sid_accepts_random_vector",
-        1,
+    cases = (
+        (
+            "test_generate_connect_sid_matches_deterministic_vector",
+            "test_generate_connect_sid_accepts_random_vector",
+            "Python Connect SID deterministic vector exactness test",
+        ),
+        (
+            "test_bootstrap_connect_preview_session_rejects_bad_options_before_registration",
+            "test_bootstrap_connect_preview_session_accepts_bad_options_before_registration",
+            "Python Connect preview bootstrap bad-options exactness test",
+        ),
+        (
+            "test_connect_sign_result_ok_rejects_confusable_algorithms",
+            "test_connect_sign_result_ok_accepts_confusable_algorithms",
+            "Python Connect wallet signature confusable algorithm exactness test",
+        ),
     )
-    mutated = mutated.replace(
-        "test_bootstrap_connect_preview_session_rejects_bad_options_before_registration",
-        "test_bootstrap_connect_preview_session_accepts_bad_options_before_registration",
-        1,
-    )
-    mutated = mutated.replace(
-        "test_connect_sign_result_ok_rejects_confusable_algorithms",
-        "test_connect_sign_result_ok_accepts_confusable_algorithms",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Python Connect exactness tests")
-    mutated_texts = dict(texts)
-    mutated_texts[target] = mutated
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        print("negative control rejected Python Connect exactness test drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Python Connect exactness test drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python Connect exactness test "
+                + label
+            )
+        mutated_texts = dict(texts)
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: Python Connect exactness test drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        raise SystemExit(
+            "negative control failed: Python Connect exactness test drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Python Connect exactness test drift was not detected")
+    print("negative control rejected Python Connect exactness test drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":
     target = PYTHON_SDK_TEST_COMMAND
@@ -18933,8 +20298,17 @@ if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run the Torii canonical request auth exactness regression"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK canonical request test filter drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK canonical request test filter drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK canonical request test filter drift was not detected")
 
@@ -18952,8 +20326,17 @@ if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script"
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run the identifier receipt exactness and adversarial vector regression"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK identifier receipt test filter drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK identifier receipt test filter drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK identifier receipt test filter drift was not detected")
 
@@ -18971,8 +20354,17 @@ if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run the multisig resolved account exactness regression"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK multisig response test filter drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK multisig response test filter drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK multisig response test filter drift was not detected")
 
@@ -18993,37 +20385,61 @@ if mode == "--negative-control-python-block-height-vectors":
         '        "7 ",\n'
         '        " 7",\n'
         '        "18446744073709551616",\n'
+        "        -1,\n"
+        "        1 << 64,\n"
     )
     new = (
         "    invalid_block_heights = (\n"
-        "        True,\n"
-        "        False,\n"
-        "        1.5,\n"
-        '        "1",\n'
-        '        "00",\n'
-        '        "01",\n'
-        '        "0007",\n'
-        '        "-0",\n'
-        '        "+7",\n'
-        '        "7 ",\n'
-        '        "18446744073709551616",\n'
+        "        None,\n"
+        "        None,\n"
+        "        1,\n"
+        '        "2",\n'
+        '        "0",\n'
+        '        "2",\n'
+        '        "7",\n'
+        '        "0",\n'
+        '        "7",\n'
+        '        "7",\n'
+        '        "7",\n'
+        '        "7",\n'
+        "        0,\n"
+        "        1 << 63,\n"
     )
     mutated = texts[target].replace(old, new, 1)
     if mutated == texts[target] or old in mutated:
         raise SystemExit(
             "negative control failed: unable to mutate Python recursive spend block_height vectors"
         )
+    expected_labels = (
+        "Python typed recursive spend blockHeight test vectors missing True",
+        "Python typed recursive spend blockHeight test vectors missing False",
+        "Python typed recursive spend blockHeight test vectors missing 1.5",
+        'Python typed recursive spend blockHeight test vectors missing "1"',
+        'Python typed recursive spend blockHeight test vectors missing "00"',
+        'Python typed recursive spend blockHeight test vectors missing "01"',
+        'Python typed recursive spend blockHeight test vectors missing "0007"',
+        'Python typed recursive spend blockHeight test vectors missing "-0"',
+        'Python typed recursive spend blockHeight test vectors missing "+7"',
+        'Python typed recursive spend blockHeight test vectors missing "7 "',
+        'Python typed recursive spend blockHeight test vectors missing " 7"',
+        'Python typed recursive spend blockHeight test vectors missing "18446744073709551616"',
+        "Python typed recursive spend blockHeight test vectors missing -1",
+        "Python typed recursive spend blockHeight test vectors missing 1 << 64",
+    )
     mutated_texts[target] = mutated
     try:
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Python typed recursive spend blockHeight test vectors" not in message:
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python recursive spend block_height vector drift was not detected"
+                "negative control failed: Python recursive spend block_height vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python recursive spend block_height vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python recursive spend block_height vector drift was not detected"
@@ -19039,13 +20455,28 @@ if mode == "--negative-control-python-note-amount-vectors":
         '        "00",\n'
         '        "01",\n'
         '        "0007",\n'
+        '        "-1",\n'
+        '        "+1",\n'
+        '        "1.0",\n'
+        '        "1e3",\n'
+        '        "7 ",\n'
+        '        " 7",\n'
+        "        str(1 << 128),\n"
     )
     new = (
         "    invalid_amounts = (\n"
-        '        "",\n'
-        '        "0",\n'
-        '        "00",\n'
-        '        "01",\n'
+        '        "ok",\n'
+        '        "2",\n'
+        '        "3",\n'
+        '        "4",\n'
+        '        "5",\n'
+        '        "6",\n'
+        '        "8",\n'
+        '        "9",\n'
+        '        "10",\n'
+        '        "11",\n'
+        '        "12",\n'
+        "        str(1 << 127),\n"
     )
     mutated = texts[target].replace(old, new, 1)
     if mutated == texts[target] or old in mutated:
@@ -19057,12 +20488,29 @@ if mode == "--negative-control-python-note-amount-vectors":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Python typed recursive spend note amount test vectors" not in message:
+        expected_labels = (
+            'Python typed recursive spend note amount test vectors missing ""',
+            'Python typed recursive spend note amount test vectors missing "0"',
+            'Python typed recursive spend note amount test vectors missing "00"',
+            'Python typed recursive spend note amount test vectors missing "01"',
+            'Python typed recursive spend note amount test vectors missing "0007"',
+            'Python typed recursive spend note amount test vectors missing "-1"',
+            'Python typed recursive spend note amount test vectors missing "+1"',
+            'Python typed recursive spend note amount test vectors missing "1.0"',
+            'Python typed recursive spend note amount test vectors missing "1e3"',
+            'Python typed recursive spend note amount test vectors missing "7 "',
+            'Python typed recursive spend note amount test vectors missing " 7"',
+            "Python typed recursive spend note amount test vectors missing str(1 << 128)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python recursive spend note amount vector drift was not detected"
+                "negative control failed: Python recursive spend note amount vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python recursive spend note amount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python recursive spend note amount vector drift was not detected"
@@ -19078,13 +20526,28 @@ if mode == "--negative-control-python-redeem-public-amount-vectors":
         '        "00",\n'
         '        "01",\n'
         '        "0007",\n'
+        '        "-1",\n'
+        '        "+1",\n'
+        '        "1.0",\n'
+        '        "1e3",\n'
+        '        "7 ",\n'
+        '        " 7",\n'
+        "        str(1 << 128),\n"
     )
     new = (
         '    invalid_public_amounts = (\n'
-        '        "",\n'
-        '        "0",\n'
-        '        "00",\n'
-        '        "01",\n'
+        '        "ok",\n'
+        '        "2",\n'
+        '        "3",\n'
+        '        "4",\n'
+        '        "5",\n'
+        '        "6",\n'
+        '        "8",\n'
+        '        "9",\n'
+        '        "10",\n'
+        '        "11",\n'
+        '        "12",\n'
+        "        str(1 << 127),\n"
     )
     mutated = texts[target].replace(old, new, 1)
     if mutated == texts[target] or old in mutated:
@@ -19096,12 +20559,29 @@ if mode == "--negative-control-python-redeem-public-amount-vectors":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Python typed recursive spend public amount test vectors" not in message:
+        expected_labels = (
+            'Python typed recursive spend public amount test vectors missing ""',
+            'Python typed recursive spend public amount test vectors missing "0"',
+            'Python typed recursive spend public amount test vectors missing "00"',
+            'Python typed recursive spend public amount test vectors missing "01"',
+            'Python typed recursive spend public amount test vectors missing "0007"',
+            'Python typed recursive spend public amount test vectors missing "-1"',
+            'Python typed recursive spend public amount test vectors missing "+1"',
+            'Python typed recursive spend public amount test vectors missing "1.0"',
+            'Python typed recursive spend public amount test vectors missing "1e3"',
+            'Python typed recursive spend public amount test vectors missing "7 "',
+            'Python typed recursive spend public amount test vectors missing " 7"',
+            "Python typed recursive spend public amount test vectors missing str(1 << 128)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python recursive spend public_amount vector drift was not detected"
+                "negative control failed: Python recursive spend public_amount vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python recursive spend public_amount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python recursive spend public_amount vector drift was not detected"
@@ -19128,8 +20608,19 @@ if mode == "--negative-control-identifier-receipt-proof-base64-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift identifier receipt attestation kind and proof base64 validation missing Data(base64Encoded: proofB64) == nil",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt proof-base64 guard drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt proof-base64 guard drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt proof-base64 guard drift was not detected")
 
@@ -19148,56 +20639,105 @@ if mode == "--negative-control-identifier-receipt-kind-exactness-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt attestation kind exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt attestation kind exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt attestation kind exactness drift was not detected")
 
 if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":
     target = "python/iroha_torii_client/client.py"
     original = read(target)
-    mutated = original.replace(
-        '        proof_b64 = _require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")\n',
-        '        proof_b64 = _require_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")\n',
-        1,
-    ).replace(
-        '            _require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64"),\n',
-        '            _require_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64"),\n',
-        1,
+    replacements = (
+        (
+            '        proof_b64 = _require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")\n',
+            '        proof_b64 = _require_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")\n',
+        ),
+        (
+            '            _require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64"),\n',
+            '            _require_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64"),\n',
+        ),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate identifier receipt proof-base64 exactness guard")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate identifier receipt proof-base64 exactness guard "
+                + old.strip()
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     texts[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt proof-base64 exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt proof-base64 exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt proof-base64 exactness drift was not detected")
 
 if mode == "--negative-control-identifier-receipt-signature-exactness-guard":
     target = "python/iroha_torii_client/client.py"
     original = read(target)
-    mutated = original.replace(
-        '_identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")',
-        '_identifier_hex_bytes(record.get("signature"), "payload.opening.signature")',
-        1,
-    ).replace(
-        '_identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
-        '_identifier_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
-        1,
+    replacements = (
+        (
+            '_identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")',
+            '_identifier_hex_bytes(record.get("signature"), "payload.opening.signature")',
+        ),
+        (
+            '_identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
+            '_identifier_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
+        ),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate identifier receipt signature exactness guard")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate identifier receipt signature exactness guard "
+                + old
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     texts[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt signature exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt signature exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt signature exactness drift was not detected")
 
@@ -19216,8 +20756,19 @@ if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt policy-id exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt policy-id exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt policy-id exactness drift was not detected")
 
@@ -19237,8 +20788,19 @@ if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-gu
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt policy-summary id exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt policy-summary id exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt policy-summary id exactness drift was not detected")
 
@@ -19257,8 +20819,19 @@ if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt program-id exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt program-id exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt program-id exactness drift was not detected")
 
@@ -19277,8 +20850,19 @@ if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt account-id exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt account-id exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt account-id exactness drift was not detected")
 
@@ -19297,74 +20881,143 @@ if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift identifier receipt attestation kind and proof base64 validation missing accountId = rawAccountId",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift identifier receipt account-id exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift identifier receipt account-id exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift identifier receipt account-id exactness drift was not detected")
 
 if mode == "--negative-control-native-bridge-identifier-receipt-exactness":
-    mutated = dict(texts)
     target = "crates/connect_norito_bridge/src/lib.rs"
-    original = mutated[target]
-    updated = original.replace(
-        "if raw.is_empty() || raw.trim() != raw {",
-        "if raw.trim().is_empty() {",
-        1,
+    original = texts[target]
+    cases = (
+        (
+            "if raw.is_empty() || raw.trim() != raw {",
+            "if raw.trim().is_empty() {",
+            "raw.is_empty() || raw.trim() != raw",
+        ),
+        (
+            "fn parse_identifier_receipt_rejects_padded_payload_fields()",
+            "fn parse_identifier_receipt_allows_padded_payload_fields()",
+            "parse_identifier_receipt_rejects_padded_payload_fields",
+        ),
+        (
+            "fn parse_identifier_receipt_rejects_padded_proof_attestation_fields()",
+            "fn parse_identifier_receipt_allows_padded_proof_attestation_fields()",
+            "parse_identifier_receipt_rejects_padded_proof_attestation_fields",
+        ),
     )
-    updated = updated.replace(
-        "fn parse_identifier_receipt_rejects_padded_payload_fields()",
-        "fn parse_identifier_receipt_allows_padded_payload_fields()",
-        1,
-    )
-    updated = updated.replace(
-        "fn parse_identifier_receipt_rejects_padded_proof_attestation_fields()",
-        "fn parse_identifier_receipt_allows_padded_proof_attestation_fields()",
-        1,
-    )
-    if updated == original:
-        raise SystemExit("negative control failed: unable to mutate native bridge identifier receipt exactness")
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        if "Rust native identifier receipt exactness" not in message:
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = dict(texts)
+        updated = original.replace(old, new, 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: native bridge identifier receipt exactness drift was not detected"
+                "negative control failed: unable to mutate native bridge identifier receipt exactness "
+                + label
             )
-        print("negative control rejected native bridge identifier receipt exactness drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: native bridge identifier receipt exactness drift was not detected")
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (
+                label,
+                "Rust native identifier receipt exactness",
+            )
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: native bridge identifier receipt exactness drift was not detected for "
+                    + ", ".join(missing)
+                )
+            for detected_message in dict.fromkeys(first_lines_for_labels(message, expected_labels)):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        raise SystemExit(
+            "negative control failed: native bridge identifier receipt exactness drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: native bridge identifier receipt exactness drift was not detected")
+    print("negative control rejected native bridge identifier receipt exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-native-bridge-claim-identifier-account-binding":
-    mutated = dict(texts)
     target = "crates/connect_norito_bridge/src/lib.rs"
-    original = mutated[target]
-    updated = original.replace(
-        "        validate_identifier_claim_account(&account, &receipt)?;\n",
-        "",
+    original = texts[target]
+    cases = (
+        (
+            "        let private_key = parse_private_key(key_slice)?;\n"
+            "        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;\n"
+            "        validate_identifier_claim_account(&account, &receipt)?;\n",
+            "        let private_key = parse_private_key(key_slice)?;\n"
+            "        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;\n",
+            "Rust native claim identifier transaction account binding",
+        ),
+        (
+            "        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;\n"
+            "        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;\n"
+            "        validate_identifier_claim_account(&account, &receipt)?;\n",
+            "        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;\n"
+            "        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;\n",
+            "Rust native claim identifier algorithm transaction account binding",
+        ),
+        (
+            "fn validate_identifier_claim_account_rejects_mismatched_receipt_account()",
+            "fn validate_identifier_claim_account_allows_mismatched_receipt_account()",
+            "validate_identifier_claim_account_rejects_mismatched_receipt_account",
+        ),
     )
-    updated = updated.replace(
-        "fn validate_identifier_claim_account_rejects_mismatched_receipt_account()",
-        "fn validate_identifier_claim_account_allows_mismatched_receipt_account()",
-        1,
-    )
-    if updated == original:
-        raise SystemExit("negative control failed: unable to mutate native claim-identifier account binding")
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        if "Rust native claim identifier account binding" not in message:
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = dict(texts)
+        updated = original.replace(old, new, 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: native claim-identifier account binding drift was not detected"
+                "negative control failed: unable to mutate native claim-identifier account binding "
+                + label
             )
-        print("negative control rejected native claim-identifier account binding drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: native claim-identifier account binding drift was not detected")
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            if label == "validate_identifier_claim_account_rejects_mismatched_receipt_account":
+                expected_labels = (
+                    label,
+                    "Rust native claim identifier account binding",
+                )
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: native claim-identifier account binding drift was not detected for "
+                    + ", ".join(missing)
+                )
+            for detected_message in dict.fromkeys(first_lines_for_labels(message, expected_labels)):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        raise SystemExit(
+            "negative control failed: native claim-identifier account binding drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: native claim-identifier account binding drift was not detected")
+    print("negative control rejected native claim-identifier account binding drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-identifier-receipt-hash-exactness-guard":
     target = "python/iroha_torii_client/client.py"
@@ -19383,8 +21036,19 @@ if mode == "--negative-control-identifier-receipt-hash-exactness-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt hash-field exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt hash-field exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt hash-field exactness drift was not detected")
 
@@ -19405,8 +21069,19 @@ if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt timestamp exactness drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt timestamp exactness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt timestamp exactness drift was not detected")
 
@@ -19425,8 +21100,19 @@ if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            'Android Java identifier receipt parser timestamp u64 validation missing asUnsignedLong(root.get("executed_at_ms"), context + ".executed_at_ms")',
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier receipt timestamp u64 drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected identifier receipt timestamp u64 drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt timestamp u64 drift was not detected")
 
@@ -19447,7 +21133,7 @@ if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":
             "prefixed_algorithm = prefix.lower()",
         ),
     )
-    first_message = None
+    detected_messages = []
     for before, after, label in cases:
         mutated = original.replace(before, after, 1)
         if mutated == original:
@@ -19461,13 +21147,18 @@ if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":
             run_checks(texts)
         except ParityError as error:
             message = str(error)
-            if label not in message and "Python identifier receipt resolver-key parser exactness" not in message:
+            expected_labels = (
+                label,
+                "Python identifier receipt resolver-key parser exactness",
+            )
+            detected_labels = [expected_label for expected_label in expected_labels if expected_label in message]
+            if not detected_labels:
                 raise SystemExit(
                     "negative control failed: identifier receipt resolver-key exactness drift was not detected for "
                     + label
                 )
-            if first_message is None:
-                first_message = message
+            for detected_message in first_lines_for_labels(message, detected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
             continue
         finally:
             text_overrides.pop(target, None)
@@ -19475,10 +21166,11 @@ if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":
         raise SystemExit(
             "negative control failed: identifier receipt resolver-key exactness drift was not detected for " + label
         )
-    if first_message is None:
+    if not detected_messages:
         raise SystemExit("negative control failed: identifier receipt resolver-key exactness drift was not detected")
     print("negative control rejected identifier receipt resolver-key exactness drift")
-    print(first_message.splitlines()[0])
+    for detected_message in detected_messages:
+        print(detected_message)
     raise SystemExit(0)
 
 if mode == "--negative-control-python-sdk-event-filter-test-filter-script":
@@ -19500,8 +21192,17 @@ if mode == "--negative-control-python-sdk-event-filter-test-filter-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Python SDK script must run Torii event-filter verifier/proof exactness regressions"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK event-filter test filter drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK event-filter test filter drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK event-filter test filter drift was not detected")
 
@@ -19519,23 +21220,61 @@ if mode == "--negative-control-python-sdk-workflow-inventory":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "python/iroha_python/tests/offline_cash_test.py"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK workflow inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK workflow inventory drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK workflow inventory drift was not detected")
 
 if mode == "--negative-control-python-lineage-frozen-copy":
     mutated = dict(texts)
     target = "python/iroha_python/tests/kagemusha_test.py"
-    mutated[target] = mutated[target].replace("FrozenInstanceError", "RuntimeError", 1)
-    mutated[target] = mutated[target].replace("proving_key[:] =", "proving_key_copy[:] =", 1)
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate Python lineage frozen copy test")
+    replacements = (
+        (
+            "from dataclasses import FrozenInstanceError",
+            "from dataclasses import dataclass",
+        ),
+        ("proving_key[:] =", "proving_key_copy[:] ="),
+    )
+    updated = mutated[target]
+    for old, new in replacements:
+        next_updated = updated.replace(old, new, 1)
+        if next_updated == updated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python lineage frozen copy test "
+                + old
+            )
+        updated = next_updated
+    mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python native output Norito guard tests missing from dataclasses import FrozenInstanceError",
+            "Python native output Norito guard tests missing proving_key[:] =",
+            "Python lineage key artifact copy tests missing proving_key[:] = b\"\\x00\" * len(proving_key)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Python lineage frozen copy test drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Python lineage frozen copy test drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python lineage frozen copy test drift was not detected")
 
@@ -19553,8 +21292,17 @@ if mode == "--negative-control-python-sdk-test-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the Python recursive spend SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK test workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK test workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK test workflow drift was not detected")
 
@@ -19572,8 +21320,17 @@ if mode == "--negative-control-python-host-test-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the Python PyO3 append-boundary host test"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python host test workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python host test workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python host test workflow drift was not detected")
 
@@ -19591,8 +21348,17 @@ if mode == "--negative-control-python-sdk-needs-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload benchmark job must wait for the Python SDK test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Python SDK workflow dependency drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Python SDK workflow dependency drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK workflow dependency drift was not detected")
 
@@ -19610,8 +21376,17 @@ if mode == "--negative-control-jvm-sdk-job-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must define the JVM SDK test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK workflow job drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK workflow job drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK workflow job drift was not detected")
 
@@ -19629,8 +21404,17 @@ if mode == "--negative-control-jvm-sdk-runner-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run JVM SDK tests on Ubuntu"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK workflow runner drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK workflow runner drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK workflow runner drift was not detected")
 
@@ -19648,8 +21432,17 @@ if mode == "--negative-control-jvm-sdk-java-setup-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must set up Java for JVM SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK Java setup workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK Java setup workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK Java setup workflow drift was not detected")
 
@@ -19667,8 +21460,17 @@ if mode == "--negative-control-jvm-sdk-java-distribution-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must use Temurin Java for JVM SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK Java distribution drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK Java distribution drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK Java distribution drift was not detected")
 
@@ -19686,8 +21488,17 @@ if mode == "--negative-control-jvm-sdk-java-version-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must pin Java 21 for JVM SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK Java version drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK Java version drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK Java version drift was not detected")
 
@@ -19705,166 +21516,310 @@ if mode == "--negative-control-jvm-sdk-test-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the JVM recursive spend SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK test workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK test workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK test workflow drift was not detected")
 
 if mode == "--negative-control-jvm-sdk-test-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
+        ),
+        (
+            ",org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest",
+            "",
+            "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest",
+        ),
     )
-    mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JVM SDK test filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JVM SDK test filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JVM SDK test filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit("negative control failed: unable to mutate JVM SDK test filter " + label)
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JVM SDK test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JVM SDK test filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JVM SDK test filter drift was not detected")
+    print("negative control rejected JVM SDK test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  --tests org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  --tests org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest",
+        ),
+        (
+            ",org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
+            "",
+            "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
+        ),
     )
-    mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JVM SDK canonical request test filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JVM SDK canonical request test filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JVM SDK canonical request test filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM SDK canonical request test filter " + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JVM SDK canonical request test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JVM SDK canonical request test filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JVM SDK canonical request test filter drift was not detected")
+    print("negative control rejected JVM SDK canonical request test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
+        ),
+        (
+            "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest",
+        ),
+        (
+            "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
+        ),
+        (
+            "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest",
+        ),
+        (
+            "  --tests org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest",
+        ),
+        (
+            ",org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
+            "",
+            "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
+        ),
+        (
+            " \\\n  --tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests",
+            "",
+            "Kagemusha JVM SDK script must run Android signing algorithm exactness tests",
+        ),
     )
-    mutated = mutated.replace(
-        "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \\\n",
-        "",
-        1,
-    )
-    mutated = mutated.replace(
-        "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \\\n",
-        "",
-        1,
-    )
-    mutated = mutated.replace(
-        "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest \\\n",
-        "",
-        1,
-    )
-    mutated = mutated.replace(
-        "  --tests org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest \\\n",
-        "",
-        1,
-    )
-    mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
-        "",
-        1,
-    )
-    mutated = mutated.replace(
-        " \\\n  --tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JVM SDK signing/verifier test filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JVM SDK signing/verifier test filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JVM SDK signing/verifier test filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM SDK signing/verifier test filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JVM SDK signing/verifier test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JVM SDK signing/verifier test filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JVM SDK signing/verifier test filter drift was not detected")
+    print("negative control rejected JVM SDK signing/verifier test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  --tests org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  --tests org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
+        ),
+        (
+            ",org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests",
+            "",
+            "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests",
+        ),
     )
-    mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests",
-        "",
-        1,
-    )
-    if mutated == original:
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM SDK Torii event-stream verifier filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JVM SDK Torii event-stream verifier filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
         raise SystemExit(
-            "negative control failed: unable to mutate JVM SDK Torii event-stream verifier filter"
+            "negative control failed: JVM SDK Torii event-stream verifier filter drift was not detected for "
+            + label
         )
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JVM SDK Torii event-stream verifier filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM SDK Torii event-stream verifier filter drift was not detected"
-    )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM SDK Torii event-stream verifier filter drift was not detected"
+        )
+    print("negative control rejected JVM SDK Torii event-stream verifier filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+        ),
+        (
+            ",org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests",
+            "",
+            "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests",
+        ),
+        (
+            ",org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
+            "",
+            "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
+        ),
     )
-    mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests",
-        "",
-        1,
-    )
-    mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JVM SDK identifier receipt filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JVM SDK identifier receipt filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM SDK identifier receipt filter drift was not detected"
-    )
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM SDK identifier receipt filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JVM SDK identifier receipt filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JVM SDK identifier receipt filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM SDK identifier receipt filter drift was not detected"
+        )
+    print("negative control rejected JVM SDK identifier receipt filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-sdk-workflow-inventory":
     target = WORKFLOW_PATH
@@ -19880,8 +21835,20 @@ if mode == "--negative-control-jvm-sdk-workflow-inventory":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK workflow inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK workflow inventory drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK workflow inventory drift was not detected")
 
@@ -19899,8 +21866,20 @@ if mode == "--negative-control-jvm-sdk-android-workflow-inventory":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK Android workflow inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK Android workflow inventory drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK Android workflow inventory drift was not detected")
 
@@ -19914,8 +21893,17 @@ if mode == "--negative-control-jvm-sdk-jdk21-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JVM SDK script must print the selected Java version"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK JDK 21 script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK JDK 21 script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK JDK 21 script drift was not detected")
 
@@ -19933,8 +21921,17 @@ if mode == "--negative-control-jvm-sdk-java-home-override-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JVM SDK script must keep the documented Java home override variable"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK Java home override drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK Java home override drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK Java home override drift was not detected")
 
@@ -19952,8 +21949,17 @@ if mode == "--negative-control-jvm-sdk-java-home-reject-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JVM SDK script must reject inherited non-JDK-21 JAVA_HOME values"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK inherited Java home rejection drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK inherited Java home rejection drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK inherited Java home rejection drift was not detected")
 
@@ -19968,8 +21974,17 @@ if mode == "--negative-control-jvm-recursive-compact-verifier-availability":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kotlin recursive compact wrapper missing check(nativeVerifierAvailable)"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM recursive compact verifier availability drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM recursive compact verifier availability drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM recursive compact verifier availability drift was not detected")
 
@@ -19986,7 +22001,7 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
         ),
         (
             "envelope verifier-key hash mismatch",
-            "envelope verifier-key hash mismatch may be unavailable",
+            "envelope key mismatch may be unavailable",
         ),
     )
     changed = False
@@ -20002,8 +22017,26 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin recursive compact verifier tests missing "
+            "public instance column 0 must contain exactly one row; found 2",
+            "Kotlin recursive compact verifier tests missing "
+            "envelope verifier-key hash mismatch",
+            "Android Java recursive compact verifier tests missing "
+            "public instance column 0 must contain exactly one row; found 2",
+            "Android Java recursive compact verifier tests missing "
+            "envelope verifier-key hash mismatch",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM recursive compact shape classifier drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JVM recursive compact shape classifier drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM recursive compact shape classifier drift was not detected")
 
@@ -20048,7 +22081,8 @@ if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile native output header drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile native output header drift was not detected")
 
@@ -20085,18 +22119,20 @@ if mode == "--negative-control-mobile-privacy-production-gate-exactness":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        for label in (
+        expected_labels = (
             "Swift privacy production-gate exactness",
             "Kotlin privacy production-gate exactness",
             "Android Java privacy production-gate exactness",
-        ):
+        )
+        for label in expected_labels:
             if label not in message:
                 raise SystemExit(
                     "negative control failed: mobile privacy production-gate drift was not detected for "
                     + label
                 )
         print("negative control rejected mobile privacy production-gate exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
 
@@ -20194,7 +22230,8 @@ if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile privacy audit hash uniqueness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile privacy audit hash uniqueness drift was not detected")
 
@@ -20255,7 +22292,8 @@ if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile privacy localnet lifecycle audit drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile privacy localnet lifecycle audit drift was not detected")
 
@@ -20336,7 +22374,8 @@ if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy localnet lifecycle catalog drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy localnet lifecycle catalog drift was not detected")
 
@@ -20405,7 +22444,8 @@ if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy SDK export/review-scope drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: public privacy SDK export/review-scope drift was not detected"
@@ -20470,7 +22510,8 @@ if mode == "--negative-control-public-privacy-zero-hash-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy zero-hash evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy zero-hash evidence drift was not detected")
 
@@ -20533,7 +22574,8 @@ if mode == "--negative-control-public-privacy-repeated-hash-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy repeated-hash evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy repeated-hash evidence drift was not detected")
 
@@ -20596,7 +22638,8 @@ if mode == "--negative-control-public-privacy-zero-signature-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy zero-signature evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy zero-signature evidence drift was not detected")
 
@@ -20659,7 +22702,8 @@ if mode == "--negative-control-public-privacy-repeated-signature-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy repeated-signature evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy repeated-signature evidence drift was not detected")
 
@@ -20722,7 +22766,8 @@ if mode == "--negative-control-public-privacy-reviewer-identity-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy reviewer-identity evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy reviewer-identity evidence drift was not detected")
 
@@ -20785,7 +22830,8 @@ if mode == "--negative-control-public-privacy-artifact-label-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy artifact-label evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy artifact-label evidence drift was not detected")
 
@@ -20848,7 +22894,8 @@ if mode == "--negative-control-public-privacy-duplicate-row-evidence":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy duplicate-row evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy duplicate-row evidence drift was not detected")
 
@@ -20905,7 +22952,8 @@ if mode == "--negative-control-public-privacy-deterministic-test-artifact":
                 + ", ".join(missing)
             )
         print("negative control rejected public privacy deterministic test artifact drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy deterministic test artifact drift was not detected")
 
@@ -20949,7 +22997,8 @@ if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile ZK Merkle provider adversarial coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected"
@@ -21003,7 +23052,8 @@ if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile ZK Torii parser shape coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile ZK Torii parser shape coverage drift was not detected")
 
@@ -21067,9 +23117,68 @@ if mode == "--negative-control-mobile-confidential-note-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile confidential note coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile confidential note coverage drift was not detected")
+
+if mode == "--negative-control-mobile-confidential-witness-codecs":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
+            "buildConfidentialUnshieldProofRequestV1",
+            "buildConfidentialGenericProofRequestV1",
+            "Kotlin confidential witness codecs",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
+            "buildConfidentialUnshieldProofRequestV1",
+            "buildConfidentialGenericProofRequestV1",
+            "Android Java confidential witness codecs",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+            "typedConfidentialWitnessBuildersRejectAmbiguousShapes",
+            "typedConfidentialWitnessBuildersAllowAmbiguousShapes",
+            "Kotlin privacy confidential witness codec tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+            "typedConfidentialWitnessBuildersRejectAmbiguousShapes",
+            "typedConfidentialWitnessBuildersAllowAmbiguousShapes",
+            "Android Java privacy confidential witness codec tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, old, new, label in targets:
+        original = read(target)
+        mutated = original.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile confidential witness codec coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile confidential witness codec drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile confidential witness codec drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile confidential witness codec drift was not detected")
 
 if mode == "--negative-control-mobile-offline-readiness-coverage":
     mutated_texts = dict(texts)
@@ -21131,7 +23240,8 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile offline readiness coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile offline readiness coverage drift was not detected")
 
@@ -21183,7 +23293,8 @@ if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected Kotlin offline cash settlement coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kotlin offline cash settlement coverage drift was not detected")
 
@@ -21234,7 +23345,8 @@ if mode == "--negative-control-android-offline-transfer-persistence-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected Android offline transfer persistence coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android offline transfer persistence coverage drift was not detected")
 
@@ -21318,7 +23430,8 @@ if mode == "--negative-control-mobile-transaction-norito-runner-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile transaction/Norito coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile transaction/Norito coverage drift was not detected")
 
@@ -21382,7 +23495,8 @@ if mode == "--negative-control-kotlin-norito-framing-runner-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected Kotlin Norito framing coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kotlin Norito framing coverage drift was not detected")
 
@@ -21458,7 +23572,8 @@ if mode == "--negative-control-mobile-account-address-canonical-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile account address canonical coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: mobile account address canonical coverage drift was not detected"
@@ -21592,7 +23707,8 @@ if mode == "--negative-control-mobile-connect-runner-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile Connect runner coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile Connect runner coverage drift was not detected")
 
@@ -21680,7 +23796,8 @@ if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile transport/inspector/attestation coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: mobile transport/inspector/attestation coverage drift was not detected"
@@ -21802,7 +23919,8 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected mobile SCCP runner coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile SCCP runner coverage drift was not detected")
 
@@ -21902,7 +24020,8 @@ if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-co
                 + ", ".join(missing)
             )
         print("negative control rejected mobile Torii RPC/subscription/WebSocket coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected"
@@ -21922,30 +24041,90 @@ if mode == "--negative-control-jvm-sdk-android-harness-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK Android harness drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK Android harness drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK Android harness drift was not detected")
+
+if mode == "--negative-control-jvm-sdk-direct-javac-harness-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    direct_javac_block = (
+        "javac \\\n"
+        '  -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \\\n'
+        '  -d "${JAVA_OUT}" \\\n'
+        "  java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java\n"
+        'java -ea -cp "${JAVA_OUT}" \\\n'
+        "  org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest\n\n"
+    )
+    mutated = original.replace(direct_javac_block, "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK direct javac harness")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JVM SDK script must directly compile and run the Android recursive spend harness with javac"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK direct javac harness drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected JVM SDK direct javac harness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM SDK direct javac harness drift was not detected"
+    )
 
 if mode == "--negative-control-jvm-sdk-test-order-workflow":
     target = WORKFLOW_PATH
     original = read(target)
     command = f"        run: {JVM_SDK_TEST_COMMAND}"
-    mutated = original.replace(f"{command}\n", "", 1)
-    mutated = mutated.replace(
-        "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n",
-        "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n"
-        f"{command}\n",
-        1,
+    replacements = (
+        (f"{command}\n", ""),
+        (
+            "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n",
+            "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n"
+            f"{command}\n",
+        ),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to move JVM SDK tests after benchmark")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to move JVM SDK tests after benchmark "
+                + old.strip()
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the JVM recursive spend SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK test ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK test ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK test ordering drift was not detected")
 
@@ -21963,8 +24142,17 @@ if mode == "--negative-control-jvm-sdk-needs-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload benchmark job must wait for the JVM SDK test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JVM SDK workflow dependency drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JVM SDK workflow dependency drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK workflow dependency drift was not detected")
 
@@ -21982,8 +24170,17 @@ if mode == "--negative-control-swift-sdk-job-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must define the Swift SDK parse job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK workflow job drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK workflow job drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK workflow job drift was not detected")
 
@@ -22001,8 +24198,17 @@ if mode == "--negative-control-swift-sdk-runner-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the Swift SDK parse job on macOS"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK workflow runner drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK workflow runner drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK workflow runner drift was not detected")
 
@@ -22020,106 +24226,219 @@ if mode == "--negative-control-swift-sdk-parse-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the Swift recursive spend SDK parse check"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK parse workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK parse workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK parse workflow drift was not detected")
 
 if mode == "--negative-control-swift-sdk-parse-surface-script":
     target = SWIFT_SDK_PARSE_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
+        ),
     )
-    mutated = mutated.replace(
-        "  IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \\\n",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Swift SDK parse surface")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected Swift SDK parse surface drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Swift SDK parse surface drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit("negative control failed: unable to mutate Swift SDK parse surface " + label)
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: Swift SDK parse surface drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift SDK parse surface drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift SDK parse surface drift was not detected")
+    print("negative control rejected Swift SDK parse surface drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-connect-parse-surface-script":
     target = SWIFT_SDK_PARSE_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  IrohaSwift/Sources/IrohaSwift/ConnectClient.swift \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  IrohaSwift/Sources/IrohaSwift/ConnectClient.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift",
+        ),
     )
-    mutated = mutated.replace(
-        "  IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift \\\n",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Swift Connect parse surface")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected Swift Connect parse surface drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Swift Connect parse surface drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit("negative control failed: unable to mutate Swift Connect parse surface " + label)
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: Swift Connect parse surface drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift Connect parse surface drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift Connect parse surface drift was not detected")
+    print("negative control rejected Swift Connect parse surface drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-sdk-privacy-parse-script":
     target = SWIFT_SDK_PARSE_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+        ),
     )
-    mutated = mutated.replace(
-        "  IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \\\n",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Swift SDK privacy parse surface")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected Swift SDK privacy parse drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Swift SDK privacy parse drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift SDK privacy parse surface " + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: Swift SDK privacy parse drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift SDK privacy parse drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift SDK privacy parse drift was not detected")
+    print("negative control rejected Swift SDK privacy parse drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":
     target = SWIFT_SDK_PARSE_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "  IrohaSwift/Sources/IrohaSwift/ToriiClient.swift \\\n",
-        "",
-        1,
+    cases = (
+        (
+            "  IrohaSwift/Sources/IrohaSwift/ToriiClient.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+        ),
     )
-    mutated = mutated.replace(
-        "  IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift \\\n",
-        "",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Swift SDK Torii verifier parse surface")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected Swift SDK Torii verifier parse drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Swift SDK Torii verifier parse drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift SDK Torii verifier parse surface " + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: Swift SDK Torii verifier parse drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift SDK Torii verifier parse drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift SDK Torii verifier parse drift was not detected")
+    print("negative control rejected Swift SDK Torii verifier parse drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-sdk-workflow-inventory":
     target = WORKFLOW_PATH
@@ -22135,8 +24454,20 @@ if mode == "--negative-control-swift-sdk-workflow-inventory":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK workflow inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK workflow inventory drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK workflow inventory drift was not detected")
 
@@ -22154,8 +24485,20 @@ if mode == "--negative-control-swift-sdk-source-workflow-inventory":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK source workflow inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK source workflow inventory drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK source workflow inventory drift was not detected")
 
@@ -22168,8 +24511,17 @@ if mode == "--negative-control-swift-sdk-uc4-skip":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Swift UC4 payment-token diagnostic test missing throw XCTSkip"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift UC4 diagnostic skip drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift UC4 diagnostic skip drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift UC4 diagnostic skip drift was not detected")
 
@@ -22186,8 +24538,17 @@ if mode == "--negative-control-swift-lineage-data-copy":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Swift lineage key artifact Data copy tests missing var exposedProvingKeyArchive = initArtifacts.lineageProvingKeyArchive"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift lineage Data copy test drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift lineage Data copy test drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift lineage Data copy test drift was not detected")
 
@@ -22205,8 +24566,17 @@ if mode == "--negative-control-swift-recursive-compact-verifier-bool":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Swift recursive compact bridge verifier probe missing normalizeKagemushaRecursiveCompactVerifierOutput"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift recursive compact verifier bool drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift recursive compact verifier bool drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift recursive compact verifier bool drift was not detected")
 
@@ -22225,8 +24595,17 @@ if mode == "--negative-control-swift-recursive-compact-verifier-availability":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Swift recursive compact wrapper missing bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift recursive compact verifier availability drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift recursive compact verifier availability drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift recursive compact verifier availability drift was not detected")
 
@@ -22251,8 +24630,20 @@ if mode == "--negative-control-swift-kagemusha-native-output-cap":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift recursive compact bridge verifier probe missing guard length <= CUnsignedLong(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes)",
+            "Swift recursive compact verifier tests missing testNativeBridgeRejectsOversizedKagemushaOutputBeforeCopying",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift Kagemusha native output cap drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift Kagemusha native output cap drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift Kagemusha native output cap drift was not detected")
 
@@ -22304,7 +24695,8 @@ if mode == "--negative-control-swift-native-output-headers":
                 + ", ".join(missing)
             )
         print("negative control rejected Swift native output header drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift native output header drift was not detected")
 
@@ -22356,7 +24748,8 @@ if mode == "--negative-control-swift-native-input-headers":
                 + ", ".join(missing)
             )
         print("negative control rejected Swift native input header drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift native input header drift was not detected")
 
@@ -22387,8 +24780,20 @@ if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem(",
+            "Swift Kagemusha instruction transaction builder tests missing testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift Kagemusha instruction transaction builder drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift Kagemusha instruction transaction builder drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"
@@ -22397,8 +24802,38 @@ if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
 if mode == "--negative-control-swift-note-amount-vectors":
     mutated_texts = dict(texts)
     target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
-    mutated = texts[target].replace('"0007",', '"7",', 1)
-    if mutated == texts[target] or '"0007"' in mutated:
+    old = (
+        "        for amount in [\n"
+        '            "",\n'
+        '            "0",\n'
+        '            "00",\n'
+        '            "01",\n'
+        '            "0007",\n'
+        '            "-1",\n'
+        '            "+1",\n'
+        '            "1.0",\n'
+        '            "1e3",\n'
+        '            "7 ",\n'
+        '            " 7",\n'
+        "            Self.u128MaxPlusOne\n"
+    )
+    new = (
+        "        for amount in [\n"
+        '            "ok",\n'
+        '            "2",\n'
+        '            "3",\n'
+        '            "4",\n'
+        '            "5",\n'
+        '            "6",\n'
+        '            "8",\n'
+        '            "9",\n'
+        '            "10",\n'
+        '            "11",\n'
+        '            "12",\n'
+        '            "13"\n'
+    )
+    mutated = texts[target].replace(old, new, 1)
+    if mutated == texts[target] or old in mutated:
         raise SystemExit(
             "negative control failed: unable to mutate Swift recursive spend note amount vectors"
         )
@@ -22407,12 +24842,39 @@ if mode == "--negative-control-swift-note-amount-vectors":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Swift typed recursive spend note amount test vectors" not in message:
+        expected_labels = (
+            'Swift typed recursive spend note amount test vectors missing ""',
+            'Swift typed recursive spend note amount test vectors missing "0"',
+            'Swift typed recursive spend note amount test vectors missing "00"',
+            'Swift typed recursive spend note amount test vectors missing "01"',
+            'Swift typed recursive spend note amount test vectors missing "0007"',
+            'Swift typed recursive spend note amount test vectors missing "-1"',
+            'Swift typed recursive spend note amount test vectors missing "+1"',
+            'Swift typed recursive spend note amount test vectors missing "1.0"',
+            'Swift typed recursive spend note amount test vectors missing "1e3"',
+            'Swift typed recursive spend note amount test vectors missing "7 "',
+            'Swift typed recursive spend note amount test vectors missing " 7"',
+            "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
+            'Swift typed recursive spend public amount test vectors missing "00"',
+            'Swift typed recursive spend public amount test vectors missing "01"',
+            'Swift typed recursive spend public amount test vectors missing "0007"',
+            'Swift typed recursive spend public amount test vectors missing "-1"',
+            'Swift typed recursive spend public amount test vectors missing "+1"',
+            'Swift typed recursive spend public amount test vectors missing "1.0"',
+            'Swift typed recursive spend public amount test vectors missing "1e3"',
+            'Swift typed recursive spend public amount test vectors missing "7 "',
+            'Swift typed recursive spend public amount test vectors missing " 7"',
+            "Swift typed recursive spend public amount test vectors missing Self.u128MaxPlusOne",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Swift recursive spend note amount vector drift was not detected"
+                "negative control failed: Swift recursive spend note amount vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Swift recursive spend note amount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Swift recursive spend note amount vector drift was not detected"
@@ -22421,8 +24883,38 @@ if mode == "--negative-control-swift-note-amount-vectors":
 if mode == "--negative-control-swift-redeem-public-amount-vectors":
     mutated_texts = dict(texts)
     target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
-    mutated = texts[target].replace('"0007",', '"7",', 1)
-    if mutated == texts[target] or '"0007"' in mutated:
+    old = (
+        "        for amount in [\n"
+        '            "",\n'
+        '            "0",\n'
+        '            "00",\n'
+        '            "01",\n'
+        '            "0007",\n'
+        '            "-1",\n'
+        '            "+1",\n'
+        '            "1.0",\n'
+        '            "1e3",\n'
+        '            "7 ",\n'
+        '            " 7",\n'
+        "            Self.u128MaxPlusOne\n"
+    )
+    new = (
+        "        for amount in [\n"
+        '            "ok",\n'
+        '            "2",\n'
+        '            "3",\n'
+        '            "4",\n'
+        '            "5",\n'
+        '            "6",\n'
+        '            "8",\n'
+        '            "9",\n'
+        '            "10",\n'
+        '            "11",\n'
+        '            "12",\n'
+        '            "13"\n'
+    )
+    mutated = texts[target].replace(old, new, 1)
+    if mutated == texts[target] or old in mutated:
         raise SystemExit(
             "negative control failed: unable to mutate Swift recursive spend publicAmount vectors"
         )
@@ -22431,12 +24923,39 @@ if mode == "--negative-control-swift-redeem-public-amount-vectors":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Swift typed recursive spend public amount test vectors" not in message:
+        expected_labels = (
+            'Swift typed recursive spend note amount test vectors missing ""',
+            'Swift typed recursive spend note amount test vectors missing "0"',
+            'Swift typed recursive spend note amount test vectors missing "00"',
+            'Swift typed recursive spend note amount test vectors missing "01"',
+            'Swift typed recursive spend note amount test vectors missing "0007"',
+            'Swift typed recursive spend note amount test vectors missing "-1"',
+            'Swift typed recursive spend note amount test vectors missing "+1"',
+            'Swift typed recursive spend note amount test vectors missing "1.0"',
+            'Swift typed recursive spend note amount test vectors missing "1e3"',
+            'Swift typed recursive spend note amount test vectors missing "7 "',
+            'Swift typed recursive spend note amount test vectors missing " 7"',
+            "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
+            'Swift typed recursive spend public amount test vectors missing "00"',
+            'Swift typed recursive spend public amount test vectors missing "01"',
+            'Swift typed recursive spend public amount test vectors missing "0007"',
+            'Swift typed recursive spend public amount test vectors missing "-1"',
+            'Swift typed recursive spend public amount test vectors missing "+1"',
+            'Swift typed recursive spend public amount test vectors missing "1.0"',
+            'Swift typed recursive spend public amount test vectors missing "1e3"',
+            'Swift typed recursive spend public amount test vectors missing "7 "',
+            'Swift typed recursive spend public amount test vectors missing " 7"',
+            "Swift typed recursive spend public amount test vectors missing Self.u128MaxPlusOne",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Swift recursive spend publicAmount vector drift was not detected"
+                "negative control failed: Swift recursive spend publicAmount vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Swift recursive spend publicAmount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Swift recursive spend publicAmount vector drift was not detected"
@@ -22459,8 +24978,17 @@ if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests missing testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift identifier receipt account-id decode coverage drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift identifier receipt account-id decode coverage drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift identifier receipt account-id decode coverage drift was not detected")
 
@@ -22479,8 +25007,19 @@ if mode == "--negative-control-swift-nfc-receive-success-preservation":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift NFC receive/send success runtime wiring missing hasSuccessState: didPublishReceiveSuccess || didComplete",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift NFC receive success preservation drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift NFC receive success preservation drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift NFC receive success preservation drift was not detected")
 
@@ -22499,8 +25038,19 @@ if mode == "--negative-control-swift-nfc-receipt-ack-single-success":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift NFC receive/send success runtime wiring missing let shouldNotifyReceiptAckReady = markReceiptAckReady()",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift NFC receipt ACK single-success drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift NFC receipt ACK single-success drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift NFC receipt ACK single-success drift was not detected")
 
@@ -22524,8 +25074,20 @@ if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift NFC receive/send success runtime wiring missing shouldPublishReceiveSuccessOnAckRead(",
+            r"Swift NFC receive ACK-read single-success state transition missing pattern private func markReceiptAckReadComplete\(\) -> \([\s\S]*?let shouldStopEmulation = !didComplete[\s\S]*?let shouldNotify = shouldStopEmulation[\s\S]*?shouldPublishReceiveSuccessOnAckRead\(\s*hasAcceptedPayment:\s*didAcceptPayment\s*\)[\s\S]*?if shouldStopEmulation \{[\s\S]*?didComplete = true[\s\S]*?if shouldNotify \{[\s\S]*?didAcceptPayment = true[\s\S]*?didPublishReceiveSuccess = true[\s\S]*?return \(shouldStopEmulation, shouldNotify\)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift NFC receipt ACK-read single-success drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift NFC receipt ACK-read single-success drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift NFC receipt ACK-read single-success drift was not detected")
 
@@ -22551,8 +25113,19 @@ if mode == "--negative-control-swift-nfc-emulation-progress-after-success":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            r"Swift NFC receive emulation progress suppression after success missing pattern private func notifyEmulationStarted\(\)[\s\S]*?shouldApplyEmulationStartedProgress\(\s*activeSessionMatches:\s*true,\s*isReceiving:\s*true,\s*hasAcceptedPayment:\s*didAcceptPayment\s*\)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift NFC emulation progress-after-success drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift NFC emulation progress-after-success drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift NFC emulation progress-after-success drift was not detected")
 
@@ -22577,8 +25150,19 @@ if mode == "--negative-control-swift-nfc-send-terminal-success-policy":
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            r"Swift NFC send progress terminal-success gate missing pattern private func log\(_ message: String\)[\s\S]*?if isSendingPayment \{[\s\S]*?IrohaOfflineDeviceTransferSendCompletionPolicy\.shouldApplyProgress\(\s*isTransferring:\s*true,\s*hasTerminalSuccess:\s*hasTerminalSendSuccess\s*\)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift NFC send terminal-success policy drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift NFC send terminal-success policy drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift NFC send terminal-success policy drift was not detected")
 
@@ -22592,8 +25176,17 @@ if mode == "--negative-control-swift-sdk-version-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Swift SDK script must print the selected swiftc version"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK version script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK version script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK version script drift was not detected")
 
@@ -22611,8 +25204,17 @@ if mode == "--negative-control-swift-sdk-override-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Swift SDK script must keep the documented swiftc override variable"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK compiler override drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK compiler override drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK compiler override drift was not detected")
 
@@ -22630,8 +25232,17 @@ if mode == "--negative-control-swift-sdk-needs-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload benchmark job must wait for the Swift SDK parse job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK workflow dependency drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected Swift SDK workflow dependency drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK workflow dependency drift was not detected")
 
@@ -23032,8 +25643,17 @@ if mode == "--negative-control-js-sdk-job-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must define the JavaScript SDK test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK workflow job drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK workflow job drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK workflow job drift was not detected")
 
@@ -23051,8 +25671,17 @@ if mode == "--negative-control-js-sdk-runner-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run JavaScript SDK tests on Ubuntu"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK workflow runner drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK workflow runner drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK workflow runner drift was not detected")
 
@@ -23070,8 +25699,17 @@ if mode == "--negative-control-js-sdk-node-setup-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must set up Node for JavaScript SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node setup workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node setup workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node setup workflow drift was not detected")
 
@@ -23089,8 +25727,17 @@ if mode == "--negative-control-js-sdk-node-version-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must pin Node 20 for JavaScript SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node version drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node version drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node version drift was not detected")
 
@@ -23104,8 +25751,17 @@ if mode == "--negative-control-js-sdk-node-version-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JavaScript SDK script must emit the selected Node version"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node version script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node version script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node version script drift was not detected")
 
@@ -23123,8 +25779,17 @@ if mode == "--negative-control-js-sdk-node-override-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JavaScript SDK script must keep the documented Node override variable"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node override drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node override drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node override drift was not detected")
 
@@ -23138,8 +25803,17 @@ if mode == "--negative-control-js-sdk-node-resolver-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JavaScript SDK script must resolve Node 20 before falling back to node"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node resolver drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node resolver drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node resolver drift was not detected")
 
@@ -23153,8 +25827,17 @@ if mode == "--negative-control-js-sdk-node-major-script":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha JavaScript SDK script must reject non-Node-20 runtimes"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node major script drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node major script drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node major script drift was not detected")
 
@@ -23172,8 +25855,17 @@ if mode == "--negative-control-js-sdk-node-cache-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must cache JavaScript SDK dependencies by package-lock"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK cache path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK cache path drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK cache path drift was not detected")
 
@@ -23193,8 +25885,17 @@ if mode == "--negative-control-js-sdk-node-setup-order-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must set up Node before installing JavaScript SDK dependencies"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK Node setup ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK Node setup ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK Node setup ordering drift was not detected")
 
@@ -23212,8 +25913,17 @@ if mode == "--negative-control-js-sdk-install-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must install JavaScript SDK dependencies"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK install workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK install workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK install workflow drift was not detected")
 
@@ -23231,8 +25941,17 @@ if mode == "--negative-control-js-sdk-native-build-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must build the JavaScript SDK native host"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK native build workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK native build workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK native build workflow drift was not detected")
 
@@ -23240,8 +25959,8 @@ if mode == "--negative-control-js-sdk-test-workflow":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        JS_SDK_TEST_COMMAND,
-        "ci/check_kagemusha_recursive_spend_js_sdk.sh --skip",
+        f"        run: {JS_SDK_TEST_COMMAND}",
+        "        run: ci/check_kagemusha_recursive_spend_js_sdk.sh --skip",
         1,
     )
     if mutated == original:
@@ -23250,151 +25969,388 @@ if mode == "--negative-control-js-sdk-test-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the JavaScript recursive spend SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK test workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK test workflow drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK test workflow drift was not detected")
 
 if mode == "--negative-control-js-sdk-transaction-builder-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace("|buildKagemusha", "", 1)
-    mutated = mutated.replace(" \\\n  test/transactionBuilder.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK transaction-builder filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK transaction-builder filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK transaction-builder filter drift was not detected")
+    cases = (
+        (
+            "|buildKagemusha",
+            "",
+            "JavaScript SDK transaction-builder focused selector",
+        ),
+        (
+            " \\\n  test/transactionBuilder.test.js",
+            "",
+            "JavaScript SDK transaction-builder test file",
+        ),
+    )
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK transaction-builder filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK transaction-builder filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK transaction-builder filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK transaction-builder filter drift was not detected")
+    print("negative control rejected JavaScript SDK transaction-builder filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-privacy-native-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives",
-        "",
-        1,
+    cases = (
+        (
+            "|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives",
+            "",
+            "JavaScript SDK privacy native focused selectors",
+        ),
+        (
+            " \\\n  test/privacyNative.test.js",
+            "",
+            "JavaScript SDK privacy native test file",
+        ),
     )
-    mutated = mutated.replace(" \\\n  test/privacyNative.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK privacy native filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK privacy native filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK privacy native filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK privacy native filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK privacy native filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK privacy native filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK privacy native filter drift was not detected")
+    print("negative control rejected JavaScript SDK privacy native filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-offline-cash-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "|offline cash configuration snapshot requires cached issuer key and ABI",
-        "",
-        1,
+    cases = (
+        (
+            "|offline cash configuration snapshot requires cached issuer key and ABI",
+            "",
+            "JavaScript SDK offline cash focused selector",
+        ),
+        (
+            " \\\n  test/offlineCashLifecycle.test.js",
+            "",
+            "JavaScript SDK offline cash test file",
+        ),
     )
-    mutated = mutated.replace(" \\\n  test/offlineCashLifecycle.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK offline cash filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK offline cash filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK offline cash filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK offline cash filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK offline cash filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK offline cash filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK offline cash filter drift was not detected")
+    print("negative control rejected JavaScript SDK offline cash filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-canonical-request-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "|canonical request signing: rejects padded auth fields",
-        "",
-        1,
+    cases = (
+        (
+            "|canonical request signing: rejects padded auth fields",
+            "",
+            "JavaScript SDK canonical request focused selector",
+        ),
+        (
+            " \\\n  test/canonicalRequest.test.js",
+            "",
+            "JavaScript SDK canonical request test file",
+        ),
     )
-    mutated = mutated.replace(" \\\n  test/canonicalRequest.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK canonical request filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK canonical request filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK canonical request filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK canonical request filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK canonical request filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK canonical request filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK canonical request filter drift was not detected")
+    print("negative control rejected JavaScript SDK canonical request filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-event-filter-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "|streamEvents rejects unsupported production backend event filters before fetch"
-        "|streamEvents rejects malformed verifying key event names before fetch"
-        "|streamEvents rejects malformed proof event hashes before fetch",
-        "",
-        1,
+    cases = (
+        (
+            "|streamEvents rejects unsupported production backend event filters before fetch"
+            "|streamEvents rejects malformed verifying key event names before fetch"
+            "|streamEvents rejects malformed proof event hashes before fetch",
+            "",
+            "JavaScript SDK event-filter focused selectors",
+        ),
+        (
+            " \\\n  test/toriiClient.test.js",
+            "",
+            "JavaScript SDK event-filter test file",
+        ),
     )
-    mutated = mutated.replace(" \\\n  test/toriiClient.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK event-filter filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK event-filter filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK event-filter filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK event-filter filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK event-filter filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK event-filter filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK event-filter filter drift was not detected")
+    print("negative control rejected JavaScript SDK event-filter filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-verifier-key-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags",
-        "",
-        1,
+    cases = (
+        (
+            "|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags",
+            "",
+            "JavaScript SDK verifier-key focused selectors",
+        ),
+        (
+            " \\\n  test/instructionBuilders.test.js",
+            "",
+            "JavaScript SDK verifier-key test file",
+        ),
     )
-    mutated = mutated.replace(" \\\n  test/instructionBuilders.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK verifier-key filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK verifier-key filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK verifier-key filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK verifier-key filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK verifier-key filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK verifier-key filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK verifier-key filter drift was not detected")
+    print("negative control rejected JavaScript SDK verifier-key filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace(
-        "|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|"
-        "encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|"
-        "encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|"
-        "verifyIdentifierResolutionReceipt matches shared receipt vectors",
-        "",
-        1,
+    cases = (
+        (
+            "|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|"
+            "encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|"
+            "encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|"
+            "verifyIdentifierResolutionReceipt matches shared receipt vectors",
+            "",
+            "JavaScript SDK identifier receipt focused selectors",
+        ),
+        (
+            " \\\n  test/toriiClient.identifier.test.js",
+            "",
+            "JavaScript SDK identifier receipt test file",
+        ),
     )
-    mutated = mutated.replace(" \\\n  test/toriiClient.identifier.test.js", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate JavaScript SDK identifier receipt filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected JavaScript SDK identifier receipt filter drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript SDK identifier receipt filter drift was not detected")
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK identifier receipt filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK identifier receipt filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK identifier receipt filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK identifier receipt filter drift was not detected")
+    print("negative control rejected JavaScript SDK identifier receipt filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-torii-runner-coverage":
     mutated_texts = dict(texts)
@@ -23449,7 +26405,8 @@ if mode == "--negative-control-js-torii-runner-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected JavaScript Torii runner coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript Torii runner coverage drift was not detected")
 
@@ -23530,7 +26487,8 @@ if mode == "--negative-control-js-connect-runner-coverage":
                 + ", ".join(missing)
             )
         print("negative control rejected JavaScript Connect runner coverage drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript Connect runner coverage drift was not detected")
 
@@ -23548,8 +26506,20 @@ if mode == "--negative-control-js-sdk-workflow-inventory":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            "javascript/iroha_js/test/offlineCashLifecycle.test.js"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK workflow inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK workflow inventory drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK workflow inventory drift was not detected")
 
@@ -23557,6 +26527,7 @@ if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":
     target = WORKFLOW_PATH
     original = read(target)
     rejected = []
+    detected_messages = []
     for relative in SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS:
         workflow_line = f'      - "{relative}"\n'
         if workflow_line not in original:
@@ -23569,6 +26540,7 @@ if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":
             run_checks(texts)
         except ParityError as error:
             message = str(error)
+            expected_labels = (relative,)
             if relative not in message:
                 raise SystemExit(
                     "negative control failed: SDK privacy workflow inventory drift for "
@@ -23577,6 +26549,8 @@ if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":
                     + message.splitlines()[0]
                 )
             rejected.append(relative)
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(detected_message)
         else:
             raise SystemExit(
                 "negative control failed: SDK privacy workflow inventory drift was not detected for "
@@ -23586,6 +26560,8 @@ if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":
             text_overrides.pop(target, None)
     print("negative control rejected SDK privacy workflow inventory matrix drift")
     print(f"checked {len(rejected)} SDK privacy workflow paths")
+    for detected_message in detected_messages:
+        print(detected_message)
     raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-install-order-workflow":
@@ -23593,20 +26569,34 @@ if mode == "--negative-control-js-sdk-install-order-workflow":
     original = read(target)
     install_line = f"        run: {JS_SDK_INSTALL_COMMAND}"
     test_line = f"        run: {JS_SDK_TEST_COMMAND}"
-    mutated = original.replace(f"{install_line}\n", "", 1)
-    mutated = mutated.replace(
-        f"{test_line}\n",
-        f"{test_line}\n{install_line}\n",
-        1,
+    replacements = (
+        (f"{install_line}\n", ""),
+        (f"{test_line}\n", f"{test_line}\n{install_line}\n"),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to move JavaScript SDK install after tests")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to move JavaScript SDK install after tests "
+                + old.strip()
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must install JavaScript SDK dependencies before running JavaScript tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK install ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK install ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK install ordering drift was not detected")
 
@@ -23614,21 +26604,38 @@ if mode == "--negative-control-js-sdk-test-order-workflow":
     target = WORKFLOW_PATH
     original = read(target)
     test_line = f"        run: {JS_SDK_TEST_COMMAND}"
-    mutated = original.replace(f"{test_line}\n", "", 1)
-    mutated = mutated.replace(
-        "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n",
-        "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n"
-        f"{test_line}\n",
-        1,
+    replacements = (
+        (f"{test_line}\n", ""),
+        (
+            "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n",
+            "        run: ci/check_kagemusha_recursive_spend_payload_bench.sh\n"
+            f"{test_line}\n",
+        ),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to move JavaScript SDK tests after benchmark")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to move JavaScript SDK tests after benchmark "
+                + old.strip()
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must run the JavaScript recursive spend SDK tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK test ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK test ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK test ordering drift was not detected")
 
@@ -23640,20 +26647,34 @@ if mode == "--negative-control-js-sdk-native-build-order-workflow":
         f"        run: {JS_SDK_NATIVE_BUILD_COMMAND}\n"
     )
     test_line = f"        run: {JS_SDK_TEST_COMMAND}"
-    mutated = original.replace(native_build_block, "", 1)
-    mutated = mutated.replace(
-        f"{test_line}\n",
-        f"{test_line}\n{native_build_block}",
-        1,
+    replacements = (
+        (native_build_block, ""),
+        (f"{test_line}\n", f"{test_line}\n{native_build_block}"),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to move JavaScript SDK native build after tests")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to move JavaScript SDK native build after tests "
+                + old.strip()
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload workflow must build the JavaScript SDK native host before running JavaScript tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK native build ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK native build ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK native build ordering drift was not detected")
 
@@ -23671,8 +26692,17 @@ if mode == "--negative-control-js-sdk-needs-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha payload benchmark job must wait for the JavaScript SDK test job"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript SDK workflow dependency drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected JavaScript SDK workflow dependency drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK workflow dependency drift was not detected")
 
@@ -23690,8 +26720,20 @@ if mode == "--negative-control-sdk-parity-meta-test-workflow":
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow paths do not cover SDK parity sources: "
+            f"{JS_PARITY_TEST_PATH}"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: SDK parity meta-test workflow path drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected SDK parity meta-test workflow path drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK parity meta-test workflow path drift was not detected")
 
@@ -23702,20 +26744,40 @@ if mode == "--negative-control-sdk-negative-controls-order-workflow":
         "          ci/check_kagemusha_recursive_spend_sdk_parity.sh "
         "--negative-control-js-browser-helper"
     )
-    mutated = original.replace(f"{command}\n", "", 1)
-    mutated = mutated.replace(
-        f"        run: {SDK_PARITY_MAIN_COMMAND}",
-        f"        run: {SDK_PARITY_MAIN_COMMAND}\n{command}",
-        1,
+    replacements = (
+        (f"{command}\n", ""),
+        (
+            f"        run: {SDK_PARITY_MAIN_COMMAND}",
+            f"        run: {SDK_PARITY_MAIN_COMMAND}\n{command}",
+        ),
     )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to move SDK negative-control command after main guard")
+    mutated = original
+    for old, new in replacements:
+        next_mutated = mutated.replace(old, new, 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to move SDK negative-control command after main guard "
+                + old.strip()
+            )
+        mutated = next_mutated
     text_overrides[target] = mutated
     try:
         run_checks(texts)
     except ParityError as error:
+        message = str(error)
+        expected = (
+            "Kagemusha payload workflow must run the SDK parity "
+            "JavaScript browser helper negative control before the main SDK parity guard"
+        )
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: SDK negative-control ordering drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
         print("negative control rejected SDK negative-control ordering drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK negative-control ordering drift was not detected")
 
@@ -23732,8 +26794,19 @@ if mode == "--negative-control-js-browser-helper":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/dist/crypto.browser.js constants missing KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JavaScript browser helper drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JavaScript browser helper drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: browser helper drift was not detected")
 
@@ -23750,8 +26823,19 @@ if mode == "--negative-control-js-lineage-key-artifact-copy":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/crypto.js portable lineage key artifact package missing get lineageVerifierKey()",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS lineage key artifact copy drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JS lineage key artifact copy drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS lineage key artifact copy drift was not detected")
 
@@ -23768,8 +26852,19 @@ if mode == "--negative-control-js-lineage-key-package-binding":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/crypto.js portable lineage key artifact package missing archivePayload.includes(verifierKeyCommitment)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS lineage key package binding drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JS lineage key package binding drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS lineage key package binding drift was not detected")
 
@@ -23786,8 +26881,19 @@ if mode == "--negative-control-js-append-lineage-key-boundary":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing if (suppliedLineageKeyMaterial && !appendNeedsLineageKeyArtifacts) {",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS append lineage key boundary drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JS append lineage key boundary drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS append lineage key boundary drift was not detected")
 
@@ -23812,8 +26918,20 @@ if mode == "--negative-control-js-lineage-key-artifact-request-object":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing function kagemushaNormalizeLineageKeyArtifactsForRequest(",
+            "JavaScript package dist recursive spend lineage key artifact request coverage missing package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS lineage key artifact request object drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JS lineage key artifact request object drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS lineage key artifact request object drift was not detected"
@@ -23833,7 +26951,11 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
         "buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing",
         1,
     )
-    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+    if (
+        mutated_source == texts[source_target]
+        or "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)" in mutated_source
+        or mutated_test == texts[test_target]
+    ):
         raise SystemExit(
             "negative control failed: unable to mutate JS Kagemusha instruction transaction builder coverage"
         )
@@ -23842,8 +26964,20 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/transaction.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction",
+            "JavaScript Kagemusha instruction transaction builder tests missing buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS Kagemusha instruction transaction builder drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JS Kagemusha instruction transaction builder drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS Kagemusha instruction transaction builder drift was not detected"
@@ -23852,6 +26986,7 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
 if mode == "--negative-control-js-note-amount-vectors":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+    package_target = "javascript/iroha_js/test/package_dist.test.js"
     old = (
         "  const invalidPositiveU128Amounts = [\n"
         '    "",\n'
@@ -23859,30 +26994,110 @@ if mode == "--negative-control-js-note-amount-vectors":
         '    "00",\n'
         '    "01",\n'
         '    "0007",\n'
+        '    "-1",\n'
+        '    "+1",\n'
+        '    "1.0",\n'
+        '    "1e3",\n'
+        '    "7 ",\n'
+        '    " 7",\n'
+        "    String(1n << 128n),\n"
     )
     new = (
         "  const invalidPositiveU128Amounts = [\n"
-        '    "",\n'
-        '    "0",\n'
-        '    "00",\n'
-        '    "01",\n'
+        '    "ok",\n'
+        '    "2",\n'
+        '    "3",\n'
+        '    "4",\n'
+        '    "5",\n'
+        '    "6",\n'
+        '    "8",\n'
+        '    "9",\n'
+        '    "10",\n'
+        '    "11",\n'
+        '    "12",\n'
+        "    String(1n << 127n),\n"
     )
     updated = texts[target].replace(old, new, 1)
     if updated == texts[target] or old in updated:
         raise SystemExit(
             "negative control failed: unable to mutate JS recursive spend note amount vectors"
         )
+    package_old = (
+        "  const packageDistInvalidPositiveU128Amounts = [\n"
+        '    "",\n'
+        '    "0",\n'
+        '    "00",\n'
+        '    "01",\n'
+        '    "0007",\n'
+        '    "-1",\n'
+        '    "+1",\n'
+        '    "1.0",\n'
+        '    "1e3",\n'
+        '    "7 ",\n'
+        '    " 7",\n'
+        "    String(1n << 128n),\n"
+    )
+    package_new = (
+        "  const packageDistInvalidPositiveU128Amounts = [\n"
+        '    "ok",\n'
+        '    "2",\n'
+        '    "3",\n'
+        '    "4",\n'
+        '    "5",\n'
+        '    "6",\n'
+        '    "8",\n'
+        '    "9",\n'
+        '    "10",\n'
+        '    "11",\n'
+        '    "12",\n'
+        "    String(1n << 127n),\n"
+    )
+    updated_package = texts[package_target].replace(package_old, package_new, 1)
+    if updated_package == texts[package_target] or package_old in updated_package:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS package-dist recursive spend note amount vectors"
+        )
     mutated[target] = updated
+    mutated[package_target] = updated_package
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "JavaScript typed recursive spend note amount test vectors" not in message:
+        expected_labels = (
+            'JavaScript typed recursive spend note amount test vectors missing ""',
+            'JavaScript typed recursive spend note amount test vectors missing "0"',
+            'JavaScript typed recursive spend note amount test vectors missing "00"',
+            'JavaScript typed recursive spend note amount test vectors missing "01"',
+            'JavaScript typed recursive spend note amount test vectors missing "0007"',
+            'JavaScript typed recursive spend note amount test vectors missing "-1"',
+            'JavaScript typed recursive spend note amount test vectors missing "+1"',
+            'JavaScript typed recursive spend note amount test vectors missing "1.0"',
+            'JavaScript typed recursive spend note amount test vectors missing "1e3"',
+            'JavaScript typed recursive spend note amount test vectors missing "7 "',
+            'JavaScript typed recursive spend note amount test vectors missing " 7"',
+            "JavaScript typed recursive spend note amount test vectors missing String(1n << 128n)",
+            'JavaScript package dist recursive spend note amount vector coverage missing ""',
+            'JavaScript package dist recursive spend note amount vector coverage missing "0"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "00"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "01"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "0007"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "-1"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "+1"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "1.0"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "1e3"',
+            'JavaScript package dist recursive spend note amount vector coverage missing "7 "',
+            'JavaScript package dist recursive spend note amount vector coverage missing " 7"',
+            "JavaScript package dist recursive spend note amount vector coverage missing String(1n << 128n)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JS recursive spend note amount vector drift was not detected"
+                "negative control failed: JS recursive spend note amount vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JS recursive spend note amount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS recursive spend note amount vector drift was not detected"
@@ -23891,6 +27106,7 @@ if mode == "--negative-control-js-note-amount-vectors":
 if mode == "--negative-control-js-redeem-public-amount-vectors":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+    package_target = "javascript/iroha_js/test/package_dist.test.js"
     old = (
         "  const invalidPublicAmounts = [\n"
         '    "",\n'
@@ -23898,30 +27114,110 @@ if mode == "--negative-control-js-redeem-public-amount-vectors":
         '    "00",\n'
         '    "01",\n'
         '    "0007",\n'
+        '    "-1",\n'
+        '    "+1",\n'
+        '    "1.0",\n'
+        '    "1e3",\n'
+        '    "7 ",\n'
+        '    " 7",\n'
+        "    String(1n << 128n),\n"
     )
     new = (
         "  const invalidPublicAmounts = [\n"
-        '    "",\n'
-        '    "0",\n'
-        '    "00",\n'
-        '    "01",\n'
+        '    "ok",\n'
+        '    "2",\n'
+        '    "3",\n'
+        '    "4",\n'
+        '    "5",\n'
+        '    "6",\n'
+        '    "8",\n'
+        '    "9",\n'
+        '    "10",\n'
+        '    "11",\n'
+        '    "12",\n'
+        "    String(1n << 127n),\n"
     )
     updated = texts[target].replace(old, new, 1)
     if updated == texts[target] or old in updated:
         raise SystemExit(
             "negative control failed: unable to mutate JS recursive spend publicAmount vectors"
         )
+    package_old = (
+        "  const packageDistInvalidPublicAmounts = [\n"
+        '    "",\n'
+        '    "0",\n'
+        '    "00",\n'
+        '    "01",\n'
+        '    "0007",\n'
+        '    "-1",\n'
+        '    "+1",\n'
+        '    "1.0",\n'
+        '    "1e3",\n'
+        '    "7 ",\n'
+        '    " 7",\n'
+        "    String(1n << 128n),\n"
+    )
+    package_new = (
+        "  const packageDistInvalidPublicAmounts = [\n"
+        '    "ok",\n'
+        '    "2",\n'
+        '    "3",\n'
+        '    "4",\n'
+        '    "5",\n'
+        '    "6",\n'
+        '    "8",\n'
+        '    "9",\n'
+        '    "10",\n'
+        '    "11",\n'
+        '    "12",\n'
+        "    String(1n << 127n),\n"
+    )
+    updated_package = texts[package_target].replace(package_old, package_new, 1)
+    if updated_package == texts[package_target] or package_old in updated_package:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS package-dist recursive spend publicAmount vectors"
+        )
     mutated[target] = updated
+    mutated[package_target] = updated_package
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "JavaScript typed recursive spend public amount test vectors" not in message:
+        expected_labels = (
+            'JavaScript typed recursive spend public amount test vectors missing ""',
+            'JavaScript typed recursive spend public amount test vectors missing "0"',
+            'JavaScript typed recursive spend public amount test vectors missing "00"',
+            'JavaScript typed recursive spend public amount test vectors missing "01"',
+            'JavaScript typed recursive spend public amount test vectors missing "0007"',
+            'JavaScript typed recursive spend public amount test vectors missing "-1"',
+            'JavaScript typed recursive spend public amount test vectors missing "+1"',
+            'JavaScript typed recursive spend public amount test vectors missing "1.0"',
+            'JavaScript typed recursive spend public amount test vectors missing "1e3"',
+            'JavaScript typed recursive spend public amount test vectors missing "7 "',
+            'JavaScript typed recursive spend public amount test vectors missing " 7"',
+            "JavaScript typed recursive spend public amount test vectors missing String(1n << 128n)",
+            'JavaScript package dist recursive spend public amount vector coverage missing ""',
+            'JavaScript package dist recursive spend public amount vector coverage missing "0"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "00"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "01"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "0007"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "-1"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "+1"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "1.0"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "1e3"',
+            'JavaScript package dist recursive spend public amount vector coverage missing "7 "',
+            'JavaScript package dist recursive spend public amount vector coverage missing " 7"',
+            "JavaScript package dist recursive spend public amount vector coverage missing String(1n << 128n)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JS recursive spend publicAmount vector drift was not detected"
+                "negative control failed: JS recursive spend publicAmount vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JS recursive spend publicAmount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS recursive spend publicAmount vector drift was not detected"
@@ -23935,6 +27231,7 @@ if mode == "--negative-control-js-block-height-vectors":
         '    "7 ",\n'
         '    " 7",\n'
         '    "18446744073709551616",\n'
+        "    -0,\n"
     )
     new = (
         '    "7 ",\n'
@@ -23949,6 +27246,7 @@ if mode == "--negative-control-js-block-height-vectors":
         '    "7 ",\n'
         '    " 7",\n'
         '    "18446744073709551616",\n'
+        "    -0,\n"
     )
     package_new = (
         '    "7 ",\n'
@@ -23965,18 +27263,154 @@ if mode == "--negative-control-js-block-height-vectors":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if (
-            "JavaScript typed recursive spend blockHeight test vectors" not in message
-            or "JavaScript package dist recursive spend blockHeight vector coverage" not in message
-        ):
+        expected_labels = (
+            'JavaScript typed recursive spend blockHeight test vectors missing " 7"',
+            "JavaScript typed recursive spend blockHeight test vectors missing     -0,",
+            'JavaScript package dist recursive spend blockHeight vector coverage missing " 7"',
+            "JavaScript package dist recursive spend blockHeight vector coverage missing     -0,",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JS recursive spend blockHeight vector drift was not detected"
+                "negative control failed: JS recursive spend blockHeight vector drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JS recursive spend blockHeight vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS recursive spend blockHeight vector drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    replacements = (
+        (
+            "Buffer.from([1, 2, 3]),",
+            "pallasOpenEnvelopes,",
+            "JavaScript dist typed recursive spend Pallas preflight tests missing Buffer.from([1, 2, 3])",
+        ),
+        (
+            'syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72),',
+            "pallasOpenEnvelopes,",
+            'JavaScript dist typed recursive spend Pallas preflight tests missing syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72)',
+        ),
+        (
+            "syntheticPallasOpenEnvelopesArchive(2),",
+            "pallasOpenEnvelopes,",
+            "JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(2)",
+        ),
+        (
+            "syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false }),",
+            "pallasOpenEnvelopes,",
+            "JavaScript dist typed recursive spend Pallas preflight tests missing syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false })",
+        ),
+    )
+    updated = texts[target]
+    expected_labels = []
+    for old, new, label in replacements:
+        next_updated = updated.replace(old, new, 1)
+        if next_updated == updated:
+            raise SystemExit(
+                "negative control failed: unable to mutate JS package-dist Pallas opening vector "
+                + old
+            )
+        updated = next_updated
+        expected_labels.append(label)
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS package-dist Pallas opening vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JS package-dist Pallas opening vector drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS package-dist Pallas opening vector drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    replacements = (
+        (
+            "package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
+            "package dist Kagemusha recursive spend typed requests skip malformed raw lineage key fields before native dispatch",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
+        ),
+        (
+            "package dist accepted init raw lineage proving key without verifier key",
+            "package dist accepted init raw lineage proving key with verifier key",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage proving key without verifier key",
+        ),
+        (
+            "package dist accepted init raw lineage verifier key without proving key",
+            "package dist accepted init raw lineage verifier key with proving key",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage verifier key without proving key",
+        ),
+        (
+            "package dist accepted init raw lineage key profile mismatch",
+            "package dist accepted init raw lineage key profile match",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage key profile mismatch",
+        ),
+        (
+            "package dist accepted append raw lineage keys without previous proof openings",
+            "package dist accepted append raw lineage keys with previous proof openings",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage keys without previous proof openings",
+        ),
+        (
+            "package dist accepted append raw lineage proving key without verifier key",
+            "package dist accepted append raw lineage proving key with verifier key",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage proving key without verifier key",
+        ),
+        (
+            "package dist accepted append raw lineage verifier key without proving key",
+            "package dist accepted append raw lineage verifier key with proving key",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage verifier key without proving key",
+        ),
+        (
+            "package dist accepted append raw lineage key profile mismatch",
+            "package dist accepted append raw lineage key profile match",
+            "JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage key profile mismatch",
+        ),
+    )
+    updated = texts[target]
+    expected_labels = []
+    for old, new, label in replacements:
+        next_updated = updated.replace(old, new, 1)
+        if next_updated == updated:
+            raise SystemExit(
+                "negative control failed: unable to mutate JS package-dist raw lineage key vector "
+                + old
+            )
+        updated = next_updated
+        expected_labels.append(label)
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS package-dist raw lineage key vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JS package-dist raw lineage key vector drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS package-dist raw lineage key vector drift was not detected"
     )
 
 if mode == "--negative-control-js-python-native-output-headers":
@@ -24019,7 +27453,8 @@ if mode == "--negative-control-js-python-native-output-headers":
                 + ", ".join(missing)
             )
         print("negative control rejected JS/Python native output header drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS/Python native output header drift was not detected")
 
@@ -24030,6 +27465,11 @@ if mode == "--negative-control-python-kagemusha-instruction-transaction-builder"
     mutated_source = texts[source_target].replace(
         "def build_kagemusha_recursive_redeem_transaction(",
         "def build_kagemusha_recursive_redeem_transaction_unchecked(",
+        1,
+    )
+    mutated_source = mutated_source.replace(
+        "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
+        "instruction = redeem_request_archive",
         1,
     )
     mutated_test = texts[test_target].replace(
@@ -24046,8 +27486,20 @@ if mode == "--negative-control-python-kagemusha-instruction-transaction-builder"
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
+            "Python Kagemusha instruction transaction tests missing bad_request_flags[39] = 0x20",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Python Kagemusha instruction transaction builder drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Python Kagemusha instruction transaction builder drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python Kagemusha instruction transaction builder drift was not detected"
@@ -24130,8 +27582,19 @@ if mode == "--negative-control-python-lineage-key-package-binding":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python portable lineage key artifact package missing archive_payload.find(verifier_key_commitment)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Python lineage key package binding drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Python lineage key package binding drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python lineage key package binding drift was not detected")
 
@@ -24362,8 +27825,19 @@ if mode == "--negative-control-swift-lineage-key-package-binding":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift portable lineage key artifact package missing archivePayload.range(of: verifierKeyCommitment)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift lineage key package binding drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift lineage key package binding drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift lineage key package binding drift was not detected")
 
@@ -24397,13 +27871,20 @@ if mode == "--negative-control-swift-compact-projection-hardening":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "Swift recursive compact verifier tests"
-        if label not in message:
+        expected_labels = (
+            "Swift recursive compact verifier tests missing testProjectionRejectsEmptyBundleArchiveBeforeBridgeCall",
+            "Swift recursive compact verifier tests missing testProjectionVerifierRejectsMalformedCompactTokenArchiveBeforeBridgeCall",
+            "Swift recursive compact verifier tests missing testProjectionVerifierNativeRecursiveCompactUnavailableIsDistinctFromRejection",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Swift compact projection hardening drift was not detected"
+                "negative control failed: Swift compact projection hardening drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Swift compact projection hardening drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Swift compact projection hardening drift was not detected"
@@ -24458,8 +27939,19 @@ if mode == "--negative-control-swift-lineage-witness-availability-probe":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift native availability probe missing probeKagemushaLineageWitnessFromInitResultFunction(",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift lineage witness availability probe drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift lineage witness availability probe drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift lineage witness availability probe drift was not detected")
 
@@ -24476,8 +27968,19 @@ if mode == "--negative-control-swift-lineage-witness-append-availability-probe":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift native availability probe missing probeKagemushaLineageWitnessAppendResultFunction(",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift lineage witness append availability probe drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Swift lineage witness append availability probe drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift lineage witness append availability probe drift was not detected")
 
@@ -24494,8 +27997,19 @@ if mode == "--negative-control-jvm-lineage-key-package-binding":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin witnessless Reserved-lineage helper bounds missing archivePayload.indexOfSlice(verifierKeyCommitment) >= 0",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Kotlin/JVM lineage key package binding drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Kotlin/JVM lineage key package binding drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kotlin/JVM lineage key package binding drift was not detected")
 
@@ -24512,8 +28026,19 @@ if mode == "--negative-control-android-lineage-key-package-binding":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android witnessless Reserved-lineage helper bounds missing indexOfSlice(archivePayload, verifierKeyCommitment) < 0",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Android Java lineage key package binding drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Android Java lineage key package binding drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android Java lineage key package binding drift was not detected")
 
@@ -24530,8 +28055,19 @@ if mode == "--negative-control-jvm-lineage-witness-availability-probe":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin JVM SDK native availability probes missing nativeLineageWitnessFromInitResult(probe, probe)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Kotlin/JVM lineage witness availability probe drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Kotlin/JVM lineage witness availability probe drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kotlin/JVM lineage witness availability probe drift was not detected")
 
@@ -24548,8 +28084,19 @@ if mode == "--negative-control-jvm-lineage-witness-append-availability-probe":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin JVM SDK native availability probes missing nativeLineageWitnessAppendResult(probe, probe, probe)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Kotlin/JVM lineage witness append availability probe drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Kotlin/JVM lineage witness append availability probe drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kotlin/JVM lineage witness append availability probe drift was not detected")
 
@@ -24566,8 +28113,19 @@ if mode == "--negative-control-android-lineage-witness-availability-probe":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java SDK native availability probes missing nativeLineageWitnessFromInitResult(probe, probe)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Android Java lineage witness availability probe drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Android Java lineage witness availability probe drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android Java lineage witness availability probe drift was not detected")
 
@@ -24584,10 +28142,64 @@ if mode == "--negative-control-android-lineage-witness-append-availability-probe
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java SDK native availability probes missing nativeLineageWitnessAppendResult(probe, probe, probe)",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Android Java lineage witness append availability probe drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Android Java lineage witness append availability probe drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android Java lineage witness append availability probe drift was not detected")
+
+if mode == "--negative-control-jvm-android-hop-evidence-shape":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "exactly 9 single-row",
+            "shape may pass",
+            "Kotlin/JVM typed hop evidence shape and binding tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "exactly 9 single-row",
+            "shape may pass",
+            "Android Java typed hop evidence shape and binding tests",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate JVM/Android hop evidence shape in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android hop evidence shape drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android hop evidence shape drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM/Android hop evidence shape drift was not detected"
+    )
 
 if mode == "--negative-control-jvm-note-amount-vectors":
     mutated = dict(texts)
@@ -24624,7 +28236,11 @@ if mode == "--negative-control-jvm-note-amount-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM/Android note amount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(
+            message,
+            [label for _target, (_needle, label) in replacements.items()],
+        ):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM/Android note amount vector drift was not detected")
 
@@ -24663,7 +28279,11 @@ if mode == "--negative-control-jvm-redeem-public-amount-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM/Android publicAmount vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(
+            message,
+            [label for _target, (_needle, label) in replacements.items()],
+        ):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM/Android publicAmount vector drift was not detected")
 
@@ -24680,8 +28300,19 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin recursive spend input Norito guard tests missing previousBundleArchive must be a valid Norito archive",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM Pallas builder input guard drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JVM Pallas builder input guard drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM Pallas builder input guard drift was not detected")
 
@@ -24724,7 +28355,11 @@ if mode == "--negative-control-non-csharp-pallas-builder-input-guards":
                 + ", ".join(missing)
             )
         print("negative control rejected non-C# Pallas builder input guard drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(
+            message,
+            [label for _target, (_old, _new, label) in replacements.items()],
+        ):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: non-C# Pallas builder input guard drift was not detected")
 
@@ -24764,27 +28399,51 @@ if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":
                 + ", ".join(missing)
             )
         print("negative control rejected non-C# Pallas builder native output drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(
+            message,
+            [label for _target, (_old, _new, label) in replacements.items()],
+        ):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: non-C# Pallas builder native output drift was not detected")
 
 if mode == "--negative-control-js-lineage-readonly-declarations":
     mutated = dict(texts)
     target = "javascript/iroha_js/index.d.ts"
-    mutated[target] = mutated[target].replace(
-        "readonly lineageVerifierKey: Buffer;",
-        "lineageVerifierKey: Buffer;",
-        1,
+    replacements = (
+        (
+            "readonly lineageVerifierKey: Buffer;",
+            "lineageVerifierKey: Buffer;",
+            "JavaScript TypeScript declarations missing readonly lineageVerifierKey: Buffer;",
+        ),
+        (
+            "readonly lineageProvingKeyArchive: Buffer;",
+            "lineageProvingKeyArchive: Buffer;",
+            "JavaScript TypeScript declarations missing readonly lineageProvingKeyArchive: Buffer;",
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit(
-            "negative control failed: unable to mutate JS lineage key artifact readonly declarations"
-        )
+    expected_labels = []
+    for old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate JS lineage key artifact readonly declaration {old}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS lineage key artifact readonly declaration drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected JS lineage key artifact readonly declaration drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS lineage key artifact readonly declaration drift was not detected"
@@ -25041,13 +28700,44 @@ if mode == "--negative-control-sdk-archive-input-copy":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK archive input copy drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK archive input copy drift was not detected")
 
 if mode == "--negative-control-sdk-lineage-proving-key-copy":
     mutated = dict(texts)
     mutations = (
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "exposedProvingKey[0] = 0;",
+            "exposedProofArchive[0] = 0;",
+            "JavaScript package lineage key artifact tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "exposedProvingKey[0] = 0;",
+            "exposedProofArchive[0] = 0;",
+            "JavaScript source lineage key artifact copy tests",
+        ),
+        (
+            "javascript/iroha_js/test/crypto.browser.test.js",
+            "exposedProvingKey[0] = 0;",
+            "exposedProofArchive[0] = 0;",
+            "JavaScript browser lineage key artifact tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "assert init_artifacts.lineage_proving_key_archive == init_proving_key_archive",
+            "assert init_artifacts.lineage_proving_key_archive != init_proving_key_archive",
+            "Python lineage key artifact copy tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+            "exposedProvingKeyArchive[0] = 0",
+            "exposedProofArchive[0] = 0",
+            "Swift lineage key artifact Data copy tests",
+        ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "exposedProvingKeyArchive",
@@ -25087,43 +28777,204 @@ if mode == "--negative-control-sdk-lineage-proving-key-copy":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK lineage proving key artifact copy drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK lineage proving key artifact copy drift was not detected")
 
 if mode == "--negative-control-sdk-helper-surface":
     mutated = dict(texts)
-    target = "javascript/iroha_js/src/index.js"
-    mutated[target] = mutated[target].replace(
-        "  canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,\n",
-        "",
-        1,
+    mutations = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "export function canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "javascript/iroha_js/src/crypto.js public API",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "!canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "!canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "javascript/iroha_js/src/crypto.js public API",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "export function canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "javascript/iroha_js/dist/crypto.js public API",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "!canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "!canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "javascript/iroha_js/dist/crypto.js public API",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.browser.js",
+            "export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "export function canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "javascript/iroha_js/src/crypto.browser.js public API",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.browser.js",
+            "export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "export function canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "javascript/iroha_js/dist/crypto.browser.js public API",
+        ),
+        (
+            "javascript/iroha_js/src/index.js",
+            "  canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,\n",
+            "",
+            "javascript/iroha_js/src/index.js re-exports",
+        ),
+        (
+            "javascript/iroha_js/dist/index.js",
+            "  canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,\n",
+            "",
+            "javascript/iroha_js/dist/index.js re-exports",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "export function canChooseKagemushaRecursiveSpendAppendOutputProofCircuitId(",
+            "JavaScript TypeScript declarations",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "semantic previous proofs cannot select Reserved-lineage output",
+            "semantic previous proofs may select Reserved-lineage output",
+            "JavaScript recursive spend append output helper tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "semantic previous proofs cannot select Reserved-lineage output",
+            "semantic previous proofs may select Reserved-lineage output",
+            "JavaScript package dist recursive spend append output helper tests",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/__init__.py",
+            '"can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+            '"can_choose_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+            "Python package re-exports",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            '"can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+            '"can_choose_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+            "Python SDK",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "def can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(",
+            "def can_choose_kagemusha_recursive_spend_append_output_proof_circuit_id(",
+            "Python SDK",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "        if not can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(",
+            "        if not can_choose_kagemusha_recursive_spend_append_output_proof_circuit_id(",
+            "Python SDK",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/__init__.py",
+            "        can_select_kagemusha_recursive_spend_append_output_proof_circuit_id,",
+            "        can_choose_kagemusha_recursive_spend_append_output_proof_circuit_id,",
+            "Python package re-exports",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "semantic previous proofs cannot select Reserved-lineage output",
+            "semantic previous proofs may select Reserved-lineage output",
+            "Python recursive spend append output helper tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+            "previousHopCount < recursiveSpendLineageWitnesslessMaxHopsV1",
+            "previousHopCount <= recursiveSpendLineageWitnesslessMaxHopsV1",
+            "Swift witnessless Reserved-lineage helper bounds",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            "previousHopCount < RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
+            "previousHopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
+            "Android witnessless Reserved-lineage helper bounds",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            "previousHopCount < RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
+            "previousHopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
+            "Kotlin witnessless Reserved-lineage helper bounds",
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK helper surface")
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {label}")
+        mutated[target] = updated
+        if label not in expected_labels:
+            expected_labels.append(label)
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK public helper surface drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK public helper surface drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK public helper surface drift was not detected")
 
 if mode == "--negative-control-mobile-halo2-vk-hash":
     mutated = dict(texts)
-    target = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java"
-    mutated[target] = mutated[target].replace(
-        KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1,
-        KAGEMUSHA_HALO2_STALE_CANONICAL_VK_HASH_V1,
-        1,
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
+            f'canonicalVKHash = Data(hexString: "{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")!',
+            f'Swift Halo2 canonical VK hash missing canonicalVKHash = Data(hexString: "{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")!',
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
+            f'hexBytes("{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")',
+            f'Android Java Halo2 canonical VK hash missing hexBytes("{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+            f'hexBytes("{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")',
+            f'Kotlin Halo2 canonical VK hash missing hexBytes("{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")',
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate mobile Halo2 VK hash")
+    expected_labels = []
+    for target, needle, label in mutations:
+        replacement = needle.replace(
+            KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1,
+            KAGEMUSHA_HALO2_STALE_CANONICAL_VK_HASH_V1,
+            1,
+        )
+        mutated[target] = mutated[target].replace(needle, replacement, 1)
+        if mutated[target] == texts[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate mobile Halo2 VK hash for {target}"
+            )
+        expected_labels.append(label)
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile Halo2 VK hash drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected mobile Halo2 VK hash drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile Halo2 VK hash drift was not detected")
 
@@ -25160,6 +29011,10 @@ if mode == "--negative-control-sdk-readme-boundary":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} missing previous-proof opening archive boundary"
+            for target in replacements
+        ]
         missing = [
             target
             for target in replacements
@@ -25171,7 +29026,8 @@ if mode == "--negative-control-sdk-readme-boundary":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK README boundary drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README boundary drift was not detected")
 
@@ -25204,6 +29060,10 @@ if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} missing previous-proof opening archive boundary"
+            for target in targets
+        ]
         missing = [
             target
             for target in targets
@@ -25215,7 +29075,8 @@ if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK README proof-chain accumulator drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README proof-chain accumulator drift was not detected")
 
@@ -25297,6 +29158,10 @@ if mode == "--negative-control-sdk-readme-pallas-builder-surface":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} missing Pallas open-envelope builder docs"
+            for target in replacements
+        ]
         missing = [
             target
             for target in replacements
@@ -25308,7 +29173,8 @@ if mode == "--negative-control-sdk-readme-pallas-builder-surface":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK README Pallas builder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README Pallas builder drift was not detected")
 
@@ -25326,13 +29192,47 @@ if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
         "Native append lets SDKs supply accumulator digests as optional metadata.",
         1,
     )
-    if mutated[target] == texts[target]:
+    mutated[target] = mutated[target].replace(
+        "generic proof-state (`proofState`, `ProofState`, `proof_state`), and\n"
+        "recursive/lineage proof-state aliases as native-owned accumulator bytes.",
+        "proof-state aliases may be SDK metadata.",
+        1,
+    )
+    mutated[target] = mutated[target].replace(
+        "generic proof-state (`proofState`, `ProofState`, `proof_state`),\n"
+        "recursive/lineage proof-state, aggregation-transcript, fixed-window\n"
+        "table-schedule/shared-manifest/table-base, verifier-witness batch,\n"
+        "transition-profile binding, append-opening preflight, recursive\n"
+        "verifier scalar-projection, and previous/resulting accumulator aliases as\n"
+        "native-owned accumulator bytes.",
+        "proof-state and native material aliases may be SDK metadata.",
+        1,
+    )
+    if (
+        "Native append lets SDKs supply accumulator digests as optional metadata."
+        not in mutated[target]
+        or "proof-state and native material aliases may be SDK metadata." not in mutated[target]
+    ):
         raise SystemExit("negative control failed: unable to mutate offline Kagemusha accumulator boundary")
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "offline Kagemusha docs missing native-owned accumulator boundary: Native append streams the previous "
+            "recursive proof bytes and per-hop accumulator material into native-owned accumulator digests",
+            "offline Kagemusha docs missing native-owned accumulator boundary: generic proof-state (`proofState`, `ProofState`, `proof_state`)",
+            "offline Kagemusha docs missing native-owned accumulator boundary: previous/resulting accumulator aliases as native-owned accumulator bytes",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: offline Kagemusha accumulator boundary drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected offline Kagemusha accumulator boundary drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: offline Kagemusha accumulator boundary drift was not detected")
 
@@ -25358,13 +29258,25 @@ if mode == "--negative-control-offline-doc-localnet-lifecycle-release-evidence":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "offline Kagemusha docs missing localnet lifecycle release evidence"
-        if label not in message:
+        expected_labels = (
+            "offline Kagemusha docs missing localnet lifecycle release evidence: "
+            "--localnet-lifecycle-evidence artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json",
+            "offline Kagemusha docs missing localnet lifecycle release evidence: "
+            "production 4-peer run id, chain id, peer ids",
+            "offline Kagemusha docs missing localnet lifecycle release evidence: "
+            "smoke/replay/restart/state-recovery hashes",
+            "offline Kagemusha docs missing localnet lifecycle release evidence: "
+            "eight shield-to-redeem lifecycle hashes",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected"
+                "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected offline Kagemusha localnet lifecycle evidence drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected"
@@ -25411,8 +29323,24 @@ if mode == "--negative-control-offline-doc-pallas-builder-surface":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "offline Kagemusha docs missing Pallas open-envelope builder surface: "
+            "current-hop and previous-proof Pallas open-envelope archive builders",
+            "offline Kagemusha docs missing Pallas open-envelope builder surface: "
+            "record bundle or previous recursive bundle",
+            "offline Kagemusha docs missing Pallas open-envelope builder surface: "
+            "SDKs should treat the generated archives as native-owned opaque Norito bytes",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: offline Kagemusha Pallas builder drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected offline Kagemusha Pallas builder drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: offline Kagemusha Pallas builder drift was not detected")
 
@@ -25432,8 +29360,20 @@ if mode == "--negative-control-offline-doc-instruction-transaction-surface":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "offline Kagemusha docs missing all-SDK instruction transaction boundary: "
+            "empty, malformed, tampered, or wrong-type instruction archives",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: offline Kagemusha instruction transaction surface drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected offline Kagemusha instruction transaction surface drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: offline Kagemusha instruction transaction surface drift was not detected"
@@ -25446,6 +29386,11 @@ if mode == "--negative-control-sdk-proof-chain-accumulator-input":
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
             "\nprivate enum StaleProofChainDigestInputFixture { static func append(recursiveProofChainDigestV1: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+            "\nprivate enum StaleProofChainDigestNativeBridgeFixture { static func append(recursiveProofChainDigestBytes: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator digest public input",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -25468,9 +29413,19 @@ if mode == "--negative-control-sdk-proof-chain-accumulator-input":
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
         ),
         (
+            "python/iroha_python/src/iroha_python/__init__.py",
+            "\ndef _stale_proof_chain_digest_root_export_fixture(recursive_proof_chain_digest_bytes: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/__init__.py accumulator digest public input",
+        ),
+        (
             "javascript/iroha_js/src/crypto.js",
             "\nfunction staleProofChainDigestInputFixture(recursiveProofChainDigestBytes) { return recursiveProofChainDigestBytes; }\n",
             "javascript/iroha_js/src/crypto.js accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "\nfunction staleProofChainDigestDistInputFixture(proofChainDigestBytes) { return proofChainDigestBytes; }\n",
+            "javascript/iroha_js/dist/crypto.js accumulator digest public input",
         ),
         (
             "javascript/iroha_js/index.d.ts",
@@ -25495,7 +29450,8 @@ if mode == "--negative-control-sdk-proof-chain-accumulator-input":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK proof-chain accumulator public input drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK proof-chain accumulator public input drift was not detected"
@@ -25508,6 +29464,11 @@ if mode == "--negative-control-sdk-accumulator-digest-inputs":
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
             "\nprivate enum StaleAccumulatorDigestInputFixture { static func append(lineageDigestV1: Data, aggregationTranscriptDigestBytes: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+            "\nprivate enum StaleAccumulatorDigestNativeBridgeFixture { static func append(fixedWindowSharedTableManifestDigestBytes: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator digest public input",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -25530,9 +29491,19 @@ if mode == "--negative-control-sdk-accumulator-digest-inputs":
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
         ),
         (
+            "python/iroha_python/src/iroha_python/__init__.py",
+            "\ndef _stale_accumulator_digest_root_export_fixture(verifier_witness_batch_digest_bytes: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/__init__.py accumulator digest public input",
+        ),
+        (
             "javascript/iroha_js/src/crypto.js",
             "\nfunction staleAccumulatorDigestInputFixture(lineageDigestV1, aggregationTranscriptDigestBytes) { return lineageDigestV1 || aggregationTranscriptDigestBytes; }\n",
             "javascript/iroha_js/src/crypto.js accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "\nfunction staleAccumulatorDigestDistInputFixture(fixedWindowTableScheduleDigestBytes) { return fixedWindowTableScheduleDigestBytes; }\n",
+            "javascript/iroha_js/dist/crypto.js accumulator digest public input",
         ),
         (
             "javascript/iroha_js/index.d.ts",
@@ -25557,7 +29528,8 @@ if mode == "--negative-control-sdk-accumulator-digest-inputs":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator digest public input drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator digest public input drift was not detected"
@@ -25568,17 +29540,22 @@ if mode == "--negative-control-sdk-accumulator-material-inputs":
     mutations = (
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "\nprivate enum StaleAccumulatorMaterialInputFixture { static func append(terminalAccumulator: Data, walletRecursiveProofChainBytes: Data) {} }\n",
+            "\nprivate enum StaleAccumulatorMaterialInputFixture { static func append(terminalAccumulator: Data, walletRecursiveProofChainBytes: Data, proofChainBytes: Data, accumulatorSnapshot: Data, lineageSnapshot: Data, proofState: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator material public input",
         ),
         (
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+            "\nprivate enum StaleAccumulatorMaterialNativeBridgeFixture { static func append(WalletRecursiveProofChainBytes: Data, accumulatorState: Data, recursiveAccumulatorV1: Data, RecursiveSnapshotBytes: Data, ProofStateBytes: Data, RecursiveProofStateBytes: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator material public input",
+        ),
+        (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "\nprivate object StaleAccumulatorMaterialInputFixture { fun append(lineageAccumulatorState: ByteArray?, recursiveAccumulatorStateBytes: ByteArray?) {} }\n",
+            "\nprivate object StaleAccumulatorMaterialInputFixture { fun append(lineageAccumulatorState: ByteArray?, recursiveAccumulatorStateBytes: ByteArray?, proofChainBytes: ByteArray?, accumulatorSnapshot: ByteArray?, recursiveSnapshot: ByteArray?, proofStateBytes: ByteArray?) {} }\n",
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator material public input",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "\nfinal class StaleAccumulatorMaterialInputFixture { static void append(final byte[] appendAccumulator, final byte[] recursiveProofChainBytes) {} }\n",
+            "\nfinal class StaleAccumulatorMaterialInputFixture { static void append(final byte[] appendAccumulator, final byte[] recursiveProofChainBytes, final byte[] proofChainBytes, final byte[] lineageSnapshot, final byte[] proofState, final byte[] recursiveProofState) {} }\n",
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator material public input",
         ),
         (
@@ -25588,17 +29565,27 @@ if mode == "--negative-control-sdk-accumulator-material-inputs":
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
-            "\ndef _stale_accumulator_material_input_fixture(lineage_accumulator_state: bytes, recursive_accumulator_state_bytes: bytes) -> None:\n    pass\n",
+            "\ndef _stale_accumulator_material_input_fixture(lineage_accumulator_state: bytes, recursive_accumulator_state_bytes: bytes, proof_chain_bytes: bytes, accumulator_snapshot: bytes, recursive_snapshot: bytes, lineage_snapshot: bytes, proof_state: bytes, recursive_proof_state: bytes) -> None:\n    pass\n",
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator material public input",
         ),
         (
+            "python/iroha_python/src/iroha_python/__init__.py",
+            "\ndef _stale_accumulator_material_root_export_fixture(accumulator_state: bytes, append_accumulator_bytes: bytes, proof_state: bytes, lineage_snapshot: bytes, lineage_proof_state: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/__init__.py accumulator material public input",
+        ),
+        (
             "javascript/iroha_js/src/crypto.js",
-            "\nfunction staleAccumulatorMaterialInputFixture(terminalAccumulator, walletRecursiveProofChainBytes) { return terminalAccumulator || walletRecursiveProofChainBytes; }\n",
+            "\nfunction staleAccumulatorMaterialInputFixture(terminalAccumulator, walletRecursiveProofChainBytes, proofChainBytes, accumulatorSnapshot, recursiveSnapshot, lineageSnapshot, proofState, recursiveProofState) { return terminalAccumulator || walletRecursiveProofChainBytes || proofChainBytes || accumulatorSnapshot || recursiveSnapshot || lineageSnapshot || proofState || recursiveProofState; }\n",
             "javascript/iroha_js/src/crypto.js accumulator material public input",
         ),
         (
+            "javascript/iroha_js/dist/crypto.js",
+            "\nfunction staleAccumulatorMaterialDistInputFixture(WalletRecursiveProofChainBytes, appendAccumulator, recursiveSnapshot, ProofStateBytes, lineageProofState) { return WalletRecursiveProofChainBytes || appendAccumulator || recursiveSnapshot || ProofStateBytes || lineageProofState; }\n",
+            "javascript/iroha_js/dist/crypto.js accumulator material public input",
+        ),
+        (
             "javascript/iroha_js/index.d.ts",
-            "\nexport interface StaleAccumulatorMaterialInputFixture { terminalAccumulator: BinaryLike; walletRecursiveProofChainBytes: BinaryLike; lineageAccumulatorState: BinaryLike; recursiveAccumulatorStateBytes: BinaryLike; }\n",
+            "\nexport interface StaleAccumulatorMaterialStateAliasFixture { accumulatorSnapshot: BinaryLike; recursiveSnapshot: BinaryLike; lineageSnapshotBytes: BinaryLike; proofState: BinaryLike; ProofStateBytes: BinaryLike; recursiveProofState: BinaryLike; lineageProofStateBytes: BinaryLike; }\n",
             "javascript/iroha_js/index.d.ts accumulator material public input",
         ),
     )
@@ -25610,18 +29597,50 @@ if mode == "--negative-control-sdk-accumulator-material-inputs":
             )
         mutated[target] += addition
         expected_labels.append(label)
+    expected_snapshot_alias_labels = (
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineageSnapshot",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*RecursiveSnapshot",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*recursiveSnapshot",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineageSnapshot",
+        "python/iroha_python/src/iroha_python/kagemusha.py accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*recursive_snapshot",
+        "python/iroha_python/src/iroha_python/kagemusha.py accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineage_snapshot",
+        "python/iroha_python/src/iroha_python/__init__.py accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineage_snapshot",
+        "javascript/iroha_js/src/crypto.js accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*recursiveSnapshot",
+        "javascript/iroha_js/src/crypto.js accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineageSnapshot",
+        "javascript/iroha_js/dist/crypto.js accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*recursiveSnapshot",
+        "javascript/iroha_js/index.d.ts accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*recursiveSnapshot",
+        "javascript/iroha_js/index.d.ts accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineageSnapshot",
+    )
+    expected_proof_state_alias_labels = (
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proofState",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*ProofState",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proofState",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proofState",
+        "python/iroha_python/src/iroha_python/kagemusha.py accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proof_state",
+        "python/iroha_python/src/iroha_python/__init__.py accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proof_state",
+        "javascript/iroha_js/src/crypto.js accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proofState",
+        "javascript/iroha_js/dist/crypto.js accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*ProofState",
+        "javascript/iroha_js/index.d.ts accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*proofState",
+        "javascript/iroha_js/index.d.ts accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*ProofState",
+    )
+    expected_messages = (
+        tuple(expected_labels)
+        + expected_snapshot_alias_labels
+        + expected_proof_state_alias_labels
+    )
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        missing = [label for label in expected_labels if label not in message]
+        missing = [label for label in expected_messages if label not in message]
         if missing:
             raise SystemExit(
                 "negative control failed: SDK accumulator material public input drift was not detected for "
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator material public input drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_messages):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator material public input drift was not detected"
@@ -25634,6 +29653,11 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
             "\nprivate enum StaleAccumulatorBoundaryDigestInputFixture { static func append(appendBoundaryDigestV1: Data, transitionProfileBindingDigestBytes: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+            "\nprivate enum StaleAccumulatorBoundaryDigestNativeBridgeFixture { static func append(appendBoundaryDigestV1: Data, transitionProfileBindingDigestBytes: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator digest public input",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -25656,9 +29680,19 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
         ),
         (
+            "python/iroha_python/src/iroha_python/__init__.py",
+            "\ndef _stale_accumulator_boundary_digest_root_export_fixture(append_boundary_digest_bytes: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/__init__.py accumulator digest public input",
+        ),
+        (
             "javascript/iroha_js/src/crypto.js",
             "\nfunction staleAccumulatorBoundaryDigestInputFixture(appendBoundaryDigestV1, transitionProfileBindingDigestBytes) { return appendBoundaryDigestV1 || transitionProfileBindingDigestBytes; }\n",
             "javascript/iroha_js/src/crypto.js accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "\nfunction staleAccumulatorBoundaryDigestDistInputFixture(appendOpeningPreflightDigestBytes) { return appendOpeningPreflightDigestBytes; }\n",
+            "javascript/iroha_js/dist/crypto.js accumulator digest public input",
         ),
         (
             "javascript/iroha_js/index.d.ts",
@@ -25685,7 +29719,8 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator boundary digest public input drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator boundary digest public input drift was not detected"
@@ -25783,7 +29818,8 @@ if mode == "--negative-control-sdk-accumulator-field-length-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator field-length vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator field-length vector drift was not detected"
@@ -25848,7 +29884,8 @@ if mode == "--negative-control-sdk-accumulator-hop-count-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator hop-count vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator hop-count vector drift was not detected"
@@ -25882,6 +29919,11 @@ if mode == "--negative-control-sdk-accumulator-chain-id-shape":
             '            2,\n            kagemusha._kagemusha_string("kagemusha-recursive-spend-abi-chain")',
             "Python recursive spend bundle accumulator chain-id shape guard tests",
         ),
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+            'KagemushaNoritoString("prod-chain-id")',
+            'KagemushaNoritoString("prod-chain-ID")',
+            "C# recursive spend bundle chainId canonical-shape guard tests",
+        ),
         "javascript/iroha_js/test/package_dist.test.js": (
             'recursiveSpendBundleWithAccumulatorField(\n          1,\n          kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),',
             'recursiveSpendBundleWithAccumulatorField(\n          2,\n          kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),',
@@ -25908,7 +29950,8 @@ if mode == "--negative-control-sdk-accumulator-chain-id-shape":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator chain-id shape drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator chain-id shape drift was not detected"
@@ -26025,6 +30068,12 @@ if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
             'sharedRecursiveSpendAbi6Archive("init_bundle")),\n    /currentNote has trailing bytes/',
             "JavaScript package dist recursive spend bundle summary trailing-field coverage",
         ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendBundleWithTopLevelTrailingField(initBundleArchive)",
+            "SharedRecursiveSpendArchive(\"init_bundle\")",
+            "C# recursive spend bundle trailing-field guard tests",
+        ),
     )
     expected_labels = []
     for target, old, new, label in replacements:
@@ -26046,11 +30095,194 @@ if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle summary trailing-field vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle summary trailing-field vector drift was not detected"
     )
+
+if mode == "--negative-control-sdk-verify-lineage-record-preflight":
+    mutation_sets = (
+        (
+            "missing",
+            (
+                (
+                    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+                    "try KagemushaRecursiveSpendVerifyRequest(\n"
+                    "                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: \"init_bundle\")\n"
+                    "                )",
+                    "try KagemushaRecursiveSpendVerifyRequest(\n"
+                    "                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: \"append_bundle\")\n"
+                    "                )",
+                    "Swift typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendArchive(\"init_bundle\"),\n"
+                    "      })",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendAbi7Archive(\"append_bundle\"),\n"
+                    "      })",
+                    "JavaScript typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
+                    'match="lineage_verifier_record is required for reserved-lineage bundles",',
+                    'match="lineage_verifier_record is optional for reserved-lineage bundles",',
+                    "Python typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+                    "\"lineageVerifierRecord is required for reserved-lineage bundles\",\n"
+                    "            missingVerifyLineageRecord.message,",
+                    "\"lineageVerifierRecord is optional for reserved-lineage bundles\",\n"
+                    "            missingVerifyLineageRecord.message,",
+                    "Kotlin typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+                    "assertThrows(\n"
+                    "        \"lineageVerifierRecord is required for reserved-lineage bundles\",\n"
+                    "        () ->\n"
+                    "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
+                    "assertThrows(\n"
+                    "        \"lineageVerifierRecord is optional for reserved-lineage bundles\",\n"
+                    "        () ->\n"
+                    "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
+                    "Android Java typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+                    "KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,\n"
+                    "                hasLineageVerifierRecord: false",
+                    "KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,\n"
+                    "                hasLineageVerifierRecord: true",
+                    "C# recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "javascript/iroha_js/test/package_dist.test.js",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendAbi6Archive(\"init_bundle\"),\n"
+                    "      })",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendAbi7Archive(\"append_bundle\"),\n"
+                    "      })",
+                    "JavaScript package dist recursive spend verify lineage-record preflight coverage",
+                ),
+            ),
+        ),
+        (
+            "dangling",
+            (
+                (
+                    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+                    "try KagemushaRecursiveSpendVerifyRequest(\n"
+                    "                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: \"append_bundle\"),\n"
+                    "                    lineageVerifierRecord: try Self.sampleVerifierRecord()\n"
+                    "                )",
+                    "try KagemushaRecursiveSpendVerifyRequest(\n"
+                    "                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: \"init_bundle\"),\n"
+                    "                    lineageVerifierRecord: try Self.sampleVerifierRecord()\n"
+                    "                )",
+                    "Swift typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendAbi7Archive(\"append_bundle\"),\n"
+                    "        lineageVerifierRecord: verifierRecord,\n"
+                    "      })",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendArchive(\"init_bundle\"),\n"
+                    "        lineageVerifierRecord: verifierRecord,\n"
+                    "      })",
+                    "JavaScript typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "python/iroha_python/tests/kagemusha_test.py",
+                    "bundle=_shared_recursive_spend_abi7_archive(\"append_bundle\"),\n"
+                    "            lineage_verifier_record=verifier_record,",
+                    "bundle=_shared_recursive_spend_archive(\"init_bundle\"),\n"
+                    "            lineage_verifier_record=verifier_record,",
+                    "Python typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+                    "\"lineageVerifierRecord is only valid for reserved-lineage bundles\",\n"
+                    "            semanticVerifyLineageRecord.message,",
+                    "\"lineageVerifierRecord is allowed for semantic bundles\",\n"
+                    "            semanticVerifyLineageRecord.message,",
+                    "Kotlin typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+                    "assertThrows(\n"
+                    "        \"lineageVerifierRecord is only valid for reserved-lineage bundles\",\n"
+                    "        () ->\n"
+                    "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
+                    "assertThrows(\n"
+                    "        \"lineageVerifierRecord is allowed for semantic bundles\",\n"
+                    "        () ->\n"
+                    "            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(",
+                    "Android Java typed recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+                    "KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,\n"
+                    "                hasLineageVerifierRecord: true",
+                    "KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,\n"
+                    "                hasLineageVerifierRecord: false",
+                    "C# recursive spend verify lineage-record preflight tests",
+                ),
+                (
+                    "javascript/iroha_js/test/package_dist.test.js",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendAbi7Archive(\"append_bundle\"),\n"
+                    "        lineageVerifierRecord: previousLineageVerifierRecord,\n"
+                    "      })",
+                    "encodeKagemushaRecursiveSpendVerifyRequest({\n"
+                    "        bundle: sharedRecursiveSpendAbi6Archive(\"init_bundle\"),\n"
+                    "        lineageVerifierRecord: previousLineageVerifierRecord,\n"
+                    "      })",
+                    "JavaScript package dist recursive spend verify lineage-record preflight coverage",
+                ),
+            ),
+        ),
+    )
+    detected_messages = []
+    for vector_name, replacements in mutation_sets:
+        mutated = dict(texts)
+        expected_labels = []
+        for target, old, new, label in replacements:
+            updated = mutated[target].replace(old, new, 1)
+            if updated == mutated[target]:
+                raise SystemExit(
+                    f"negative control failed: unable to mutate verify lineage-record {vector_name} preflight in {target}"
+                )
+            mutated[target] = updated
+            expected_labels.append(label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    f"negative control failed: SDK verify lineage-record {vector_name} preflight drift was not detected for "
+                    + ", ".join(missing)
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{vector_name}: {detected_message}")
+            continue
+        raise SystemExit(
+            f"negative control failed: SDK verify lineage-record {vector_name} preflight drift was not detected"
+        )
+    print("negative control rejected SDK verify lineage-record preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":
     mutated = dict(texts)
@@ -26086,6 +30318,12 @@ if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":
             "Python recursive spend verify-result trailing-field guard tests",
         ),
         (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendVerifyResultWithTrailingField())).Message",
+            "SharedRecursiveSpendAbi7Archive(\"verify_result\"))).Message",
+            "C# recursive spend verify-result trailing-field guard tests",
+        ),
+        (
             "javascript/iroha_js/test/package_dist.test.js",
             "recursiveSpendVerifyResultWithTrailingField(),\n      ),\n    /verifyResult has trailing bytes/u",
             'sharedRecursiveSpendAbi7Archive("verify_result"),\n      ),\n    /verifyResult has trailing bytes/u',
@@ -26112,7 +30350,8 @@ if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK verify-result trailing-field vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK verify-result trailing-field vector drift was not detected"
@@ -26265,6 +30504,30 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             'sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),\n      /lineageWitness\\.previousRecursiveProofs\\.verifierKeyId/',
             "JavaScript package dist recursive spend lineage-witness trailing-field coverage",
         ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendLineageWitnessWithTrailingField(),",
+            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\"),",
+            "C# recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofsField(),",
+            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\"),",
+            "C# recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousProofField(),",
+            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\"),",
+            "C# recursive spend lineage-witness trailing-field guard tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),",
+            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\"),",
+            "C# recursive spend lineage-witness trailing-field guard tests",
+        ),
     )
     expected_labels = []
     for target, old, new, label in replacements:
@@ -26286,7 +30549,8 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK lineage-witness trailing-field vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK lineage-witness trailing-field vector drift was not detected"
@@ -26294,6 +30558,8 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
 
 if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
     mutated = dict(texts)
+    # Exercise current-note amount trailing-field coverage by removing the
+    # numericPayloadWithTrailingField vectors from every SDK surface.
     replacements = (
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
@@ -26322,7 +30588,7 @@ if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
-            "[2, kagemushaZeroNumericPayload(), /amount/]",
+            'sharedRecursiveSpendArchive("init_bundle")',
             "JavaScript recursive spend bundle current-note amount encoding guard tests",
         ),
         (
@@ -26337,8 +30603,14 @@ if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
         (
             "javascript/iroha_js/test/package_dist.test.js",
             "[2, kagemushaNumericPayloadWithTrailingField(), /amount/]",
-            "[2, kagemushaZeroNumericPayload(), /amount/]",
+            'sharedRecursiveSpendAbi6Archive("init_bundle")',
             "JavaScript package dist recursive spend bundle current-note amount encoding coverage",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendBundleWithCurrentNoteAmountTrailingField(initBundleArchive)",
+            "RecursiveSpendBundleWithCurrentNoteTrailingField(initBundleArchive)",
+            "C# recursive spend bundle trailing-field guard tests",
         ),
     )
     expected_labels = []
@@ -26361,7 +30633,8 @@ if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK current-note amount trailing-field vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK current-note amount trailing-field vector drift was not detected"
@@ -26426,7 +30699,8 @@ if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle proof-circuit vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof-circuit vector drift was not detected"
@@ -26529,7 +30803,8 @@ if mode == "--negative-control-sdk-bundle-proof-backend-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle proof-backend vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof-backend vector drift was not detected"
@@ -26563,6 +30838,11 @@ if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
             "_recursive_spend_bundle_with_proof_box_backend(\n                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND\n            )",
             "Python recursive spend bundle proof-box backend guard tests",
         ),
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+            'KagemushaNoritoString("halo2/kzg")',
+            'KagemushaNoritoString("halo2/ipa")',
+            "C# recursive spend bundle proof-box backend guard tests",
+        ),
         "javascript/iroha_js/test/package_dist.test.js": (
             'recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),\n      ),\n    /bundle\\.proof_backend/,',
             'recursiveSpendBundleWithProofBoxBackend("halo2/ipa"),\n      ),\n    /bundle\\.proof_backend/,',
@@ -26589,7 +30869,8 @@ if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle proof-box backend vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof-box backend vector drift was not detected"
@@ -26706,6 +30987,12 @@ if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":
             'sharedRecursiveSpendAbi6Archive("init_bundle"),\n      ),\n    /proof has trailing bytes/',
             "JavaScript package dist recursive spend bundle proof trailing-field coverage",
         ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendBundleWithVerifierKeyIdTrailingField(initBundleArchive)",
+            "SharedRecursiveSpendArchive(\"init_bundle\")",
+            "C# recursive spend bundle trailing-field guard tests",
+        ),
     )
     expected_labels = []
     for target, old, new, label in replacements:
@@ -26727,7 +31014,8 @@ if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle proof trailing-field vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof trailing-field vector drift was not detected"
@@ -26802,7 +31090,8 @@ if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle proof-bytes vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof-bytes vector drift was not detected"
@@ -26997,7 +31286,8 @@ if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle proof-public-input vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle proof-public-input vector drift was not detected"
@@ -27508,7 +31798,8 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK bundle current-note vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK bundle current-note vector drift was not detected"
@@ -27573,18 +31864,143 @@ if mode == "--negative-control-sdk-accumulator-domain-vectors":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK accumulator domain vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator domain vector drift was not detected"
     )
 
+if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":
+    mutation_sets = (
+        (
+            "short",
+            {
+                "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+                    "for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32)] {",
+                    "for changeOutput in [Data(repeating: 1, count: 32), Data(repeating: 0, count: 32)] {",
+                    "Swift typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+                    "[Buffer.alloc(31, 1), /changeOutput must be 32 bytes/]",
+                    "[Buffer.alloc(32, 1), /changeOutput must be 32 bytes/]",
+                    "JavaScript typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "python/iroha_python/tests/kagemusha_test.py": (
+                    '(b"\\x01" * 31, "change_output must be exactly 32 bytes")',
+                    '(b"\\x01" * 32, "change_output must be exactly 32 bytes")',
+                    "Python typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+                    'ByteArray(31) { 1 } to "changeOutput must be exactly 32 bytes"',
+                    'ByteArray(32) { 1 } to "changeOutput must be exactly 32 bytes"',
+                    "Kotlin typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+                    'repeat((byte) 0x01, 31), "changeOutput must be exactly 32 bytes"',
+                    'repeat((byte) 0x01, 32), "changeOutput must be exactly 32 bytes"',
+                    "Android Java typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+                    "Enumerable.Repeat((byte)0x01, 31).ToArray()",
+                    "Enumerable.Repeat((byte)0x01, 32).ToArray()",
+                    "C# recursive spend redeem change-output fixed32 tests",
+                ),
+                "javascript/iroha_js/test/package_dist.test.js": (
+                    "[Buffer.alloc(31, 1), /changeOutput must be 32 bytes/]",
+                    "[Buffer.alloc(32, 1), /changeOutput must be 32 bytes/]",
+                    "JavaScript package dist recursive spend redeem change-output fixed32 coverage",
+                ),
+            },
+        ),
+        (
+            "zero",
+            {
+                "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+                    "for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32)] {",
+                    "for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 1, count: 32)] {",
+                    "Swift typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+                    "/changeOutput must be non-zero/",
+                    "/changeOutput must be nonempty/",
+                    "JavaScript typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "python/iroha_python/tests/kagemusha_test.py": (
+                    "change_output must be non-zero",
+                    "change_output must be nonempty",
+                    "Python typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+                    "changeOutput must be non-zero",
+                    "changeOutput must be nonempty",
+                    "Kotlin typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+                    "changeOutput must be non-zero",
+                    "changeOutput must be nonempty",
+                    "Android Java typed recursive spend redeem change-output fixed32 tests",
+                ),
+                "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+                    'Assert.Contains("changeOutput must be non-zero", zeroChangeOutputError.Message);',
+                    'Assert.Contains("changeOutput must be nonempty", zeroChangeOutputError.Message);',
+                    "C# recursive spend redeem change-output fixed32 tests",
+                ),
+                "javascript/iroha_js/test/package_dist.test.js": (
+                    "/changeOutput must be non-zero/",
+                    "/changeOutput must be nonempty/",
+                    "JavaScript package dist recursive spend redeem change-output fixed32 coverage",
+                ),
+            },
+        ),
+    )
+    detected_messages = []
+    for vector_name, replacements in mutation_sets:
+        mutated = dict(texts)
+        expected_labels = []
+        for target, (old, new, label) in replacements.items():
+            updated = mutated[target].replace(old, new, 1)
+            if updated == mutated[target]:
+                raise SystemExit(
+                    f"negative control failed: unable to mutate redeem change-output {vector_name} fixed32 vector in {target}"
+                )
+            mutated[target] = updated
+            expected_labels.append(label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    f"negative control failed: SDK redeem change-output {vector_name} fixed32 vector drift was not detected for "
+                    + ", ".join(missing)
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{vector_name}: {detected_message}")
+            continue
+        raise SystemExit(
+            f"negative control failed: SDK redeem change-output {vector_name} fixed32 vector drift was not detected"
+        )
+    print("negative control rejected SDK redeem change-output fixed32 vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-sdk-redeem-change-output-relationships":
     mutated = dict(texts)
     replacements = {
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
-            'assertRedeemRequestInvalidField("changeOutput")',
-            'assertRedeemRequestInvalidField("publicAmount")',
+            'assertRedeemRequestInvalidField("changeOutput") {\n'
+            '            try KagemushaRecursiveSpendRedeemRequest(\n'
+            '                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),\n'
+            "                recipient: Self.sampleRecipient(),\n"
+            '                publicAmount: "6"',
+            'assertRedeemRequestInvalidField("publicAmount") {\n'
+            '            try KagemushaRecursiveSpendRedeemRequest(\n'
+            '                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),\n'
+            "                recipient: Self.sampleRecipient(),\n"
+            '                publicAmount: "6"',
             "Swift typed recursive spend redeem change-output relationship tests",
         ),
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
@@ -27638,70 +32054,11 @@ if mode == "--negative-control-sdk-redeem-change-output-relationships":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK redeem change-output relationship drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK redeem change-output relationship drift was not detected"
-    )
-
-if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":
-    mutated = dict(texts)
-    replacements = {
-        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
-            "Data(repeating: 0, count: 32)",
-            "Data(repeating: 1, count: 32)",
-            "Swift typed recursive spend redeem change-output fixed32 tests",
-        ),
-        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
-            "/changeOutput must be non-zero/",
-            "/changeOutput must be nonempty/",
-            "JavaScript typed recursive spend redeem change-output fixed32 tests",
-        ),
-        "python/iroha_python/tests/kagemusha_test.py": (
-            "change_output must be non-zero",
-            "change_output must be nonempty",
-            "Python typed recursive spend redeem change-output fixed32 tests",
-        ),
-        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
-            "changeOutput must be non-zero",
-            "changeOutput must be nonempty",
-            "Kotlin typed recursive spend redeem change-output fixed32 tests",
-        ),
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
-            "changeOutput must be non-zero",
-            "changeOutput must be nonempty",
-            "Android Java typed recursive spend redeem change-output fixed32 tests",
-        ),
-        "javascript/iroha_js/test/package_dist.test.js": (
-            "/changeOutput must be non-zero/",
-            "/changeOutput must be nonempty/",
-            "JavaScript package dist recursive spend redeem change-output fixed32 coverage",
-        ),
-    }
-    expected_labels = []
-    for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate redeem change-output fixed32 vector in {target}"
-            )
-        mutated[target] = updated
-        expected_labels.append(label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK redeem change-output fixed32 vector drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK redeem change-output fixed32 vector drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK redeem change-output fixed32 vector drift was not detected"
     )
 
 if mode == "--negative-control-sdk-redeem-lineage-preflight":
@@ -27773,7 +32130,8 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK redeem lineage preflight drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK redeem lineage preflight drift was not detected"
@@ -27881,7 +32239,8 @@ if mode == "--negative-control-sdk-redeem-lineage-witness-shape":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK redeem lineage witness shape drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK redeem lineage witness shape drift was not detected"
@@ -27981,7 +32340,8 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK init lineage key auto preflight drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK init lineage key auto preflight drift was not detected"
@@ -28105,7 +32465,8 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK append lineage key material selection drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK append lineage key material selection drift was not detected"
@@ -28140,8 +32501,36 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
-            '"outputProofCircuitId is not valid for the previous bundle");',
-            '"lineageKeyArtifacts are only valid for lineage append output");',
+            "final SpendBundleSummary previousSummary = decodeBundle(this.previousBundle);\n"
+            "      final String normalizedOutput =\n"
+            "          KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputProofCircuitId);\n"
+            "      final boolean appendNeedsPreviousProofOpenEnvelopes =\n"
+            "          KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(\n"
+            "              normalizedOutput, previousSummary.hopCount);\n"
+            "      final boolean appendNeedsPreviousLineageVerifierRecord =\n"
+            "          KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(\n"
+            "              previousSummary.proofCircuitId);\n"
+            "      final boolean appendNeedsLineageKeyArtifacts =\n"
+            "          KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput);\n"
+            "      require(\n"
+            "          KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(\n"
+            "              previousSummary.proofCircuitId, normalizedOutput, previousSummary.hopCount),\n"
+            '          "outputProofCircuitId is not valid for the previous bundle");',
+            "final SpendBundleSummary previousSummary = decodeBundle(this.previousBundle);\n"
+            "      final String normalizedOutput =\n"
+            "          KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputProofCircuitId);\n"
+            "      final boolean appendNeedsPreviousProofOpenEnvelopes =\n"
+            "          KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(\n"
+            "              normalizedOutput, previousSummary.hopCount);\n"
+            "      final boolean appendNeedsPreviousLineageVerifierRecord =\n"
+            "          KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(\n"
+            "              previousSummary.proofCircuitId);\n"
+            "      final boolean appendNeedsLineageKeyArtifacts =\n"
+            "          KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput);\n"
+            "      require(\n"
+            "          KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(\n"
+            "              previousSummary.proofCircuitId, normalizedOutput, previousSummary.hopCount),\n"
+            '          "lineageKeyArtifacts are only valid for lineage append output");',
             "Android Java typed recursive spend append output selection before lineage-key selection",
         ),
         (
@@ -28171,7 +32560,8 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK append output selection preflight drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK append output selection preflight drift was not detected"
@@ -28273,7 +32663,8 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK append previous proof opening selection drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK append previous proof opening selection drift was not detected"
@@ -28393,7 +32784,8 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-preflight":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK append previous lineage record preflight drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK append previous lineage record preflight drift was not detected"
@@ -28419,6 +32811,12 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-parse-prefligh
             "malformedPreviousLineageRecordBeforeOpenings",
             "malformedPreviousLineageRecordAfterOpenings",
             "JavaScript source lineage key artifact copy tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "malformedPreviousLineageRecordBeforeOpeningsPackageDist",
+            "malformedPreviousLineageRecordAfterOpeningsPackageDist",
+            "JavaScript package dist previous-lineage record parse ordering tests",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
@@ -28453,7 +32851,8 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-parse-prefligh
                 + ", ".join(missing)
             )
         print("negative control rejected SDK append previous lineage record parse preflight drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK append previous lineage record parse preflight drift was not detected"
@@ -28506,8 +32905,28 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-selection":
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
-            '.invalidField("previousLineageVerifierRecord")',
-            '.invalidField("previousLineageVerifierRecordOptional")',
+            'previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),\n'
+            "                recordBundle: recordBundle,\n"
+            "                pallasOpenEnvelopes: pallasOpenEnvelopes,\n"
+            "                currentNote: Self.sampleNote(seed: 0x43),\n"
+            "                outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,\n"
+            "                previousLineageVerifierRecord: Self.sampleVerifierRecord()\n"
+            "            )\n"
+            "        ) { error in\n"
+            "            XCTAssertEqual(\n"
+            "                error as? KagemushaRecursiveSpendRequestCodecError,\n"
+            '                .invalidField("previousLineageVerifierRecord")',
+            'previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),\n'
+            "                recordBundle: recordBundle,\n"
+            "                pallasOpenEnvelopes: pallasOpenEnvelopes,\n"
+            "                currentNote: Self.sampleNote(seed: 0x43),\n"
+            "                outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,\n"
+            "                previousLineageVerifierRecord: Self.sampleVerifierRecord()\n"
+            "            )\n"
+            "        ) { error in\n"
+            "            XCTAssertEqual(\n"
+            "                error as? KagemushaRecursiveSpendRequestCodecError,\n"
+            '                .invalidField("previousLineageVerifierRecordOptional")',
             "Swift typed recursive spend request codec tests",
         ),
         (
@@ -28555,7 +32974,8 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-selection":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK append previous lineage record selection drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK append previous lineage record selection drift was not detected"
@@ -28594,6 +33014,10 @@ if mode == "--negative-control-sdk-readme-availability-surface":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} missing previous-proof opening archive boundary"
+            for target in replacements
+        ]
         missing = [
             target
             for target in replacements
@@ -28605,7 +33029,8 @@ if mode == "--negative-control-sdk-readme-availability-surface":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK README availability surface drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README availability surface drift was not detected")
 
@@ -28629,6 +33054,10 @@ if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} missing recursive compact ABI-7 boundary"
+            for target in targets
+        ]
         missing = [
             target
             for target in targets
@@ -28640,7 +33069,8 @@ if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK README recursive compact unavailable drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README recursive compact unavailable drift was not detected")
 
@@ -28679,6 +33109,10 @@ if mode == "--negative-control-sdk-readme-compact-projection-verifier":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} missing recursive compact ABI-7 boundary"
+            for target in replacements
+        ]
         missing = [
             target
             for target in replacements
@@ -28690,7 +33124,8 @@ if mode == "--negative-control-sdk-readme-compact-projection-verifier":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK README compact projection verifier drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README compact projection verifier drift was not detected")
 
@@ -28727,6 +33162,10 @@ if mode == "--negative-control-sdk-readme-stale-future-lineage":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
+        expected_labels = [
+            f"{target} still describes Reserved-lineage append output as future"
+            for target in replacements
+        ]
         missing = [
             target
             for target in replacements
@@ -28738,7 +33177,8 @@ if mode == "--negative-control-sdk-readme-stale-future-lineage":
                 + ", ".join(missing)
             )
         print("negative control rejected stale SDK README Reserved-lineage wording")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: stale SDK README Reserved-lineage wording was not detected")
 
@@ -28812,7 +33252,8 @@ if mode == "--negative-control-cross-sdk-helper-bodies":
                 + ", ".join(missing)
             )
         print("negative control rejected cross-SDK helper body drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: cross-SDK helper body drift was not detected")
 
@@ -28892,7 +33333,8 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
                 + ", ".join(missing)
             )
         print("negative control rejected cross-SDK preferred-mode fallback drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: cross-SDK preferred-mode fallback drift was not detected")
 
@@ -28926,7 +33368,8 @@ if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM Offline Note V2 decoder placeholder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM Offline Note V2 decoder placeholder drift was not detected"
@@ -28966,7 +33409,8 @@ if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM Offline Note V2 instruction wrapper drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected"
@@ -29006,7 +33450,8 @@ if mode == "--negative-control-jvm-offline-note-v2-instruction-decoder":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM Offline Note V2 instruction decoder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected"
@@ -29052,7 +33497,8 @@ if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names"
                 + ", ".join(missing)
             )
         print("negative control rejected Offline Note V2 canonical instruction wire-name drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected"
@@ -29069,13 +33515,16 @@ if mode == "--negative-control-swift-offline-note-v2-decoder-placeholder":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "Swift Offline Note V2 decoder placeholder removal"
-        if label not in message:
+        expected_labels = ("Swift Offline Note V2 decoder placeholder removal",)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Swift Offline Note V2 decoder placeholder drift was not detected"
+                "negative control failed: Swift Offline Note V2 decoder placeholder drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Swift Offline Note V2 decoder placeholder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Swift Offline Note V2 decoder placeholder drift was not detected"
@@ -29119,7 +33568,8 @@ if mode == "--negative-control-swift-offline-note-v2-instruction-decoder":
                 + ", ".join(missing)
             )
         print("negative control rejected Swift Offline Note V2 instruction decoder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected"
@@ -29167,7 +33617,8 @@ if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":
                 + ", ".join(missing)
             )
         print("negative control rejected Rust recursive compact unavailable classifier drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Rust recursive compact unavailable classifier drift was not detected")
 
@@ -29189,12 +33640,19 @@ if mode == "--negative-control-rust-kagemusha-hop-public-instance-shape":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Rust Kagemusha hop public-instance shape" not in message:
+        expected_labels = (
+            "Rust Kagemusha hop public-instance shape missing "
+            "ensure_kagemusha_confidential_v2_public_instance_shape(&instance_columns)?;",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Rust Kagemusha hop public-instance shape drift reported an unexpected guard"
+                "negative control failed: Rust Kagemusha hop public-instance shape drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Rust Kagemusha hop public-instance shape drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Rust Kagemusha hop public-instance shape drift was not detected"
@@ -29223,12 +33681,19 @@ if mode == "--negative-control-rust-kagemusha-fold-root-transition":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Rust Kagemusha fold root-transition preflight" not in message:
+        expected_labels = (
+            "Rust Kagemusha fold root-transition preflight missing "
+            "if step.root_before == step.root_after",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Rust Kagemusha fold root-transition drift reported an unexpected guard"
+                "negative control failed: Rust Kagemusha fold root-transition drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Rust Kagemusha fold root-transition drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Rust Kagemusha fold root-transition drift was not detected"
@@ -29267,7 +33732,8 @@ if mode == "--negative-control-sdk-recursive-compact-unavailable-helper":
                 + ", ".join(missing)
             )
         print("negative control rejected SDK recursive compact unavailable helper drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK recursive compact unavailable helper drift was not detected")
 
@@ -29425,7 +33891,8 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
                 + ", ".join(missing)
             )
         print("negative control rejected ABI-7 recursive compact verifier surface drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: ABI-7 recursive compact verifier surface drift was not detected"
@@ -29534,7 +34001,8 @@ public static class StaleRecursiveCompactKeyPackageArityFixture
                 + ", ".join(missing)
             )
         print("negative control rejected ABI-7 recursive compact key-package arity drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: ABI-7 recursive compact key-package arity drift was not detected"
@@ -29573,8 +34041,20 @@ if mode == "--negative-control-python-recursive-compact-probe-arity":
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Python recursive compact prover availability probe must pass record, Pallas, and key-artifact probe archives",
+            "Python recursive compact verifier availability probes must pass compact-token and verifier-key probe archives",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Python recursive compact probe arity drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Python recursive compact probe arity drift")
-        print(str(error).splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python recursive compact probe arity drift was not detected"
@@ -29598,13 +34078,19 @@ if mode == "--negative-control-js-recursive-compact-key-package-dispatch":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist recursive compact key-package dispatch coverage"
-        if label not in message:
+        expected_labels = (
+            "JavaScript package dist recursive compact key-package dispatch coverage missing "
+            "package dist Kagemusha recursive compact requires key packages before native dispatch",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript recursive compact key-package dispatch drift was not detected"
+                "negative control failed: JavaScript recursive compact key-package dispatch drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript recursive compact key-package dispatch drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript recursive compact key-package dispatch drift was not detected"
@@ -29628,13 +34114,19 @@ if mode == "--negative-control-js-package-dist-recursive-compact-declarations":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist recursive compact declaration coverage"
-        if label not in message:
+        expected_labels = (
+            "JavaScript package dist recursive compact declaration coverage missing "
+            "package declarations expose recursive compact key-package signatures",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist recursive compact declaration drift was not detected"
+                "negative control failed: JavaScript package dist recursive compact declaration drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist recursive compact declaration drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist recursive compact declaration drift was not detected"
@@ -29658,106 +34150,615 @@ if mode == "--negative-control-js-package-dist-accumulator-digest-declarations":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+        expected_labels = (
+            "JavaScript package dist accumulator digest declaration coverage missing "
+            "package declarations keep accumulator digests native-owned",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist accumulator digest declaration drift was not detected"
+                "negative control failed: JavaScript package dist accumulator digest declaration drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist accumulator digest declaration drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist accumulator digest declaration drift was not detected"
     )
 
 if mode == "--negative-control-js-package-dist-accumulator-digest-denylist":
-    mutated = dict(texts)
     target = "javascript/iroha_js/test/package_dist.test.js"
-    original = mutated[target]
-    updated = original.replace(
-        "appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|",
-        "",
-        1,
+    mutations = (
+        (
+            "lineageDigest|LineageDigest|lineage_digest|",
+            "lineage digest",
+        ),
+        (
+            "aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|",
+            "aggregation transcript digest",
+        ),
+        (
+            "fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|",
+            "fixed-window table schedule digest",
+        ),
+        (
+            "fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|",
+            "fixed-window shared-table manifest digest",
+        ),
+        (
+            "fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|",
+            "fixed-window table-base digest",
+        ),
+        (
+            "verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|",
+            "verifier witness batch digest",
+        ),
+        (
+            "recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|",
+            "recursive proof-chain digest",
+        ),
+        (
+            "proofChainDigest|ProofChainDigest|proof_chain_digest|",
+            "bare proof-chain digest",
+        ),
+        (
+            "transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|",
+            "transition profile binding digest",
+        ),
+        (
+            "appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|",
+            "append opening preflight digest",
+        ),
+        (
+            "appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|",
+            "append boundary digest",
+        ),
+        (
+            "recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|",
+            "recursive verifier scalar projection digest",
+        ),
+        (
+            "previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|",
+            "previous accumulator digest",
+        ),
+        (
+            "resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|",
+            "resulting accumulator digest",
+        ),
+        (
+            "accumulatorDigest|AccumulatorDigest|accumulator_digest",
+            "generic accumulator digest",
+        ),
     )
-    if updated == original:
-        raise SystemExit(
-            "negative control failed: unable to mutate JavaScript package dist accumulator digest denylist"
-        )
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+    detected_messages = []
+    for removed_token, digest_name in mutations:
+        mutated = dict(texts)
+        original = mutated[target]
+        updated = original.replace(removed_token, "", 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"
+                f"negative control failed: unable to mutate JavaScript package dist accumulator digest denylist for {digest_name}"
             )
-        print("negative control rejected JavaScript package dist accumulator digest denylist drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            required_token = removed_token.removesuffix("|")
+            expected = (
+                "JavaScript package dist accumulator digest declaration coverage missing "
+                + required_token
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"
+                )
+            detected_messages.append(
+                f"{digest_name}: {first_lines_for_labels(message, (expected,))[0]}"
+            )
+            continue
+        raise SystemExit(
+            f"negative control failed: JavaScript package dist accumulator digest denylist drift was not detected for {digest_name}"
+        )
+    print("negative control rejected JavaScript package dist accumulator digest denylist drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-js-package-dist-accumulator-digest-self-check-exactness":
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    mutations = (
+        (
+            '"lineageDigestV1",',
+            "lineage digest exact self-check entry",
+        ),
+        (
+            '"aggregationTranscriptDigestV1",',
+            "aggregation transcript digest exact self-check entry",
+        ),
+        (
+            '"fixedWindowTableScheduleDigestV1",',
+            "fixed-window table schedule digest exact self-check entry",
+        ),
+        (
+            '"fixedWindowSharedTableManifestDigestV1",',
+            "fixed-window shared-table manifest digest exact self-check entry",
+        ),
+        (
+            '"fixedWindowTableBaseDigestV1",',
+            "fixed-window table-base digest exact self-check entry",
+        ),
+        (
+            '"verifierWitnessBatchDigestV1",',
+            "verifier witness batch digest exact self-check entry",
+        ),
+        (
+            '"recursiveProofChainDigestV1",',
+            "recursive proof-chain digest exact self-check entry",
+        ),
+        (
+            '"ProofChainDigestBytes",',
+            "bare proof-chain digest exact self-check entry",
+        ),
+        (
+            '"transitionProfileBindingDigestV1",',
+            "transition profile binding digest exact self-check entry",
+        ),
+        (
+            '"appendOpeningPreflightDigestV1",',
+            "append opening preflight digest exact self-check entry",
+        ),
+        (
+            '"appendBoundaryDigestV1",',
+            "append boundary digest exact self-check entry",
+        ),
+        (
+            '"recursiveVerifierScalarProjectionDigestV1",',
+            "recursive verifier scalar projection digest exact self-check entry",
+        ),
+        (
+            '"previousAccumulatorDigestV1",',
+            "previous accumulator digest exact self-check entry",
+        ),
+        (
+            '"resultingAccumulatorDigestV1",',
+            "resulting accumulator digest exact self-check entry",
+        ),
+        (
+            '"terminalAccumulatorDigest",',
+            "terminal accumulator digest exact self-check entry",
+        ),
+        (
+            '"walletRecursiveProofChainDigest",',
+            "wallet recursive proof-chain digest exact self-check entry",
+        ),
+        (
+            '"accumulatorDigestV1",',
+            "generic accumulator digest exact self-check entry",
+        ),
     )
+    detected_messages = []
+    for removed_entry, digest_name in mutations:
+        mutated = dict(texts)
+        original = mutated[target]
+        updated = original.replace(removed_entry, "", 1)
+        if updated == original:
+            raise SystemExit(
+                f"negative control failed: unable to mutate JavaScript package dist accumulator digest self-check entry for {digest_name}"
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected = (
+                "JavaScript package dist accumulator digest declaration exact self-check entries missing "
+                + removed_entry
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript package dist accumulator digest self-check exactness drift was not detected"
+                )
+            detected_messages.append(
+                f"{digest_name}: {first_lines_for_labels(message, (expected,))[0]}"
+            )
+            continue
+        raise SystemExit(
+            f"negative control failed: JavaScript package dist accumulator digest self-check exactness drift was not detected for {digest_name}"
+        )
+    print("negative control rejected JavaScript package dist accumulator digest self-check exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":
-    mutated = dict(texts)
     target = "javascript/iroha_js/test/package_dist.test.js"
-    original = mutated[target]
-    updated = original.replace(
-        "previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|",
-        "",
-        1,
+    mutations = (
+        (
+            "previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|",
+            "previous accumulator digest",
+        ),
+        (
+            "resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|",
+            "resulting accumulator digest",
+        ),
     )
-    if updated == original:
-        raise SystemExit(
-            "negative control failed: unable to mutate JavaScript package dist terminal accumulator digest denylist"
-        )
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+    detected_messages = []
+    for removed_token, digest_name in mutations:
+        mutated = dict(texts)
+        original = mutated[target]
+        updated = original.replace(removed_token, "", 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"
+                f"negative control failed: unable to mutate JavaScript package dist terminal accumulator digest denylist for {digest_name}"
             )
-        print("negative control rejected JavaScript package dist terminal accumulator digest denylist drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"
-    )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            required_token = removed_token.removesuffix("|")
+            expected = (
+                "JavaScript package dist accumulator digest declaration coverage missing "
+                + required_token
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"
+                )
+            detected_messages.append(
+                f"{digest_name}: {first_lines_for_labels(message, (expected,))[0]}"
+            )
+            continue
+        raise SystemExit(
+            f"negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected for {digest_name}"
+        )
+    print("negative control rejected JavaScript package dist terminal accumulator digest denylist drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-package-dist-accumulator-material-denylist":
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    mutations = (
+        (
+            "lineageAccumulator|LineageAccumulator|lineage_accumulator|",
+            "lineage accumulator material",
+        ),
+        (
+            "aggregationTranscript|AggregationTranscript|aggregation_transcript|",
+            "aggregation transcript material",
+        ),
+        (
+            "fixedWindowTableSchedule|FixedWindowTableSchedule|fixed_window_table_schedule|",
+            "fixed-window table schedule material",
+        ),
+        (
+            "fixedWindowSharedTableManifest|FixedWindowSharedTableManifest|fixed_window_shared_table_manifest|",
+            "fixed-window shared-table manifest material",
+        ),
+        (
+            "fixedWindowTableBase|FixedWindowTableBase|fixed_window_table_base|",
+            "fixed-window table-base material",
+        ),
+        (
+            "verifierWitnessBatch|VerifierWitnessBatch|verifier_witness_batch|",
+            "verifier witness batch material",
+        ),
+        (
+            "recursiveProofChain|RecursiveProofChain|recursive_proof_chain|",
+            "recursive proof-chain material",
+        ),
+        (
+            "proofChain|ProofChain|proof_chain|",
+            "bare proof-chain material",
+        ),
+        (
+            "appendAccumulator|AppendAccumulator|append_accumulator|",
+            "append accumulator material",
+        ),
+        (
+            "recursiveAccumulator|RecursiveAccumulator|recursive_accumulator|",
+            "recursive accumulator material",
+        ),
+        (
+            "terminalAccumulator|TerminalAccumulator|terminal_accumulator|",
+            "terminal accumulator material",
+        ),
+        (
+            "walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain|",
+            "wallet recursive proof-chain material",
+        ),
+        (
+            "transitionProfileBinding|TransitionProfileBinding|transition_profile_binding|",
+            "transition profile binding material",
+        ),
+        (
+            "appendOpeningPreflight|AppendOpeningPreflight|append_opening_preflight|",
+            "append opening preflight material",
+        ),
+        (
+            "recursiveVerifierScalarProjection|RecursiveVerifierScalarProjection|recursive_verifier_scalar_projection|",
+            "recursive verifier scalar projection material",
+        ),
+        (
+            "previousAccumulator|PreviousAccumulator|previous_accumulator|",
+            "previous accumulator material",
+        ),
+        (
+            "resultingAccumulator|ResultingAccumulator|resulting_accumulator|",
+            "resulting accumulator material",
+        ),
+        (
+            "accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot|",
+            "accumulator snapshot material",
+        ),
+        (
+            "recursiveSnapshot|RecursiveSnapshot|recursive_snapshot|",
+            "recursive snapshot material",
+        ),
+        (
+            "lineageSnapshot|LineageSnapshot|lineage_snapshot|",
+            "lineage snapshot material",
+        ),
+        (
+            "proofState|ProofState|proof_state|",
+            "generic proof-state material",
+        ),
+        (
+            "recursiveProofState|RecursiveProofState|recursive_proof_state|",
+            "recursive proof-state material",
+        ),
+        (
+            "lineageProofState|LineageProofState|lineage_proof_state|",
+            "lineage proof-state material",
+        ),
+        (
+            "accumulatorState|AccumulatorState|accumulator_state",
+            "generic accumulator-state material",
+        ),
+    )
+    detected_messages = []
+    for removed_token, material_name in mutations:
+        mutated = dict(texts)
+        original = mutated[target]
+        updated = original.replace(removed_token, "", 1)
+        if updated == original:
+            raise SystemExit(
+                f"negative control failed: unable to mutate JavaScript package dist accumulator material denylist for {material_name}"
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            required_token = removed_token.removesuffix("|")
+            expected = (
+                "JavaScript package dist accumulator material declaration coverage missing "
+                + required_token
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript package dist accumulator material denylist drift was not detected"
+                )
+            detected_messages.append(
+                f"{material_name}: {first_lines_for_labels(message, (expected,))[0]}"
+            )
+            continue
+        raise SystemExit(
+            f"negative control failed: JavaScript package dist accumulator material denylist drift was not detected for {material_name}"
+        )
+    print("negative control rejected JavaScript package dist accumulator material denylist drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-js-package-dist-accumulator-material-self-check-exactness":
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    mutations = (
+        (
+            '"lineageAccumulatorState",',
+            "lineage accumulator material exact self-check entry",
+        ),
+        (
+            '"recursiveProofChainBytes",',
+            "recursive proof-chain material exact self-check entry",
+        ),
+        (
+            '"terminalAccumulator",',
+            "terminal accumulator material exact self-check entry",
+        ),
+        (
+            '"walletRecursiveProofChain",',
+            "wallet recursive proof-chain material exact self-check entry",
+        ),
+        (
+            '"proofChain",',
+            "bare proof-chain material exact self-check entry",
+        ),
+        (
+            '"appendAccumulator",',
+            "append accumulator material exact self-check entry",
+        ),
+        (
+            '"recursiveAccumulator",',
+            "recursive accumulator material exact self-check entry",
+        ),
+        (
+            '"aggregationTranscript",',
+            "aggregation transcript material exact self-check entry",
+        ),
+        (
+            '"fixedWindowTableSchedule",',
+            "fixed-window table schedule material exact self-check entry",
+        ),
+        (
+            '"fixedWindowSharedTableManifest",',
+            "fixed-window shared-table manifest material exact self-check entry",
+        ),
+        (
+            '"fixedWindowTableBase",',
+            "fixed-window table-base material exact self-check entry",
+        ),
+        (
+            '"verifierWitnessBatch",',
+            "verifier witness batch material exact self-check entry",
+        ),
+        (
+            '"transitionProfileBinding",',
+            "transition profile binding material exact self-check entry",
+        ),
+        (
+            '"appendOpeningPreflight",',
+            "append opening preflight material exact self-check entry",
+        ),
+        (
+            '"recursiveVerifierScalarProjection",',
+            "recursive verifier scalar projection material exact self-check entry",
+        ),
+        (
+            '"previousAccumulator",',
+            "previous accumulator material exact self-check entry",
+        ),
+        (
+            '"resultingAccumulator",',
+            "resulting accumulator material exact self-check entry",
+        ),
+        (
+            '"accumulatorSnapshot",',
+            "accumulator snapshot material exact self-check entry",
+        ),
+        (
+            '"recursiveSnapshot",',
+            "recursive snapshot material exact self-check entry",
+        ),
+        (
+            '"lineageSnapshot",',
+            "lineage snapshot material exact self-check entry",
+        ),
+        (
+            '"proofState",',
+            "generic proof-state material exact self-check entry",
+        ),
+        (
+            '"recursiveProofState",',
+            "recursive proof-state material exact self-check entry",
+        ),
+        (
+            '"lineageProofState",',
+            "lineage proof-state material exact self-check entry",
+        ),
+        (
+            '"accumulatorState",',
+            "generic accumulator-state material exact self-check entry",
+        ),
+    )
+    detected_messages = []
+    for removed_entry, material_name in mutations:
+        mutated = dict(texts)
+        original = mutated[target]
+        updated = original.replace(removed_entry, "", 1)
+        if updated == original:
+            raise SystemExit(
+                f"negative control failed: unable to mutate JavaScript package dist accumulator material self-check entry for {material_name}"
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected = (
+                "JavaScript package dist accumulator material declaration exact self-check entries missing "
+                + removed_entry
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript package dist accumulator material self-check exactness drift was not detected"
+                )
+            detected_messages.append(
+                f"{material_name}: {first_lines_for_labels(message, (expected,))[0]}"
+            )
+            continue
+        raise SystemExit(
+            f"negative control failed: JavaScript package dist accumulator material self-check exactness drift was not detected for {material_name}"
+        )
+    print("negative control rejected JavaScript package dist accumulator material self-check exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-js-package-dist-prefixed-accumulator-material-denylist":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/package_dist.test.js"
     original = mutated[target]
     updated = original.replace(
-        "terminalAccumulator|TerminalAccumulator|terminal_accumulator|",
-        "",
+        r"\b[A-Za-z0-9_]*(?:lineageAccumulator",
+        r"\b(?:lineageAccumulator",
         1,
     )
     if updated == original:
         raise SystemExit(
-            "negative control failed: unable to mutate JavaScript package dist accumulator material denylist"
+            "negative control failed: unable to mutate JavaScript package dist prefixed accumulator material denylist"
         )
     mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+        expected_labels = (
+            r"JavaScript package dist accumulator material prefix denial missing "
+            r"\b[A-Za-z0-9_]*(?:lineageAccumulator",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist accumulator material denylist drift was not detected"
+                "negative control failed: JavaScript package dist prefixed accumulator material denylist drift was not detected for "
+                + ", ".join(missing)
             )
-        print("negative control rejected JavaScript package dist accumulator material denylist drift")
-        print(message.splitlines()[0])
+        print("negative control rejected JavaScript package dist prefixed accumulator material denylist drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
-        "negative control failed: JavaScript package dist accumulator material denylist drift was not detected"
+        "negative control failed: JavaScript package dist prefixed accumulator material denylist drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-suffixed-accumulator-material-denylist":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        r"accumulator_state)/u;",
+        r"accumulator_state)\b/u;",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist suffixed accumulator material denylist"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            r"JavaScript package dist accumulator material suffix denial contains forbidden pattern "
+            r"accumulatorMaterialDeclarationPattern\s*=\s*/[^\n]*\)\s*\\b/u",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist suffixed accumulator material denylist drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JavaScript package dist suffixed accumulator material denylist drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist suffixed accumulator material denylist drift was not detected"
     )
 
 if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":
@@ -29778,13 +34779,19 @@ if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denyl
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+        expected_labels = (
+            r"JavaScript package dist accumulator digest prefix denial missing "
+            r"\b[A-Za-z0-9_]*(?:lineageDigest",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist prefixed accumulator digest denylist drift was not detected"
+                "negative control failed: JavaScript package dist prefixed accumulator digest denylist drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist prefixed accumulator digest denylist drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist prefixed accumulator digest denylist drift was not detected"
@@ -29808,13 +34815,19 @@ if mode == "--negative-control-js-package-dist-suffixed-accumulator-digest-denyl
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest suffix denial"
-        if label not in message:
+        expected_labels = (
+            r"JavaScript package dist accumulator digest suffix denial contains forbidden pattern "
+            r"accumulatorDigestDeclarationPattern\s*=\s*/[^\n]*\)\s*\\b/u",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected"
+                "negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist suffixed accumulator digest denylist drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected"
@@ -29841,13 +34854,19 @@ if mode == "--negative-control-js-package-dist-declaration-sweep":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+        expected_labels = (
+            "JavaScript package dist accumulator digest declaration coverage missing "
+            "connect.browser.d.ts",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist declaration sweep drift was not detected"
+                "negative control failed: JavaScript package dist declaration sweep drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist declaration sweep drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist declaration sweep drift was not detected"
@@ -29874,13 +34893,19 @@ if mode == "--negative-control-js-package-dist-nexus-declaration-sweep":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+        expected_labels = (
+            "JavaScript package dist accumulator digest declaration coverage missing "
+            "nexus-app.d.ts",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected"
+                "negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist Nexus declaration sweep drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected"
@@ -29907,13 +34932,19 @@ if mode == "--negative-control-js-package-dist-kotodama-declaration-sweep":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript package dist accumulator digest declaration coverage"
-        if label not in message:
+        expected_labels = (
+            "JavaScript package dist accumulator digest declaration coverage missing "
+            "kotodama-compiler.d.ts",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript package dist Kotodama declaration sweep drift was not detected"
+                "negative control failed: JavaScript package dist Kotodama declaration sweep drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript package dist Kotodama declaration sweep drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript package dist Kotodama declaration sweep drift was not detected"
@@ -29953,7 +34984,8 @@ if mode == "--negative-control-js-dts-recursive-compact-key-package":
                 + ", ".join(missing)
             )
         print("negative control rejected JavaScript TypeScript recursive compact key-package declaration drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript TypeScript recursive compact key-package declaration drift was not detected"
@@ -29975,13 +35007,19 @@ if mode == "--negative-control-python-recursive-compact-root-export":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "Python package recursive compact and Pallas builder re-exports"
-        if label not in message:
+        expected_labels = [
+            "Python package recursive compact and Pallas builder re-exports missing " + method
+            for method in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS
+        ]
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python recursive compact root re-export drift was not detected"
+                "negative control failed: Python recursive compact root re-export drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python recursive compact root re-export drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python recursive compact root re-export drift was not detected"
@@ -30041,7 +35079,8 @@ if mode == "--negative-control-recursive-spend-compact-projection-surface":
                 + ", ".join(missing)
             )
         print("negative control rejected recursive spend compact projection surface drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: recursive spend compact projection surface drift was not detected"
@@ -30064,13 +35103,19 @@ if mode == "--negative-control-js-compact-projection-block-height-validation":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        label = "JavaScript recursive spend compact projection gate"
-        if label not in message:
+        expected_labels = (
+            "JavaScript recursive spend compact projection gate missing "
+            "const checkedBlockHeight = normalizeKagemushaBlockHeight(blockHeight);",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript compact projection block-height validation drift was not detected"
+                "negative control failed: JavaScript compact projection block-height validation drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JavaScript compact projection block-height validation drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JavaScript compact projection block-height validation drift was not detected"
@@ -30080,24 +35125,37 @@ if mode == "--negative-control-python-recursive-spend-compact-projection-root-ex
     mutated_texts = dict(texts)
     target = "python/iroha_python/src/iroha_python/__init__.py"
     method = "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
-    mutated = mutated_texts[target].replace(f'    "{method}",\n', "", 1)
-    mutated = mutated.replace(f"        {method},\n", "", 1)
-    if mutated == mutated_texts[target]:
-        raise SystemExit(
-            "negative control failed: unable to mutate Python recursive spend compact projection root export"
-        )
+    replacements = (
+        f'    "{method}",\n',
+        f"        {method},\n",
+    )
+    mutated = mutated_texts[target]
+    for needle in replacements:
+        next_mutated = mutated.replace(needle, "", 1)
+        if next_mutated == mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python recursive spend compact projection root export "
+                + needle.strip()
+            )
+        mutated = next_mutated
     mutated_texts[target] = mutated
     try:
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        label = "Python package recursive spend compact projection re-exports"
-        if label not in message:
+        expected_labels = (
+            "Python package recursive spend compact projection re-exports missing "
+            + method,
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python recursive spend compact projection root export drift was not detected"
+                "negative control failed: Python recursive spend compact projection root export drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python recursive spend compact projection root export drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python recursive spend compact projection root export drift was not detected"
@@ -30115,10 +35173,15 @@ if mode == "--negative-control-python-compact-projection-hardening":
             "expected_compact_token = bytes(compact_token)",
             "borrowed_compact_token = compact_token",
         ),
+        (
+            "expected_compact_token",
+            "borrowed_compact_token",
+        ),
     )
     mutated = mutated_texts[target]
     for old, new in replacements:
-        updated = mutated.replace(old, new, 1)
+        count = -1 if old == "expected_compact_token" else 1
+        updated = mutated.replace(old, new, count)
         if updated == mutated:
             raise SystemExit(
                 f"negative control failed: unable to mutate Python compact projection hardening coverage in {target}"
@@ -30129,13 +35192,19 @@ if mode == "--negative-control-python-compact-projection-hardening":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        label = "Python recursive spend compact projection tests"
-        if label not in message:
+        expected_labels = (
+            "Python recursive spend compact projection tests missing test_recursive_spend_compact_projection_rejects_permissive_native_probes",
+            "Python recursive spend compact projection tests missing expected_compact_token",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Python compact projection hardening drift was not detected"
+                "negative control failed: Python compact projection hardening drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Python compact projection hardening drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: Python compact projection hardening drift was not detected"
@@ -30164,13 +35233,24 @@ if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        label = "Rust JNI recursive compact projection block-height carrier"
-        if label not in message:
+        expected_labels = (
+            "Rust JNI recursive compact projection raw u64 block-height carrier missing "
+            "let height = block_height.map(java_jlong_to_u64_bits);",
+            (
+                r"Rust JNI recursive compact projection block-height carrier contains forbidden pattern "
+                r"Some\(value\)\s+if\s+value\s*<\s*0\s*=>\s*return\s+Err\("
+                r"\"blockHeight must be non-negative\"\.to_owned\(\)\)"
+            ),
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JVM compact projection unsigned block-height drift was not detected"
+                "negative control failed: JVM compact projection unsigned block-height drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JVM compact projection unsigned block-height drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM compact projection unsigned block-height drift was not detected"
@@ -30178,40 +35258,120 @@ if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":
 
 if mode == "--negative-control-jvm-compact-projection-block-height-vectors":
     mutated_texts = dict(texts)
-    replacements = {
+    mutation_cases = {
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
-            '                    "01",\n',
-            "Kotlin compact projection blockHeight test vectors",
+            (
+                "                    -1L,\n",
+                "                    0L,\n",
+                "Kotlin compact projection blockHeight test vectors missing -1L",
+            ),
+            (
+                "                    Long.MAX_VALUE,\n",
+                "                    0L,\n",
+                "Kotlin compact projection blockHeight test vectors missing Long.MAX_VALUE",
+            ),
+            (
+                '                    "9223372036854775808",\n',
+                '                    "7",\n',
+                'Kotlin compact projection blockHeight test vectors missing "9223372036854775808"',
+            ),
+            (
+                '                    BigInteger("18446744073709551615"),\n',
+                '                    BigInteger("7"),\n',
+                'Kotlin compact projection blockHeight test vectors missing BigInteger("18446744073709551615")',
+            ),
+            (
+                '                    "01",\n',
+                '                    "1",\n',
+                'Kotlin compact projection blockHeight test vectors missing "01"',
+            ),
+            (
+                '                    " 1",\n',
+                '                    "1",\n',
+                'Kotlin compact projection blockHeight test vectors missing " 1"',
+            ),
+            (
+                '                    "18446744073709551616",\n',
+                '                    "7",\n',
+                'Kotlin compact projection blockHeight test vectors missing "18446744073709551616"',
+            ),
+            (
+                '                    BigInteger("-1"),\n',
+                '                    BigInteger("1"),\n',
+                'Kotlin compact projection blockHeight test vectors missing BigInteger("-1")',
+            ),
         ),
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
-            '                    validRecursiveCompactInput, validRecursiveCompactInput, "01"));\n',
-            "Android Java compact projection blockHeight test vectors",
+            (
+                "                    validRecursiveCompactInput, validRecursiveCompactInput, -1L));\n",
+                "                    validRecursiveCompactInput, validRecursiveCompactInput, 0L));\n",
+                "Android Java compact projection blockHeight test vectors missing -1L",
+            ),
+            (
+                "                    new byte[0], validRecursiveCompactInput, Long.MAX_VALUE));\n",
+                "                    new byte[0], validRecursiveCompactInput, 0L));\n",
+                "Android Java compact projection blockHeight test vectors missing Long.MAX_VALUE",
+            ),
+            (
+                '                    new byte[0], validRecursiveCompactInput, "9223372036854775808"));\n',
+                '                    new byte[0], validRecursiveCompactInput, "7"));\n',
+                'Android Java compact projection blockHeight test vectors missing "9223372036854775808"',
+            ),
+            (
+                '                    new BigInteger("18446744073709551615")));\n',
+                '                    new BigInteger("7")));\n',
+                'Android Java compact projection blockHeight test vectors missing new BigInteger("18446744073709551615")',
+            ),
+            (
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, "01"));\n',
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, "1"));\n',
+                'Android Java compact projection blockHeight test vectors missing "01"',
+            ),
+            (
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, " 1"));\n',
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, "1"));\n',
+                'Android Java compact projection blockHeight test vectors missing " 1"',
+            ),
+            (
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, "18446744073709551616"));\n',
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, "7"));\n',
+                'Android Java compact projection blockHeight test vectors missing "18446744073709551616"',
+            ),
+            (
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, new BigInteger("-1")));\n',
+                '                    validRecursiveCompactInput, validRecursiveCompactInput, new BigInteger("1")));\n',
+                'Android Java compact projection blockHeight test vectors missing new BigInteger("-1")',
+            ),
         ),
     }
-    for target, (needle, _label) in replacements.items():
-        mutated = mutated_texts[target].replace(needle, "", 1)
-        if mutated == mutated_texts[target]:
-            raise SystemExit(
-                "negative control failed: unable to mutate JVM/Android compact projection blockHeight vectors in "
-                + target
-            )
+    expected_labels = []
+    for target, replacements in mutation_cases.items():
+        mutated = mutated_texts[target]
+        for old, new, expected_label in replacements:
+            updated = mutated.replace(old, new, 1)
+            if updated == mutated:
+                raise SystemExit(
+                    "negative control failed: unable to mutate JVM/Android compact projection blockHeight vector "
+                    + expected_label
+                    + " in "
+                    + target
+                )
+            mutated = updated
+            expected_labels.append(expected_label)
         mutated_texts[target] = mutated
     try:
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        missing = [
-            label
-            for _target, (_needle, label) in replacements.items()
-            if label not in message
-        ]
+        missing = [label for label in expected_labels if label not in message]
         if missing:
             raise SystemExit(
                 "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected for "
                 + ", ".join(missing)
             )
         print("negative control rejected JVM/Android compact projection blockHeight vector drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected"
@@ -30271,7 +35431,11 @@ if mode == "--negative-control-jvm-android-compact-projection-native-output-guar
                 + ", ".join(missing)
             )
         print("negative control rejected JVM/Android compact projection native output guard drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(
+            message,
+            [label for _target, _replacements, label in cases],
+        ):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM/Android compact projection native output guard drift was not detected"
@@ -30312,7 +35476,11 @@ if mode == "--negative-control-jvm-android-compact-projection-availability-split
                 + ", ".join(missing)
             )
         print("negative control rejected JVM/Android compact projection availability drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(
+            message,
+            [label for _target, _old, _new, label in cases],
+        ):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM/Android compact projection availability drift was not detected"
@@ -30322,34 +35490,63 @@ if mode == "--negative-control-jvm-claim-identifier-account-binding-test":
     mutated_texts = dict(texts)
     java_target = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java"
     kotlin_target = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
-    java_mutated = mutated_texts[java_target].replace(
-        "claimIdentifierRejectsAccountMismatchBeforeEncoding",
-        "claimIdentifierAllowsAccountMismatchBeforeEncoding",
-    ).replace(
-        "ClaimIdentifier accountId must match receipt.accountId",
-        "ClaimIdentifier account mismatch may be checked by core",
+    java_replacements = (
+        (
+            "claimIdentifierRejectsAccountMismatchBeforeEncoding",
+            "claimIdentifierAllowsAccountMismatchBeforeEncoding",
+        ),
+        (
+            "ClaimIdentifier accountId must match receipt.accountId",
+            "ClaimIdentifier account mismatch may be checked by core",
+        ),
     )
-    kotlin_mutated = mutated_texts[kotlin_target].replace(
-        "claim identifier rejects account mismatch before encoding",
-        "claim identifier allows account mismatch before encoding",
-    ).replace(
-        "ClaimIdentifier accountId must match receipt.accountId",
-        "ClaimIdentifier account mismatch may be checked by core",
+    kotlin_replacements = (
+        (
+            "claim identifier rejects account mismatch before encoding",
+            "claim identifier allows account mismatch before encoding",
+        ),
+        (
+            "ClaimIdentifier accountId must match receipt.accountId",
+            "ClaimIdentifier account mismatch may be checked by core",
+        ),
     )
-    if java_mutated == mutated_texts[java_target] or kotlin_mutated == mutated_texts[kotlin_target]:
-        raise SystemExit("negative control failed: unable to mutate JVM ClaimIdentifier account binding tests")
+    java_mutated = mutated_texts[java_target]
+    for old, new in java_replacements:
+        next_mutated = java_mutated.replace(old, new, 1)
+        if next_mutated == java_mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Java ClaimIdentifier account binding test "
+                + old
+            )
+        java_mutated = next_mutated
+    kotlin_mutated = mutated_texts[kotlin_target]
+    for old, new in kotlin_replacements:
+        next_mutated = kotlin_mutated.replace(old, new, 1)
+        if next_mutated == kotlin_mutated:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin ClaimIdentifier account binding test "
+                + old
+            )
+        kotlin_mutated = next_mutated
     mutated_texts[java_target] = java_mutated
     mutated_texts[kotlin_target] = kotlin_mutated
     try:
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "ClaimIdentifier account binding test" not in message:
+        expected_labels = (
+            "Android Java ClaimIdentifier account binding test",
+            "Kotlin ClaimIdentifier account binding test",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: JVM ClaimIdentifier account binding drift was not detected"
+                "negative control failed: JVM ClaimIdentifier account binding drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected JVM ClaimIdentifier account binding drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM ClaimIdentifier account binding drift was not detected")
 
@@ -30421,7 +35618,8 @@ if mode == "--negative-control-jvm-claim-identifier-account-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM ClaimIdentifier account exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM ClaimIdentifier account exactness drift was not detected")
 
@@ -30484,7 +35682,8 @@ if mode == "--negative-control-jvm-identifier-claim-record-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected JVM identifier claim-record exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM identifier claim-record exactness drift was not detected")
 
@@ -30592,7 +35791,8 @@ if mode == "--negative-control-js-swift-identifier-claim-record-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected JS/Swift identifier claim-record exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS/Swift identifier claim-record exactness drift was not detected")
 
@@ -30754,7 +35954,8 @@ if mode == "--negative-control-ram-lfe-response-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected RAM-LFE response exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: RAM-LFE response exactness drift was not detected")
 
@@ -30919,7 +36120,8 @@ if mode == "--negative-control-ram-lfe-program-policy-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected RAM-LFE program-policy exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: RAM-LFE program-policy exactness drift was not detected")
 
@@ -31012,7 +36214,8 @@ if mode == "--negative-control-identifier-policy-proof-verifier-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected identifier policy proof-verifier exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier policy proof-verifier exactness drift was not detected")
 
@@ -31167,7 +36370,8 @@ if mode == "--negative-control-identifier-policy-metadata-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected identifier policy metadata exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier policy metadata exactness drift was not detected")
 
@@ -31294,7 +36498,8 @@ if mode == "--negative-control-account-alias-resolution-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected account alias resolution exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: account alias resolution exactness drift was not detected")
 
@@ -31434,7 +36639,8 @@ if mode == "--negative-control-multisig-resolved-account-exactness":
                 + ", ".join(missing)
             )
         print("negative control rejected multisig resolved account exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: multisig resolved account exactness drift was not detected")
 
@@ -31460,12 +36666,18 @@ if mode == "--negative-control-android-device-lab-family-fail-closed":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Android device-lab exporter must fail closed" not in message:
+        expected_labels = (
+            "Android device-lab exporter must fail closed after the standard device matrix",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Android device-lab family fallback drift was not detected"
+                "negative control failed: Android device-lab family fallback drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Android device-lab family fallback drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android device-lab family fallback drift was not detected")
 
@@ -31485,12 +36697,16 @@ if mode == "--negative-control-android-device-lab-family-overmatch":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Android device-lab exporter exact family matching" not in message:
+        expected_labels = ("Android device-lab exporter exact family matching",)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Android device-lab family overmatch drift was not detected"
+                "negative control failed: Android device-lab family overmatch drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Android device-lab family overmatch drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android device-lab family overmatch drift was not detected")
 
@@ -31513,12 +36729,16 @@ if mode == "--negative-control-android-device-lab-family-override-binding":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Android slot assembler exact family matching" not in message:
+        expected_labels = ("Android slot assembler exact family matching",)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Android device-lab family override drift was not detected"
+                "negative control failed: Android device-lab family override drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Android device-lab family override drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android device-lab family override drift was not detected")
 
@@ -31542,12 +36762,16 @@ if mode == "--negative-control-android-device-lab-assembler-identity-fields":
         run_checks(mutated_texts)
     except ParityError as error:
         message = str(error)
-        if "Android slot assembler exact family matching" not in message:
+        expected_labels = ("Android slot assembler exact family matching",)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: Android device-lab assembler identity field drift was not detected"
+                "negative control failed: Android device-lab assembler identity field drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected Android device-lab assembler identity field drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android device-lab assembler identity field drift was not detected")
 
@@ -31563,21 +36787,27 @@ if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     updated = updated.replace(
         "zero-envelope nested Pallas archives",
         "one-envelope nested Pallas archives",
-        1,
     )
-    if updated == original:
+    if updated == original or "zero-envelope nested Pallas archives" in updated:
         raise SystemExit("negative control failed: unable to mutate native bridge zero-envelope Pallas guard")
     mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "Rust C recursive spend nested Pallas guard" not in message:
+        expected_labels = (
+            "Rust C recursive spend nested Pallas guard missing zero-envelope Pallas archive",
+            "Rust C recursive spend nested Pallas guard missing zero-envelope nested Pallas archives",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: native bridge zero-envelope Pallas guard drift was not detected"
+                "negative control failed: native bridge zero-envelope Pallas guard drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected native bridge zero-envelope Pallas guard drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: native bridge zero-envelope Pallas guard drift was not detected"
@@ -31611,12 +36841,20 @@ if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "Rust native bridge ZK1 I10P parser exactness tests" not in message:
+        expected_labels = (
+            "Rust native bridge ZK1 I10P parser exactness tests missing zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads",
+            "Rust native bridge ZK1 I10P parser exactness tests missing I10P payloads with trailing bytes must not be partially decoded",
+            "Rust native bridge ZK1 I10P parser exactness tests missing zk1_read_instance_columns(&payload).is_none()",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
             raise SystemExit(
-                "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"
+                "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected for "
+                + ", ".join(missing)
             )
         print("negative control rejected native bridge ZK1 I10P parser exactness drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"
@@ -31662,7 +36900,8 @@ if mode == "--negative-control-kagemusha-abi-probe-bounds":
                 + ", ".join(missing)
             )
         print("negative control rejected Kagemusha ABI probe bounds drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kagemusha ABI probe bounds drift was not detected")
 
@@ -31768,7 +37007,8 @@ if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":
                 + ", ".join(missing)
             )
         print("negative control rejected package dist recursive spend partial ABI-6 drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: package dist recursive spend partial ABI-6 drift was not detected"
@@ -31810,7 +37050,8 @@ if mode == "--negative-control-js-package-dist-compact-projection":
                 + ", ".join(missing)
             )
         print("negative control rejected package dist compact projection drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: package dist compact projection drift was not detected"
@@ -31852,7 +37093,8 @@ if mode == "--negative-control-js-package-dist-record-backed-pallas-builders":
                 + ", ".join(missing)
             )
         print("negative control rejected package dist record-backed/Pallas builder drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: package dist record-backed/Pallas builder drift was not detected"
@@ -31899,7 +37141,8 @@ if mode == "--negative-control-kagemusha-probe-rejection-shape":
                 + ", ".join(missing)
             )
         print("negative control rejected Kagemusha probe rejection shape drift")
-        print(message.splitlines()[0])
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kagemusha probe rejection shape drift was not detected")
 

@@ -43,7 +43,7 @@ from typing import Any
 
 
 MANIFEST_VERSION = 1
-SUMMARY_VERSION = 1
+SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 ISO_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:"
@@ -95,9 +95,12 @@ PROFILE_SIGNATURE_POLICIES = {
 }
 PROFILE_REFERENCE_DATASETS = {"bic-lei", "isin-cusip", "mic-directory"}
 PROFILE_ADDRESS_MODES = {"permissive", "require-structured", "forbid-unstructured"}
+OCSP_BASIC_RESPONSE_OID_DER = b"\x2b\x06\x01\x05\x05\x07\x30\x01\x01"
 MAX_PROFILE_DER_BLOBS = 8
 MAX_PROFILE_DER_BYTES = 1024 * 1024
 MAX_PROFILE_DER_BASE64_CHARS = ((MAX_PROFILE_DER_BYTES + 2) // 3) * 4
+MAX_PROFILE_MINOR_UNITS = 4
+MAX_PROFILE_UNSIGNED_INT = (1 << 64) - 1
 MAX_MANIFEST_JSON_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_SCHEMA_BYTES = 8 * 1024 * 1024
@@ -352,45 +355,51 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
     if max_bytes is not None and (
         isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
     ):
         raise FixtureManifestError("max file bytes must be a positive integer")
-    _reject_symlinked_existing_ancestors(path.parent)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise FixtureManifestError(f"{path} does not exist") from error
+        raise FixtureManifestError(f"{label} does not exist") from error
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
-        raise FixtureManifestError(f"{path} must not be a symlink")
+        raise FixtureManifestError(f"{label} must not be a symlink")
     if not stat.S_ISREG(mode):
-        raise FixtureManifestError(f"{path} must be a regular file")
+        raise FixtureManifestError(f"{label} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise FixtureManifestError(f"{path} exceeds {max_bytes} byte input limit")
+        raise FixtureManifestError(f"{label} exceeds {max_bytes} byte input limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise FixtureManifestError(f"{path} must be a regular file")
+            raise FixtureManifestError(f"{label} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise FixtureManifestError(f"{path} exceeds {max_bytes} byte input limit")
+            raise FixtureManifestError(f"{label} exceeds {max_bytes} byte input limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise FixtureManifestError(f"{path} exceeds {max_bytes} byte input limit")
+            raise FixtureManifestError(f"{label} exceeds {max_bytes} byte input limit")
         return raw
     except FileNotFoundError as error:
-        raise FixtureManifestError(f"{path} does not exist") from error
+        raise FixtureManifestError(f"{label} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise FixtureManifestError(f"{path} must not be a symlink") from error
-        raise FixtureManifestError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise FixtureManifestError(f"{label} must not be a symlink") from error
+        raise FixtureManifestError(f"cannot open {label} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -653,35 +662,36 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_output_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise FixtureManifestError(f"{path.parent} must be a directory") from error
+        raise FixtureManifestError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise FixtureManifestError(f"{path.parent} must not be a symlink")
+        raise FixtureManifestError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise FixtureManifestError(f"{path.parent} must be a directory")
+        raise FixtureManifestError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise FixtureManifestError(f"{path} must not be a symlink")
+            raise FixtureManifestError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise FixtureManifestError(f"{path} must be a regular file")
+            raise FixtureManifestError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise FixtureManifestError(f"{path} must not be hard-linked")
+            raise FixtureManifestError(f"{label} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise FixtureManifestError(f"{path.parent} must not be a symlink") from error
-        raise FixtureManifestError(f"{path.parent} must be a directory") from error
+            raise FixtureManifestError(f"{label} must not be a symlink") from error
+        raise FixtureManifestError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -695,16 +705,16 @@ def _write_text_output(path: Path, text: str) -> None:
         except OSError as error:
             if error.errno == errno.ELOOP:
                 raise FixtureManifestError(
-                    f"{path} temp file must not be a symlink"
+                    f"{label} temp file must not be a symlink"
                 ) from error
             raise FixtureManifestError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise FixtureManifestError(f"{path} temp file must be a regular file")
+            raise FixtureManifestError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise FixtureManifestError(f"{path} temp file must not be hard-linked")
+            raise FixtureManifestError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -727,7 +737,11 @@ def _write_text_output(path: Path, text: str) -> None:
         os.close(parent_fd)
 
 
-def _reject_symlinked_existing_ancestors(path: Path) -> None:
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     for part in parts:
@@ -739,21 +753,34 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
-            raise FixtureManifestError(f"{current} must not be a symlink")
+            label = display_label or str(current)
+            raise FixtureManifestError(f"{label} must not be a symlink")
 
 
-def _load_json(path: Path) -> Any:
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
     return _load_json_bytes(
-        _read_regular_file(path, max_bytes=MAX_MANIFEST_JSON_BYTES),
+        _read_regular_file(
+            path,
+            max_bytes=MAX_MANIFEST_JSON_BYTES,
+            display_label=label,
+        ),
         path,
+        display_label=label,
     )
 
 
-def _load_json_bytes(raw: bytes, path: Path) -> Any:
+def _load_json_bytes(
+    raw: bytes,
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> Any:
+    label = display_label or str(path)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise FixtureManifestError(f"{path} is not UTF-8 JSON") from error
+        raise FixtureManifestError(f"{label} is not UTF-8 JSON") from error
     try:
         value = json.loads(
             text,
@@ -761,7 +788,7 @@ def _load_json_bytes(raw: bytes, path: Path) -> Any:
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise FixtureManifestError(f"{path} is not valid JSON: {error}") from error
+        raise FixtureManifestError(f"{label} is not valid JSON: {error}") from error
     _reject_json_surrogates(value)
     return value
 
@@ -877,7 +904,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise FixtureManifestError(f"JSON contains non-finite numeric constant {value}")
+    raise FixtureManifestError("JSON contains non-finite numeric constant")
 
 
 def _reject_json_surrogates(value: Any) -> None:
@@ -961,7 +988,13 @@ def _rust_offset_is_ignored_span(text: str, offset: int) -> bool:
     return line_comment or bool(block_depth)
 
 
-def _profile_catalog_match(text: str, path: Path) -> re.Match[str]:
+def _profile_catalog_match(
+    text: str,
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> re.Match[str]:
+    label = display_label or str(path)
     matches = [
         match
         for match in PROFILE_CATALOG_RE.finditer(text)
@@ -969,22 +1002,31 @@ def _profile_catalog_match(text: str, path: Path) -> re.Match[str]:
     ]
     if not matches:
         raise FixtureManifestError(
-            f"{path} does not contain DEFAULT_PROFILES_JSON raw string"
+            f"{label} does not contain DEFAULT_PROFILES_JSON raw string"
         )
     if len(matches) > 1:
         raise FixtureManifestError(
-            f"{path} must contain exactly one DEFAULT_PROFILES_JSON raw string"
+            f"{label} must contain exactly one DEFAULT_PROFILES_JSON raw string"
         )
     return matches[0]
 
 
-def _load_profile_catalog(path: Path) -> tuple[list[Any], str, str]:
-    raw = _read_regular_file(path, max_bytes=MAX_PROFILE_CATALOG_BYTES)
+def _load_profile_catalog(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> tuple[list[Any], str, str]:
+    label = display_label or str(path)
+    raw = _read_regular_file(
+        path,
+        max_bytes=MAX_PROFILE_CATALOG_BYTES,
+        display_label=label,
+    )
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise FixtureManifestError(f"{path} is not valid UTF-8") from error
-    match = _profile_catalog_match(text, path)
+        raise FixtureManifestError(f"{label} is not valid UTF-8") from error
+    match = _profile_catalog_match(text, path, display_label=label)
     catalog_json = match.group("body")
     try:
         catalog = json.loads(
@@ -994,43 +1036,67 @@ def _load_profile_catalog(path: Path) -> tuple[list[Any], str, str]:
         )
     except json.JSONDecodeError as error:
         raise FixtureManifestError(
-            f"{path} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
+            f"{label} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
         ) from error
     _reject_json_surrogates(catalog)
     return (
-        _require_array(catalog, f"{path}.DEFAULT_PROFILES_JSON"),
+        _require_array(catalog, f"{label}.DEFAULT_PROFILES_JSON"),
         sha256_hex(raw),
         sha256_hex(catalog_json.encode("utf-8")),
     )
 
 
-def _reject_xml_dtd_or_entities(raw: bytes, path: Path) -> None:
+def _reject_xml_dtd_or_entities(
+    raw: bytes,
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
+    label = display_label or str(path)
     if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
         raise FixtureManifestError(
-            f"{path} must not contain DTD or entity declarations"
+            f"{label} must not contain DTD or entity declarations"
         )
 
 
-def _parse_xml(path: Path) -> ET.Element:
+def _parse_xml(path: Path, *, display_label: str | None = None) -> ET.Element:
+    label = display_label or str(path)
     return _parse_xml_bytes(
-        _read_regular_file(path, max_bytes=MAX_FIXTURE_XML_BYTES),
+        _read_regular_file(
+            path,
+            max_bytes=MAX_FIXTURE_XML_BYTES,
+            display_label=label,
+        ),
         path,
+        display_label=label,
     )
 
 
-def _parse_xml_bytes(raw: bytes, path: Path) -> ET.Element:
-    _reject_xml_dtd_or_entities(raw, path)
+def _parse_xml_bytes(
+    raw: bytes,
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> ET.Element:
+    label = display_label or str(path)
+    _reject_xml_dtd_or_entities(raw, path, display_label=label)
     try:
         return ET.fromstring(raw)
     except ET.ParseError as error:
-        raise FixtureManifestError(f"{path} is not well-formed XML: {error}") from error
+        raise FixtureManifestError(f"{label} is not well-formed XML: {error}") from error
 
 
-def _reject_restricted_schema_terms(raw: bytes, path: Path) -> None:
+def _reject_restricted_schema_terms(
+    raw: bytes,
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
+    label = display_label or str(path)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise FixtureManifestError(f"{path} is not valid UTF-8") from error
+        raise FixtureManifestError(f"{label} is not valid UTF-8") from error
     lowered = text.casefold()
     format_removed = "".join(
         ch for ch in lowered if unicodedata.category(ch) != "Cf"
@@ -1047,7 +1113,7 @@ def _reject_restricted_schema_terms(raw: bytes, path: Path) -> None:
     for marker in RESTRICTED_SCHEMA_TEXT_MARKERS:
         if any(marker in normalized for normalized in normalized_forms):
             raise FixtureManifestError(
-                f"{path} contains restricted redistribution terms; "
+                f"{label} contains restricted redistribution terms; "
                 "do not check in licensed Standards Editor packages without redistribution rights"
             )
 
@@ -1312,6 +1378,8 @@ def _optional_nonnegative_int(value: dict[str, Any], key: str, label: str) -> in
     raw = value.get(key)
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
         raise FixtureManifestError(f"{label}.{key} must be a non-negative integer when set")
+    if raw > MAX_PROFILE_UNSIGNED_INT:
+        raise FixtureManifestError(f"{label}.{key} must fit in u64")
     return raw
 
 
@@ -1420,18 +1488,36 @@ def _optional_canonical_base64_list(
                 f"{MAX_PROFILE_DER_BYTES} bytes"
             )
         _require_der_sequence(decoded, f"{label}.{key}[{offset}]")
+        if key == "x509_crl_der_base64":
+            _require_der_crl_shape(decoded, f"{label}.{key}[{offset}]")
+        elif key == "x509_ocsp_response_der_base64":
+            _require_der_ocsp_response_shape(decoded, f"{label}.{key}[{offset}]")
         if base64.b64encode(decoded).decode("ascii") != item:
             raise FixtureManifestError(f"{label}.{key}[{offset}] must be canonical padded base64")
     return items
 
 
 def _require_der_sequence(value: bytes, label: str) -> None:
-    if not value or value[0] != 0x30:
+    tag, _full, _content, offset = _read_der_element(value, 0, label)
+    if tag != 0x30:
         raise FixtureManifestError(f"{label} must be a DER SEQUENCE")
-    if len(value) < 2:
-        raise FixtureManifestError(f"{label} has truncated DER length")
+    if offset != len(value):
+        raise FixtureManifestError(
+            f"{label} DER length does not consume the whole value"
+        )
 
-    first_length = value[1]
+
+def _read_der_element(
+    value: bytes,
+    offset: int,
+    label: str,
+) -> tuple[int, bytes, bytes, int]:
+    if offset >= len(value):
+        raise FixtureManifestError(f"{label} has truncated DER element")
+    if len(value) - offset < 2:
+        raise FixtureManifestError(f"{label} has truncated DER length")
+    tag = value[offset]
+    first_length = value[offset + 1]
     header_len = 2
     if first_length < 0x80:
         content_len = first_length
@@ -1439,20 +1525,83 @@ def _require_der_sequence(value: bytes, label: str) -> None:
         length_octets = first_length & 0x7F
         if length_octets == 0 or length_octets > 4:
             raise FixtureManifestError(f"{label} has invalid DER length")
-        if len(value) < 2 + length_octets:
+        if len(value) - offset < 2 + length_octets:
             raise FixtureManifestError(f"{label} has truncated DER length")
-        length_bytes = value[2 : 2 + length_octets]
+        length_start = offset + 2
+        length_bytes = value[length_start : length_start + length_octets]
         if length_bytes[0] == 0:
             raise FixtureManifestError(f"{label} has non-minimal DER length")
         content_len = int.from_bytes(length_bytes, "big")
         if content_len < 0x80:
             raise FixtureManifestError(f"{label} has non-minimal DER length")
         header_len += length_octets
-
-    if header_len + content_len != len(value):
+    content_start = offset + header_len
+    content_end = content_start + content_len
+    if content_end > len(value):
         raise FixtureManifestError(
             f"{label} DER length does not consume the whole value"
         )
+    return (
+        tag,
+        value[offset:content_end],
+        value[content_start:content_end],
+        content_end,
+    )
+
+
+def _require_der_crl_shape(value: bytes, label: str) -> None:
+    tag, _full, content, offset = _read_der_element(value, 0, label)
+    if tag != 0x30 or offset != len(value):
+        raise FixtureManifestError(f"{label} must look like a DER CRL")
+    cursor = 0
+    for expected_tag in (0x30, 0x30, 0x03):
+        tag, _full, _content, cursor = _read_der_element(content, cursor, label)
+        if tag != expected_tag:
+            raise FixtureManifestError(f"{label} must look like a DER CRL")
+    if cursor != len(content):
+        raise FixtureManifestError(f"{label} must look like a DER CRL")
+
+
+def _require_der_ocsp_response_shape(value: bytes, label: str) -> None:
+    tag, _full, content, offset = _read_der_element(value, 0, label)
+    if tag != 0x30 or offset != len(value):
+        raise FixtureManifestError(f"{label} must look like a DER OCSP response")
+    cursor = 0
+    tag, _full, status, cursor = _read_der_element(content, cursor, label)
+    if tag != 0x0A or status != b"\x00":
+        raise FixtureManifestError(
+            f"{label} must look like a successful DER OCSP response"
+        )
+    tag, _full, response_bytes, cursor = _read_der_element(content, cursor, label)
+    if tag != 0xA0 or cursor != len(content):
+        raise FixtureManifestError(
+            f"{label} must look like a successful DER OCSP response"
+        )
+    tag, _full, response_bytes_content, response_cursor = _read_der_element(
+        response_bytes,
+        0,
+        label,
+    )
+    if tag != 0x30 or response_cursor != len(response_bytes):
+        raise FixtureManifestError(
+            f"{label} must look like a successful DER OCSP response"
+        )
+    cursor = 0
+    tag, _full, response_type, cursor = _read_der_element(
+        response_bytes_content,
+        cursor,
+        label,
+    )
+    if tag != 0x06 or response_type != OCSP_BASIC_RESPONSE_OID_DER:
+        raise FixtureManifestError(f"{label} must carry an OCSP BasicResponse payload")
+    tag, _full, basic_response, cursor = _read_der_element(
+        response_bytes_content,
+        cursor,
+        label,
+    )
+    if tag != 0x04 or cursor != len(response_bytes_content):
+        raise FixtureManifestError(f"{label} must carry an OCSP BasicResponse payload")
+    _require_der_sequence(basic_response, f"{label}.basic_response")
 
 
 def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> None:
@@ -1473,7 +1622,7 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
     _reject_non_ascii_identifier(rail, f"{label}.rail")
     _reject_overlong_profile_catalog_enum(rail, f"{label}.rail")
     if rail not in PROFILE_RAILS:
-        raise FixtureManifestError(f"{label}.rail has unknown rail {rail!r}")
+        raise FixtureManifestError(f"{label}.rail has unknown rail")
     policy = _required_string(profile, "embedded_signature_policy", label)
     _reject_non_ascii_identifier(policy, f"{label}.embedded_signature_policy")
     _reject_overlong_profile_catalog_enum(
@@ -1482,7 +1631,7 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
     )
     if policy not in PROFILE_SIGNATURE_POLICIES:
         raise FixtureManifestError(
-            f"{label}.embedded_signature_policy has unknown policy {policy!r}"
+            f"{label}.embedded_signature_policy has unknown policy"
         )
     public_pins = _optional_sha256_list(profile, "signature_public_key_sha256_pins", label)
     legacy_public_pins = _optional_sha256_list(profile, "trusted_public_key_sha256", label)
@@ -1548,7 +1697,7 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
         )
         if dataset not in PROFILE_REFERENCE_DATASETS:
             raise FixtureManifestError(
-                f"{label}.required_reference_datasets[{offset}] has unknown dataset {dataset!r}"
+                f"{label}.required_reference_datasets[{offset}] has unknown dataset"
             )
 
 
@@ -1574,17 +1723,27 @@ def _validate_amount_minor_units(message: dict[str, Any], label: str) -> None:
         units = _optional_nonnegative_int(entry, "minor_units", entry_label)
         if units is None:
             raise FixtureManifestError(f"{entry_label}.minor_units must be set")
-        if units > 255:
-            raise FixtureManifestError(f"{entry_label}.minor_units must fit in u8")
+        if units > MAX_PROFILE_MINOR_UNITS:
+            raise FixtureManifestError(
+                f"{entry_label}.minor_units must be at most {MAX_PROFILE_MINOR_UNITS}"
+            )
 
 
 def _validate_profile_catalog_message_fields(message: dict[str, Any], label: str) -> None:
     business_services = _optional_string_list(message, "business_services", label)
+    seen_business_services: dict[str, int] = {}
     for offset, service in enumerate(business_services):
         _reject_overlong_profile_catalog_identifier(
             service,
             f"{label}.business_services[{offset}]",
         )
+        service_key = service.lower()
+        if service_key in seen_business_services:
+            raise FixtureManifestError(
+                f"{label}.business_services[{offset}] duplicates "
+                f"{label}.business_services[{seen_business_services[service_key]}] ignoring ASCII case"
+            )
+        seen_business_services[service_key] = offset
     require_app_header = _optional_bool(message, "require_app_header", label)
     require_business_service = _optional_bool(message, "require_business_service", label)
     _optional_bool(message, "require_uetr", label)
@@ -1596,7 +1755,7 @@ def _validate_profile_catalog_message_fields(message: dict[str, Any], label: str
     )
     if address_mode not in PROFILE_ADDRESS_MODES:
         raise FixtureManifestError(
-            f"{label}.structured_address_mode has unknown mode {address_mode!r}"
+            f"{label}.structured_address_mode has unknown mode"
         )
     supplementary_data_max_bytes = _optional_nonnegative_int(
         message,
@@ -1748,9 +1907,7 @@ def _verify_schema_source(
     )
     source_path = _validate_source_path(_required_string(source, "path", label), f"{label}.path")
     if Path(source_path).name != f"{message_def_id}.xsd":
-        raise FixtureManifestError(
-            f"{label}.path filename must match message_def_id {message_def_id!r}"
-        )
+        raise FixtureManifestError(f"{label}.path filename must match message_def_id")
     license_id = _required_string(source, "license", label)
     if license_id not in ALLOWED_SCHEMA_SOURCE_LICENSES:
         raise FixtureManifestError(
@@ -1799,9 +1956,7 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
         f"{label}.source.path",
     )
     if Path(source_path).name != f"{message_def_id}.xsd":
-        raise FixtureManifestError(
-            f"{label}.source.path filename must match message_def_id {message_def_id!r}"
-        )
+        raise FixtureManifestError(f"{label}.source.path filename must match message_def_id")
     source_sha256 = _required_sha256(source, "sha256", f"{label}.source")
 
     raw_markers = _require_array(
@@ -1970,10 +2125,10 @@ def _schema_payload_root(root: ET.Element, path: Path) -> str:
         )
     document_complexes = _schema_children(root, "complexType", name=document_type)
     if not document_complexes:
-        raise FixtureManifestError(f"{path} has no xs:complexType name={document_type!r}")
+        raise FixtureManifestError(f"{path} has no document xs:complexType")
     if len(document_complexes) != 1:
         raise FixtureManifestError(
-            f"{path} must contain exactly one xs:complexType name={document_type!r}"
+            f"{path} must contain exactly one document xs:complexType"
         )
     document_complex = document_complexes[0]
     if _schema_child_locals(document_complex, path, "Document complex type") != [
@@ -2024,19 +2179,15 @@ def _schema_payload_root(root: ET.Element, path: Path) -> str:
         )
     payload_complexes = _schema_children(root, "complexType", name=payload_type)
     if not payload_complexes:
-        raise FixtureManifestError(
-            f"{path} has no xs:complexType name={payload_type!r}"
-        )
+        raise FixtureManifestError(f"{path} has no payload xs:complexType")
     if len(payload_complexes) != 1:
-        raise FixtureManifestError(
-            f"{path} must contain exactly one xs:complexType name={payload_type!r}"
-        )
+        raise FixtureManifestError(f"{path} must contain exactly one payload xs:complexType")
     payload_complex = payload_complexes[0]
-    if _schema_child_locals(payload_complex, path, f"payload complex type {payload_type!r}") != [
+    if _schema_child_locals(payload_complex, path, "payload complex type") != [
         "sequence"
     ]:
         raise FixtureManifestError(
-            f"{path} payload complex type {payload_type!r} must contain only one direct xs:sequence"
+            f"{path} payload complex type must contain only one direct xs:sequence"
         )
     return payload
 
@@ -2088,7 +2239,7 @@ def _validate_relative_path(
     resolved_parent = candidate.parent.resolve()
     root = containment_root.resolve()
     if not resolved_parent.is_relative_to(root):
-        raise FixtureManifestError(f"{label} must stay under {root}")
+        raise FixtureManifestError(f"{label} must stay under manifest root")
     _reject_secret_looking_path_material(raw, label)
     return candidate
 
@@ -2127,8 +2278,17 @@ def verify_schema_entry(
     )
     if Path(rel_path).stem != message_def_id:
         raise FixtureManifestError(f"{label}.path stem must equal message_def_id")
-    schema_bytes = _read_regular_file(path, max_bytes=MAX_SCHEMA_BYTES)
-    _reject_restricted_schema_terms(schema_bytes, path)
+    source_label = f"{label}.path"
+    schema_bytes = _read_regular_file(
+        path,
+        max_bytes=MAX_SCHEMA_BYTES,
+        display_label=source_label,
+    )
+    _reject_restricted_schema_terms(
+        schema_bytes,
+        path,
+        display_label=source_label,
+    )
     schema_sha256 = sha256_hex(schema_bytes)
     if "source" not in entry:
         raise FixtureManifestError(f"{label}.source must be recorded")
@@ -2138,7 +2298,7 @@ def verify_schema_entry(
         message_def_id=message_def_id,
         schema_sha256=schema_sha256,
     )
-    root = _parse_xml_bytes(schema_bytes, path)
+    root = _parse_xml_bytes(schema_bytes, path, display_label=source_label)
     namespace, local = _split_xml_name(root.tag)
     if namespace != XML_SCHEMA_NS or local != "schema":
         raise FixtureManifestError(f"{path} root must be xs:schema")
@@ -2155,17 +2315,13 @@ def verify_schema_entry(
         _reject_secret_looking_identifier(target_namespace, f"{path} targetNamespace")
     expected_namespace = _namespace_for(message_def_id)
     if target_namespace != expected_namespace:
-        raise FixtureManifestError(
-            f"{path} targetNamespace is {target_namespace!r}, expected {expected_namespace!r}"
-        )
+        raise FixtureManifestError(f"{path} targetNamespace does not match manifest message_def_id")
     if root.attrib.get("elementFormDefault") != "qualified":
         raise FixtureManifestError(f"{path} elementFormDefault must be qualified")
     _reject_unsupported_schema_composition(root, path)
     payload_root = _schema_payload_root(root, path)
     if payload_root != expected_payload_root:
-        raise FixtureManifestError(
-            f"{path} payload root is {payload_root!r}, expected {expected_payload_root!r}"
-        )
+        raise FixtureManifestError(f"{path} payload root does not match manifest payload_root")
     return {
         "path": rel_path,
         "message_def_id": message_def_id,
@@ -2325,8 +2481,13 @@ def verify_fixture_entry(
         f"{label}.path",
         allow_parent_segments=True,
     )
-    fixture_bytes = _read_regular_file(path, max_bytes=MAX_FIXTURE_XML_BYTES)
-    root = _parse_xml_bytes(fixture_bytes, path)
+    source_label = f"{label}.path"
+    fixture_bytes = _read_regular_file(
+        path,
+        max_bytes=MAX_FIXTURE_XML_BYTES,
+        display_label=source_label,
+    )
+    root = _parse_xml_bytes(fixture_bytes, path, display_label=source_label)
     _reject_non_ascii_xml_identifiers(root, path, "XML fixture")
     _reject_secret_looking_xml_content(root, path, "XML fixture")
     namespace, local = _split_xml_name(root.tag)
@@ -2335,7 +2496,7 @@ def verify_fixture_entry(
     namespace_message_id = _message_id_from_namespace(namespace, str(path))
     if namespace_message_id != message_def_id:
         raise FixtureManifestError(
-            f"{path} namespace message id is {namespace_message_id!r}, expected {message_def_id!r}"
+            f"{path} namespace message id does not match manifest fixture"
         )
     _require_no_xml_attributes(root, path, "Document element")
     payload = _first_element_child(root, path)
@@ -2346,9 +2507,7 @@ def verify_fixture_entry(
     _reject_non_ascii_identifier(payload_local, f"{path} payload root")
     _reject_secret_looking_identifier(payload_local, f"{path} payload root")
     if payload_local != expected_payload_root:
-        raise FixtureManifestError(
-            f"{path} payload root is {payload_local!r}, expected {expected_payload_root!r}"
-        )
+        raise FixtureManifestError(f"{path} payload root does not match manifest fixture")
     _require_no_xml_attributes(payload, path, "payload element")
 
     schema_backed = False
@@ -2365,17 +2524,11 @@ def verify_fixture_entry(
         )
         schema = schemas_by_path.get(schema_rel)
         if schema is None:
-            raise FixtureManifestError(f"{label}.schema references unknown schema {schema_rel}")
+            raise FixtureManifestError(f"{label}.schema references unknown schema")
         if schema["message_def_id"] != message_def_id:
-            raise FixtureManifestError(
-                f"{label}.schema message id {schema['message_def_id']!r} "
-                f"does not match fixture {message_def_id!r}"
-            )
+            raise FixtureManifestError(f"{label}.schema message id does not match fixture")
         if schema["payload_root"] != expected_payload_root:
-            raise FixtureManifestError(
-                f"{label}.schema payload root {schema['payload_root']!r} "
-                f"does not match fixture {expected_payload_root!r}"
-        )
+            raise FixtureManifestError(f"{label}.schema payload root does not match fixture")
         schema_backed = True
         if validate_xml_schema:
             _validate_fixture_xml_schema(
@@ -2401,10 +2554,16 @@ def verify_fixture_entry(
 def verify_profile_catalog(
     path: Path,
     schema_backed_message_ids: set[str],
+    *,
+    display_label: str | None = None,
 ) -> dict[str, Any]:
     """Verify profile catalog versions against schema-backed XML fixtures."""
 
-    profiles, profile_catalog_sha256, profile_catalog_json_sha256 = _load_profile_catalog(path)
+    label = display_label or "profile catalog"
+    profiles, profile_catalog_sha256, profile_catalog_json_sha256 = _load_profile_catalog(
+        path,
+        display_label=label,
+    )
     versions: list[dict[str, Any]] = []
     missing_schema_versions: list[dict[str, str]] = []
     skipped_family_versions: list[dict[str, str]] = []
@@ -2413,7 +2572,7 @@ def verify_profile_catalog(
     seen_profile_versions: set[tuple[str, str, str, str]] = set()
 
     for profile_offset, profile_raw in enumerate(profiles):
-        profile_label = f"{path}.profiles[{profile_offset}]"
+        profile_label = f"{label}.profiles[{profile_offset}]"
         profile = _require_object(profile_raw, profile_label)
         _reject_unknown_keys(profile, PROFILE_CATALOG_PROFILE_KEYS, profile_label)
         _check_no_secret_material(profile, profile_label)
@@ -2425,7 +2584,7 @@ def verify_profile_catalog(
                 f"{profile_label}.id must be a canonical lowercase profile id"
             )
         if profile_id in seen_profile_ids:
-            raise FixtureManifestError(f"{profile_label}.id duplicates profile id {profile_id!r}")
+            raise FixtureManifestError(f"{profile_label}.id duplicates profile id")
         seen_profile_ids.add(profile_id)
         message_profiles = _require_array(
             profile.get("message_profiles"),
@@ -2477,14 +2636,14 @@ def verify_profile_catalog(
                 if MESSAGE_DEF_ID_RE.fullmatch(raw_version) is None:
                     if raw_version != message_type:
                         raise FixtureManifestError(
-                            f"{version_label} must equal message_type {message_type!r} "
+                            f"{version_label} must equal message_type "
                             "or be a concrete message definition id"
                         )
                     key = (profile_id, message_type, direction, raw_version)
                     if key in seen_profile_versions:
                         raise FixtureManifestError(
                             f"{version_label} duplicates profile/message/direction "
-                            f"family alias {raw_version!r}"
+                            "family alias"
                         )
                     seen_profile_versions.add(key)
                     skipped_family_versions.append(
@@ -2498,14 +2657,12 @@ def verify_profile_catalog(
                     continue
                 if not raw_version.startswith(message_type + "."):
                     raise FixtureManifestError(
-                        f"{version_label} {raw_version!r} does not match "
-                        f"message_type {message_type!r}"
+                        f"{version_label} does not match message_type"
                     )
                 key = (profile_id, message_type, direction, raw_version)
                 if key in seen_profile_versions:
                     raise FixtureManifestError(
-                        f"{version_label} duplicates profile/message/direction version "
-                        f"{raw_version!r}"
+                        f"{version_label} duplicates profile/message/direction version"
                     )
                 seen_profile_versions.add(key)
                 schema_backed = raw_version in schema_backed_message_ids
@@ -2542,52 +2699,97 @@ def verify_profile_catalog(
     }
 
 
-def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def _missing_profile_schema_message_ids(
+    missing_profile_schema_versions: list[dict[str, str]],
+    missing_schema_fixtures: list[dict[str, Any]],
+    schema_only: list[dict[str, Any]],
+    blocked_schema_sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return unique missing profile message ids with reviewed-gap context."""
+
+    counts: dict[str, int] = {}
+    for missing in missing_profile_schema_versions:
+        message_def_id = missing["message_def_id"]
+        counts[message_def_id] = counts.get(message_def_id, 0) + 1
+
+    missing_schema_ids = {
+        fixture["message_def_id"] for fixture in missing_schema_fixtures
+    }
+    schema_only_ids = {schema["message_def_id"] for schema in schema_only}
+    blocked_source_ids = {
+        blocked["message_def_id"] for blocked in blocked_schema_sources
+    }
+    return [
+        {
+            "message_def_id": message_def_id,
+            "profile_version_count": counts[message_def_id],
+            "reviewed_missing_schema_fixture": message_def_id in missing_schema_ids,
+            "reviewed_schema_only": message_def_id in schema_only_ids,
+            "blocked_source": message_def_id in blocked_source_ids,
+        }
+        for message_def_id in sorted(counts)
+    ]
+
+
+def verify_manifest(
+    path: Path,
+    args: argparse.Namespace,
+    *,
+    display_label: str | None = None,
+) -> dict[str, Any]:
     """Verify the ISO fixture manifest and return a digest-bound summary."""
 
+    label = display_label or "manifest"
     xmllint_timeout_secs = _require_bounded_xmllint_timeout_secs(
         getattr(args, "xmllint_timeout_secs", DEFAULT_XMLLINT_TIMEOUT_SECS),
         "--xmllint-timeout-secs",
     )
-    manifest_bytes = _read_regular_file(path, max_bytes=MAX_MANIFEST_JSON_BYTES)
-    manifest = _require_object(_load_json_bytes(manifest_bytes, path), str(path))
-    _reject_unknown_keys(manifest, TOP_LEVEL_KEYS, str(path))
+    manifest_bytes = _read_regular_file(
+        path,
+        max_bytes=MAX_MANIFEST_JSON_BYTES,
+        display_label=label,
+    )
+    manifest = _require_object(
+        _load_json_bytes(manifest_bytes, path, display_label=label),
+        label,
+    )
+    _reject_unknown_keys(manifest, TOP_LEVEL_KEYS, label)
     manifest_version = manifest.get("version")
     if (
         isinstance(manifest_version, bool)
         or not isinstance(manifest_version, int)
         or manifest_version != MANIFEST_VERSION
     ):
-        raise FixtureManifestError(f"{path}.version must be {MANIFEST_VERSION}")
+        raise FixtureManifestError(f"{label}.version must be {MANIFEST_VERSION}")
     manifest_dir = path.resolve().parent
 
-    raw_schemas = _require_array(manifest.get("schemas"), f"{path}.schemas")
-    raw_fixtures = _require_array(manifest.get("fixtures"), f"{path}.fixtures")
+    raw_schemas = _require_array(manifest.get("schemas"), f"{label}.schemas")
+    raw_fixtures = _require_array(manifest.get("fixtures"), f"{label}.fixtures")
     if "blocked_schema_sources" not in manifest:
         raise FixtureManifestError(
-            f"{path}.blocked_schema_sources must be recorded as an array"
+            f"{label}.blocked_schema_sources must be recorded as an array"
         )
     raw_blocked_schema_sources = _require_array(
         manifest["blocked_schema_sources"],
-        f"{path}.blocked_schema_sources",
+        f"{label}.blocked_schema_sources",
     )
     schemas = [
         verify_schema_entry(
-            _require_object(entry, f"{path}.schemas[{offset}]"),
-            f"{path}.schemas[{offset}]",
+            _require_object(entry, f"{label}.schemas[{offset}]"),
+            f"{label}.schemas[{offset}]",
             manifest_dir,
         )
         for offset, entry in enumerate(raw_schemas)
     ]
     schema_paths = [schema["path"] for schema in schemas]
     if len(schema_paths) != len(set(schema_paths)):
-        raise FixtureManifestError(f"{path}.schemas contains duplicate schema paths")
+        raise FixtureManifestError(f"{label}.schemas contains duplicate schema paths")
     schema_ids = [schema["message_def_id"] for schema in schemas]
     if len(schema_ids) != len(set(schema_ids)):
-        raise FixtureManifestError(f"{path}.schemas contains duplicate message_def_id values")
+        raise FixtureManifestError(f"{label}.schemas contains duplicate message_def_id values")
     schema_digests = [schema["sha256"] for schema in schemas]
     if len(schema_digests) != len(set(schema_digests)):
-        raise FixtureManifestError(f"{path}.schemas contains duplicate schema SHA-256 values")
+        raise FixtureManifestError(f"{label}.schemas contains duplicate schema SHA-256 values")
     schema_sources = [
         (
             schema["source"]["repository"],
@@ -2597,13 +2799,13 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
         for schema in schemas
     ]
     if len(schema_sources) != len(set(schema_sources)):
-        raise FixtureManifestError(f"{path}.schemas contains duplicate source provenance")
+        raise FixtureManifestError(f"{label}.schemas contains duplicate source provenance")
     schemas_by_path = {schema["path"]: schema for schema in schemas}
 
     blocked_schema_sources = [
         _verify_blocked_schema_source(
             entry,
-            f"{path}.blocked_schema_sources[{offset}]",
+            f"{label}.blocked_schema_sources[{offset}]",
         )
         for offset, entry in enumerate(raw_blocked_schema_sources)
     ]
@@ -2617,18 +2819,18 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     ]
     if len(blocked_source_provenance) != len(set(blocked_source_provenance)):
         raise FixtureManifestError(
-            f"{path}.blocked_schema_sources contains duplicate source provenance"
+            f"{label}.blocked_schema_sources contains duplicate source provenance"
         )
     blocked_source_digests = [
         blocked["source"]["sha256"] for blocked in blocked_schema_sources
     ]
     if len(blocked_source_digests) != len(set(blocked_source_digests)):
         raise FixtureManifestError(
-            f"{path}.blocked_schema_sources contains duplicate candidate SHA-256 values"
+            f"{label}.blocked_schema_sources contains duplicate candidate SHA-256 values"
         )
     if set(blocked_source_digests) & set(schema_digests):
         raise FixtureManifestError(
-            f"{path}.blocked_schema_sources contains candidate SHA-256 values "
+            f"{label}.blocked_schema_sources contains candidate SHA-256 values "
             "that already identify checked-in schemas"
         )
     blocked_message_ids = {
@@ -2636,13 +2838,13 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     }
     for message_def_id in sorted(blocked_message_ids & set(schema_ids)):
         raise FixtureManifestError(
-            f"{path}.blocked_schema_sources includes already checked-in schema {message_def_id}"
+            f"{label}.blocked_schema_sources includes an already checked-in schema"
         )
 
     fixtures = [
         verify_fixture_entry(
-            _require_object(entry, f"{path}.fixtures[{offset}]"),
-            f"{path}.fixtures[{offset}]",
+            _require_object(entry, f"{label}.fixtures[{offset}]"),
+            f"{label}.fixtures[{offset}]",
             manifest_dir,
             schemas_by_path,
             validate_xml_schema=args.validate_xml_schema,
@@ -2652,13 +2854,13 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     ]
     fixture_paths = [fixture["path"] for fixture in fixtures]
     if len(fixture_paths) != len(set(fixture_paths)):
-        raise FixtureManifestError(f"{path}.fixtures contains duplicate fixture paths")
+        raise FixtureManifestError(f"{label}.fixtures contains duplicate fixture paths")
     fixture_digests = [fixture["sha256"] for fixture in fixtures]
     if len(fixture_digests) != len(set(fixture_digests)):
-        raise FixtureManifestError(f"{path}.fixtures contains duplicate fixture SHA-256 values")
+        raise FixtureManifestError(f"{label}.fixtures contains duplicate fixture SHA-256 values")
     if set(blocked_source_digests) & set(fixture_digests):
         raise FixtureManifestError(
-            f"{path}.blocked_schema_sources contains candidate SHA-256 values "
+            f"{label}.blocked_schema_sources contains candidate SHA-256 values "
             "that already identify checked-in fixtures"
         )
     backed_schema_paths = {fixture["schema"] for fixture in fixtures if fixture["schema"]}
@@ -2670,7 +2872,7 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     for schema in schema_only:
         if not schema["schema_only_reason"]:
             raise FixtureManifestError(
-                f"{path} schema {schema['path']} has no fixture and no schema_only_reason"
+                f"{label} schema {schema['path']} has no fixture and no schema_only_reason"
             )
     missing_schema_fixtures = [
         fixture for fixture in fixtures if not fixture["schema_backed"]
@@ -2692,7 +2894,11 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     if profile_catalog_path is None and args.require_profile_schema_backed_versions:
         profile_catalog_path = DEFAULT_PROFILE_CATALOG
     profile_catalog = (
-        verify_profile_catalog(profile_catalog_path, schema_backed_message_ids)
+        verify_profile_catalog(
+            profile_catalog_path,
+            schema_backed_message_ids,
+            display_label="profile catalog",
+        )
         if profile_catalog_path is not None
         else None
     )
@@ -2710,20 +2916,21 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
         for message_def_id in sorted(blocked_message_ids - blocked_gap_message_ids):
             if profile_catalog is None:
                 raise FixtureManifestError(
-                    f"{path}.blocked_schema_sources includes {message_def_id} "
+                    f"{label}.blocked_schema_sources includes an entry "
                     "without a current missing fixture/schema gap; pass "
                     "--profile-catalog to prove profile-version gaps"
                 )
             else:
                 raise FixtureManifestError(
-                    f"{path}.blocked_schema_sources includes {message_def_id} "
+                    f"{label}.blocked_schema_sources includes an entry "
                     "without a current missing schema/profile gap"
                 )
     if args.require_profile_schema_backed_versions and missing_profile_schema_versions:
-        first = missing_profile_schema_versions[0]
+        missing_count = len(missing_profile_schema_versions)
         raise FixtureManifestError(
-            f"profile {first['profile_id']} version {first['message_def_id']} "
-            "is not schema-backed by any checked-in XML fixture"
+            f"profile catalog has {missing_count} message version"
+            f"{'' if missing_count == 1 else 's'} not schema-backed by any "
+            "checked-in XML fixture"
         )
 
     summary: dict[str, Any] = {
@@ -2761,6 +2968,12 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
             for schema in schema_only
         ],
         "missing_profile_schema_versions": missing_profile_schema_versions,
+        "missing_profile_schema_message_ids": _missing_profile_schema_message_ids(
+            missing_profile_schema_versions,
+            missing_schema_fixtures,
+            schema_only,
+            blocked_schema_sources,
+        ),
         "blocked_schema_sources": blocked_schema_sources,
         "schemas": schemas,
         "fixtures": fixtures,
@@ -2780,16 +2993,16 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
 
 def run(args: argparse.Namespace) -> int:
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_output_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
     _reject_output_path_smuggling(args.manifest, "--manifest")
     if args.profile_catalog is not None:
         _reject_output_path_smuggling(args.profile_catalog, "--profile-catalog")
         _reject_repository_input_path(args.profile_catalog, "--profile-catalog")
-    summary = verify_manifest(args.manifest, args)
+    summary = verify_manifest(args.manifest, args, display_label="manifest")
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0
 

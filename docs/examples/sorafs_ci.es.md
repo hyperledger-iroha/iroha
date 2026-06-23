@@ -64,7 +64,7 @@ jobs:
 
 ## Notas
 
-- `sorafs_cli` debe estar disponible en el runner (p. ej., `cargo install --path crates/sorafs_car --features cli` antes de estos pasos).
+- `sorafs_cli` debe estar disponible en el runner (p. ej., `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` antes de estos pasos).
 - El workflow debe proporcionar un audience OIDC explicito (aqui `sorafs`); ajusta `--identity-token-audience` para que coincida con tu politica de Fulcio.
 - El pipeline de release debe archivar `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` y `artifacts/proof.json` para revision de governance.
 - Los artefactos deterministas de ejemplo viven en `fixtures/sorafs_manifest/ci_sample`; copialos en tests cuando necesites manifests, chunk plans o bundle JSON golden sin recomputar el pipeline.

@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-02-07
 - أرفق رابط تذكرة المعالجة (مثل `governance/tickets/SF6-SR-2026.md`)
   Создан в Рабочей группе по разработке инструментов для инженеров безопасности.
 - تحقّق в إغلاق قائمة المعالجة في المذكرة؛ Сделайте это в ближайшее время.
-- Дополнительный ремень безопасности (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Дополнительный ремень безопасности (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   Он сказал это.
 - تأكد أن أمر التوقيع الذي ستنفذه يتضمن `--identity-token-provider` و
   `--identity-token-audience=<aud>` был вызван Фульсио в 2007 году.
@@ -49,9 +49,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 В сообщении говорится:
 
 - `cargo fmt --all -- --check` (рабочая область)
-- `cargo clippy --locked --all-targets` вместо `sorafs_car` (название `cli`),
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   و`sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` لتلك الحزم نفسها
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Он был убит в 1980-х годах в Вашингтоне. Он и Сан-Франциско
 الإصدار متصلة بـ main; Он выбрал вишню, которую он выбрал для себя.

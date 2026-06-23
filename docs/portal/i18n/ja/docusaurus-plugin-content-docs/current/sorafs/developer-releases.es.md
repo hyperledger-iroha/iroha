@@ -31,7 +31,7 @@ lint/test y キャプチャ アーティファクト パラ コンスミドー�
 - 救済チケットの補助 (例、`governance/tickets/SF6-SR-2026.md`) とその内容
   セキュリティ エンジニアリングとツール ワーキング グループの概要。
 - 修復メモのリストを確認し、セラダを確認します。ロス・テムス・シン・リゾルバー・ブロックアン・エル・ランザミエント。
-- ハーネスのログを準備してください (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- ハーネスのログを準備してください (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   マニフェストのバンドルを調整します。
 - タント `--identity-token-provider` コモを含む飛行機の脱出コマンドを確認してください
   Un `--identity-token-audience=<aud>` は、リリースの証拠となるキャプチャを明示的に示します。
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 El script realiza las siguientes comprobaciones:
 
 - `cargo fmt --all -- --check` (ワークスペース)
-- `cargo clippy --locked --all-targets` パラ `sorafs_car` (機能 `cli`)、
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` パラ エソス ミスモス クレート
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 失敗した場合は、倫理規定を修正してください。リリース後のビルドの損失
 デベン・エスター・コンメイン。リリース時に修正をチェリーピックする必要はありません。

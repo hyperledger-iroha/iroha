@@ -1,4 +1,4 @@
-//! Generates PoR challenge/proof and governance log fixtures.
+//! Generates PoR, PoTR, repair, and governance log fixtures.
 
 use std::{
     error::Error,
@@ -12,7 +12,8 @@ use norito::{
     json::{Map, Value, to_string_pretty},
 };
 use sorafs_manifest::{
-    CapacityMetadataEntry,
+    CapacityMetadataEntry, POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, ProofStreamTier,
+    REPAIR_TASK_VERSION_V1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
     governance::{
         GOVERNANCE_LOG_VERSION_V1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
         GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
@@ -23,12 +24,18 @@ use sorafs_manifest::{
         derive_challenge_seed,
     },
     provider_advert::{AdvertSignature, SignatureAlgorithm},
+    repair::QueuedRepairStateV1,
 };
+use soranet_pq::{HedgedRngSeed, MlDsaSuite, deterministic_chacha20_rng, sign_mldsa};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let por_dir = PathBuf::from("fixtures/sorafs_manifest/por");
+    let potr_dir = PathBuf::from("fixtures/sorafs_manifest/potr");
+    let repair_dir = PathBuf::from("fixtures/sorafs_manifest/repair");
     let gov_dir = PathBuf::from("fixtures/sorafs_manifest/governance");
     fs::create_dir_all(&por_dir)?;
+    fs::create_dir_all(&potr_dir)?;
+    fs::create_dir_all(&repair_dir)?;
     fs::create_dir_all(&gov_dir)?;
 
     let manifest_digest = [0x42; 32];
@@ -146,8 +153,56 @@ fn main() -> Result<(), Box<dyn Error>> {
         verdict_json(&verdict),
     )?;
 
+    let potr_receipt = PotrReceiptV1 {
+        version: POTR_RECEIPT_VERSION_V1,
+        manifest_digest,
+        provider_id,
+        tier: ProofStreamTier::Hot,
+        deadline_ms: 90_000,
+        latency_ms: 42_000,
+        status: PotrStatus::Success,
+        requested_at_ms: 1_700_000_000_000,
+        responded_at_ms: 1_700_000_042_000,
+        recorded_at_ms: 1_700_000_042_100,
+        range_start: 0,
+        range_end: 1_048_575,
+        request_id: Some([0x44; 16]),
+        trace_id: Some([0x33; 16]),
+        note: Some("fixture retrieval completed".to_string()),
+        gateway_signature: None,
+        provider_signature: None,
+    };
+    potr_receipt.validate()?;
+    write_norito_pair(
+        &potr_dir.join("receipt_v1"),
+        &potr_receipt,
+        potr_receipt_json(&potr_receipt),
+    )?;
+
+    let repair_task = RepairTaskRecordV1 {
+        version: REPAIR_TASK_VERSION_V1,
+        ticket_id: RepairTicketId("REP-900".to_owned()),
+        manifest_digest,
+        provider_id,
+        auditor_account: "auditor@sora".to_owned(),
+        state: RepairTaskStateV1::Queued(QueuedRepairStateV1 {
+            queued_at_unix: 1_700_000_060,
+            sla_deadline_unix: Some(1_700_086_400),
+        }),
+        por_history_id: Some(drand_round),
+        sla_deadline_unix: Some(1_700_086_400),
+        scheduler_notes: Some("waiting for worker claim".to_owned()),
+        slash_proposal_digest: None,
+    };
+    repair_task.validate()?;
+    write_norito_pair(
+        &repair_dir.join("task_v1"),
+        &repair_task,
+        repair_task_json(&repair_task),
+    )?;
+
     // Governance node sample (wrap proof).
-    let node = GovernanceLogNodeV1 {
+    let mut node = GovernanceLogNodeV1 {
         version: GOVERNANCE_LOG_VERSION_V1,
         node_cid: b"bafygovernancelognode".to_vec(),
         prev_cid: Some(b"bafygovernancelognodeprev".to_vec()),
@@ -156,11 +211,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         payload: GovernanceLogPayloadV1::PorProof(proof.clone()),
         publisher_signature: GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Dilithium3,
-            public_key: vec![0x05; 64],
-            signature: vec![0x06; 160],
+            public_key: Vec::new(),
+            signature: Vec::new(),
         },
     };
+    sign_governance_log_node_mldsa(&mut node, b"sorafs-fixture-governance-mldsa-v1")?;
     node.validate()?;
+    node.verify_publisher_signature()?;
 
     write_norito_pair(
         &gov_dir.join("node_v1"),
@@ -168,6 +225,38 @@ fn main() -> Result<(), Box<dyn Error>> {
         governance_node_json(&node, proof_digest),
     )?;
 
+    Ok(())
+}
+
+fn sign_governance_log_node_mldsa(
+    node: &mut GovernanceLogNodeV1,
+    seed: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let seed = blake3::hash(seed);
+    let key_pair = soranet_pq::generate_mldsa_keypair_from_seed(
+        MlDsaSuite::MlDsa65,
+        HedgedRngSeed::from_entropy(*seed.as_bytes()),
+        b"sorafs-fixture-governance-mldsa-keypair-v1",
+    )?;
+    let payload_bytes = node.signature_payload_bytes()?;
+    let mut signing_rng = deterministic_chacha20_rng(
+        HedgedRngSeed::from_entropy(
+            *blake3::hash(b"sorafs-fixture-governance-mldsa-sign-v1").as_bytes(),
+        ),
+        b"sorafs-fixture-governance-mldsa-sign-v1",
+    );
+    let signature = sign_mldsa(
+        MlDsaSuite::MlDsa65,
+        key_pair.secret_key(),
+        &[],
+        &payload_bytes,
+        &mut signing_rng,
+    )?;
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Dilithium3,
+        public_key: key_pair.public_key().to_vec(),
+        signature: signature.as_bytes().to_vec(),
+    };
     Ok(())
 }
 
@@ -382,6 +471,212 @@ fn verdict_json(verdict: &AuditVerdictV1) -> Value {
         .collect();
     map.insert("metadata".into(), Value::Array(metadata));
     Value::Object(map)
+}
+
+fn potr_receipt_json(receipt: &PotrReceiptV1) -> Value {
+    let mut map = Map::new();
+    map.insert("version".into(), Value::from(receipt.version));
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(encode(receipt.manifest_digest)),
+    );
+    map.insert(
+        "provider_id_hex".into(),
+        Value::from(encode(receipt.provider_id)),
+    );
+    map.insert("tier".into(), Value::from(proof_stream_tier(receipt.tier)));
+    map.insert("deadline_ms".into(), Value::from(receipt.deadline_ms));
+    map.insert("latency_ms".into(), Value::from(receipt.latency_ms));
+    map.insert("status".into(), Value::from(potr_status(receipt.status)));
+    map.insert(
+        "requested_at_ms".into(),
+        Value::from(receipt.requested_at_ms),
+    );
+    map.insert(
+        "responded_at_ms".into(),
+        Value::from(receipt.responded_at_ms),
+    );
+    map.insert("recorded_at_ms".into(), Value::from(receipt.recorded_at_ms));
+    map.insert("range_start".into(), Value::from(receipt.range_start));
+    map.insert("range_end".into(), Value::from(receipt.range_end));
+    map.insert(
+        "request_id_hex".into(),
+        receipt
+            .request_id
+            .map(|request_id| Value::from(encode(request_id)))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "trace_id_hex".into(),
+        receipt
+            .trace_id
+            .map(|trace_id| Value::from(encode(trace_id)))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "note".into(),
+        receipt
+            .note
+            .as_ref()
+            .map(|note| Value::from(note.clone()))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "gateway_signature".into(),
+        if receipt.gateway_signature.is_some() {
+            Value::from("present")
+        } else {
+            Value::Null
+        },
+    );
+    map.insert(
+        "provider_signature".into(),
+        if receipt.provider_signature.is_some() {
+            Value::from("present")
+        } else {
+            Value::Null
+        },
+    );
+    Value::Object(map)
+}
+
+fn repair_task_json(task: &RepairTaskRecordV1) -> Value {
+    let mut map = Map::new();
+    map.insert("version".into(), Value::from(task.version));
+    map.insert("ticket_id".into(), Value::from(task.ticket_id.to_string()));
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(encode(task.manifest_digest)),
+    );
+    map.insert(
+        "provider_id_hex".into(),
+        Value::from(encode(task.provider_id)),
+    );
+    map.insert(
+        "auditor_account".into(),
+        Value::from(task.auditor_account.clone()),
+    );
+    map.insert("state".into(), repair_state_json(&task.state));
+    map.insert(
+        "por_history_id".into(),
+        task.por_history_id.map(Value::from).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "sla_deadline_unix".into(),
+        task.sla_deadline_unix
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "scheduler_notes".into(),
+        task.scheduler_notes
+            .as_ref()
+            .map(|notes| Value::from(notes.clone()))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "slash_proposal_digest_hex".into(),
+        task.slash_proposal_digest
+            .map(|digest| Value::from(encode(digest)))
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(map)
+}
+
+fn repair_state_json(state: &RepairTaskStateV1) -> Value {
+    let mut map = Map::new();
+    match state {
+        RepairTaskStateV1::Queued(queued) => {
+            map.insert("state".into(), Value::from("queued"));
+            map.insert("queued_at_unix".into(), Value::from(queued.queued_at_unix));
+            map.insert(
+                "sla_deadline_unix".into(),
+                queued
+                    .sla_deadline_unix
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+            );
+        }
+        RepairTaskStateV1::InProgress(in_progress) => {
+            map.insert("state".into(), Value::from("in_progress"));
+            map.insert(
+                "queued_at_unix".into(),
+                Value::from(in_progress.queued_at_unix),
+            );
+            map.insert(
+                "started_at_unix".into(),
+                Value::from(in_progress.started_at_unix),
+            );
+            map.insert(
+                "repair_agent".into(),
+                in_progress
+                    .repair_agent
+                    .as_ref()
+                    .map(|agent| Value::from(agent.clone()))
+                    .unwrap_or(Value::Null),
+            );
+        }
+        RepairTaskStateV1::Completed(completed) => {
+            map.insert("state".into(), Value::from("completed"));
+            map.insert(
+                "queued_at_unix".into(),
+                Value::from(completed.queued_at_unix),
+            );
+            map.insert(
+                "started_at_unix".into(),
+                Value::from(completed.started_at_unix),
+            );
+            map.insert(
+                "completed_at_unix".into(),
+                Value::from(completed.completed_at_unix),
+            );
+            map.insert(
+                "resolution_notes".into(),
+                completed
+                    .resolution_notes
+                    .as_ref()
+                    .map(|notes| Value::from(notes.clone()))
+                    .unwrap_or(Value::Null),
+            );
+        }
+        RepairTaskStateV1::Failed(failed) => {
+            map.insert("state".into(), Value::from("failed"));
+            map.insert("queued_at_unix".into(), Value::from(failed.queued_at_unix));
+            map.insert("failed_at_unix".into(), Value::from(failed.failed_at_unix));
+            map.insert("reason".into(), Value::from(failed.reason.clone()));
+        }
+        RepairTaskStateV1::Escalated(escalated) => {
+            map.insert("state".into(), Value::from("escalated"));
+            map.insert(
+                "queued_at_unix".into(),
+                Value::from(escalated.queued_at_unix),
+            );
+            map.insert(
+                "escalated_at_unix".into(),
+                Value::from(escalated.escalated_at_unix),
+            );
+            map.insert("reason".into(), Value::from(escalated.reason.clone()));
+        }
+    }
+    Value::Object(map)
+}
+
+fn proof_stream_tier(tier: ProofStreamTier) -> &'static str {
+    match tier {
+        ProofStreamTier::Hot => "hot",
+        ProofStreamTier::Warm => "warm",
+        ProofStreamTier::Archive => "archive",
+    }
+}
+
+fn potr_status(status: PotrStatus) -> &'static str {
+    match status {
+        PotrStatus::Success => "success",
+        PotrStatus::MissedDeadline => "missed_deadline",
+        PotrStatus::ProviderError => "provider_error",
+        PotrStatus::GatewayError => "gateway_error",
+        PotrStatus::ClientCancelled => "client_cancelled",
+    }
 }
 
 fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> Value {

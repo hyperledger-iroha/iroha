@@ -54,7 +54,7 @@ un manifiesto codificado en Norito apto para el pinning en el registro de SoraFS
 ### Inicio rápido de la CLI
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 El comando imprime digests de chunks y detalles del manifiesto; cuando se suministran
@@ -166,7 +166,7 @@ payload ensamblado coincide con las expectativas del manifiesto antes de escribi
 útil para smoke-tests de CI que quieren asegurar que el orquestador no omitió ni reordenó
 chunks de forma silenciosa.
 
-Si ya tienes el reporte JSON creado por `sorafs-manifest-stub`, pásalo directamente mediante
+Si ya tienes el reporte JSON creado por `sorafs_manifest_stub`, pásalo directamente mediante
 `--manifest-report=docs.report.json`. La CLI de fetch reutilizará los campos embebidos
 `chunk_fetch_specs`, `payload_digest_hex` y `payload_len`, así que no necesitas gestionar
 archivos de plan o validación por separado.

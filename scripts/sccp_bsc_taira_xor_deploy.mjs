@@ -23,7 +23,7 @@ import {
   rename,
   writeFile,
 } from "node:fs/promises";
-import { dirname, extname, isAbsolute, relative, resolve, win32 } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import { keccak_256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha3.js";
@@ -126,6 +126,8 @@ const SMOKE_FIXTURE_IC = Object.freeze(
 const BN254_BASE_FIELD_MODULUS = BigInt(
   "21888242871839275222246405745257275088696311157297823662689037894645226208583",
 );
+const DECIMAL_WORD = /^(?:0|[1-9][0-9]*)$/u;
+const SNARKJS_ZKEY_VERIFY_OK = "ZKey Ok!";
 const BN254_TWIST_B_COEFFICIENT = Object.freeze([
   BigInt(
     "19485874751759354771024239261021720505790618469301721065564631296452457478373",
@@ -144,13 +146,23 @@ export const PRODUCTION_REQUIREMENTS_SCHEMA =
   "iroha-sccp-bsc-taira-xor-production-requirements/v1";
 export const SOURCE_PARITY_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-native-evm-source-parity-attestation/v1";
+const NO_WASM_NO_REMOTE_SCAN_SCHEMA =
+  "iroha-sccp-bsc-native-evm-no-wasm-no-remote-scan/v1";
 const BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA =
   "iroha-sccp-bsc-groth16-material-manifest/v1";
+const BSC_GROTH16_PROOF_SELF_TEST_SCHEMA =
+  "iroha-sccp-bsc-groth16-proof-self-test/v1";
 const BSC_FULL_SCCP_CIRCUIT_PROFILE = "sccp-bsc-full-message-v1";
+const DEFAULT_BSC_FULL_MESSAGE_CIRCUIT_SOURCE =
+  "artifacts/sccp-bsc/circuits/sccp-bsc-full-message-v1.circom";
 const BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-semantic-circuit-attestation/v1";
 const BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-circuit-security-attestation/v1";
+const BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-semantic-review-evidence/v1";
+const BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-circuit-security-audit-evidence/v1";
 const BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-trusted-setup-attestation/v1";
 const BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA =
@@ -169,6 +181,10 @@ const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = Object.freeze([
   "destination_binding_hash",
 ]);
 const PRODUCTION_FULL_SCCP_MIN_R1CS_CONSTRAINTS = 4096;
+const BSC_GROTH16_R1CS_INFO_SOURCES = new Set([
+  "snarkjs-cli",
+  "binary-header-fallback",
+]);
 export const TAIRA_BURN_RECORD_CONTRACT_SCHEMA =
   "iroha-sccp-taira-xor-burn-record-contract/v1";
 export const DEFAULT_ARTIFACTS_OUT = "artifacts/sccp-bsc/contracts";
@@ -214,6 +230,8 @@ const PRIVATE_KEY_PEM_PATTERN =
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 const PLACEHOLDER_BURN_RECORD_TEXT_PATTERN =
   /(?:diagnostic|dummy|fixture|mock|placeholder|stub|test-only)/iu;
+const PRODUCTION_EVIDENCE_FORBIDDEN_WORDS =
+  /\b(?:diagnostic|fixture|mock|placeholder|sample|stub|test-fixture|test-only)\b/iu;
 const PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN =
   /(?:change[-_ ]?me|changeme|dummy|example|mock|placeholder|replace[-_ ]?me|sample|stub|test[-_ ]?only|fixture[-_ ]?only|todo|your[-_ ]?[a-z0-9_-]*)/iu;
 const DIAGNOSTIC_TEXT_KEYS = [
@@ -665,8 +683,13 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs source-parity-attestation [--bsc-network testnet|mainnet] [--out ${DEFAULT_NATIVE_EVM_SOURCE_PARITY_ATTESTATION_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --ptau <phase2.ptau> [--out-dir output/sccp-bsc-production/groth16-material/testnet] [--circom-bin circom2] [--snarkjs-bin snarkjs]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --snarkjs-verifier-key <verification_key.json> --circuit-source <full-message.circom> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test --manifest <groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--allow-unready-candidate true|--allow-unready-mainnet-candidate true] [--out <proof-self-test.json>]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request --manifest <candidate-groth16-material.manifest.json> --toolchain-sha256 <0x...> [--out <attestation-request.json>]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--out <signed-role-attestation.json>]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
@@ -709,13 +732,15 @@ bundle attestations, and post-deploy live evidence. Canonical production output
 is refused unless the manifest is productionReady true and free of diagnostic
 or placeholder material.`,
   "native-prover-bundle": `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 
 Builds the SDK-validated native EVM prover bundle from production proof
-artifacts, keys, implementation files, parity/self-test evidence, and signed
-audit attestations. This independently verifies Groth16 material attestations
-against --trusted-attestation-signer before a productionReady BSC route manifest
-can be emitted.`,
+artifacts, keys, implementation files, Groth16 proof self-test evidence,
+parity/self-test evidence, and signed audit attestations. This independently
+verifies Groth16 material attestations against --trusted-attestation-signer and
+requires --groth16-proof-self-test to bind a successful SnarkJS prove/verify
+report with adversarial witness rejection evidence to the same productionReady
+material manifest before a productionReady BSC route manifest can be emitted.`,
   "source-parity-attestation": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs source-parity-attestation [--bsc-network testnet|mainnet] [--out ${DEFAULT_NATIVE_EVM_SOURCE_PARITY_ATTESTATION_OUT}]
 
@@ -726,13 +751,28 @@ marker evidence.`,
   "groth16-material": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --ptau <phase2.ptau> [--out-dir output/sccp-bsc-production/groth16-material/testnet] [--circom-bin circom2] [--snarkjs-bin snarkjs]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --create-local-ptau-power 8 --allow-local-testnet-setup true [--out-dir output/sccp-bsc-production/groth16-material/testnet]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --snarkjs-verifier-key <verification_key.json> --circuit-source <full-message.circom> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test --manifest <groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--allow-unready-candidate true|--allow-unready-mainnet-candidate true] [--out <proof-self-test.json>]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request --manifest <candidate-groth16-material.manifest.json> --toolchain-sha256 <0x...> [--out <attestation-request.json>]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--out <signed-role-attestation.json>]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 
 Generates real Circom/SnarkJS Groth16 candidate material or materializes
 externally audited production circuit/proving/verifier material into the BSC
-native-prover artifact shape. Locally generated setup output remains
-productionReady false until semantic circuit and ceremony/build attestations are
-attached and signed by a configured trusted attestation signer.`,
+native-prover artifact shape. When --circuit-source is omitted, materialize uses
+${DEFAULT_BSC_FULL_MESSAGE_CIRCUIT_SOURCE}. Materialize creates unsigned
+candidate material; attestation-request emits role-separated payload hashes;
+sign-attestation signs exactly one ready role body with an Ed25519 private key
+file without writing secrets; attestation-status audits request, transcript,
+signature, and trusted-signer readiness without writing outputs; and
+finalize-attestations refuses productionReady output unless every signed
+attestation matches the request package and trusted signer policy.
+proof-self-test requires productionReady material by default;
+--allow-unready-candidate true only refreshes testnet candidate evidence, while
+--allow-unready-mainnet-candidate true is the separate explicit opt-in for
+mainnet candidate evidence. Neither mode makes candidate material
+production-ready.`,
   "route-config": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
 
@@ -887,8 +927,39 @@ export function bscProductionRequirements(options = {}) {
         `--bsc-network ${profile.key} ` +
         "--r1cs <production-circuit.r1cs> " +
         "--zkey <production-proving-key.zkey> " +
+        "--ptau <powersOfTau28_hez_final_22.ptau> " +
         "--snarkjs-verifier-key <production-verification_key.json> " +
-        "--circuit-source <production-full-message.circom> " +
+        "[--circuit-source <production-full-message.circom>] " +
+        "--trusted-setup-transcript <trusted-setup-transcript.json> " +
+        "--reproducible-build-transcript <reproducible-build-transcript.json> " +
+        `--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/${profile.key}`,
+      groth16AttestationRequest:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request " +
+        "--manifest <candidate-groth16-material.manifest.json> " +
+        "--toolchain-sha256 <0x...> " +
+        "--out <attestation-request.json>",
+      groth16SignAttestation:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material sign-attestation " +
+        "--request <attestation-request.json> " +
+        "--role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild " +
+        "--private-key-pem <ed25519-private-key.pem> " +
+        "--out <signed-role-attestation.json>",
+      groth16AttestationStatus:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-status " +
+        "--request <attestation-request.json> " +
+        "--semantic-attestation <semantic-sccp-circuit-attestation.json> " +
+        "--circuit-security-attestation <circuit-security-audit.json> " +
+        "--trusted-setup-attestation <trusted-setup-ceremony.json> " +
+        "--reproducible-build-attestation <reproducible-build-attestation.json> " +
+        "--trusted-attestation-signer <0x...>",
+      groth16ProofSelfTest:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test " +
+        "--manifest <production-ready-groth16-material.manifest.json> " +
+        "--witness-wasm <production-circuit.wasm> " +
+        "--out <proof-self-test.json>",
+      groth16FinalizeAttestations:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations " +
+        "--request <attestation-request.json> " +
         "--semantic-attestation <semantic-sccp-circuit-attestation.json> " +
         "--circuit-security-attestation <circuit-security-audit.json> " +
         "--trusted-setup-attestation <trusted-setup-ceremony.json> " +
@@ -903,6 +974,7 @@ export function bscProductionRequirements(options = {}) {
         "--proving-key <relative-circuit.zkey> " +
         "--verifier-key <relative-verifier-key.json> " +
         "--groth16-material-manifest <relative-groth16-material-manifest.json> " +
+        "--groth16-proof-self-test <relative-groth16-proof-self-test.json> " +
         "--trusted-attestation-signer <0x...> " +
         "--cross-sdk-parity <relative-cross-sdk-parity.json> " +
         "--native-prover-self-test <relative-native-self-test.json> " +
@@ -1028,26 +1100,99 @@ export function bscProductionRequirements(options = {}) {
           "Production burn-record proving key referenced relative to the artifact root.",
       }),
       productionRequirementInput({
+        id: "groth16-powers-of-tau",
+        kind: "file",
+        placeholder: "<powersOfTau28_hez_final_22.ptau>",
+        requiredBy: ["groth16-material"],
+        description:
+          "Powers-of-Tau transcript passed to SnarkJS zkey verification; its sha256 is embedded in the Groth16 material manifest and every role attestation payload.",
+      }),
+      productionRequirementInput({
         id: "groth16-material-manifest",
         kind: "file",
         placeholder: "<relative-groth16-material-manifest.json>",
         requiredBy: ["native-prover-bundle"],
         description:
-          "ProductionReady Groth16 material manifest generated by groth16-material materialize and bound to the proof artifact, proving key, verifier key, semantic attestation, trusted setup, and reproducible build evidence.",
+          "ProductionReady Groth16 material manifest generated by groth16-material finalize-attestations and bound to the proof artifact, proving key, verifier key, transcript artifacts, semantic attestation, trusted setup, and reproducible build evidence.",
+      }),
+      productionRequirementInput({
+        id: "candidate-groth16-material-manifest",
+        kind: "file",
+        placeholder: "<candidate-groth16-material.manifest.json>",
+        requiredBy: ["groth16-attestation-request"],
+        description:
+          "Unsigned candidate Groth16 material manifest emitted by materialize and hashed into the attestation request package.",
+      }),
+      productionRequirementInput({
+        id: "groth16-attestation-request-package",
+        kind: "file",
+        placeholder: "<attestation-request.json>",
+        requiredBy: [
+          "groth16-sign-attestation",
+          "groth16-attestation-status",
+          "groth16-finalize-attestations",
+        ],
+        description:
+          "Role-separated attestation request package whose signedPayloadSha256 values must match the semantic, security, setup, and reproducible-build signatures.",
+      }),
+      productionRequirementInput({
+        id: "signed-groth16-role-attestations",
+        kind: "file-set",
+        placeholder:
+          "<semantic-sccp-circuit-attestation.json>,<circuit-security-audit.json>,<trusted-setup-ceremony.json>,<reproducible-build-attestation.json>",
+        requiredBy: [
+          "groth16-attestation-status",
+          "groth16-finalize-attestations",
+          "native-prover-bundle",
+        ],
+        description:
+          "Four public Ed25519-signed role attestation files produced from the request package; each signed body must match its request role payload hash and use a trusted, role-separated signer fingerprint.",
+      }),
+      productionRequirementInput({
+        id: "groth16-proof-self-test-report",
+        kind: "file",
+        placeholder: "<proof-self-test.json>",
+        requiredBy: [
+          "groth16-proof-self-test",
+          "native-prover-bundle",
+          "production-material-preflight",
+        ],
+        description:
+          "Public SnarkJS wtns/prove/verify report generated from the productionReady manifest-bound full-message circuit, proving key, verifier key, and deterministic synthetic SCCP witness.",
       }),
       productionRequirementInput({
         id: "trusted-groth16-attestation-signer",
         kind: "hex-fingerprint",
         placeholder: "<0x...>",
-        requiredBy: ["groth16-material", "native-prover-bundle"],
+        requiredBy: [
+          "groth16-attestation-status",
+          "groth16-finalize-attestations",
+          "native-prover-bundle",
+        ],
         description:
           "Trusted Ed25519 public-key fingerprint used to verify detached signatures on Groth16 semantic, security, setup, and reproducible-build attestations.",
+      }),
+      productionRequirementInput({
+        id: "trusted-setup-transcript",
+        kind: "file",
+        placeholder: "<trusted-setup-transcript.json>",
+        requiredBy: ["groth16-material"],
+        description:
+          "Concrete trusted-setup ceremony transcript whose sha256 must match the trusted setup attestation contributionTranscriptSha256.",
+      }),
+      productionRequirementInput({
+        id: "reproducible-build-transcript",
+        kind: "file",
+        placeholder: "<reproducible-build-transcript.json>",
+        requiredBy: ["groth16-material"],
+        description:
+          "Concrete reproducible-build transcript whose sha256 must match the reproducible build attestation buildTranscriptSha256.",
       }),
       productionRequirementInput({
         id: "semantic-sccp-circuit-attestation",
         kind: "file",
         placeholder: "<semantic-sccp-circuit-attestation.json>",
-        requiredBy: ["groth16-material", "native-prover-bundle"],
+        requiredBy: ["groth16-finalize-attestations", "native-prover-bundle"],
         description:
           "Public attestation that the Groth16 circuit enforces the full SCCP message, finality, route, and destination-binding semantics, not only the 9 public signal shape.",
       }),
@@ -1055,7 +1200,7 @@ export function bscProductionRequirements(options = {}) {
         id: "trusted-setup-ceremony-attestation",
         kind: "file",
         placeholder: "<trusted-setup-ceremony.json>",
-        requiredBy: ["groth16-material", "native-prover-bundle"],
+        requiredBy: ["groth16-finalize-attestations", "native-prover-bundle"],
         description:
           "Public ceremony evidence binding the ptau, phase2 zkey, circuit hash, contribution transcript, and verifier key hash.",
       }),
@@ -1063,7 +1208,7 @@ export function bscProductionRequirements(options = {}) {
         id: "reproducible-groth16-build-attestation",
         kind: "file",
         placeholder: "<reproducible-build-attestation.json>",
-        requiredBy: ["groth16-material", "native-prover-bundle"],
+        requiredBy: ["groth16-finalize-attestations", "native-prover-bundle"],
         description:
           "Independent reproducible build evidence for the circuit source, R1CS, proving key, SnarkJS verification key, and BSC verifier-key JSON.",
       }),
@@ -1671,12 +1816,13 @@ function flattenArray(value, label) {
 }
 
 function normalizeUint256Array(value, label, expectedLength) {
-  const values = flattenArray(value, label).map((entry, index) =>
-    normalizeUint256(entry, `${label}[${index}]`),
-  );
-  if (values.length !== expectedLength) {
+  const entries = flattenArray(value, label);
+  if (entries.length !== expectedLength) {
     throw new Error(`${label} must contain ${expectedLength} uint256 values.`);
   }
+  const values = entries.map((entry, index) =>
+    normalizeBn254DecimalWord(entry, `${label}[${index}]`),
+  );
   return values;
 }
 
@@ -1686,6 +1832,31 @@ function normalizeBn254FieldElement(value, label) {
     throw new Error(`${label} must be a BN254 field element.`);
   }
   return parsed;
+}
+
+function normalizeBn254DecimalWord(value, label) {
+  if (typeof value !== "string" || !DECIMAL_WORD.test(value)) {
+    throw new Error(`${label} must be a canonical decimal BN254 field word.`);
+  }
+  const parsed = BigInt(value);
+  if (parsed >= BN254_BASE_FIELD_MODULUS) {
+    throw new Error(`${label} must be a BN254 field element.`);
+  }
+  return parsed.toString();
+}
+
+function normalizeGroth16ProofSelfTestPublicSignals(value, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== BSC_GROTH16_PUBLIC_SIGNAL_NAMES.length
+  ) {
+    throw new Error(
+      `${label} must contain ${BSC_GROTH16_PUBLIC_SIGNAL_NAMES.length} canonical decimal BN254 field words.`,
+    );
+  }
+  return value.map((entry, index) =>
+    normalizeBn254DecimalWord(entry, `${label}[${index}]`),
+  );
 }
 
 function bn254Mod(value) {
@@ -1880,15 +2051,28 @@ export function normalizeVerifierMaterial(
   if (sourceDomain !== SCCP_DOMAIN_SORA || targetDomain !== SCCP_DOMAIN_BSC) {
     throw new Error("destination verifier domains must be SORA -> BSC.");
   }
-  const expectedVerifierKeyHash = normalizeHex32(
-    readFirstValue(
-      material,
-      "expectedVerifierKeyHash",
-      "verifierKeyHash",
-      "verifyingKeyHash",
-    ),
-    "expectedVerifierKeyHash",
+  const publicInputCount = Number(
+    readFirstValue(material, "publicInputCount", "public_input_count"),
   );
+  if (!Number.isSafeInteger(publicInputCount) || publicInputCount !== 9) {
+    throw new Error("publicInputCount must be 9 for BSC SCCP verifier material.");
+  }
+  const verifierKeyHashValues = [
+    ["expectedVerifierKeyHash", readFirstValue(material, "expectedVerifierKeyHash")],
+    ["verifierKeyHash", readFirstValue(material, "verifierKeyHash")],
+    ["verifyingKeyHash", readFirstValue(material, "verifyingKeyHash")],
+  ]
+    .filter(([, value]) => value !== undefined && value !== null && trim(value) !== "")
+    .map(([label, value]) => [label, normalizeHex32(value, label)]);
+  if (verifierKeyHashValues.length === 0) {
+    throw new Error("expectedVerifierKeyHash is required.");
+  }
+  const expectedVerifierKeyHash = verifierKeyHashValues[0][1];
+  for (const [label, value] of verifierKeyHashValues.slice(1)) {
+    if (value !== expectedVerifierKeyHash) {
+      throw new Error(`${label} must match expectedVerifierKeyHash.`);
+    }
+  }
   const normalizedMaterial = normalizeVerifierCoordinates(material);
   const fixtureShaped =
     isNormalizedSmokeFixtureGroth16VerifierMaterial(normalizedMaterial);
@@ -3224,6 +3408,7 @@ function sourceParityTreeHash(attestation) {
     networkIdHex: attestation.networkIdHex,
     domain: attestation.domain,
     proofBackend: attestation.proofBackend,
+    proofFamily: attestation.proofFamily,
     requiredMarkers: attestation.requiredMarkers,
     sdks: attestation.sdks,
   };
@@ -3346,11 +3531,421 @@ export async function buildBscNativeEvmSourceParityAttestation(options = {}) {
     networkIdHex: profile.networkIdHex,
     domain: SCCP_DOMAIN_BSC,
     proofBackend: BSC_EVM_GROTH16_BACKEND,
+    proofFamily: SCCP_PROOF_FAMILY_STARK_FRI,
     requiredMarkers: [...requiredMarkers],
     sdks,
   };
   attestation.sourceTreeHash = sourceParityTreeHash(attestation);
   return attestation;
+}
+
+function validateBscNativeEvmSourceParityAttestationArtifact(artifact, profile) {
+  const label = "auditHashes.native_implementation_audit source parity attestation";
+  let record;
+  try {
+    record = parseJsonWithoutDuplicateKeys(artifact.bytes.toString("utf8"), label);
+  } catch (error) {
+    throw new Error(
+      `${label} must be valid duplicate-free JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const reason = unsafeSecretReason(record, label);
+  if (reason) {
+    throw new Error(reason);
+  }
+  if (!isRecord(record)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  const knownTopLevelFields = new Set([
+    "schema",
+    "generatedAt",
+    "routeId",
+    "assetKey",
+    "bscNetwork",
+    "chain",
+    "chainIdHex",
+    "networkIdHex",
+    "domain",
+    "proofBackend",
+    "proofFamily",
+    "requiredMarkers",
+    "sdks",
+    "sourceTreeHash",
+  ]);
+  const problems = [
+    ...Object.keys(record)
+      .filter((key) => !knownTopLevelFields.has(key))
+      .map((key) => `${label} contains unknown field: ${key}`),
+    groth16ManifestStringProblem(
+      record,
+      ["schema"],
+      SOURCE_PARITY_ATTESTATION_SCHEMA,
+      `${label} schema`,
+    ),
+    groth16ManifestStringProblem(record, ["routeId"], ROUTE_ID, `${label} routeId`),
+    groth16ManifestStringProblem(record, ["assetKey"], ASSET_KEY, `${label} assetKey`),
+    groth16ManifestStringProblem(
+      record,
+      ["bscNetwork"],
+      profile.key,
+      `${label} bscNetwork`,
+    ),
+    groth16ManifestStringProblem(record, ["chain"], profile.chain, `${label} chain`),
+    groth16ManifestStringProblem(
+      record,
+      ["chainIdHex"],
+      profile.chainIdHex,
+      `${label} chainIdHex`,
+    ),
+    groth16ManifestHashProblem(
+      record,
+      ["networkIdHex"],
+      profile.networkIdHex,
+      `${label} networkIdHex`,
+    ),
+    readFirstValue(record, "domain") === SCCP_DOMAIN_BSC
+      ? ""
+      : `${label} domain must be ${SCCP_DOMAIN_BSC}`,
+    groth16ManifestStringProblem(
+      record,
+      ["proofBackend"],
+      BSC_EVM_GROTH16_BACKEND,
+      `${label} proofBackend`,
+    ),
+    groth16ManifestStringProblem(
+      record,
+      ["proofFamily"],
+      SCCP_PROOF_FAMILY_STARK_FRI,
+      `${label} proofFamily`,
+    ),
+  ].filter(Boolean);
+  const requiredMarkers = sourceParityRequiredMarkersForProfile(profile.key);
+  const markers = readFirstValue(record, "requiredMarkers");
+  if (
+    !Array.isArray(markers) ||
+    JSON.stringify(markers) !== JSON.stringify(requiredMarkers)
+  ) {
+    problems.push(`${label} requiredMarkers must match ${profile.key} profile`);
+  }
+  const sdks = readFirstRecord(record, "sdks");
+  if (!sdks) {
+    problems.push(`${label} sdks block is required`);
+  } else {
+    const knownSdkFields = new Set(["implementation", "implementationHash", "files"]);
+    const knownFileFields = new Set(["path", "sha256", "sizeBytes", "markers"]);
+    const expectedSpecs = sourceParitySdkSpecsForProfile(profile.key);
+    const expectedSdkNames = Object.keys(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).sort();
+    const actualSdkNames = Object.keys(sdks).sort();
+    if (JSON.stringify(actualSdkNames) !== JSON.stringify(expectedSdkNames)) {
+      problems.push(`${label} sdks must contain exactly ${expectedSdkNames.join(", ")}`);
+    }
+    for (const sdk of expectedSdkNames) {
+      const sdkRecord = readFirstRecord(sdks, sdk);
+      const expectedImplementation =
+        SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1[sdk];
+      const expectedSpec = expectedSpecs[sdk];
+      if (!sdkRecord) {
+        problems.push(`${label} ${sdk} SDK record is required`);
+        continue;
+      }
+      for (const key of Object.keys(sdkRecord)) {
+        if (!knownSdkFields.has(key)) {
+          problems.push(`${label} ${sdk} contains unknown field: ${key}`);
+        }
+      }
+      if (readFirstString(sdkRecord, "implementation") !== expectedImplementation) {
+        problems.push(
+          `${label} ${sdk} implementation must be ${expectedImplementation}`,
+        );
+      }
+      const files = readFirstValue(sdkRecord, "files");
+      const implementationHashFiles = [];
+      if (!Array.isArray(files) || files.length !== expectedSpec.files.length) {
+        problems.push(`${label} ${sdk} files must match source parity spec`);
+      } else {
+        for (const [index, expectedFile] of expectedSpec.files.entries()) {
+          const file = files[index];
+          if (!isRecord(file)) {
+            problems.push(`${label} ${sdk} files[${index}] must be an object`);
+            continue;
+          }
+          for (const key of Object.keys(file)) {
+            if (!knownFileFields.has(key)) {
+              problems.push(
+                `${label} ${sdk} files[${index}] contains unknown field: ${key}`,
+              );
+            }
+          }
+          const filePath = readFirstString(file, "path");
+          if (filePath !== expectedFile.path) {
+            problems.push(
+              `${label} ${sdk} files[${index}].path must be ${expectedFile.path}`,
+            );
+          }
+          let fileHash = "";
+          try {
+            fileHash = normalizeCanonicalHex32(
+              readFirstValue(file, "sha256"),
+              `${label} ${sdk} ${expectedFile.path} sha256`,
+            );
+          } catch (error) {
+            problems.push(error instanceof Error ? error.message : String(error));
+          }
+          const sizeBytes = Number(readFirstValue(file, "sizeBytes"));
+          if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
+            problems.push(`${label} ${sdk} ${expectedFile.path} sizeBytes is required`);
+          }
+          const fileMarkers = readFirstValue(file, "markers");
+          if (
+            !Array.isArray(fileMarkers) ||
+            JSON.stringify(fileMarkers) !== JSON.stringify(expectedFile.markers)
+          ) {
+            problems.push(
+              `${label} ${sdk} ${expectedFile.path} markers must match source parity spec`,
+            );
+          }
+          implementationHashFiles.push({
+            path: filePath,
+            sha256: fileHash,
+            markers: Array.isArray(fileMarkers) ? fileMarkers : [],
+          });
+        }
+      }
+      try {
+        const expectedImplementationHash = bytesToHex(
+          sha256(
+            textEncoder.encode(
+              stableJsonString({
+                sdk,
+                implementation: expectedImplementation,
+                files: implementationHashFiles,
+              }),
+            ),
+          ),
+        );
+        const implementationHash = normalizeCanonicalHex32(
+          readFirstValue(sdkRecord, "implementationHash"),
+          `${label} ${sdk} implementationHash`,
+        );
+        if (implementationHash !== expectedImplementationHash) {
+          problems.push(`${label} ${sdk} implementationHash must match files`);
+        }
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+  try {
+    const declaredTreeHash = normalizeCanonicalHex32(
+      readFirstValue(record, "sourceTreeHash"),
+      `${label} sourceTreeHash`,
+    );
+    const actualTreeHash = sourceParityTreeHash(record);
+    if (declaredTreeHash !== actualTreeHash) {
+      problems.push(`${label} sourceTreeHash must match source parity payload`);
+    }
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+  if (problems.length > 0) {
+    throw new Error(`${label} is not production-ready: ${problems.join("; ")}`);
+  }
+}
+
+function noWasmNoRemoteScanHash(record) {
+  return bytesToHex(
+    sha256(
+      textEncoder.encode(
+        stableJsonString({
+          schema: record.schema,
+          routeId: record.routeId,
+          assetKey: record.assetKey,
+          bscNetwork: record.bscNetwork,
+          chain: record.chain,
+          chainIdHex: record.chainIdHex,
+          networkIdHex: record.networkIdHex,
+          domain: record.domain,
+          proofBackend: record.proofBackend,
+          proofFamily: record.proofFamily,
+          noWasm: record.noWasm,
+          remoteProverRequired: record.remoteProverRequired,
+          browserImplementation: record.browserImplementation,
+          scanResult: record.scanResult,
+          forbiddenWasmReferences: record.forbiddenWasmReferences,
+          forbiddenRemoteReferences: record.forbiddenRemoteReferences,
+          inspectedSdkArtifacts: record.inspectedSdkArtifacts,
+        }),
+      ),
+    ),
+  );
+}
+
+function validateBscNativeEvmNoWasmNoRemoteScanArtifact({
+  artifact,
+  profile,
+  sdkArtifacts,
+}) {
+  const label = "auditHashes.no_wasm_no_remote_scan";
+  let record;
+  try {
+    record = parseJsonWithoutDuplicateKeys(artifact.bytes.toString("utf8"), label);
+  } catch (error) {
+    throw new Error(
+      `${label} must be valid duplicate-free JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const reason = unsafeSecretReason(record, label);
+  if (reason) {
+    throw new Error(reason);
+  }
+  if (!isRecord(record)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  const knownTopLevelFields = new Set([
+    "schema",
+    "generatedAt",
+    "routeId",
+    "assetKey",
+    "bscNetwork",
+    "chain",
+    "chainIdHex",
+    "networkIdHex",
+    "domain",
+    "proofBackend",
+    "proofFamily",
+    "noWasm",
+    "remoteProverRequired",
+    "browserImplementation",
+    "scanResult",
+    "forbiddenWasmReferences",
+    "forbiddenRemoteReferences",
+    "inspectedSdkArtifacts",
+    "scanHash",
+  ]);
+  const problems = [
+    ...Object.keys(record)
+      .filter((key) => !knownTopLevelFields.has(key))
+      .map((key) => `${label} contains unknown field: ${key}`),
+    groth16ManifestStringProblem(record, ["schema"], NO_WASM_NO_REMOTE_SCAN_SCHEMA, `${label} schema`),
+    groth16ManifestStringProblem(record, ["routeId"], ROUTE_ID, `${label} routeId`),
+    groth16ManifestStringProblem(record, ["assetKey"], ASSET_KEY, `${label} assetKey`),
+    groth16ManifestStringProblem(record, ["bscNetwork"], profile.key, `${label} bscNetwork`),
+    groth16ManifestStringProblem(record, ["chain"], profile.chain, `${label} chain`),
+    groth16ManifestStringProblem(record, ["chainIdHex"], profile.chainIdHex, `${label} chainIdHex`),
+    groth16ManifestHashProblem(record, ["networkIdHex"], profile.networkIdHex, `${label} networkIdHex`),
+    readFirstValue(record, "domain") === SCCP_DOMAIN_BSC
+      ? ""
+      : `${label} domain must be ${SCCP_DOMAIN_BSC}`,
+    groth16ManifestStringProblem(record, ["proofBackend"], BSC_EVM_GROTH16_BACKEND, `${label} proofBackend`),
+    groth16ManifestStringProblem(record, ["proofFamily"], SCCP_PROOF_FAMILY_STARK_FRI, `${label} proofFamily`),
+    groth16ManifestBooleanProblem(record, ["noWasm"], true, `${label} noWasm`),
+    groth16ManifestBooleanProblem(record, ["remoteProverRequired"], false, `${label} remoteProverRequired`),
+    groth16ManifestStringProblem(record, ["browserImplementation"], "pure-typescript", `${label} browserImplementation`),
+    groth16ManifestStringProblem(record, ["scanResult"], "pass", `${label} scanResult`),
+    groth16ManifestIntegerProblem(record, ["forbiddenWasmReferences"], 0, `${label} forbiddenWasmReferences`),
+    groth16ManifestIntegerProblem(record, ["forbiddenRemoteReferences"], 0, `${label} forbiddenRemoteReferences`),
+  ].filter(Boolean);
+  const inspected = readFirstValue(record, "inspectedSdkArtifacts");
+  const sdkArtifactsBySdk = new Map((sdkArtifacts ?? []).map((entry) => [entry.sdk, entry]));
+  const expectedSdkNames = Object.keys(
+    SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  ).sort();
+  if (!Array.isArray(inspected) || inspected.length !== expectedSdkNames.length) {
+    problems.push(`${label} inspectedSdkArtifacts must cover every required SDK`);
+  } else {
+    const knownEntryFields = new Set([
+      "sdk",
+      "implementation",
+      "path",
+      "sha256",
+      "sizeBytes",
+      "forbiddenWasmReferences",
+      "forbiddenRemoteReferences",
+    ]);
+    const seen = new Set();
+    for (const [index, entry] of inspected.entries()) {
+      if (!isRecord(entry)) {
+        problems.push(`${label} inspectedSdkArtifacts[${index}] must be an object`);
+        continue;
+      }
+      for (const key of Object.keys(entry)) {
+        if (!knownEntryFields.has(key)) {
+          problems.push(
+            `${label} inspectedSdkArtifacts[${index}] contains unknown field: ${key}`,
+          );
+        }
+      }
+      const sdk = readFirstString(entry, "sdk");
+      if (!expectedSdkNames.includes(sdk)) {
+        problems.push(`${label} inspectedSdkArtifacts[${index}].sdk is not required`);
+        continue;
+      }
+      if (seen.has(sdk)) {
+        problems.push(`${label} inspectedSdkArtifacts contains duplicate sdk: ${sdk}`);
+      }
+      seen.add(sdk);
+      const actualArtifact = sdkArtifactsBySdk.get(sdk);
+      if (!actualArtifact) {
+        problems.push(`${label} ${sdk} SDK artifact is missing from bundle`);
+        continue;
+      }
+      const expectedImplementation =
+        SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1[sdk];
+      if (readFirstString(entry, "implementation") !== expectedImplementation) {
+        problems.push(`${label} ${sdk} implementation must be ${expectedImplementation}`);
+      }
+      if (readFirstString(entry, "path") !== actualArtifact.path) {
+        problems.push(`${label} ${sdk} path must match native SDK artifact`);
+      }
+      try {
+        const hash = normalizeCanonicalHex32(
+          readFirstValue(entry, "sha256"),
+          `${label} ${sdk} sha256`,
+        );
+        if (hash !== actualArtifact.sha256) {
+          problems.push(`${label} ${sdk} sha256 must match native SDK artifact`);
+        }
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : String(error));
+      }
+      const sizeBytes = Number(readFirstValue(entry, "sizeBytes"));
+      if (!Number.isSafeInteger(sizeBytes) || sizeBytes !== actualArtifact.sizeBytes) {
+        problems.push(`${label} ${sdk} sizeBytes must match native SDK artifact`);
+      }
+      if (readFirstValue(entry, "forbiddenWasmReferences") !== 0) {
+        problems.push(`${label} ${sdk} forbiddenWasmReferences must be 0`);
+      }
+      if (readFirstValue(entry, "forbiddenRemoteReferences") !== 0) {
+        problems.push(`${label} ${sdk} forbiddenRemoteReferences must be 0`);
+      }
+    }
+    for (const sdk of expectedSdkNames) {
+      if (!seen.has(sdk)) {
+        problems.push(`${label} inspectedSdkArtifacts missing sdk: ${sdk}`);
+      }
+    }
+  }
+  try {
+    const declaredScanHash = normalizeCanonicalHex32(
+      readFirstValue(record, "scanHash"),
+      `${label} scanHash`,
+    );
+    const actualScanHash = noWasmNoRemoteScanHash(record);
+    if (declaredScanHash !== actualScanHash) {
+      problems.push(`${label} scanHash must match scan payload`);
+    }
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+  if (problems.length > 0) {
+    throw new Error(`${label} is not production-ready: ${problems.join("; ")}`);
+  }
 }
 
 async function writeJsonNoSecrets(pathName, value) {
@@ -3834,7 +4429,7 @@ function assertProductionAuditHashLiteral(value, label) {
   return normalized;
 }
 
-async function normalizeAuditHashOrFile(root, value, label) {
+async function normalizeAuditHashOrFile(root, value, label, options = {}) {
   const text = normalizeNonEmptyText(value, label);
   if (/^(?:0x)?[0-9a-f]{64}$/iu.test(text)) {
     return assertProductionAuditHashLiteral(text, label);
@@ -3842,13 +4437,15 @@ async function normalizeAuditHashOrFile(root, value, label) {
   if (text.startsWith("0x")) {
     throw new Error(`${label} must be a 32-byte hex hash or artifact file.`);
   }
-  return (await readArtifactUnderRoot(root, text, label)).sha256;
+  const artifact = await readArtifactUnderRoot(root, text, label);
+  options.validateArtifact?.(artifact);
+  return artifact.sha256;
 }
 
 async function readNativeProverAuditHashes(
   root,
   options,
-  { parityFixture, selfTestFixture } = {},
+  { parityFixture, selfTestFixture, profile, sdkArtifacts } = {},
 ) {
   const entries = [];
   for (const [key, optionNames] of Object.entries(
@@ -3869,6 +4466,23 @@ async function readNativeProverAuditHashes(
       root,
       requiredOption(options, optionNames, `auditHashes.${key}`),
       `auditHashes.${key}`,
+      {
+        validateArtifact:
+          key === "native_implementation_audit" && profile
+            ? (artifact) =>
+                validateBscNativeEvmSourceParityAttestationArtifact(
+                  artifact,
+                  profile,
+                )
+            : key === "no_wasm_no_remote_scan" && profile
+              ? (artifact) =>
+                  validateBscNativeEvmNoWasmNoRemoteScanArtifact({
+                    artifact,
+                    profile,
+                    sdkArtifacts,
+                  })
+            : null,
+      },
     );
     if (derived && normalized !== derived) {
       throw new Error(`auditHashes.${key} must match the artifact sha256.`);
@@ -4094,6 +4708,28 @@ function groth16ManifestIntegerProblem(record, keys, expected, label) {
     : `${label} must be ${expected}`;
 }
 
+function groth16ManifestIntegerAtLeastProblem(record, keys, expected, label) {
+  const actual = Number(readFirstValue(record, ...keys));
+  return Number.isSafeInteger(actual) && actual >= expected
+    ? ""
+    : `${label} must be at least ${expected}`;
+}
+
+function groth16ManifestBooleanProblem(record, keys, expected, label) {
+  return readFirstValue(record, ...keys) === expected
+    ? ""
+    : `${label} must be ${expected}`;
+}
+
+function groth16ManifestHashPresentProblem(record, keys, label) {
+  try {
+    groth16MaterialManifestHash(record, keys, label);
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 function groth16ManifestHashProblem(record, keys, expected, label) {
   try {
     const actual = groth16MaterialManifestHash(record, keys, label);
@@ -4101,6 +4737,240 @@ function groth16ManifestHashProblem(record, keys, expected, label) {
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
+}
+
+function groth16ManifestArrayOrCountAtLeastProblem(
+  record,
+  arrayKeys,
+  countKeys,
+  minimum,
+  label,
+) {
+  for (const key of arrayKeys) {
+    const value = readFirstValue(record, key);
+    if (Array.isArray(value)) {
+      const distinct = new Set(value.map((entry) => trim(entry)).filter(Boolean));
+      return distinct.size >= minimum
+        ? ""
+        : `${label} must record at least ${minimum}`;
+    }
+  }
+  const count = Number(readFirstValue(record, ...countKeys));
+  if (Number.isSafeInteger(count)) {
+    return count >= minimum ? "" : `${label} must record at least ${minimum}`;
+  }
+  return `${label} is required`;
+}
+
+function groth16ManifestOptionalBooleanProblem(record, keys, expected, label) {
+  const value = readFirstValue(record, ...keys);
+  return value === undefined ? "" : value === expected ? "" : `${label} must be ${expected}`;
+}
+
+function groth16ManifestOptionalStringProblem(record, keys, expected, label) {
+  const value = readFirstValue(record, ...keys);
+  if (value === undefined) {
+    return "";
+  }
+  return groth16ManifestStringProblem(record, keys, expected, label);
+}
+
+function groth16ManifestOptionalIntegerProblem(record, keys, expected, label) {
+  const value = readFirstValue(record, ...keys);
+  if (value === undefined) {
+    return "";
+  }
+  return groth16ManifestIntegerProblem(record, keys, expected, label);
+}
+
+function productionEvidenceTextProblems(value, label, path = "") {
+  const problems = [];
+  if (typeof value === "string") {
+    const scanValue =
+      path.endsWith(".path") || path === ".path"
+        ? basename(win32.basename(value))
+        : value;
+    if (PRODUCTION_EVIDENCE_FORBIDDEN_WORDS.test(scanValue)) {
+      problems.push(
+        `${label}${path} must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material`,
+      );
+    }
+    return problems;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      problems.push(
+        ...productionEvidenceTextProblems(entry, label, `${path}[${index}]`),
+      );
+    }
+    return problems;
+  }
+  if (isRecord(value)) {
+    for (const [key, entry] of Object.entries(value)) {
+      problems.push(
+        ...productionEvidenceTextProblems(
+          entry,
+          label,
+          path ? `${path}.${key}` : `.${key}`,
+        ),
+      );
+    }
+  }
+  return problems;
+}
+
+function groth16MaterialManifestReferenceProblems(manifest) {
+  const artifacts = readFirstRecord(manifest, "artifacts");
+  const attestations = readFirstRecord(manifest, "attestations");
+  return [
+    ...(artifacts
+      ? productionEvidenceTextProblems(
+          artifacts,
+          "Groth16 material manifest artifacts",
+        )
+      : []),
+    ...(attestations
+      ? productionEvidenceTextProblems(
+          attestations,
+          "Groth16 material manifest attestations",
+        )
+      : []),
+  ];
+}
+
+function groth16AttestationAllowedFields(expectedSchema) {
+  const common = [
+    "schema",
+    "routeId",
+    "route_id",
+    "assetKey",
+    "asset_key",
+    "bscNetwork",
+    "bsc_network",
+    "network",
+    "chain",
+    "chainIdHex",
+    "chain_id_hex",
+    "networkIdHex",
+    "network_id_hex",
+    "proofBackend",
+    "proof_backend",
+    "proofFamily",
+    "proof_family",
+    "circuitProfile",
+    "circuit_profile",
+    "publicInputCount",
+    "public_input_count",
+    "publicSignalNames",
+    "public_signal_names",
+    "verifierKeyHash",
+    "verifier_key_hash",
+    "circuitSourceSha256",
+    "circuit_source_sha256",
+    "r1csSha256",
+    "r1cs_sha256",
+      "proofArtifactHash",
+      "proof_artifact_hash",
+      "powersOfTauSha256",
+      "powers_of_tau_sha256",
+      "ptauSha256",
+      "ptau_sha256",
+      "provingKeySha256",
+      "proving_key_sha256",
+    "provingKeyHash",
+    "proving_key_hash",
+    "snarkjsVerificationKeySha256",
+    "snarkjs_verification_key_sha256",
+    "bscVerifierKeySha256",
+    "bsc_verifier_key_sha256",
+    "signature",
+  ];
+  const bySchema = {
+    [BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA]: [
+      "semanticReviewEvidenceSchema",
+      "semantic_review_evidence_schema",
+      "semanticReviewEvidenceSha256",
+      "semantic_review_evidence_sha256",
+      "semanticReviewReportSha256",
+      "semantic_review_report_sha256",
+      "fullSccpMessageSemantics",
+      "full_sccp_message_semantics",
+      "sourceFinalitySemantics",
+      "source_finality_semantics",
+      "destinationBindingSemantics",
+      "destination_binding_semantics",
+      "publicSignalDerivationSemantics",
+      "public_signal_derivation_semantics",
+      "negativeCaseCoverage",
+      "negative_case_coverage",
+    ],
+    [BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA]: [
+      "circuitSecurityAuditEvidenceSchema",
+      "circuit_security_audit_evidence_schema",
+      "circuitSecurityAuditEvidenceSha256",
+      "circuit_security_audit_evidence_sha256",
+      "circuitSecurityAuditReportSha256",
+      "circuit_security_audit_report_sha256",
+      "auditResult",
+      "audit_result",
+      "approved",
+      "productionApproved",
+      "production_approved",
+      "criticalFindings",
+      "critical_findings",
+      "highFindings",
+      "high_findings",
+      "unresolvedFindings",
+      "unresolved_findings",
+    ],
+    [BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA]: [
+      "ceremonyResult",
+      "ceremony_result",
+      "localSingleContributor",
+      "local_single_contributor",
+      "minimumContributors",
+      "minimum_contributors",
+      "toxicWasteDestroyed",
+      "toxic_waste_destroyed",
+      "contributionTranscriptSha256",
+      "contribution_transcript_sha256",
+    ],
+    [BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA]: [
+      "reproducible",
+      "reproducibleBuild",
+      "reproducible_build",
+      "independentRebuilders",
+      "independent_rebuilders",
+      "buildTranscriptSha256",
+      "build_transcript_sha256",
+      "toolchainSha256",
+      "toolchain_sha256",
+      "r1csInfoSource",
+      "r1cs_info_source",
+      "r1csPublicInputCount",
+      "r1cs_public_input_count",
+      "r1csConstraintCount",
+      "r1cs_constraint_count",
+      "zkeyVerify",
+      "zkey_verify",
+      "zkeyVerifyResult",
+      "zkey_verify_result",
+      "zkeyVerificationKeyExport",
+      "zkey_verification_key_export",
+      "verifierKeyHashMatches",
+      "verifier_key_hash_matches",
+      "exportedVerifierKeyHash",
+      "exported_verifier_key_hash",
+    ],
+  };
+  return new Set([...common, ...(bySchema[expectedSchema] ?? [])]);
+}
+
+function groth16AttestationUnknownFieldProblems(record, expectedSchema, label) {
+  const allowed = groth16AttestationAllowedFields(expectedSchema);
+  return Object.keys(record)
+    .filter((key) => !allowed.has(key))
+    .map((key) => `${label} contains unknown field: ${key}`);
 }
 
 function groth16PublicSignalsProblem(record, label) {
@@ -4296,6 +5166,18 @@ function groth16MaterialManifestSelfCheckProblems(manifest, binding) {
   if (readFirstValue(snarkjs, "r1csInfo", "r1cs_info") !== true) {
     problems.push("Groth16 material manifest SnarkJS R1CS self-check must pass");
   }
+  const r1csInfoSource = readFirstString(
+    snarkjs,
+    "r1csInfoSource",
+    "r1cs_info_source",
+  );
+  if (!BSC_GROTH16_R1CS_INFO_SOURCES.has(r1csInfoSource)) {
+    problems.push(
+      `Groth16 material manifest SnarkJS R1CS info source must be one of ${[
+        ...BSC_GROTH16_R1CS_INFO_SOURCES,
+      ].join(", ")}`,
+    );
+  }
   const r1csPublicInputCount = Number(
     readFirstValue(
       snarkjs,
@@ -4321,6 +5203,28 @@ function groth16MaterialManifestSelfCheckProblems(manifest, binding) {
   ) {
     problems.push(
       `Groth16 material manifest SnarkJS R1CS constraint count must be at least ${PRODUCTION_FULL_SCCP_MIN_R1CS_CONSTRAINTS}`,
+    );
+  }
+  if (
+    readFirstValue(
+      snarkjs,
+      "zkeyVerify",
+      "zkey_verify",
+    ) !== true
+  ) {
+    problems.push(
+      "Groth16 material manifest SnarkJS zkey verify self-check must pass",
+    );
+  }
+  if (
+    readFirstString(
+      snarkjs,
+      "zkeyVerifyResult",
+      "zkey_verify_result",
+    ) !== SNARKJS_ZKEY_VERIFY_OK
+  ) {
+    problems.push(
+      `Groth16 material manifest SnarkJS zkey verify result must be ${SNARKJS_ZKEY_VERIFY_OK}`,
     );
   }
   if (
@@ -4575,14 +5479,20 @@ function groth16AttestationBodyProblems({
   label,
   binding,
   profile,
+  manifest,
   proofArtifact,
   provingKey,
   verifierKey,
   verifierMaterial,
   snarkjsVerificationKeyHash,
   circuitSourceHash,
+  powersOfTauHash,
+  trustedSetupTranscriptHash,
+  reproducibleBuildTranscriptHash,
 }) {
   const problems = [
+    ...groth16AttestationUnknownFieldProblems(record, expectedSchema, label),
+    ...productionEvidenceTextProblems(record, label),
     groth16ManifestStringProblem(record, ["schema"], expectedSchema, `${label} schema`),
     groth16ManifestStringProblem(record, ["routeId", "route_id"], ROUTE_ID, `${label} routeId`),
     groth16ManifestStringProblem(record, ["assetKey", "asset_key"], ASSET_KEY, `${label} assetKey`),
@@ -4604,6 +5514,18 @@ function groth16AttestationBodyProblems({
       ["networkIdHex", "network_id_hex"],
       profile.networkIdHex,
       `${label} networkIdHex`,
+    ),
+    groth16ManifestStringProblem(
+      record,
+      ["proofBackend", "proof_backend"],
+      BSC_EVM_GROTH16_BACKEND,
+      `${label} proofBackend`,
+    ),
+    groth16ManifestStringProblem(
+      record,
+      ["proofFamily", "proof_family"],
+      SCCP_PROOF_FAMILY_STARK_FRI,
+      `${label} proofFamily`,
     ),
     groth16ManifestStringProblem(
       record,
@@ -4638,6 +5560,17 @@ function groth16AttestationBodyProblems({
     ),
     groth16ManifestHashProblem(
       record,
+      [
+        "powersOfTauSha256",
+        "powers_of_tau_sha256",
+        "ptauSha256",
+        "ptau_sha256",
+      ],
+      powersOfTauHash,
+      `${label} powersOfTauSha256`,
+    ),
+    groth16ManifestHashProblem(
+      record,
       ["provingKeySha256", "proving_key_sha256", "provingKeyHash", "proving_key_hash"],
       provingKey.sha256,
       `${label} provingKeySha256`,
@@ -4660,7 +5593,303 @@ function groth16AttestationBodyProblems({
       circuitSourceHash,
       `${label} circuitSourceSha256`,
     ),
+    ...(expectedSchema === BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA
+      ? groth16ReproducibleBuildAttestationProblems({
+          record,
+          label,
+          manifest,
+          binding,
+          reproducibleBuildTranscriptHash,
+        })
+      : []),
+    ...(expectedSchema === BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA
+      ? groth16TrustedSetupAttestationProblems({
+          record,
+          label,
+          trustedSetupTranscriptHash,
+        })
+      : []),
+    ...(expectedSchema === BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA
+      ? groth16SemanticAttestationProblems({ record, label })
+      : []),
+    ...(expectedSchema === BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA
+      ? groth16CircuitSecurityAttestationProblems({ record, label })
+      : []),
   ];
+  return problems.filter(Boolean);
+}
+
+function groth16SemanticAttestationProblems({ record, label }) {
+  return [
+    groth16ManifestStringProblem(
+      record,
+      ["semanticReviewEvidenceSchema", "semantic_review_evidence_schema"],
+      BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+      `${label} semanticReviewEvidenceSchema`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["semanticReviewEvidenceSha256", "semantic_review_evidence_sha256"],
+      `${label} semanticReviewEvidenceSha256`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["semanticReviewReportSha256", "semantic_review_report_sha256"],
+      `${label} semanticReviewReportSha256`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["fullSccpMessageSemantics", "full_sccp_message_semantics"],
+      true,
+      `${label} fullSccpMessageSemantics`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["sourceFinalitySemantics", "source_finality_semantics"],
+      true,
+      `${label} sourceFinalitySemantics`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["destinationBindingSemantics", "destination_binding_semantics"],
+      true,
+      `${label} destinationBindingSemantics`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["publicSignalDerivationSemantics", "public_signal_derivation_semantics"],
+      true,
+      `${label} publicSignalDerivationSemantics`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["negativeCaseCoverage", "negative_case_coverage"],
+      true,
+      `${label} negativeCaseCoverage`,
+    ),
+  ].filter(Boolean);
+}
+
+function groth16CircuitSecurityAttestationProblems({ record, label }) {
+  return [
+    groth16ManifestStringProblem(
+      record,
+      ["circuitSecurityAuditEvidenceSchema", "circuit_security_audit_evidence_schema"],
+      BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+      `${label} circuitSecurityAuditEvidenceSchema`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["circuitSecurityAuditEvidenceSha256", "circuit_security_audit_evidence_sha256"],
+      `${label} circuitSecurityAuditEvidenceSha256`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["circuitSecurityAuditReportSha256", "circuit_security_audit_report_sha256"],
+      `${label} circuitSecurityAuditReportSha256`,
+    ),
+    groth16ManifestStringProblem(
+      record,
+      ["auditResult", "audit_result"],
+      "pass",
+      `${label} auditResult`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["approved", "productionApproved", "production_approved"],
+      true,
+      `${label} approved`,
+    ),
+    groth16ManifestIntegerProblem(
+      record,
+      ["criticalFindings", "critical_findings"],
+      0,
+      `${label} criticalFindings`,
+    ),
+    groth16ManifestIntegerProblem(
+      record,
+      ["highFindings", "high_findings"],
+      0,
+      `${label} highFindings`,
+    ),
+    groth16ManifestIntegerProblem(
+      record,
+      ["unresolvedFindings", "unresolved_findings"],
+      0,
+      `${label} unresolvedFindings`,
+    ),
+  ].filter(Boolean);
+}
+
+function groth16TrustedSetupAttestationProblems({
+  record,
+  label,
+  trustedSetupTranscriptHash,
+}) {
+  return [
+    groth16ManifestStringProblem(
+      record,
+      ["ceremonyResult", "ceremony_result"],
+      "pass",
+      `${label} ceremonyResult`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["localSingleContributor", "local_single_contributor"],
+      false,
+      `${label} localSingleContributor`,
+    ),
+    groth16ManifestIntegerAtLeastProblem(
+      record,
+      ["minimumContributors", "minimum_contributors"],
+      2,
+      `${label} minimumContributors`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["toxicWasteDestroyed", "toxic_waste_destroyed"],
+      true,
+      `${label} toxicWasteDestroyed`,
+    ),
+    groth16ManifestHashProblem(
+      record,
+      ["contributionTranscriptSha256", "contribution_transcript_sha256"],
+      trustedSetupTranscriptHash,
+      `${label} contributionTranscriptSha256`,
+    ),
+  ].filter(Boolean);
+}
+
+function groth16ReproducibleBuildAttestationProblems({
+  record,
+  label,
+  manifest,
+  binding,
+  reproducibleBuildTranscriptHash,
+}) {
+  const selfChecks = readFirstRecord(manifest, "selfChecks", "self_checks");
+  const snarkjs = selfChecks
+    ? readFirstRecord(selfChecks, "snarkjs", "snark_js")
+    : null;
+  if (!snarkjs) {
+    return [`${label} requires Groth16 material manifest selfChecks.snarkjs`];
+  }
+  const problems = [
+    groth16ManifestBooleanProblem(
+      record,
+      ["reproducible", "reproducibleBuild", "reproducible_build"],
+      true,
+      `${label} reproducible`,
+    ),
+    groth16ManifestIntegerAtLeastProblem(
+      record,
+      ["independentRebuilders", "independent_rebuilders"],
+      2,
+      `${label} independentRebuilders`,
+    ),
+    groth16ManifestHashProblem(
+      record,
+      ["buildTranscriptSha256", "build_transcript_sha256"],
+      reproducibleBuildTranscriptHash,
+      `${label} buildTranscriptSha256`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["toolchainSha256", "toolchain_sha256"],
+      `${label} toolchainSha256`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["zkeyVerify", "zkey_verify"],
+      true,
+      `${label} zkeyVerify`,
+    ),
+    groth16ManifestStringProblem(
+      record,
+      ["zkeyVerifyResult", "zkey_verify_result"],
+      readFirstString(snarkjs, "zkeyVerifyResult", "zkey_verify_result"),
+      `${label} zkeyVerifyResult`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["zkeyVerificationKeyExport", "zkey_verification_key_export"],
+      true,
+      `${label} zkeyVerificationKeyExport`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["verifierKeyHashMatches", "verifier_key_hash_matches"],
+      true,
+      `${label} verifierKeyHashMatches`,
+    ),
+    groth16ManifestHashProblem(
+      record,
+      ["exportedVerifierKeyHash", "exported_verifier_key_hash"],
+      binding.verifierKeyHash,
+      `${label} exportedVerifierKeyHash`,
+    ),
+  ];
+  const r1csInfoSource = readFirstString(
+    snarkjs,
+    "r1csInfoSource",
+    "r1cs_info_source",
+  );
+  if (r1csInfoSource) {
+    problems.push(
+      groth16ManifestStringProblem(
+        record,
+        ["r1csInfoSource", "r1cs_info_source"],
+        r1csInfoSource,
+        `${label} r1csInfoSource`,
+      ),
+    );
+  } else {
+    problems.push(
+      `${label} requires Groth16 material manifest SnarkJS R1CS info source`,
+    );
+  }
+  const r1csPublicInputCount = Number(
+    readFirstValue(
+      snarkjs,
+      "r1csPublicInputCount",
+      "r1cs_public_input_count",
+    ),
+  );
+  if (Number.isSafeInteger(r1csPublicInputCount)) {
+    problems.push(
+      groth16ManifestIntegerProblem(
+        record,
+        ["r1csPublicInputCount", "r1cs_public_input_count"],
+        r1csPublicInputCount,
+        `${label} r1csPublicInputCount`,
+      ),
+    );
+  } else {
+    problems.push(
+      `${label} requires Groth16 material manifest SnarkJS R1CS public input count`,
+    );
+  }
+  const r1csConstraintCount = Number(
+    readFirstValue(
+      snarkjs,
+      "r1csConstraintCount",
+      "r1cs_constraint_count",
+    ),
+  );
+  if (Number.isSafeInteger(r1csConstraintCount)) {
+    problems.push(
+      groth16ManifestIntegerProblem(
+        record,
+        ["r1csConstraintCount", "r1cs_constraint_count"],
+        r1csConstraintCount,
+        `${label} r1csConstraintCount`,
+      ),
+    );
+  } else {
+    problems.push(
+      `${label} requires Groth16 material manifest SnarkJS R1CS constraint count`,
+    );
+  }
   return problems.filter(Boolean);
 }
 
@@ -4807,6 +6036,212 @@ function groth16AttestationSignerDiversityProblems(rows) {
   return problems;
 }
 
+function groth16TrustedSetupTranscriptProblems(record, label) {
+  const phase1 = readFirstRecord(record, "phase1");
+  const snarkjsPowersOfTauVerify = phase1
+    ? readFirstRecord(
+        phase1,
+        "snarkjsPowersOfTauVerify",
+        "snarkjs_powers_of_tau_verify",
+      )
+    : null;
+  const phase2 = readFirstRecord(record, "phase2");
+  return [
+    ...productionEvidenceTextProblems(record, label),
+    groth16ManifestArrayOrCountAtLeastProblem(
+      record,
+      ["contributors", "participants", "contributions"],
+      [
+        "minimumContributors",
+        "minimum_contributors",
+        "minimumContributorsObserved",
+        "minimum_contributors_observed",
+      ],
+      2,
+      `${label} contributors`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["localSingleContributor", "local_single_contributor"],
+      false,
+      `${label} localSingleContributor`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["toxicWasteDestroyed", "toxic_waste_destroyed"],
+      true,
+      `${label} toxicWasteDestroyed`,
+    ),
+    groth16ManifestStringProblem(
+      record,
+      ["ceremonyResult", "ceremony_result"],
+      "pass",
+      `${label} ceremonyResult`,
+    ),
+    phase1 ? "" : `${label} phase1 block is required`,
+    snarkjsPowersOfTauVerify
+      ? groth16ManifestBooleanProblem(
+          snarkjsPowersOfTauVerify,
+          ["completed"],
+          true,
+          `${label} snarkjsPowersOfTauVerify.completed`,
+        )
+      : `${label} snarkjsPowersOfTauVerify block is required`,
+    phase2 ? "" : `${label} phase2 block is required`,
+    phase2
+      ? groth16ManifestStringProblem(
+          phase2,
+          ["snarkjsZkeyVerify", "snarkjs_zkey_verify"],
+          "ZKey Ok!",
+          `${label} snarkjsZkeyVerify`,
+        )
+      : "",
+  ].filter(Boolean);
+}
+
+function groth16ReproducibleBuildTranscriptProblems(record, label, manifest) {
+  const selfChecks = readFirstRecord(manifest, "selfChecks", "self_checks");
+  const snarkjs = selfChecks
+    ? readFirstRecord(selfChecks, "snarkjs", "snark_js")
+    : null;
+  const problems = [
+    ...productionEvidenceTextProblems(record, label),
+    groth16ManifestArrayOrCountAtLeastProblem(
+      record,
+      ["independentRebuilders", "independent_rebuilders", "rebuilders"],
+      [
+        "independentRebuilderCount",
+        "independent_rebuilder_count",
+        "independentRebuildersObserved",
+        "independent_rebuilders_observed",
+      ],
+      2,
+      `${label} independentRebuilders`,
+    ),
+    groth16ManifestBooleanProblem(
+      record,
+      ["reproducible", "reproducibleBuildComplete", "reproducible_build_complete"],
+      true,
+      `${label} reproducible`,
+    ),
+  ];
+  if (snarkjs) {
+    problems.push(
+      groth16ManifestBooleanProblem(
+        record,
+        ["zkeyVerify", "zkey_verify"],
+        true,
+        `${label} zkeyVerify`,
+      ),
+      groth16ManifestStringProblem(
+        record,
+        ["zkeyVerifyResult", "zkey_verify_result"],
+        readFirstString(snarkjs, "zkeyVerifyResult", "zkey_verify_result"),
+        `${label} zkeyVerifyResult`,
+      ),
+    );
+    const r1csInfoSource = readFirstString(
+      snarkjs,
+      "r1csInfoSource",
+      "r1cs_info_source",
+    );
+    if (r1csInfoSource) {
+      problems.push(
+        groth16ManifestOptionalStringProblem(
+          record,
+          ["r1csInfoSource", "r1cs_info_source"],
+          r1csInfoSource,
+          `${label} r1csInfoSource`,
+        ),
+      );
+    }
+    const r1csPublicInputCount = Number(
+      readFirstValue(
+        snarkjs,
+        "r1csPublicInputCount",
+        "r1cs_public_input_count",
+      ),
+    );
+    if (Number.isSafeInteger(r1csPublicInputCount)) {
+      problems.push(
+        groth16ManifestOptionalIntegerProblem(
+          record,
+          ["r1csPublicInputCount", "r1cs_public_input_count"],
+          r1csPublicInputCount,
+          `${label} r1csPublicInputCount`,
+        ),
+      );
+    }
+    const r1csConstraintCount = Number(
+      readFirstValue(
+        snarkjs,
+        "r1csConstraintCount",
+        "r1cs_constraint_count",
+      ),
+    );
+    if (Number.isSafeInteger(r1csConstraintCount)) {
+      problems.push(
+        groth16ManifestOptionalIntegerProblem(
+          record,
+          ["r1csConstraintCount", "r1cs_constraint_count"],
+          r1csConstraintCount,
+          `${label} r1csConstraintCount`,
+        ),
+      );
+    }
+  }
+  return problems.filter(Boolean);
+}
+
+async function referencedGroth16MaterialTranscriptProblems({ root, manifest }) {
+  const artifacts = readFirstRecord(manifest, "artifacts") ?? {};
+  const required = [
+    [
+      ["trustedSetupTranscript", "trusted_setup_transcript"],
+      "trusted setup transcript",
+      (record, label) => groth16TrustedSetupTranscriptProblems(record, label),
+    ],
+    [
+      ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+      "reproducible build transcript",
+      (record, label) =>
+        groth16ReproducibleBuildTranscriptProblems(record, label, manifest),
+    ],
+  ];
+  const problems = [];
+  for (const [keys, label, validate] of required) {
+    const reference = readFirstRecord(artifacts, ...keys);
+    if (!reference) {
+      problems.push(`Groth16 material manifest ${label} reference is required`);
+      continue;
+    }
+    let expectedSha256;
+    try {
+      expectedSha256 = groth16MaterialManifestHash(
+        reference,
+        ["sha256", "hash", "artifactHash", "artifact_hash"],
+        `Groth16 material manifest ${label} sha256`,
+      );
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    const readResult = await readReferencedGroth16Attestation({
+      root,
+      reference,
+      expectedSha256,
+      label: `Groth16 material manifest ${label}`,
+    });
+    problems.push(...readResult.problems);
+    if (readResult.record) {
+      problems.push(
+        ...validate(readResult.record, `Groth16 material manifest ${label}`),
+      );
+    }
+  }
+  return uniqueNonEmpty(problems);
+}
+
 async function referencedGroth16MaterialAttestationProblems({
   root,
   manifest,
@@ -4828,6 +6263,21 @@ async function referencedGroth16MaterialAttestationProblems({
     manifest,
     ["circuitSource", "circuit_source"],
     "circuit source",
+  );
+  const powersOfTauHash = groth16MaterialManifestArtifactHash(
+    manifest,
+    ["powersOfTau", "powers_of_tau"],
+    "Powers of Tau",
+  );
+  const trustedSetupTranscriptHash = groth16MaterialManifestArtifactHash(
+    manifest,
+    ["trustedSetupTranscript", "trusted_setup_transcript"],
+    "trusted setup transcript",
+  );
+  const reproducibleBuildTranscriptHash = groth16MaterialManifestArtifactHash(
+    manifest,
+    ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+    "reproducible build transcript",
   );
   const required = [
     [
@@ -4886,12 +6336,16 @@ async function referencedGroth16MaterialAttestationProblems({
         label: `Groth16 material manifest ${label}`,
         binding,
         profile,
+        manifest,
         proofArtifact,
         provingKey,
         verifierKey,
         verifierMaterial,
         snarkjsVerificationKeyHash,
         circuitSourceHash,
+        powersOfTauHash,
+        trustedSetupTranscriptHash,
+        reproducibleBuildTranscriptHash,
       });
     const signatureProblems = groth16AttestationSignatureProblems({
         record: readResult.record,
@@ -5023,6 +6477,7 @@ function validateBscGroth16MaterialManifest({
   } else if (!Array.isArray(productionBlockers)) {
     problems.push("Groth16 material manifest productionBlockers must be an array");
   }
+  problems.push(...groth16MaterialManifestReferenceProblems(manifest));
   addCheck(() => {
     const verifierKeyHash = normalizeCanonicalHex32(
       readFirstValue(manifest, "verifierKeyHash", "verifier_key_hash"),
@@ -5039,6 +6494,14 @@ function validateBscGroth16MaterialManifest({
       ? ""
       : "Groth16 material manifest R1CS hash must match proof artifact",
   );
+  addCheck(() => {
+    groth16MaterialManifestArtifactHash(
+      manifest,
+      ["powersOfTau", "powers_of_tau"],
+      "Powers of Tau",
+    );
+    return "";
+  });
   addCheck(() => {
     groth16MaterialManifestArtifactHash(
       manifest,
@@ -5070,6 +6533,22 @@ function validateBscGroth16MaterialManifest({
       manifest,
       ["snarkjsVerificationKey", "snarkjs_verification_key"],
       "SnarkJS verification key",
+    );
+    return "";
+  });
+  addCheck(() => {
+    groth16MaterialManifestArtifactHash(
+      manifest,
+      ["trustedSetupTranscript", "trusted_setup_transcript"],
+      "trusted setup transcript",
+    );
+    return "";
+  });
+  addCheck(() => {
+    groth16MaterialManifestArtifactHash(
+      manifest,
+      ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+      "reproducible build transcript",
     );
     return "";
   });
@@ -5137,6 +6616,16 @@ async function readRequiredBscGroth16MaterialManifest({
     verifierMaterial,
     trustedSignerFingerprints,
   });
+  const transcriptProblems =
+    await referencedGroth16MaterialTranscriptProblems({
+      root,
+      manifest,
+    });
+  if (transcriptProblems.length > 0) {
+    throw new Error(
+      `Groth16 material manifest transcripts are not production-ready: ${transcriptProblems.join("; ")}`,
+    );
+  }
   const attestationProblems =
     await referencedGroth16MaterialAttestationProblems({
       root,
@@ -5157,6 +6646,938 @@ async function readRequiredBscGroth16MaterialManifest({
   return { artifact, manifest };
 }
 
+function groth16MaterialManifestAttestationHash(manifest, key, label) {
+  const attestations = readFirstRecord(manifest, "attestations") ?? {};
+  const reference = readFirstRecord(attestations, key);
+  if (!reference) {
+    throw new Error(`Groth16 material manifest ${label} reference is required.`);
+  }
+  return groth16MaterialManifestHash(
+    reference,
+    ["sha256", "attestationHash", "attestation_hash"],
+    `Groth16 material manifest ${label} sha256`,
+  );
+}
+
+function requireNativeProverAuditHashesBindGroth16Material(
+  auditHashes,
+  groth16MaterialManifest,
+) {
+  const manifest = groth16MaterialManifest?.manifest;
+  if (!isRecord(manifest)) {
+    throw new Error("Groth16 material manifest is required for audit hash binding.");
+  }
+  const expectedCircuitSecurityHash = groth16MaterialManifestAttestationHash(
+    manifest,
+    "circuitSecurity",
+    "circuit security attestation",
+  );
+  if (auditHashes.circuit_security_audit !== expectedCircuitSecurityHash) {
+    throw new Error(
+      "auditHashes.circuit_security_audit must match Groth16 material manifest circuit security attestation sha256.",
+    );
+  }
+  const expectedReproducibleBuildHash = groth16MaterialManifestAttestationHash(
+    manifest,
+    "reproducibleBuild",
+    "reproducible build attestation",
+  );
+  if (auditHashes.reproducible_build_attestation !== expectedReproducibleBuildHash) {
+    throw new Error(
+      "auditHashes.reproducible_build_attestation must match Groth16 material manifest reproducible build attestation sha256.",
+    );
+  }
+}
+
+function readGroth16ProofSelfTestArtifactHash(report, artifactKeys, label) {
+  const artifacts = readFirstRecord(report, "artifacts") ?? {};
+  const artifact = readFirstRecord(artifacts, ...artifactKeys) ?? {};
+  return groth16MaterialManifestHash(
+    artifact,
+    ["sha256", "hash", "artifactHash", "artifact_hash"],
+    `Groth16 proof self-test ${label} sha256`,
+  );
+}
+
+function bscGroth16ProofSelfTestAdversarialProblems(report) {
+  const problems = [];
+  const checks = readFirstRecord(report, "adversarialChecks", "adversarial_checks");
+  if (!checks) {
+    return ["Groth16 proof self-test adversarialChecks block is required"];
+  }
+  const publicSignalMismatch = readFirstRecord(
+    checks,
+    "publicSignalMismatch",
+    "public_signal_mismatch",
+  );
+  if (!publicSignalMismatch) {
+    problems.push(
+      "Groth16 proof self-test adversarialChecks.publicSignalMismatch is required",
+    );
+  } else {
+    if (readFirstValue(publicSignalMismatch, "attempted") !== 9) {
+      problems.push(
+        "Groth16 proof self-test adversarial publicSignalMismatch.attempted must be 9",
+      );
+    }
+    if (readFirstValue(publicSignalMismatch, "rejected") !== 9) {
+      problems.push(
+        "Groth16 proof self-test adversarial publicSignalMismatch.rejected must be 9",
+      );
+    }
+    const cases = readFirstValue(publicSignalMismatch, "cases");
+    if (!Array.isArray(cases) || cases.length !== 9) {
+      problems.push(
+        "Groth16 proof self-test adversarial publicSignalMismatch.cases must contain 9 entries",
+      );
+    } else {
+      for (const [index, entry] of cases.entries()) {
+        if (!isRecord(entry)) {
+          problems.push(
+            `Groth16 proof self-test adversarial publicSignalMismatch.cases[${index}] must be an object`,
+          );
+          continue;
+        }
+        if (readFirstValue(entry, "index") !== index) {
+          problems.push(
+            `Groth16 proof self-test adversarial publicSignalMismatch.cases[${index}].index must be ${index}`,
+          );
+        }
+        if (readFirstValue(entry, "name") !== BSC_GROTH16_PUBLIC_SIGNAL_NAMES[index]) {
+          problems.push(
+            `Groth16 proof self-test adversarial publicSignalMismatch.cases[${index}].name must be ${BSC_GROTH16_PUBLIC_SIGNAL_NAMES[index]}`,
+          );
+        }
+        if (readFirstValue(entry, "rejected") !== true) {
+          problems.push(
+            `Groth16 proof self-test adversarial publicSignalMismatch.cases[${index}].rejected must be true`,
+          );
+        }
+        if (readFirstValue(entry, "phase") !== "wtnsCalculate") {
+          problems.push(
+            `Groth16 proof self-test adversarial publicSignalMismatch.cases[${index}].phase must be wtnsCalculate`,
+          );
+        }
+      }
+    }
+  }
+
+  const nonBooleanValueBit = readFirstRecord(
+    checks,
+    "nonBooleanValueBit",
+    "non_boolean_value_bit",
+  );
+  if (!nonBooleanValueBit) {
+    problems.push(
+      "Groth16 proof self-test adversarialChecks.nonBooleanValueBit is required",
+    );
+  } else {
+    if (readFirstValue(nonBooleanValueBit, "attempted") !== 1) {
+      problems.push(
+        "Groth16 proof self-test adversarial nonBooleanValueBit.attempted must be 1",
+      );
+    }
+    if (readFirstValue(nonBooleanValueBit, "rejected") !== 1) {
+      problems.push(
+        "Groth16 proof self-test adversarial nonBooleanValueBit.rejected must be 1",
+      );
+    }
+    const testCase = readFirstRecord(nonBooleanValueBit, "case");
+    if (!testCase) {
+      problems.push(
+        "Groth16 proof self-test adversarial nonBooleanValueBit.case is required",
+      );
+    } else {
+      if (readFirstValue(testCase, "signalName", "signal_name") !== BSC_GROTH16_PUBLIC_SIGNAL_NAMES[0]) {
+        problems.push(
+          `Groth16 proof self-test adversarial nonBooleanValueBit.case.signalName must be ${BSC_GROTH16_PUBLIC_SIGNAL_NAMES[0]}`,
+        );
+      }
+      if (readFirstValue(testCase, "inputName", "input_name") !== "messageIdBits") {
+        problems.push(
+          "Groth16 proof self-test adversarial nonBooleanValueBit.case.inputName must be messageIdBits",
+        );
+      }
+      if (readFirstValue(testCase, "bitIndex", "bit_index") !== 0) {
+        problems.push(
+          "Groth16 proof self-test adversarial nonBooleanValueBit.case.bitIndex must be 0",
+        );
+      }
+      if (readFirstValue(testCase, "rejected") !== true) {
+        problems.push(
+          "Groth16 proof self-test adversarial nonBooleanValueBit.case.rejected must be true",
+        );
+      }
+      if (readFirstValue(testCase, "phase") !== "wtnsCalculate") {
+        problems.push(
+          "Groth16 proof self-test adversarial nonBooleanValueBit.case.phase must be wtnsCalculate",
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+function unknownGroth16ProofSelfTestFields(record, allowedFields, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  return Object.keys(record)
+    .filter((key) => !allowedFields.has(key))
+    .map((key) => `${label} contains unknown field: ${key}`);
+}
+
+function groth16ProofSelfTestAliasProblems(record, groups, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const problems = [];
+  for (const [fieldLabel, keys] of groups) {
+    const presentKeys = keys.filter((key) => hasOwn(record, key));
+    if (presentKeys.length > 1) {
+      problems.push(
+        `${label} ${fieldLabel} must not use multiple aliases: ${presentKeys.join(", ")}`,
+      );
+    }
+  }
+  return problems;
+}
+
+function bscGroth16ProofSelfTestShapeProblems(report) {
+  const problems = [
+    ...unknownGroth16ProofSelfTestFields(
+      report,
+      new Set([
+        "schema",
+        "routeId",
+        "route_id",
+        "assetKey",
+        "asset_key",
+        "bscNetwork",
+        "bsc_network",
+        "network",
+        "chain",
+        "chainIdHex",
+        "chain_id_hex",
+        "networkIdHex",
+        "network_id_hex",
+        "circuitProfile",
+        "circuit_profile",
+        "proofBackend",
+        "proof_backend",
+        "proofFamily",
+        "proof_family",
+        "generatedAt",
+        "generated_at",
+        "manifest",
+        "artifacts",
+        "sample",
+        "witnessHash",
+        "witness_hash",
+        "proofHash",
+        "proof_hash",
+        "publicSignalsHash",
+        "public_signals_hash",
+        "snarkjs",
+        "adversarialChecks",
+        "adversarial_checks",
+        "proof",
+        "publicSignals",
+        "public_signals",
+      ]),
+      "Groth16 proof self-test report",
+    ),
+    ...groth16ProofSelfTestAliasProblems(
+      report,
+      [
+        ["routeId", ["routeId", "route_id"]],
+        ["assetKey", ["assetKey", "asset_key"]],
+        ["bscNetwork", ["bscNetwork", "bsc_network", "network"]],
+        ["chainIdHex", ["chainIdHex", "chain_id_hex"]],
+        ["networkIdHex", ["networkIdHex", "network_id_hex"]],
+        ["circuitProfile", ["circuitProfile", "circuit_profile"]],
+        ["proofBackend", ["proofBackend", "proof_backend"]],
+        ["proofFamily", ["proofFamily", "proof_family"]],
+        ["generatedAt", ["generatedAt", "generated_at"]],
+        ["witnessHash", ["witnessHash", "witness_hash"]],
+        ["proofHash", ["proofHash", "proof_hash"]],
+        ["publicSignalsHash", ["publicSignalsHash", "public_signals_hash"]],
+        ["adversarialChecks", ["adversarialChecks", "adversarial_checks"]],
+        ["publicSignals", ["publicSignals", "public_signals"]],
+      ],
+      "Groth16 proof self-test report",
+    ),
+  ];
+  const manifest = readFirstValue(report, "manifest");
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      manifest,
+      new Set([
+        "path",
+        "sha256",
+        "manifestSha256",
+        "manifest_sha256",
+        "productionReady",
+        "production_ready",
+        "productionBlockers",
+        "production_blockers",
+      ]),
+      "Groth16 proof self-test manifest",
+    ),
+    ...groth16ProofSelfTestAliasProblems(
+      manifest,
+      [
+        ["sha256", ["sha256", "manifestSha256", "manifest_sha256"]],
+        ["productionReady", ["productionReady", "production_ready"]],
+        ["productionBlockers", ["productionBlockers", "production_blockers"]],
+      ],
+      "Groth16 proof self-test manifest",
+    ),
+  );
+  const artifacts = readFirstValue(report, "artifacts");
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      artifacts,
+      new Set([
+        "circuitSource",
+        "circuit_source",
+        "r1cs",
+        "provingKey",
+        "proving_key",
+        "snarkjsVerificationKey",
+        "snarkjs_verification_key",
+        "bscVerifierKey",
+        "bsc_verifier_key",
+        "witnessWasm",
+        "witness_wasm",
+      ]),
+      "Groth16 proof self-test artifacts",
+    ),
+    ...groth16ProofSelfTestAliasProblems(
+      artifacts,
+      [
+        ["circuitSource", ["circuitSource", "circuit_source"]],
+        ["provingKey", ["provingKey", "proving_key"]],
+        [
+          "snarkjsVerificationKey",
+          ["snarkjsVerificationKey", "snarkjs_verification_key"],
+        ],
+        ["bscVerifierKey", ["bscVerifierKey", "bsc_verifier_key"]],
+        ["witnessWasm", ["witnessWasm", "witness_wasm"]],
+      ],
+      "Groth16 proof self-test artifacts",
+    ),
+  );
+  if (isRecord(artifacts)) {
+    for (const [keys, label] of [
+      [["circuitSource", "circuit_source"], "circuit source artifact"],
+      [["r1cs"], "R1CS artifact"],
+      [["provingKey", "proving_key"], "proving key artifact"],
+      [
+        ["snarkjsVerificationKey", "snarkjs_verification_key"],
+        "SnarkJS verification key artifact",
+      ],
+      [["bscVerifierKey", "bsc_verifier_key"], "BSC verifier key artifact"],
+      [["witnessWasm", "witness_wasm"], "witness WASM artifact"],
+    ]) {
+      problems.push(
+        ...unknownGroth16ProofSelfTestFields(
+          readFirstValue(artifacts, ...keys),
+          new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
+          `Groth16 proof self-test ${label}`,
+        ),
+        ...groth16ProofSelfTestAliasProblems(
+          readFirstValue(artifacts, ...keys),
+          [["sha256", ["sha256", "hash", "artifactHash", "artifact_hash"]]],
+          `Groth16 proof self-test ${label}`,
+        ),
+      );
+    }
+  }
+  const sample = readFirstValue(report, "sample");
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      sample,
+      new Set([
+        "id",
+        "syntheticInputWords",
+        "synthetic_input_words",
+        "publicSignalNames",
+        "public_signal_names",
+        "publicSignalWords",
+        "public_signal_words",
+        "inputSha256",
+        "input_sha256",
+      ]),
+      "Groth16 proof self-test sample",
+    ),
+    ...groth16ProofSelfTestAliasProblems(
+      sample,
+      [
+        [
+          "syntheticInputWords",
+          ["syntheticInputWords", "synthetic_input_words"],
+        ],
+        ["publicSignalNames", ["publicSignalNames", "public_signal_names"]],
+        ["publicSignalWords", ["publicSignalWords", "public_signal_words"]],
+        ["inputSha256", ["inputSha256", "input_sha256"]],
+      ],
+      "Groth16 proof self-test sample",
+    ),
+  );
+  const syntheticInputWords = isRecord(sample)
+    ? readFirstValue(sample, "syntheticInputWords", "synthetic_input_words")
+    : null;
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      syntheticInputWords,
+      new Set(BSC_GROTH16_PUBLIC_SIGNAL_NAMES),
+      "Groth16 proof self-test sample.syntheticInputWords",
+    ),
+  );
+  const snarkjs = readFirstValue(report, "snarkjs");
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      snarkjs,
+      new Set(["binary", "wtnsCalculate", "groth16Prove", "groth16Verify"]),
+      "Groth16 proof self-test snarkjs",
+    ),
+  );
+  const adversarialChecks = readFirstValue(
+    report,
+    "adversarialChecks",
+    "adversarial_checks",
+  );
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      adversarialChecks,
+      new Set([
+        "publicSignalMismatch",
+        "public_signal_mismatch",
+        "nonBooleanValueBit",
+        "non_boolean_value_bit",
+      ]),
+      "Groth16 proof self-test adversarialChecks",
+    ),
+    ...groth16ProofSelfTestAliasProblems(
+      adversarialChecks,
+      [
+        [
+          "publicSignalMismatch",
+          ["publicSignalMismatch", "public_signal_mismatch"],
+        ],
+        [
+          "nonBooleanValueBit",
+          ["nonBooleanValueBit", "non_boolean_value_bit"],
+        ],
+      ],
+      "Groth16 proof self-test adversarialChecks",
+    ),
+  );
+  const publicSignalMismatch = isRecord(adversarialChecks)
+    ? readFirstValue(
+        adversarialChecks,
+        "publicSignalMismatch",
+        "public_signal_mismatch",
+      )
+    : null;
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      publicSignalMismatch,
+      new Set(["attempted", "rejected", "cases"]),
+      "Groth16 proof self-test adversarialChecks.publicSignalMismatch",
+    ),
+  );
+  const publicSignalCases = isRecord(publicSignalMismatch)
+    ? readFirstValue(publicSignalMismatch, "cases")
+    : null;
+  if (Array.isArray(publicSignalCases)) {
+    for (const [index, entry] of publicSignalCases.entries()) {
+      problems.push(
+        ...unknownGroth16ProofSelfTestFields(
+          entry,
+          new Set(["index", "name", "phase", "rejected"]),
+          `Groth16 proof self-test adversarialChecks.publicSignalMismatch.cases[${index}]`,
+        ),
+      );
+    }
+  }
+  const nonBooleanValueBit = isRecord(adversarialChecks)
+    ? readFirstValue(
+        adversarialChecks,
+        "nonBooleanValueBit",
+        "non_boolean_value_bit",
+      )
+    : null;
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      nonBooleanValueBit,
+      new Set(["attempted", "rejected", "case"]),
+      "Groth16 proof self-test adversarialChecks.nonBooleanValueBit",
+    ),
+  );
+  const nonBooleanCase = isRecord(nonBooleanValueBit)
+    ? readFirstValue(nonBooleanValueBit, "case")
+    : null;
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      nonBooleanCase,
+      new Set([
+        "signalName",
+        "signal_name",
+        "inputName",
+        "input_name",
+        "bitIndex",
+        "bit_index",
+        "phase",
+        "rejected",
+      ]),
+      "Groth16 proof self-test adversarialChecks.nonBooleanValueBit.case",
+    ),
+    ...groth16ProofSelfTestAliasProblems(
+      nonBooleanCase,
+      [
+        ["signalName", ["signalName", "signal_name"]],
+        ["inputName", ["inputName", "input_name"]],
+        ["bitIndex", ["bitIndex", "bit_index"]],
+      ],
+      "Groth16 proof self-test adversarialChecks.nonBooleanValueBit.case",
+    ),
+  );
+  problems.push(
+    ...unknownGroth16ProofSelfTestFields(
+      readFirstValue(report, "proof"),
+      new Set(["pi_a", "pi_b", "pi_c", "protocol", "curve"]),
+      "Groth16 proof self-test proof",
+    ),
+  );
+  return problems;
+}
+
+function groth16ProofSelfTestDecimalWordProblems(values, expectedLength, label) {
+  if (!Array.isArray(values) || values.length !== expectedLength) {
+    return [
+      `${label} must contain ${expectedLength} canonical decimal BN254 field words`,
+    ];
+  }
+  return values.flatMap((entry, index) => {
+    try {
+      normalizeBn254DecimalWord(entry, `${label}[${index}]`);
+      return [];
+    } catch (error) {
+      return [error instanceof Error ? error.message : String(error)];
+    }
+  });
+}
+
+function bscGroth16ProofSelfTestProofProblems(proof) {
+  if (!isRecord(proof)) {
+    return ["Groth16 proof self-test proof object is required"];
+  }
+  const problems = [];
+  if (readFirstValue(proof, "protocol") !== "groth16") {
+    problems.push("Groth16 proof self-test proof.protocol must be groth16");
+  }
+  if (readFirstValue(proof, "curve") !== "bn128") {
+    problems.push("Groth16 proof self-test proof.curve must be bn128");
+  }
+  problems.push(
+    ...groth16ProofSelfTestDecimalWordProblems(
+      readFirstValue(proof, "pi_a"),
+      3,
+      "Groth16 proof self-test proof.pi_a",
+    ),
+  );
+  const piB = readFirstValue(proof, "pi_b");
+  if (!Array.isArray(piB) || piB.length !== 3) {
+    problems.push("Groth16 proof self-test proof.pi_b must contain 3 coordinate pairs");
+  } else {
+    for (const [index, row] of piB.entries()) {
+      problems.push(
+        ...groth16ProofSelfTestDecimalWordProblems(
+          row,
+          2,
+          `Groth16 proof self-test proof.pi_b[${index}]`,
+        ),
+      );
+    }
+  }
+  problems.push(
+    ...groth16ProofSelfTestDecimalWordProblems(
+      readFirstValue(proof, "pi_c"),
+      3,
+      "Groth16 proof self-test proof.pi_c",
+    ),
+  );
+  return problems;
+}
+
+function validateBscGroth16ProofSelfTestReport({
+  report,
+  artifact,
+  profile,
+  proofArtifact,
+  provingKey,
+  verifierKey,
+  verifierMaterial,
+  groth16MaterialManifest,
+}) {
+  if (!isRecord(report)) {
+    throw new Error("Groth16 proof self-test report must be a JSON object.");
+  }
+  const problems = [...bscGroth16ProofSelfTestShapeProblems(report)];
+  const check = (fn) => {
+    try {
+      const problem = fn();
+      if (problem) {
+        problems.push(problem);
+      }
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  };
+  check(() =>
+    readFirstString(report, "schema") === BSC_GROTH16_PROOF_SELF_TEST_SCHEMA
+      ? ""
+      : `Groth16 proof self-test schema must be ${BSC_GROTH16_PROOF_SELF_TEST_SCHEMA}`,
+  );
+  check(() =>
+    readFirstString(report, "routeId", "route_id") === ROUTE_ID
+      ? ""
+      : `Groth16 proof self-test routeId must be ${ROUTE_ID}`,
+  );
+  check(() =>
+    readFirstString(report, "assetKey", "asset_key") === ASSET_KEY
+      ? ""
+      : `Groth16 proof self-test assetKey must be ${ASSET_KEY}`,
+  );
+  check(() =>
+    readFirstString(report, "bscNetwork", "bsc_network", "network") ===
+    profile.key
+      ? ""
+      : `Groth16 proof self-test bscNetwork must be ${profile.key}`,
+  );
+  check(() =>
+    readFirstString(report, "chain") === profile.chain
+      ? ""
+      : `Groth16 proof self-test chain must be ${profile.chain}`,
+  );
+  check(() =>
+    readFirstString(report, "chainIdHex", "chain_id_hex") === profile.chainIdHex
+      ? ""
+      : `Groth16 proof self-test chainIdHex must be ${profile.chainIdHex}`,
+  );
+  check(() => {
+    const networkIdHex = normalizeCanonicalHex32(
+      readFirstValue(report, "networkIdHex", "network_id_hex"),
+      "Groth16 proof self-test networkIdHex",
+    );
+    return networkIdHex === profile.networkIdHex
+      ? ""
+      : `Groth16 proof self-test networkIdHex must be ${profile.networkIdHex}`;
+  });
+  check(() =>
+    readFirstString(report, "circuitProfile", "circuit_profile") ===
+    BSC_FULL_SCCP_CIRCUIT_PROFILE
+      ? ""
+      : `Groth16 proof self-test circuitProfile must be ${BSC_FULL_SCCP_CIRCUIT_PROFILE}`,
+  );
+  check(() =>
+    readFirstString(report, "proofBackend", "proof_backend") ===
+    BSC_EVM_GROTH16_BACKEND
+      ? ""
+      : `Groth16 proof self-test proofBackend must be ${BSC_EVM_GROTH16_BACKEND}`,
+  );
+  check(() =>
+    readFirstString(report, "proofFamily", "proof_family") ===
+    SCCP_PROOF_FAMILY_STARK_FRI
+      ? ""
+      : `Groth16 proof self-test proofFamily must be ${SCCP_PROOF_FAMILY_STARK_FRI}`,
+  );
+  const manifestBlock = readFirstRecord(report, "manifest") ?? {};
+  check(() =>
+    groth16MaterialManifestHash(
+      manifestBlock,
+      ["sha256", "manifestSha256", "manifest_sha256"],
+      "Groth16 proof self-test manifest sha256",
+    ) === groth16MaterialManifest.artifact.sha256
+      ? ""
+      : "Groth16 proof self-test manifest sha256 must match signed material manifest",
+  );
+  check(() =>
+    readFirstValue(manifestBlock, "productionReady", "production_ready") ===
+    true
+      ? ""
+      : "Groth16 proof self-test manifest.productionReady must be true",
+  );
+  const productionBlockers =
+    readFirstValue(manifestBlock, "productionBlockers", "production_blockers") ??
+    [];
+  if (!Array.isArray(productionBlockers) || productionBlockers.length > 0) {
+    problems.push(
+      "Groth16 proof self-test manifest.productionBlockers must be an empty array",
+    );
+  }
+  let circuitSourceHash = "";
+  let snarkjsVerificationKeyHash = "";
+  let witnessWasmHash = "";
+  check(() =>
+    readGroth16ProofSelfTestArtifactHash(
+      report,
+      ["circuitSource", "circuit_source"],
+      "circuit source",
+    ) ===
+    groth16MaterialManifestArtifactHash(
+      groth16MaterialManifest.manifest,
+      ["circuitSource", "circuit_source"],
+      "circuit source",
+    )
+      ? ""
+      : "Groth16 proof self-test circuit source hash must match signed material manifest",
+  );
+  check(() =>
+    readGroth16ProofSelfTestArtifactHash(report, ["r1cs"], "R1CS") ===
+    proofArtifact.sha256
+      ? ""
+      : "Groth16 proof self-test R1CS hash must match proof artifact",
+  );
+  check(() =>
+    readGroth16ProofSelfTestArtifactHash(
+      report,
+      ["provingKey", "proving_key"],
+      "proving key",
+    ) === provingKey.sha256
+      ? ""
+      : "Groth16 proof self-test proving key hash must match proving key",
+  );
+  check(() =>
+    readGroth16ProofSelfTestArtifactHash(
+      report,
+      ["bscVerifierKey", "bsc_verifier_key"],
+      "BSC verifier key",
+    ) === verifierKey.sha256
+      ? ""
+      : "Groth16 proof self-test BSC verifier key hash must match verifier key artifact",
+  );
+  check(() => {
+    snarkjsVerificationKeyHash = readGroth16ProofSelfTestArtifactHash(
+      report,
+      ["snarkjsVerificationKey", "snarkjs_verification_key"],
+      "SnarkJS verification key",
+    );
+    return snarkjsVerificationKeyHash ===
+      groth16MaterialManifestArtifactHash(
+        groth16MaterialManifest.manifest,
+        ["snarkjsVerificationKey", "snarkjs_verification_key"],
+        "SnarkJS verification key",
+      )
+      ? ""
+      : "Groth16 proof self-test SnarkJS verification key hash must match signed material manifest";
+  });
+  check(() => {
+    circuitSourceHash = readGroth16ProofSelfTestArtifactHash(
+      report,
+      ["circuitSource", "circuit_source"],
+      "circuit source",
+    );
+    return "";
+  });
+  check(() => {
+    witnessWasmHash = readGroth16ProofSelfTestArtifactHash(
+      report,
+      ["witnessWasm", "witness_wasm"],
+      "witness WASM",
+    );
+    return "";
+  });
+  void verifierMaterial;
+  const sample = readFirstRecord(report, "sample") ?? {};
+  const publicSignalNames = readFirstValue(sample, "publicSignalNames");
+  if (
+    !Array.isArray(publicSignalNames) ||
+    JSON.stringify(publicSignalNames) !==
+      JSON.stringify(BSC_GROTH16_PUBLIC_SIGNAL_NAMES)
+  ) {
+    problems.push(
+      "Groth16 proof self-test publicSignalNames must match BSC Groth16 public signals",
+    );
+  }
+  let normalizedSamplePublicSignals = null;
+  const samplePublicSignalWords = readFirstValue(
+    sample,
+    "publicSignalWords",
+    "public_signal_words",
+  );
+  try {
+    normalizedSamplePublicSignals = normalizeGroth16ProofSelfTestPublicSignals(
+      samplePublicSignalWords,
+      "Groth16 proof self-test sample.publicSignalWords",
+    );
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+  let normalizedPublicSignals = null;
+  const publicSignals = readFirstValue(report, "publicSignals", "public_signals");
+  try {
+    normalizedPublicSignals = normalizeGroth16ProofSelfTestPublicSignals(
+      publicSignals,
+      "Groth16 proof self-test publicSignals",
+    );
+    if (
+      normalizedSamplePublicSignals &&
+      JSON.stringify(normalizedPublicSignals) !==
+        JSON.stringify(normalizedSamplePublicSignals)
+    ) {
+      problems.push(
+        "Groth16 proof self-test publicSignals must match sample.publicSignalWords",
+      );
+    }
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+  const snarkjs = readFirstRecord(report, "snarkjs") ?? {};
+  for (const key of ["wtnsCalculate", "groth16Prove", "groth16Verify"]) {
+    if (readFirstValue(snarkjs, key) !== true) {
+      problems.push(`Groth16 proof self-test snarkjs.${key} must be true`);
+    }
+  }
+  let witnessHash = "";
+  let proofHash = "";
+  let publicSignalsHash = "";
+  check(() => {
+    witnessHash = groth16MaterialManifestHash(
+      report,
+      ["witnessHash", "witness_hash"],
+      "Groth16 proof self-test witnessHash",
+    );
+    return "";
+  });
+  check(() => {
+    proofHash = groth16MaterialManifestHash(
+      report,
+      ["proofHash", "proof_hash"],
+      "Groth16 proof self-test proofHash",
+    );
+    return "";
+  });
+  check(() => {
+    publicSignalsHash = groth16MaterialManifestHash(
+      report,
+      ["publicSignalsHash", "public_signals_hash"],
+      "Groth16 proof self-test publicSignalsHash",
+    );
+    return "";
+  });
+  if (normalizedPublicSignals && publicSignalsHash) {
+    const actualPublicSignalsHash = sha256HexBytes(
+      Buffer.from(canonicalJson(normalizedPublicSignals), "utf8"),
+    );
+    if (actualPublicSignalsHash !== publicSignalsHash) {
+      problems.push(
+        "Groth16 proof self-test publicSignalsHash must match publicSignals",
+      );
+    }
+  }
+  const proof = readFirstRecord(report, "proof");
+  if (!proof) {
+    problems.push("Groth16 proof self-test proof object is required");
+  } else {
+    problems.push(...bscGroth16ProofSelfTestProofProblems(proof));
+    if (proofHash) {
+      const actualProofHash = sha256HexBytes(
+        Buffer.from(canonicalJson(proof), "utf8"),
+      );
+      if (actualProofHash !== proofHash) {
+        problems.push("Groth16 proof self-test proofHash must match proof");
+      }
+    }
+  }
+  problems.push(...bscGroth16ProofSelfTestAdversarialProblems(report));
+  const roleHashes = [
+    ["report", artifact.sha256],
+    ["circuit source", circuitSourceHash],
+    ["R1CS proof artifact", proofArtifact.sha256],
+    ["proving key", provingKey.sha256],
+    ["BSC verifier key artifact", verifierKey.sha256],
+    ["SnarkJS verification key", snarkjsVerificationKeyHash],
+    ["witness WASM", witnessWasmHash],
+    ["witness", witnessHash],
+    ["proof", proofHash],
+    ["public signals", publicSignalsHash],
+  ].filter(([, value]) => value);
+  const seenRoleHashes = new Map();
+  for (const [label, value] of roleHashes) {
+    const previous = seenRoleHashes.get(value);
+    if (previous) {
+      problems.push(
+        `Groth16 proof self-test ${label} hash must be role-separated from ${previous} hash`,
+      );
+    } else {
+      seenRoleHashes.set(value, label);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `Groth16 proof self-test report is not production-ready: ${uniqueNonEmpty(problems).join("; ")}`,
+    );
+  }
+}
+
+async function readRequiredBscGroth16ProofSelfTestReport({
+  root,
+  options,
+  profile,
+  proofArtifact,
+  provingKey,
+  verifierKey,
+  verifierMaterial,
+  groth16MaterialManifest,
+}) {
+  const value = optionValue(options, [
+    "groth16-proof-self-test",
+    "groth16-proof-self-test-report",
+    "proof-self-test",
+  ]);
+  if (value === undefined || value === null || trim(value) === "") {
+    throw new Error(
+      "native-prover-bundle requires --groth16-proof-self-test.",
+    );
+  }
+  const artifact = await readArtifactUnderRoot(
+    root,
+    value,
+    "Groth16 proof self-test report",
+  );
+  let report;
+  try {
+    report = parseJsonWithoutDuplicateKeys(
+      artifact.bytes.toString("utf8"),
+      "Groth16 proof self-test report",
+    );
+  } catch (error) {
+    throw new Error(
+      `Groth16 proof self-test report must be valid duplicate-free JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const reason = unsafeSecretReason(report, "Groth16 proof self-test report");
+  if (reason) {
+    throw new Error(reason);
+  }
+  validateBscGroth16ProofSelfTestReport({
+    report,
+    artifact,
+    profile,
+    proofArtifact,
+    provingKey,
+    verifierKey,
+    verifierMaterial,
+    groth16MaterialManifest,
+  });
+  return { artifact, report };
+}
+
 function sdkImplementationOptionName(sdk) {
   return `${sdk}-implementation`;
 }
@@ -5166,6 +7587,7 @@ function buildNativeEvmProverBundleObject({
   proofArtifact,
   provingKey,
   verifierKey,
+  groth16ProofSelfTest,
   parityFixture,
   selfTestFixture,
   sdkArtifacts,
@@ -5192,6 +7614,8 @@ function buildNativeEvmProverBundleObject({
     browser_implementation: "pure-typescript",
     cross_sdk_parity_artifact: parityFixture.path,
     native_prover_self_test_artifact: selfTestFixture.path,
+    groth16_proof_self_test_artifact: groth16ProofSelfTest.path,
+    groth16_proof_self_test_hash: groth16ProofSelfTest.sha256,
     native_sdk_artifacts: sdkArtifacts.map((artifact) => ({
       sdk: artifact.sdk,
       implementation: artifact.implementation,
@@ -5362,10 +7786,6 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     "proof-artifact",
   );
   assertProductionProofMaterialShape(provingKey, "proving key", "proving-key");
-  const auditHashes = await readNativeProverAuditHashes(root, options, {
-    parityFixture,
-    selfTestFixture,
-  });
   const binding = routeSource.binding;
   const profile = BSC_NETWORK_PROFILES[binding.bscNetwork];
   const verifierMaterial = parseBscVerifierKeyArtifact(verifierKey, profile);
@@ -5398,11 +7818,33 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
       verifierKey,
       verifierMaterial,
     });
+  const auditHashes = await readNativeProverAuditHashes(root, options, {
+    parityFixture,
+    selfTestFixture,
+    profile,
+    sdkArtifacts,
+  });
+  requireNativeProverAuditHashesBindGroth16Material(
+    auditHashes,
+    groth16MaterialManifest,
+  );
+  const groth16ProofSelfTest =
+    await readRequiredBscGroth16ProofSelfTestReport({
+      root,
+      options,
+      profile,
+      proofArtifact,
+      provingKey,
+      verifierKey,
+      verifierMaterial,
+      groth16MaterialManifest,
+    });
   const bundle = buildNativeEvmProverBundleObject({
     routeBinding: binding,
     proofArtifact,
     provingKey,
     verifierKey,
+    groth16ProofSelfTest: groth16ProofSelfTest.artifact,
     parityFixture,
     selfTestFixture,
     sdkArtifacts,
@@ -5434,6 +7876,7 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     [proofArtifact.path, proofArtifact.bytes],
     [provingKey.path, provingKey.bytes],
     [verifierKey.path, verifierKey.bytes],
+    [groth16ProofSelfTest.artifact.path, groth16ProofSelfTest.artifact.bytes],
     [parityFixture.path, parityFixture.bytes],
     [selfTestFixture.path, selfTestFixture.bytes],
     ...sdkArtifacts.map((artifact) => [artifact.path, artifact.bytes]),
@@ -5463,6 +7906,7 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
       provingKey,
       verifierKey,
       groth16MaterialManifest: groth16MaterialManifest.artifact,
+      groth16ProofSelfTest: groth16ProofSelfTest.artifact,
       parityFixture,
       selfTestFixture,
       sdkArtifacts,

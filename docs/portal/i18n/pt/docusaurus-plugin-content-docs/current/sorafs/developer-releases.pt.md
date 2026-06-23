@@ -31,7 +31,7 @@ revisão de segurança:
 - Anexo o link do ticket de remediação (por exemplo, `governance/tickets/SF6-SR-2026.md`) e anota
   os aprovadores de Engenharia de Segurança e do Tooling Working Group.
 - Verifique se o checklist de remediação no memorando está fechado; itens pendentes bloqueados ou liberados.
-- Preparar o upload dos logs do chicote de paridade (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Preparar o upload dos logs do chicote de paridade (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   junto com o pacote de manifesto.
 - Confirme que o comando de assinatura que você vai executar inclui `--identity-token-provider` e
   um `--identity-token-audience=<aud>` explicito para capturar o escopo do Fulcio na evidência do release.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 O script faz as seguintes verificações:
 
 - `cargo fmt --all -- --check` (área de trabalho)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (com recurso `cli`),
-  `sorafs_manifest` e `sorafs_chunker`
-- `cargo test --locked --all-targets` para essas mesmas caixas
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Se algum passo falhar, corrija a regressão antes de taguear. Builds de lançamento devem
 ser contínuo com main; nao faca cherry-pick de correcoes em ramos de release. Ó

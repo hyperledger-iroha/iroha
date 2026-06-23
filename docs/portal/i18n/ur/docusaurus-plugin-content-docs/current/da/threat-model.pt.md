@@ -241,7 +241,7 @@ Nexus اور گورننس نمونے بازنطینی ، نیٹ ورک ، اور
   اور Torii کا `crates/iroha_torii/src/da/ingest.rs` میں انضمام ، کون سی زنجیر ہے
   `/v1/da/ingest` کے ذریعے فنگر پرنٹ۔
 - PDP/POTR اسٹریمنگ تخروپن کا استعمال پروف اسٹریم کنٹرول کے ذریعے کیا جاتا ہے
-  `crates/sorafs_car/tests/sorafs_cli.rs` میں ، درخواست کے بہاؤ کو ڈھانپتے ہیں
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs` میں ، درخواست کے بہاؤ کو ڈھانپتے ہیں
   خطرہ ماڈل میں پور/PDP/POTR اور متحرک ناکامی کے منظرنامے۔
 - صلاحیت اور مرمت کو بھگوانے کے نتائج میں رہتے ہیں
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` ، جبکہ بھگنے والا میٹرکس

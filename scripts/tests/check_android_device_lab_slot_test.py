@@ -2431,6 +2431,75 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertTrue(all("timed out after 7 seconds" in error for error in errors))
 
+    def test_kagemusha_slot_assembler_redacts_adb_getprop_called_process_command(
+        self,
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def failing_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            calls.append(command)
+            raise subprocess.CalledProcessError(3, command)
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=failing_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial="ABC123",
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                adb_timeout_seconds=7,
+                identity_hints={},
+                errors=errors,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(facts, {})
+        self.assertEqual(len(calls), 4)
+        self.assertIn(
+            "adb getprop ro.build.fingerprint failed: "
+            "ADB getprop ro.build.fingerprint failed with exit code 3",
+            rendered,
+        )
+        self.assertNotIn("ABC123", rendered)
+        self.assertNotIn("['adb'", rendered)
+
+    def test_kagemusha_slot_assembler_redacts_adb_getprop_oserror_detail(
+        self,
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def failing_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            calls.append(command)
+            raise OSError("adb spawn failed for ABC123 token=getprop-secret\x1b[31m")
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=failing_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial="ABC123",
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                adb_timeout_seconds=7,
+                identity_hints={},
+                errors=errors,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(facts, {})
+        self.assertEqual(len(calls), 4)
+        self.assertIn(
+            "adb getprop ro.build.fingerprint failed: "
+            "ADB getprop ro.build.fingerprint could not be executed",
+            rendered,
+        )
+        self.assertNotIn("ABC123", rendered)
+        self.assertNotIn("getprop-secret", rendered)
+        self.assertNotIn("\x1b", rendered)
+
     def test_kagemusha_slot_assembler_rejects_nonpositive_adb_timeout_before_root_classify(
         self,
     ) -> None:
@@ -3930,7 +3999,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
             output_exists = output.exists()
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(errors, ["slot metadata parent directory could not be synced"])
         self.assertFalse(output_exists)
 
@@ -4142,7 +4211,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
             destination_exists = destination.exists()
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertIsNone(digest)
         self.assertEqual(
             errors,
@@ -6813,6 +6882,54 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn(raw_puller.NON_UTF8_OUTPUT_REDACTION, rendered)
         self.assertNotIn("b'\\xff\\xfe'", rendered)
         self.assertNotIn("ÿ", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_adb_serial_in_latest_stderr(
+        self,
+    ) -> None:
+        def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="error: device ABC123 not found",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(Path(temp) / "raw"),
+                runner=runner,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(raw_puller.ADB_SERIAL_REDACTION, rendered)
+        self.assertNotIn("ABC123", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_adb_serial_in_tar_exception(
+        self,
+    ) -> None:
+        def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+            if "cat" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="pixel6\n",
+                    stderr="",
+                )
+            raise OSError("adb exec-out failed for serial ABC123")
+
+        with tempfile.TemporaryDirectory() as temp:
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(Path(temp) / "raw"),
+                runner=runner,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(raw_puller.ADB_SERIAL_REDACTION, rendered)
+        self.assertNotIn("ABC123", rendered)
 
     def test_kagemusha_android_raw_puller_install_refuses_late_existing_slot(
         self,
@@ -9874,6 +9991,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
         )
 
+    def test_kagemusha_android_raw_puller_redacts_status_ndjson_nonfinite_constant(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"telemetry/status.ndjson"},
+                extra_files={
+                    "pixel6/telemetry/status.ndjson": (
+                        b'{"status":"ok","slot_id":"pixel6","elapsed":NaN}\n'
+                    ),
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+            rendered = "\n".join(errors)
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "telemetry/status.ndjson line 1 contains non-finite constant "
+            f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION}",
+            errors,
+        )
+        self.assertNotIn("NaN", rendered)
+
     def test_kagemusha_android_raw_puller_rejects_unknown_status_ndjson(
         self,
     ) -> None:
@@ -11084,15 +11231,24 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 self.assertEqual(errors, [expected_error])
 
     def test_load_json_rejects_nonfinite_json_constant(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            payload = Path(temp) / "payload.json"
-            payload.write_text('{"value": NaN}\n', encoding="utf-8")
-            errors: list[str] = []
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant), tempfile.TemporaryDirectory() as temp:
+                payload = Path(temp) / "payload.json"
+                payload.write_text(f'{{"value": {constant}}}\n', encoding="utf-8")
+                errors: list[str] = []
 
-            data = device_lab._load_json(payload, "test json", errors)
+                data = device_lab._load_json(payload, "test json", errors)
+                rendered = "\n".join(errors)
 
-        self.assertIsNone(data)
-        self.assertEqual(errors, ["test json contains non-finite constant NaN"])
+            self.assertIsNone(data)
+            self.assertEqual(
+                errors,
+                [
+                    "test json contains non-finite constant "
+                    f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION}"
+                ],
+            )
+            self.assertNotIn(constant, rendered)
 
     def test_load_json_rejects_oversized_json_before_parse(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -15751,6 +15907,119 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_d2d_transcript_binding_rejects_reused_digest_directly(self) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        metadata = {
+            device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD: {
+                transport: {
+                    "path": f"handoff/d2d-payment-{transport}.json",
+                    "sha256": hashlib.sha256(transport.encode("utf-8")).hexdigest(),
+                }
+                for transport in transports
+            }
+        }
+        original_validator = device_lab._validate_d2d_payment_transcript_entry  # type: ignore[attr-defined]
+
+        def reused_digest_validator(
+            _slot_path: Path,
+            _metadata: dict[str, object],
+            transport: str,
+            _entry: object,
+            _errors: list[str],
+        ) -> tuple[str, dict[str, str]]:
+            return (
+                transport,
+                {
+                    "path": f"handoff/d2d-payment-{transport}.json",
+                    "sha256": "a" * 64,
+                },
+            )
+
+        try:
+            device_lab._validate_d2d_payment_transcript_entry = reused_digest_validator  # type: ignore[attr-defined]
+            errors: list[str] = []
+            bindings = device_lab.validate_d2d_payment_transcripts_binding(
+                Path("slot-0"),
+                metadata,
+                errors,
+                primary_relative=None,
+                primary_digest=None,
+                primary_transport=None,
+            )
+        finally:
+            device_lab._validate_d2d_payment_transcript_entry = original_validator  # type: ignore[attr-defined]
+
+        self.assertEqual(bindings, {transports[0]: {"path": f"handoff/d2d-payment-{transports[0]}.json", "sha256": "a" * 64}})
+        self.assertIn(
+            "slot.json d2d_payment_transcripts must not reuse sha256 digests for multiple transports",
+            errors,
+        )
+
+    def test_d2d_transcript_binding_rejects_primary_binding_reuse_directly(
+        self,
+    ) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        primary_transport = transports[0]
+        replay_transport = transports[-1]
+        primary_path = "handoff/d2d-payment.json"
+        primary_digest = "b" * 64
+        cases = (
+            (
+                "path",
+                {"path": primary_path, "sha256": "c" * 64},
+                f"slot.json {device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD} must not reuse "
+                f"{primary_path} for multiple transports",
+            ),
+            (
+                "digest",
+                {"path": "handoff/d2d-payment-replay.json", "sha256": primary_digest},
+                f"slot.json {device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD} must not reuse "
+                "sha256 digests for multiple transports",
+            ),
+        )
+        original_validator = device_lab._validate_d2d_payment_transcript_entry  # type: ignore[attr-defined]
+        for name, replay_binding, expected_error in cases:
+            with self.subTest(name=name):
+                metadata = {
+                    device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD: {
+                        replay_transport: dict(replay_binding)
+                    }
+                }
+
+                def replay_validator(
+                    _slot_path: Path,
+                    _metadata: dict[str, object],
+                    transport: str,
+                    _entry: object,
+                    _errors: list[str],
+                ) -> tuple[str, dict[str, str]]:
+                    return transport, dict(replay_binding)
+
+                try:
+                    device_lab._validate_d2d_payment_transcript_entry = replay_validator  # type: ignore[attr-defined]
+                    errors: list[str] = []
+                    bindings = device_lab.validate_d2d_payment_transcripts_binding(
+                        Path("slot-0"),
+                        metadata,
+                        errors,
+                        primary_relative=primary_path,
+                        primary_digest=primary_digest,
+                        primary_transport=primary_transport,
+                    )
+                finally:
+                    device_lab._validate_d2d_payment_transcript_entry = original_validator  # type: ignore[attr-defined]
+
+                self.assertEqual(
+                    bindings,
+                    {
+                        primary_transport: {
+                            "path": primary_path,
+                            "sha256": primary_digest,
+                        }
+                    },
+                )
+                self.assertIn(expected_error, errors)
+
     def test_production_metadata_rejects_signed_multi_transport_d2d_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -18754,6 +19023,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "telemetry/status.ndjson line 1 contains unexpected field debug_note",
             report["errors"],
         )
+
+    def test_production_metadata_redacts_status_ndjson_nonfinite_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            write_text(
+                slot / "telemetry" / "status.ndjson",
+                '{"status":"ok","slot_id":"pixel8","elapsed":Infinity}\n',
+            )
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+            rendered = json.dumps(report, sort_keys=True)
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "telemetry/status.ndjson line 1 contains non-finite constant "
+            f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION}",
+            report["errors"],
+        )
+        self.assertNotIn("Infinity", rendered)
 
     def test_production_metadata_rejects_unknown_status_ndjson(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -21983,7 +22283,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     "signed evidence output path",
                 )
 
-        self.assertEqual(errors, ["signed evidence output path could not be written"])
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence output path could not be written",
+                "signed evidence output path temporary file cleanup could not be synced",
+            ],
+        )
         self.assertFalse(output.exists())
 
     def test_signer_write_json_preserves_existing_output_on_replace_failure(self) -> None:
@@ -22240,7 +22546,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             output_exists = output.exists()
             temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(
             errors,
             ["signed evidence output path parent directory could not be synced"],
@@ -23135,7 +23441,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     "sha256sum.txt",
                 )
 
-        self.assertEqual(errors, ["sha256sum.txt could not be written"])
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt could not be written",
+                "sha256sum.txt temporary file cleanup could not be synced",
+            ],
+        )
         self.assertFalse(output.exists())
 
     def test_signer_write_text_preserves_existing_output_on_replace_failure(self) -> None:
@@ -25904,6 +26216,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     family,
                     signer,
                     d2d_payment_transport=transports[index % len(transports)],
+                    d2d_payment_transports=tuple(transports),
                 )
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = device_lab.main(
@@ -25947,10 +26260,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIn(
-            "missing Kagemusha production evidence for D2D payment transports: "
-            "nearby_offline, qr",
+            "missing Kagemusha production evidence for standard-family D2D payment transports:",
             rendered,
         )
+        self.assertIn("Google Pixel 6 / 6a=nearby_offline", rendered)
         self.assertEqual(
             summary["kagemusha"]["required_d2d_payment_transports"],
             sorted(device_lab.D2D_PAYMENT_TRANSPORTS),
@@ -25959,6 +26272,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(
             summary["kagemusha"]["missing_d2d_payment_transports"],
             ["nearby_offline", "qr"],
+        )
+        self.assertGreater(
+            len(summary["kagemusha"]["missing_d2d_payment_transport_pairs"]),
+            0,
         )
 
     def test_standard_matrix_rejects_duplicate_device_fingerprint(self) -> None:
@@ -26056,6 +26373,77 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             duplicate["value_sha256"],
             hashlib.sha256(b"slot-0:attestation-challenge").hexdigest(),
         )
+
+    def test_build_summary_reports_duplicate_d2d_transcript_digest(self) -> None:
+        duplicate_digest = "7" * 64
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transport="nfc_hce",
+                d2d_payment_transcript_sha256=duplicate_digest,
+            ),
+            summary_release_report(
+                "slot-1",
+                device_fingerprint_sha256="c" * 64,
+                attestation_challenge_sha256="d" * 64,
+                d2d_payment_transport="qr",
+                d2d_payment_transcript_sha256=duplicate_digest,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        duplicate = summary["kagemusha"]["duplicate_bindings"][
+            "d2d_payment_transcript_sha256"
+        ][0]
+        self.assertEqual(duplicate["slots"], ["slot-0", "slot-1"])
+        self.assertEqual(duplicate["value_sha256"], duplicate_digest)
+
+    def test_build_summary_reports_duplicate_d2d_transcript_map_digest(self) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        primary_transport = transports[0]
+        copied_transport = transports[-1]
+        duplicate_digest = "9" * 64
+        bindings = summary_d2d_transcript_bindings(
+            transports,
+            primary_transport=primary_transport,
+        )
+        bindings[copied_transport]["sha256"] = duplicate_digest
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transport=primary_transport,
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+            ),
+            summary_release_report(
+                "slot-1",
+                device_fingerprint_sha256="c" * 64,
+                attestation_challenge_sha256="d" * 64,
+                d2d_payment_transport=copied_transport,
+                d2d_payment_transcript_sha256=duplicate_digest,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        duplicate = summary["kagemusha"]["duplicate_bindings"][
+            "d2d_payment_transcript_sha256"
+        ][0]
+        self.assertEqual(duplicate["slots"], ["slot-0", "slot-1"])
+        self.assertEqual(duplicate["value_sha256"], duplicate_digest)
 
     def test_duplicate_matrix_bindings_can_require_complete_signed_evidence(
         self,
@@ -26810,6 +27198,77 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     list(transports),
                 )
 
+    def test_build_summary_rejects_reused_d2d_transcript_path(self) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        primary_transport = transports[0]
+        reused_transport = transports[-1]
+        bindings = summary_d2d_transcript_bindings(
+            transports,
+            primary_transport=primary_transport,
+        )
+        bindings[reused_transport]["path"] = bindings[primary_transport]["path"]
+        bindings[reused_transport]["sha256"] = hashlib.sha256(
+            b"kagemusha-summary-reused-d2d-path"
+        ).hexdigest()
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transport=primary_transport,
+                d2d_payment_transcript_path=bindings[primary_transport]["path"],
+                d2d_payment_transcript_sha256=bindings[primary_transport]["sha256"],
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            list(transports),
+        )
+
+    def test_build_summary_rejects_reused_d2d_transcript_digest(self) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        primary_transport = transports[0]
+        reused_transport = transports[-1]
+        bindings = summary_d2d_transcript_bindings(
+            transports,
+            primary_transport=primary_transport,
+        )
+        bindings[reused_transport]["sha256"] = bindings[primary_transport]["sha256"]
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transport=primary_transport,
+                d2d_payment_transcript_path=bindings[primary_transport]["path"],
+                d2d_payment_transcript_sha256=bindings[primary_transport]["sha256"],
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            list(transports),
+        )
+
     def test_build_summary_requires_canonical_d2d_transport_list(self) -> None:
         transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
         cases = (
@@ -27077,6 +27536,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     family,
                     signer,
                     d2d_payment_transport=transports[index % len(transports)],
+                    d2d_payment_transports=tuple(transports),
                 )
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = device_lab.main(
@@ -27118,6 +27578,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             transports,
         )
         self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports_by_family"],
+            {
+                family: transports
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+        )
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transport_pairs"],
+            [],
+        )
         self.assertEqual(
             summary["kagemusha"]["trusted_signer_public_key_sha256"],
             [signer["public_key_sha256"]],
@@ -27933,7 +28404,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ):
                 errors = device_lab.write_summary(summary_path, {"ok": False})
 
-        self.assertEqual(errors, ["--json-out could not be written"])
+        self.assertEqual(
+            errors,
+            [
+                "--json-out could not be written",
+                "--json-out temporary file cleanup could not be synced",
+            ],
+        )
         self.assertFalse(summary_path.exists())
 
     def test_write_summary_preserves_existing_output_on_replace_failure(self) -> None:
@@ -28103,7 +28580,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             output_exists = summary_path.exists()
             temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(errors, ["--json-out parent directory could not be synced"])
         self.assertFalse(output_exists)
         self.assertEqual(temp_files, [])
@@ -28645,6 +29122,478 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, stdout="device\n", stderr="")
         return None
 
+    def successful_expected_device_family_preflight(
+        self,
+        command: list[str],
+    ) -> subprocess.CompletedProcess[str] | None:
+        if command == [
+            "adb",
+            "-s",
+            "SERIAL123",
+            "shell",
+            "getprop",
+            "ro.product.model",
+        ]:
+            return subprocess.CompletedProcess(command, 0, stdout="Pixel 6\n", stderr="")
+        if command == [
+            "adb",
+            "-s",
+            "SERIAL123",
+            "shell",
+            "getprop",
+            "ro.product.device",
+        ]:
+            return subprocess.CompletedProcess(command, 0, stdout="oriole\n", stderr="")
+        return None
+
+    def test_android_capture_strict_json_load_redacts_nonfinite_constants(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            path = Path(temp_text) / "raw-summary.json"
+            path.write_text('{"schema": Infinity}\n', encoding="utf-8")
+
+            payload, errors = capture_runner._strict_json_load(path, "raw summary")
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(payload)
+        self.assertEqual(
+            errors,
+            [
+                "raw summary is not strict JSON: non-finite constant "
+                f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION} is not allowed"
+            ],
+        )
+        self.assertNotIn("Infinity", rendered)
+
+    def test_android_capture_assembler_command_passes_adb_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp, ["--adb-timeout-seconds", "17"])
+            command = capture_runner._assemble_command(
+                args,
+                slot_id="pixel6",
+                slot_path=args.raw_root / "pixel6",
+            )
+
+        self.assertIn("--adb-timeout-seconds", command)
+        self.assertEqual(command[command.index("--adb-timeout-seconds") + 1], "17")
+
+    def test_android_capture_expected_family_preflight_runs_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                [
+                    "--expected-device-family",
+                    "Google Pixel 6 / 6a",
+                    "--skip-build-install",
+                    "--skip-instrumentation",
+                    "--capture-summary-out",
+                    str(temp / "capture.json"),
+                ],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            validation_summary = capture_runner._default_validation_summary_path(
+                args.slot_root
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
+                family_preflight = self.successful_expected_device_family_preflight(
+                    command
+                )
+                if family_preflight is not None:
+                    return family_preflight
+                script = Path(command[1]).name if len(command) > 1 else ""
+                if script == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(args.raw_root, raw_summary)
+                elif script == "kagemusha_android_attestation_report.py":
+                    out_path = Path(command[command.index("--out") + 1])
+                    write_json(out_path, {"schema": "test-report"})
+                elif script == "check_android_device_lab_slot.py":
+                    write_json(validation_summary, {"ok": 1, "failed": 0})
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        def command_kind(command: list[str]) -> str:
+            if command == ["adb", "-s", "SERIAL123", "get-state"]:
+                return "adb-state"
+            if command == [
+                "adb",
+                "-s",
+                "SERIAL123",
+                "shell",
+                "getprop",
+                "ro.product.model",
+            ]:
+                return "adb-model"
+            if command == [
+                "adb",
+                "-s",
+                "SERIAL123",
+                "shell",
+                "getprop",
+                "ro.product.device",
+            ]:
+                return "adb-codename"
+            return Path(command[1]).name
+
+        self.assertEqual(errors, [])
+        self.assertEqual(status, 0)
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["expected_device_family"], "Google Pixel 6 / 6a")
+        self.assertEqual(
+            [command_kind(command) for command in commands],
+            [
+                "adb-state",
+                "adb-model",
+                "adb-codename",
+                "kagemusha_pull_android_device_lab_raw_slot.py",
+                "kagemusha_android_attestation_report.py",
+                "kagemusha_android_device_lab_slot.py",
+                "check_android_device_lab_slot.py",
+            ],
+        )
+        self.assertNotIn("./gradlew", [command[0] for command in commands])
+
+    def test_android_capture_expected_family_preflight_accepts_adb_crlf(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--expected-device-family", "Google Pixel 6 / 6a"],
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if command == [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.model",
+                ]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="Pixel 6\r\n",
+                        stderr="",
+                    )
+                if command == [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.device",
+                ]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="oriole\r\n",
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            errors = capture_runner._run_expected_device_family_preflight(
+                args,
+                env={},
+                runner=fake_run,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            commands,
+            [
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.model",
+                ],
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.device",
+                ],
+            ],
+        )
+
+    def test_android_capture_expected_family_rejects_wrong_device_before_build(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--expected-device-family", "Google Pixel 7 / 7 Pro"],
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
+                family_preflight = self.successful_expected_device_family_preflight(
+                    command
+                )
+                if family_preflight is not None:
+                    return family_preflight
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(
+            commands,
+            [
+                ["adb", "-s", "SERIAL123", "get-state"],
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.model",
+                ],
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.device",
+                ],
+            ],
+        )
+        self.assertEqual(
+            errors,
+            [
+                "ADB expected device family preflight expected "
+                "Google Pixel 7 / 7 Pro, got Google Pixel 6 / 6a "
+                "(model=Pixel 6; codename=oriole)"
+            ],
+        )
+        self.assertNotIn("SERIAL123", rendered)
+
+    def test_android_capture_expected_family_rejects_invalid_value_before_commands(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            args.expected_device_family = " Google Pixel 6 / 6a "
+            commands: list[list[str]] = []
+
+            def unexpected_run(command, **kwargs):
+                commands.append(list(command))
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=unexpected_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [])
+        self.assertIn(
+            "--expected-device-family must not contain surrounding whitespace",
+            errors,
+        )
+        self.assertIn(
+            "--expected-device-family must be one of the standard Kagemusha families",
+            errors,
+        )
+
+    def test_android_capture_expected_family_cli_secret_does_not_leak_before_commands(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--expected-device-family", "token=expected-family-secret"],
+            )
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = capture_runner.main(
+                    [
+                        "--repo-root",
+                        str(args.repo_root),
+                        "--kotlin-dir",
+                        str(args.kotlin_dir),
+                        "--python",
+                        args.python,
+                        "--adb",
+                        args.adb,
+                        "--gradlew",
+                        args.gradlew,
+                        "--serial",
+                        args.serial,
+                        "--expected-device-family",
+                        "token=expected-family-secret",
+                        "--java-home",
+                        args.java_home,
+                        "--android-home",
+                        args.android_home,
+                        "--android-sdk-root",
+                        args.android_sdk_root,
+                        "--raw-root",
+                        str(args.raw_root),
+                        "--slot-root",
+                        str(args.slot_root),
+                        "--private-key",
+                        str(args.private_key),
+                        "--public-key",
+                        str(args.public_key),
+                        "--signer-key-id",
+                        args.signer_key_id,
+                        "--physical-device-attestation",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--expected-device-family must not contain secret-looking material",
+            rendered,
+        )
+        self.assertIn(
+            "--expected-device-family must be one of the standard Kagemusha families",
+            rendered,
+        )
+        self.assertNotIn("expected-family-secret", rendered)
+        self.assertNotIn("invalid choice", rendered)
+
+    def test_android_capture_expected_family_redacts_unsafe_getprop_before_build(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--expected-device-family", "Google Pixel 6 / 6a"],
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
+                if command == [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.model",
+                ]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="token=adb-model-secret\n",
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(command, 0, stdout="oriole\n")
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(
+            commands,
+            [
+                ["adb", "-s", "SERIAL123", "get-state"],
+                [
+                    "adb",
+                    "-s",
+                    "SERIAL123",
+                    "shell",
+                    "getprop",
+                    "ro.product.model",
+                ],
+            ],
+        )
+        self.assertEqual(errors, ["device_model must not contain secret-looking material"])
+        self.assertNotIn("adb-model-secret", rendered)
+
+    def test_android_capture_expected_family_rejects_disruptive_getprop_before_runner(
+        self,
+    ) -> None:
+        original_adb_getprop_command = capture_runner._adb_getprop_command
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                args = self.capture_args(
+                    temp,
+                    ["--expected-device-family", "Google Pixel 6 / 6a"],
+                )
+                calls: list[list[str]] = []
+
+                def disruptive_adb_getprop_command(_args, _prop):
+                    return ["adb", "kill-server"]
+
+                def fake_run(command, **kwargs):
+                    command = list(command)
+                    calls.append(command)
+                    preflight = self.successful_adb_preflight(command)
+                    if preflight is not None:
+                        return preflight
+                    return subprocess.CompletedProcess(command, 0)
+
+                capture_runner._adb_getprop_command = disruptive_adb_getprop_command
+                status, summary, errors = capture_runner.capture_device_lab_slot(
+                    args,
+                    runner=fake_run,
+                )
+        finally:
+            capture_runner._adb_getprop_command = original_adb_getprop_command
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(calls, [["adb", "-s", "SERIAL123", "get-state"]])
+        self.assertEqual(
+            errors,
+            [
+                "ADB expected device family preflight getprop ro.product.model "
+                "must not manage other running jobs: adb kill-server"
+            ],
+        )
+
     def test_android_capture_runs_full_command_sequence_and_binds_challenge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
             temp = Path(temp_text)
@@ -28781,10 +29730,159 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             errors,
             [
                 "ADB device visibility preflight failed with exit code 1: "
-                "adb -s SERIAL123 get-state (stderr=error: device not found); "
-                "ADB attached-device diagnostic: List of devices attached"
+                f"adb -s {capture_runner.ADB_SERIAL_REDACTION} get-state "
+                "(stderr=error: device not found); "
+                "ADB attached-device diagnostic: no_visible_devices"
             ],
         )
+        self.assertNotIn("SERIAL123", "\n".join(errors))
+
+    def test_android_capture_classifies_adb_devices_diagnostic_states(self) -> None:
+        cases = (
+            (
+                "header only",
+                "List of devices attached\n\n",
+                "no_visible_devices",
+            ),
+            (
+                "daemon only",
+                "* daemon started successfully *\nList of devices attached\n",
+                "no_visible_devices",
+            ),
+            (
+                "no permissions",
+                "SERIAL-NOPERM no permissions (udev rules)\n",
+                "rows=1; states=no_permissions=1",
+            ),
+            (
+                "malformed",
+                "SERIAL-MALFORMED\n",
+                "rows=1; states=malformed=1",
+            ),
+            (
+                "unsafe state token",
+                "SERIAL-ODD device! usb:1-1 model:Pixel\n",
+                "rows=1; states=other=1",
+            ),
+            (
+                "mixed",
+                (
+                    "List of devices attached\n"
+                    "SERIAL-DEVICE device usb:1-1 model:Pixel_6\n"
+                    "SERIAL-OFFLINE offline usb:1-2 model:Pixel_7\n"
+                    "SERIAL-UNAUTH unauthorized usb:1-3 model:Pixel_8\n"
+                ),
+                "rows=3; states=device=1, offline=1, unauthorized=1",
+            ),
+        )
+        for name, output, expected in cases:
+            with self.subTest(name=name):
+                rendered = capture_runner._safe_adb_devices_output_display(output)
+
+                self.assertEqual(rendered, expected)
+                self.assertNotIn("SERIAL", rendered)
+                self.assertNotIn("Pixel", rendered)
+
+    def test_android_capture_summarizes_adb_devices_without_serials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if command == ["adb", "devices", "-l"]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=(
+                            "List of devices attached\n"
+                            "TOKEN=adb-visible-secret device "
+                            "usb:1-1 product:redacted model:Pixel_6\n"
+                            "SERIAL-OFFLINE offline usb:1-2 model:Pixel_7\n"
+                            "SERIAL-UNAUTH unauthorized usb:1-3 model:Pixel_8\n"
+                        ),
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr="error: device not found\n",
+                )
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(
+            commands,
+            [["adb", "-s", "SERIAL123", "get-state"], ["adb", "devices", "-l"]],
+        )
+        self.assertIn(
+            "ADB attached-device diagnostic: rows=3; "
+            "states=device=1, offline=1, unauthorized=1",
+            rendered,
+        )
+        self.assertNotIn("adb-visible-secret", rendered)
+        self.assertNotIn("SERIAL-OFFLINE", rendered)
+        self.assertNotIn("SERIAL-UNAUTH", rendered)
+        self.assertNotIn("Pixel_6", rendered)
+
+    def test_android_capture_redacts_adb_serial_in_preflight_output(self) -> None:
+        cases = (
+            (
+                "stderr",
+                "",
+                "error: device SERIAL123 not found\n",
+                "stderr=error: device <redacted-adb-serial> not found",
+            ),
+            (
+                "stdout",
+                "SERIAL123-offline\n",
+                "",
+                "got <redacted-adb-serial>-offline",
+            ),
+        )
+        for name, stdout, stderr, expected in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp)
+                    commands: list[list[str]] = []
+
+                    def fake_run(command, **kwargs):
+                        command = list(command)
+                        commands.append(command)
+                        if command == ["adb", "devices", "-l"]:
+                            return subprocess.CompletedProcess(
+                                command,
+                                0,
+                                stdout="List of devices attached\n\n",
+                                stderr="",
+                            )
+                        return subprocess.CompletedProcess(
+                            command,
+                            1 if name == "stderr" else 0,
+                            stdout=stdout,
+                            stderr=stderr,
+                        )
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=fake_run,
+                    )
+
+                rendered = "\n".join(errors)
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertIn(expected, rendered)
+                self.assertNotIn("SERIAL123", rendered)
 
     def test_android_capture_redacts_adb_preflight_failure_output_before_build(
         self,
@@ -29036,9 +30134,8 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
     def test_android_capture_bounds_adb_preflight_command_before_build(self) -> None:
         long_serial = "SERIAL" + ("x" * 512)
-        rendered_command = f"adb -s {long_serial} get-state"
         expected_command = (
-            rendered_command[: capture_runner.MAX_ADB_PREFLIGHT_OUTPUT_CHARS] + "..."
+            f"adb -s {capture_runner.ADB_SERIAL_REDACTION} get-state"
         )
 
         with tempfile.TemporaryDirectory() as temp_text:
@@ -29146,11 +30243,13 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             errors,
             [
                 "ADB device visibility preflight failed with exit code 1: "
-                "adb -s SERIAL123 get-state (stderr=error: device not found); "
+                f"adb -s {capture_runner.ADB_SERIAL_REDACTION} get-state "
+                "(stderr=error: device not found); "
                 "ADB attached-device diagnostic must not manage other running jobs: "
                 "adb kill-server"
             ],
         )
+        self.assertNotIn("SERIAL123", "\n".join(errors))
 
     def test_android_capture_rejects_disruptive_step_command_after_preflight(
         self,
@@ -29399,6 +30498,8 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             "Kagemusha device-lab instrumentation export failed with exit code 7",
             errors[0],
         )
+        self.assertIn(capture_runner.ADB_SERIAL_REDACTION, errors[0])
+        self.assertNotIn("SERIAL123", errors[0])
         self.assertFalse((temp / "raw").exists())
 
     def test_android_capture_rejects_noncanonical_raw_challenge_before_report(self) -> None:

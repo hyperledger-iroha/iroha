@@ -234,7 +234,7 @@ Out-of-scope for this document:
   `crates/iroha_torii/src/da/ingest.rs` بصمة الإصبع `/v1/da/ingest`
   يتحقق من موضوع کرتا ہے۔
 - أدوات محاكاة الدفق PDP/PoTR لأداة إثبات التدفق:
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ هناك تدفقات طلب PoR/PDP/PoTR و
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ هناك تدفقات طلب PoR/PDP/PoTR و
   تغطي سيناريوهات الفشل كلاً من نموذج التهديد والتهديد.
 - قدرة وإصلاح نقع النتائج `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   تم العثور عليه، مصفوفة امتصاص Sumeragi `docs/source/sumeragi_soak_matrix.md`

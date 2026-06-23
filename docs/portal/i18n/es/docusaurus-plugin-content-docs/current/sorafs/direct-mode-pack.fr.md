@@ -45,7 +45,7 @@ Los ajustes de la aplicación en la puerta de enlace están capturados en `docs/
 La preparación del modo directo incluye una cobertura en el orquestador y en las cajas CLI:- `direct_only_policy_rejects_soranet_only_providers` garantiza que `TransportPolicy::DirectOnly` se escuchará rápidamente cuando cada anuncio candidato no prend en charge que les relais SoraNet.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` garantiza que los transportes Torii/QUIC se utilizan cuando están disponibles y que las relaciones SoraNet son excluyentes de la sesión. 【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` analiza `docs/examples/sorafs_direct_mode_policy.json` para asegurar que la documentación esté alineada con los ayudantes utilitarios. 【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` ejercita `sorafs_cli fetch --transport-policy=direct-only` contra una puerta de enlace Torii simultáneamente, realiza una prueba de humo para los entornos regulados que permiten el transporte directo.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` ejercita `sorafs_cli fetch --transport-policy=direct-only` contra una puerta de enlace Torii simultáneamente, realiza una prueba de humo para los entornos regulados que permiten el transporte directo.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` envuelve el mismo comando con el JSON de política y la persistencia del marcador para la automatización del lanzamiento.
 
 Ejecute la suite ciblée antes de publicar las actualizaciones del día:

@@ -77,7 +77,7 @@ _最終更新は `python3 scripts/inventory_env_toggles.py --json docs/source/ag
 
 ## CARGO_BIN_EXE_sorafs_cli (テスト: 1)
 
-- テスト: crates/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- テスト: crates/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_fetch (テスト: 1)
 
@@ -85,7 +85,7 @@ _最終更新は `python3 scripts/inventory_env_toggles.py --json docs/source/ag
 
 ## CARGO_BIN_EXE_taikai_car (テスト: 1)
 
-- テスト: crates/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- テスト: crates/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## CARGO_BIN_NAME (製品: 3)
 

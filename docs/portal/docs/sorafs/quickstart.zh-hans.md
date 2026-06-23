@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. 构建并签署清单
 
 使用以下命令将块计划、别名和治理签名包装到清单中
-`sorafs-manifest-stub`。下面的命令展示了一个单文件有效负载；通过
+`sorafs_manifest_stub`。下面的命令展示了一个单文件有效负载；通过
 打包树的目录路径（CLI 按字典顺序遍历）。
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

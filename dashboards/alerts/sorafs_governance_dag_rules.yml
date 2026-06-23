@@ -1,0 +1,47 @@
+groups:
+  - name: sorafs-governance-dag
+    interval: 1m
+    rules:
+      - alert: SoraFSGovernanceDagPublishFailures
+        expr: increase(sorafs_governance_dag_publish_total{result="failure"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS Governance DAG publication failures detected"
+          description: |
+            Governance DAG publication failed for payload kind {{ $labels.payload_kind }} on
+            sink {{ $labels.sink }} within the last 15 minutes. Check filesystem/IPFS sink
+            health and retry the affected evidence bundle before relying on the public head.
+      - alert: SoraFSGovernanceDagBacklogHigh
+        expr: sorafs_governance_dag_backlog > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS Governance DAG publication backlog is high"
+          description: |
+            Governance DAG sink {{ $labels.sink }} has more than ten queued publication items
+            for 10 minutes. Check the publisher worker, mirror datastore, and pinning queue.
+      - alert: SoraFSGovernanceDagHeadStale
+        expr: sorafs_governance_dag_head_age_seconds > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS Governance DAG head is stale"
+          description: |
+            Governance DAG sink {{ $labels.sink }} has not advanced its verified head for more
+            than one hour. Confirm ingest is running and compare the head against local
+            filesystem evidence.
+      - alert: SoraFSGovernanceDagNoRecentPublish
+        expr: time() - max by (sink) (sorafs_governance_dag_last_publish_timestamp_seconds) > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS Governance DAG has no recent successful publication"
+          description: |
+            Governance DAG sink {{ $labels.sink }} has no successful publication timestamp
+            within the last hour. Verify the local publisher and any downstream IPFS/IPNS
+            bridge before publishing rollout evidence.

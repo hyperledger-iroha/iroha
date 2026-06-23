@@ -11,122 +11,81 @@ translation_last_reviewed: 2026-01-30
 
 ---
 title: Secure Evidence Viewer & Access Logging
-summary: Final specification for SFM-4b3 covering secure viewing, watermarking, attestation, logging, observability, and rollout.
+summary: SFM-4b3 implementation status for secure evidence viewing; media validation foundations exist, but the moderation evidence viewer service remains unshipped.
 ---
 
 # Secure Evidence Viewer & Access Logging
 
-## Goals & Scope
-- Deliver a secure, watermarking-enabled evidence viewer for moderation jurors and legal reviewers that prevents unauthorized downloads and records comprehensive audit trails.
-- Support multiple media types (video, audio, image, PDF, text) with deterministic rendering across platforms.
-- Integrate with moderation appeals (SFM-4b), compliance reporting (SFM-4c), and privacy requirements.
+## Current Status
 
-This specification completes **SFM-4b3 — Secure evidence viewer tooling**.
+SFM-4b3 is not yet shipped as a moderation evidence viewer. The repository has
+adjacent evidence metadata schemas, governance evidence export helpers, and a
+Taikai media validation harness, but it does not contain the browser viewer,
+streaming backend, watermark engine, WebAuthn session flow, or access-log
+service required for moderated juror evidence review.
 
-## Architecture Overview
-| Component | Responsibility | Notes |
-|-----------|----------------|-------|
-| Viewer frontend (`evidence_viewer_web`) | Browser app delivering streamed evidence, watermark overlays, and access controls. | React/TypeScript, strict CSP, offline disabled. |
-| Viewer backend (`evidence_streamer`) | Streams encrypted segments, issues session keys, handles authentication. | Rust service with WebAuthn + token validation. |
-| Watermark engine (`watermarkd`) | Generates per-session overlay assets (text, waveform, audio pulses). | Stateless service invoked per session. |
-| Access logger (`evidence_auditd`) | Records view events, anomaly detection, retention enforcement. | Write-ahead log + Postgres/Timescale. |
-| Transparency exporter | Packages audit events into Norito payloads for Governance DAG and dashboards. | Weekly/monthly reporting cadence. |
+## Shipped Adjacent Foundations
 
-## Session Setup & Authentication
-- Juror accesses viewer via portal; obtains session token (`SessionTokenV1`) signed by moderation service.
-- Viewer performs WebAuthn assertion (FIDO2) to attest device; backend verifies and issues `SessionKeyV1`.
-- Gateway issues signed streaming URLs bound to session key (HMAC) valid for 30 seconds.
-- CLI for jurors: `sorafs moderation open-case --case <id>` opens viewer with short-lived deep link.
-- Access roles: `juror`, `auditor`, `legal`. Each role has RBAC-driven content scope.
+- `sorafs_cli proof stream --governance-evidence-dir=DIR` writes proof-stream
+  summaries and metadata bundles for governance archival.
+- SoraFS repair and capacity schemas carry evidence digests, optional evidence
+  URIs, media types, and byte sizes for dispute and repair workflows.
+- `crates/sorafs_orchestrator/src/bin/taikai_viewer.rs` validates Taikai
+  segment envelopes against CAR archives and emits playback, CEK, PQ-health,
+  and alert telemetry. It is a media validation harness, not a moderation
+  evidence viewer.
+- Taikai viewer metrics and dashboards provide a useful model for stream health
+  telemetry, but they do not satisfy moderation evidence access controls.
 
-## Rendering & Watermarking
-- Video/audio: served as MP4/WebM/HLS segments encrypted with AES-GCM. Decryption via WebAssembly worker using session key.
-- Images/PDF: rendered via `<canvas>`; PDF rasterized server-side (PDFium) to deterministic image frames.
-- Text: displayed with inline redaction support; watermarked backgrounds.
-- Watermarks:
-  - Overlay contains `juror_token`, `case_id`, timestamp, session nonce; rotates position every 5 seconds.
-  - Watermark comprised of text + faint QR code encoding session metadata.
-  - Optional audio watermark (inaudible frequencies) for video to fingerprint audio capture.
-  - Accessibility: high-contrast mode, audio descriptions unaffected.
-- Screenshot detection: monitors `visibilitychange`, `screen.orientation`, and optional OS-specific APIs; triggers `screenshot_detected` audit event.
-- Download prevention: disable context menu, set headers (`Content-Disposition:inline`, `X-Content-Type-Options:nosniff`), rely on streaming segments + attested session identifiers.
+## Target Runtime Shape
 
-## Evidence Storage & Access Control
-- Evidence stored encrypted (per-case keys). Keys managed via KMS + governance multi-sig.
-- Viewer backend retrieves segments, decrypts server-side, re-encrypts with session key (per-chunk).
-- Access tokens require case-specific scope; manual overrides recorded.
-- Legal hold: content flagged for legal retains retention settings override, disabling auto-deletion.
+The production moderation evidence viewer still needs these services:
 
-## Logging & Audit Trail
-- Audit event schema:
-  ```norito
-  struct EvidenceAuditEventV1 {
-      event_id: Uuid,
-      case_id: Uuid,
-      viewer_role: ViewerRoleV1,
-      juror_token: String,  // pseudonym
-      access_type: EvidenceAccessTypeV1, // view|pause|seek|download_attempt|screenshot|annotation
-      timestamp: Timestamp,
-      duration_ms: Option<u64>,
-      ip_prefix: Option<String>,
-      user_agent_hash: Option<Digest32>,
-      watermark_nonce: Digest32,
-      notes: Option<String>,
-  }
-  ```
-- Events stored in append-only Postgres table, replicated to object storage (daily JSONL). Daily digest hashed and recorded in Governance DAG.
-- Transparency exporter groups events per week, producing `EvidenceAccessReportV1` with anonymized counts.
-- CLI `sorafs evidence audit --case <id>` (authorized roles) exports events.
+| Component | Responsibility |
+|-----------|----------------|
+| Viewer frontend | Browser UI for jurors, auditors, and legal reviewers with strict CSP and disabled offline mode. |
+| Viewer backend | Authenticates sessions, issues short-lived segment URLs, and binds access to case and role scopes. |
+| Watermark engine | Generates per-session visual and optional audio watermarks tied to juror pseudonyms and nonces. |
+| Access logger | Writes append-only view, seek, pause, screenshot, download-attempt, and annotation events. |
+| Transparency exporter | Publishes anonymized access reports and daily digests to the Governance DAG. |
 
-## Observability & Alerts
-- Metrics:
-  - `sorafs_evidence_sessions_total{role}`
-  - `sorafs_evidence_bandwidth_bytes_total`
-  - `sorafs_evidence_watermark_generation_seconds`
-  - `sorafs_evidence_screenshot_detected_total`
-  - `sorafs_evidence_download_attempt_total`
-  - `sorafs_evidence_session_duration_seconds_bucket`
-- Alerts:
-  - Screenshot/detection spikes.
-  - Session attestation failures.
-  - Evidence retrieval latency > 2 s (p95).
-  - Audit log replication lag > 10 minutes.
-  - Watermark generation failure.
+## Required Session Flow
 
-## APIs
-- `POST /v1/evidence/session` – initiate session; returns signed URLs + overlay metadata.
-- `GET /v1/evidence/manifest/{case_id}` – returns list of evidence items user can access.
-- `POST /v1/evidence/acknowledge` – juror acknowledges trauma warning.
-- `POST /v1/evidence/annotation` – juror adds annotation (retention 90 days).
-- `POST /v1/evidence/log` – fallback logging endpoint if client offline (sends pending events).
-- `GET /v1/evidence/audit?case_id=` – authorized audit export.
-- Strict auth via mTLS + JWT scopes (`evidence.view`, `evidence.audit`).
+1. The moderation panel service issues a signed session token for a specific case,
+   evidence item, role, and viewer pseudonym.
+2. The viewer performs device/user attestation before a session key is created.
+3. The backend returns short-lived streaming URLs plus watermark metadata.
+4. The frontend records playback and viewer interaction events locally and sends
+   them to the access logger.
+5. The logger appends events to the case audit trail and exports privacy-safe
+   digests for transparency reporting.
 
-## Security & Privacy
-- Session tokens tied to hardware attestation; repeated failure locks account (requires Ops unlock).
-- Watermark data hashed before storage to protect tokens if logs leak.
-- Viewer served from unique subdomain (`evidence.sora.net`) with strict CSP and COOP/COEP headers to prevent cross-origin leakage.
-- Evidence access uses short-lived signed URLs; any offline copy unusable without session key.
-- Retention scheduler automatically purges data per policy, generating `RetentionReportV1`.
-- Pseudonymization: juror tokens reversible only by governance through secure service.
+No production route should claim support for `/v1/evidence/session`,
+`/v1/evidence/manifest`, `/v1/evidence/log`, or `/v1/evidence/audit` until the
+service exists and the authorization model is enforced.
 
-## Testing & Rollout
-- Unit tests for watermark overlay, encryption/decryption, audit logging.
-- Automated screenshot/capture attempts in CI to test detection and logging.
-- Load test streaming performance (target: 1080p video with <5% CPU overhead on juror laptops).
-- Security assessments: penetration tests, red-team simulation, watermark removal attempts.
-- Rollout:
-  1. Build staging environment with synthetic evidence; run juror user testing.
-  2. Verify logging/retention pipeline; test transparency export.
-  3. Integrate with moderation portal; initial content class (non-sensitive).
-  4. Expand to sensitive content after trauma guardrails validated.
-  5. Document runbooks (`docs/source/sorafs/evidence_viewer_operator.md`) including support resources.
+## Remaining Production Gates
 
-## Implementation Checklist
-- [x] Define session/auth flow and APIs.
-- [x] Specify watermarking/rendering techniques for media.
-- [x] Document audit logging, retention, and transparency exports.
-- [x] Capture observability metrics, alerts, and security requirements.
-- [x] Outline testing strategy and phased rollout.
+- Build the browser evidence viewer with role-scoped case manifests, trauma
+  warnings, watermark overlays, and deterministic rendering support.
+- Build the streaming backend, short-lived URL signer, session-key workflow, and
+  WebAuthn or equivalent attestation path.
+- Implement watermark generation and per-session watermark metadata hashing.
+- Implement append-only evidence access logging and anomaly events for download
+  attempts, screenshots, session expiry, and attestation failures.
+- Add retention, erasure, and legal-hold workflows with signed receipts.
+- Export anonymized access reports and daily audit digests to the Governance DAG.
+- Add end-to-end security tests for unauthorized access, replay, stale URLs,
+  audit-log tampering, and watermark metadata mismatch.
 
-With this specification, the moderation platform can deliver a secure evidence viewing experience that balances juror usability with strict compliance and transparency obligations.
+## Validation
+
+Existing adjacent checks do not prove evidence-viewer readiness. For now, use
+the Taikai harness only for media envelope and telemetry validation:
+
+```sh
+cargo test -p sorafs_orchestrator taikai
+```
+
+When SFM-4b3 is implemented, add dedicated frontend, backend, and authorization
+tests before removing the unshipped-service language from this page.

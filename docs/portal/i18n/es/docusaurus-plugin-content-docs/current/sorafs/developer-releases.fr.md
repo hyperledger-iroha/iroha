@@ -29,7 +29,7 @@ revista de seguridad :- Téléchargez le mémo de revue sécurité SF-6 le plus 
 - Joignez le lien du ticket de remédiation (par ex. `governance/tickets/SF6-SR-2026.md`) et notez
   los aprobadores de Ingeniería de Seguridad y del Grupo de Trabajo de Herramientas.
 - Verifique que la lista de verificación de reparación del memorándum esté cerrada; Los elementos no bloquean la liberación.
-- Prepare la carga de registros del arnés de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Prepare la carga de registros del arnés de paridad (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   con el paquete de manifiesto.
 - Confirme que el comando de firma que cuenta con el ejecutor incluye las hojas `--identity-token-provider` y
   un `--identity-token-audience=<aud>` explícitamente para capturar el alcance de Fulcio en las preuves de liberación.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 El script efectúa las afirmaciones siguientes:
 
 - `cargo fmt --all -- --check` (espacio de trabajo)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (con la característica `cli`),
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` para estas mismas cajasSi une étape échoue, corrigez la régression avant de tagger. Les builds de lanzamiento
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 doivent être continúa con main; ne cherry-pickez pas de correctifs dans des sucursales
 liberación. La puerta verifica además las banderas de firma sin llave (`--identity-token-issuer`,
 `--identity-token-audience`) Sont fournis quand requis ; fuente les arguments manquants

@@ -1,7 +1,7 @@
 //! Prototype CLI for exercising the multi-source chunk fetch orchestrator.
 #![allow(unexpected_cfgs)]
 //!
-//! The tool accepts a chunk fetch plan (as emitted by `sorafs-manifest-stub
+//! The tool accepts a chunk fetch plan (as emitted by `sorafs_manifest_stub
 //! --chunk-fetch-plan-out`) and a list of local provider payloads. Each provider
 //! exposes the original payload as a single file; the orchestrator reads the
 //! required byte ranges for every chunk, verifies BLAKE3 digests and lengths,

@@ -746,7 +746,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "proofArtifactBytes must be at least 65536 bytes",
             "provingKeyBytes must be at least 65536 bytes",
             "verifierKeyBytes must be at least 128 bytes",
-            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "crossSdkParityBytes must be at least 128 bytes",
             "nativeProverSelfTestBytes must be at least 128 bytes",
             "implementationBytes must be at least 1024 bytes",
         ),
@@ -945,7 +945,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "proofArtifactBytes must be at least 65536 bytes",
             "provingKeyBytes must be at least 65536 bytes",
             "verifierKeyBytes must be at least 128 bytes",
-            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "crossSdkParityBytes must be at least 128 bytes",
             "nativeProverSelfTestBytes must be at least 128 bytes",
             "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
@@ -1075,7 +1075,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "proofArtifactBytes must be at least 65536 bytes",
             "provingKeyBytes must be at least 65536 bytes",
             "verifierKeyBytes must be at least 128 bytes",
-            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "crossSdkParityBytes must be at least 128 bytes",
             "nativeProverSelfTestBytes must be at least 128 bytes",
             "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
@@ -1182,7 +1182,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "proofArtifactBytes must be at least 65536 bytes",
             "provingKeyBytes must be at least 65536 bytes",
             "verifierKeyBytes must be at least 128 bytes",
-            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "crossSdkParityBytes must be at least 128 bytes",
             "nativeProverSelfTestBytes must be at least 128 bytes",
             "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
@@ -2169,6 +2169,48 @@ def test_release_readiness_report_guards_openapi_no_support_discovery_note(
         and removed_marker in error
         for error in errors
     )
+
+
+def test_release_readiness_report_guards_bsc_groth16_material_documentation_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin BSC Groth16 material operator docs."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._bsc_groth16_material_documentation_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-groth16-docs-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = report._bsc_groth16_material_documentation_gate_inventory_errors(
+                ((sparse_source, required_markers),),
+            )
+
+            assert any(
+                "BSC Groth16 material documentation source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_inventory(
@@ -5638,7 +5680,7 @@ def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inve
         "proofArtifactBytes must be at least 65536 bytes",
         "provingKeyBytes must be at least 65536 bytes",
         "verifierKeyBytes must be at least 128 bytes",
-        "crossSdkFixtureParityBytes must be at least 128 bytes",
+        "crossSdkParityBytes must be at least 128 bytes",
         "nativeProverSelfTestBytes must be at least 128 bytes",
         "implementationBytes must be at least 1024 bytes",
     ):
@@ -8345,6 +8387,56 @@ def test_release_readiness_report_blocks_missing_public_discovery_documentation_
     }
 
 
+def test_release_readiness_report_blocks_missing_bsc_groth16_material_documentation_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when BSC Groth16 material docs drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "BSC Groth16 material documentation source inventory "
+        "docs/source/bridge_proofs.md missing marker: "
+        "Production materialization runs `snarkjs zkey verify"
+    )
+    monkeypatch.setattr(
+        report,
+        "_bsc_groth16_material_documentation_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["bsc_groth16_material_documentation_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["public_discovery_documentation_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    assert readiness["source_inventory"][
+        "ethereum_launch_policy_documentation_gate"
+    ] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    assert readiness["source_inventory"]["proof_request_bundle_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
 def test_release_readiness_report_blocks_missing_ethereum_data_collection_no_proxy_gate(
     tmp_path: Path,
     monkeypatch,
@@ -10515,6 +10607,12 @@ def test_release_readiness_phase_command_matchers_reject_inert_option_values() -
             "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
             "--test-reporter scripts/sccp_bsc_taira_xor_deploy.test.mjs",
             "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        ),
+        (
+            "contract-smoke",
+            "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
+            "--test-reporter scripts/sccp_bsc_groth16_material.test.mjs",
+            "scripts/sccp_bsc_groth16_material.test.mjs",
         ),
         (
             "contract-smoke",

@@ -1813,6 +1813,7 @@ public sealed class ToriiClientTests
         var chunkHex = new string('b', 64);
         var successorHex = new string('c', 64);
         var aliasProof = Convert.ToBase64String("alias-proof"u8.ToArray());
+        var manifestBase64 = Convert.ToBase64String("manifest-norito"u8.ToArray());
 
         using var handler = new RecordingHandler(request =>
         {
@@ -1834,6 +1835,7 @@ public sealed class ToriiClientTests
             Assert.Equal("Hot", pinPolicy.GetProperty("storage_class").GetProperty("type").GetString());
             Assert.Equal((ulong)72, pinPolicy.GetProperty("retention_epoch").GetUInt64());
             Assert.Equal(manifestHex, root.GetProperty("manifest_digest_hex").GetString());
+            Assert.Equal(manifestBase64, root.GetProperty("manifest_b64").GetString());
             Assert.Equal(chunkHex, root.GetProperty("chunk_digest_sha3_256_hex").GetString());
             Assert.Equal((ulong)4096, root.GetProperty("content_length").GetUInt64());
             Assert.Equal((ulong)42, root.GetProperty("submitted_epoch").GetUInt64());
@@ -1878,12 +1880,44 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
+    public async Task RegisterSoraFsPinManifestAsyncAcceptsManifestBase64Payload()
+    {
+        var manifestBase64 = Convert.ToBase64String("explicit-manifest"u8.ToArray());
+        using var handler = new RecordingHandler(request =>
+        {
+            using var payload = ReadBodyAsJson(request);
+            Assert.Equal(manifestBase64, payload.RootElement.GetProperty("manifest_b64").GetString());
+            return JsonResponse("""
+                {
+                  "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "chunker_handle": "sorafs.sf1@1.0.0",
+                  "submitted_epoch": 42,
+                  "content_length": 4096,
+                  "pin_fee_nano": 500000000,
+                  "pin_fee_asset_id": "xor#universal",
+                  "pin_fee_treasury_account_id": "treasury@boi"
+                }
+                """);
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        await client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest() with
+        {
+            ManifestBase64 = manifestBase64,
+            ManifestBytes = null,
+        });
+    }
+
+    [Fact]
     public async Task RegisterSoraFsPinManifestAsyncRejectsMalformedInputsBeforeRequest()
     {
         var valid = ValidSoraFsPinRegisterRequest();
         var invalidRequests = new[]
         {
             valid with { ManifestDigestHex = "abc123" },
+            valid with { ManifestBase64 = "not base64!", ManifestBytes = null },
+            valid with { ManifestBase64 = Convert.ToBase64String("manifest"u8.ToArray()) },
+            valid with { ManifestBytes = Array.Empty<byte>() },
             valid with { ChunkDigestSha3_256Hex = new string('z', 64) },
             valid with { SuccessorOfHex = new string('c', 63) },
             valid with { ContentLength = null },
@@ -4780,6 +4814,7 @@ public sealed class ToriiClientTests
                 RetentionEpoch = 72,
             },
             ManifestDigestHex = "0x" + new string('A', 64),
+            ManifestBytes = "manifest-norito"u8.ToArray(),
             ChunkDigestSha3_256Hex = "0x" + new string('B', 64),
             ContentLength = 4096,
             SubmittedEpoch = 42,
