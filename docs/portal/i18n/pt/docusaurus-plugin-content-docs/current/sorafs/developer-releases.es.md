@@ -31,7 +31,7 @@ recentes da revisão de segurança:
 - Adicione o link do ticket de remediação (por exemplo, `governance/tickets/SF6-SR-2026.md`) e anota
   os aprovadores da Engenharia de Segurança e do Grupo de Trabalho de Ferramentas.
 - Verifique se a lista de remediação do memorando está fechada; os itens sem resolução bloqueiam o lançamento.
-- Preparar para subir os logs do arnês de paridade (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Preparar para subir os logs do arnês de paridade (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   junto com o pacote do manifesto.
 - Confirme que o comando de firma que os aviões executam inclui tanto `--identity-token-provider` como
   um `--identity-token-audience=<aud>` explícito para que o alcance de Fulcio seja capturado na evidência de liberação.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 O script realiza as seguintes comparações:
 
 - `cargo fmt --all -- --check` (área de trabalho)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (com o recurso `cli`),
-  `sorafs_manifest` e `sorafs_chunker`
-- `cargo test --locked --all-targets` para caixas esos mismos
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Se algum passo falhar, corrija a regressão antes de marcar. Los builds de lançamento
 deve ser contínuo com principal; não há necessidade de escolher as correções e as etapas de lançamento.

@@ -27,7 +27,7 @@ summary: Checklist ו-digests צפויים לאימות פרופיל chunker ה�
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | כל הבדיקות עוברות; בדיקת parity `vectors` מצליחה. | מאשר שה-fixtures הקנוניים מתקמפלים ומתאימים ליישום Rust. |
 | 2 | `ci/check_sorafs_fixtures.sh` | הסקריפט יוצא 0; מדווח digests של manifest למטה. | מאמת ש-fixtures מתחדשים בצורה נקיה ושהחתימות נשארות מצורפות. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | הרשומה `sorafs.sf1@1.0.0` תואמת את registry descriptor (`profile_id=1`). | מבטיח שה-metadata של ה-registry נשארת מסונכרנת. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | הרשומה `sorafs.sf1@1.0.0` תואמת את registry descriptor (`profile_id=1`). | מבטיח שה-metadata של ה-registry נשארת מסונכרנת. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | הרגנרציה מצליחה ללא `--allow-unsigned`; קבצי manifest ו-signature לא משתנים. | מספק הוכחת determinism לגבולות chunk ול-manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | מדווח שאין diff בין fixtures TypeScript ל-Rust JSON. | helper אופציונלי; לשמור על parity בין runtimes (הסקריפט מתוחזק ע"י Tooling WG). |
 

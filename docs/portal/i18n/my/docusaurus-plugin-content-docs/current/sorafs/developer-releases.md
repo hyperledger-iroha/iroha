@@ -28,7 +28,7 @@ SoraFS binaries (`sorafs_cli`၊ `sorafs_fetch`၊ ကူညီသူမျာ�
 - ပြန်လည်ပြင်ဆင်ခြင်းလက်မှတ်လင့်ခ်ကို ပူးတွဲပါ (ဥပမာ၊ `governance/tickets/SF6-SR-2026.md`) နှင့် လက်မှတ်ထိုးပိတ်ခြင်းကို မှတ်သားပါ။
   Security Engineering နှင့် Tooling Working Group တို့မှ အတည်ပြုသူများ။
 - မှတ်စုတိုပါရှိ ပြန်လည်ပြင်ဆင်ခြင်းစာရင်းကို ပိတ်ထားကြောင်း စစ်ဆေးပါ။ မဖြေရှင်းရသေးသော အရာများသည် ထုတ်ဝေမှုကို ပိတ်ဆို့ထားသည်။
-- တူညီသောကြိုးကြိုးမှတ်တမ်းများ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) ကို အပ်လုဒ်လုပ်ရန် ပြင်ဆင်ပါ။
+- တူညီသောကြိုးကြိုးမှတ်တမ်းများ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`) ကို အပ်လုဒ်လုပ်ရန် ပြင်ဆင်ပါ။
   manifest အစုအဝေးနှင့်အတူ။
 - `--identity-token-provider` နှင့် တိကျပြတ်သားသော နှစ်ခုလုံးပါ၀င်ရန် သင်လုပ်ဆောင်ရန် စီစဉ်ထားသည့် လက်မှတ်ရေးထိုးခြင်းကို အတည်ပြုပါ
   `--identity-token-audience=<aud>` ထို့ကြောင့် Fulcio နယ်ပယ်ကို သက်သေအထောက်အထားတွင် ဖမ်းယူထားသည်။
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ဇာတ်ညွှန်းသည် အောက်ပါအချက်များကို လုပ်ဆောင်သည်-
 
 - `cargo fmt --all -- --check` (အလုပ်ခွင်)
-- `sorafs_car` အတွက် `cargo clippy --locked --all-targets` (`cli`)၊
-  `sorafs_manifest` နှင့် `sorafs_chunker`
-- အလားတူသေတ္တာများအတွက် `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 အဆင့်တစ်ခုခု အဆင်မပြေပါက၊ တဂ်မတင်မီ ဆုတ်ယုတ်မှုကို ပြင်ဆင်ပါ။ ဖြန့်ချိရေးတွေ လုပ်ရမယ်။
 ပင်မနှင့်အတူအဆက်မပြတ်; အကိုင်းအခက်များတွင် ချယ်ရီကောက်ပြင်ဆင်ခြင်းများ မလုပ်ပါနှင့်။ တံခါး

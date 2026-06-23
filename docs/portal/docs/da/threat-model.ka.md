@@ -221,7 +221,7 @@ PDP/PoTR გამოწვევების გავლა ყალბი �
   Torii ინტეგრაცია `crates/iroha_torii/src/da/ingest.rs`-ში, რომელიც აკავშირებს
   თითის ანაბეჭდის შემოწმება ხდება `/v1/da/ingest`-ის საშუალებით.
 - PDP/PoTR ნაკადის სიმულაციები ხორციელდება მტკიცებულების ნაკადის აღკაზმულობის მეშვეობით
-  `crates/sorafs_car/tests/sorafs_cli.rs`, რომელიც მოიცავს PoR/PDP/PoTR მოთხოვნის ნაკადებს
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, რომელიც მოიცავს PoR/PDP/PoTR მოთხოვნის ნაკადებს
   და საფრთხის მოდელში ანიმაციური წარუმატებლობის სცენარები.
 - სიმძლავრე და სარემონტო soak შედეგები ცოცხალი ქვეშ
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, ხოლო უფრო ფართო

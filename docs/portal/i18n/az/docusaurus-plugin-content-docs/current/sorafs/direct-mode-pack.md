@@ -47,7 +47,7 @@ Birbaşa rejimə hazırlıq indi həm orkestr, həm də CLI qutularında əhatə
 - `direct_only_policy_rejects_soranet_only_providers`, hər bir namizəd reklamı yalnız SoraNet relelərini dəstəklədikdə `TransportPolicy::DirectOnly`-in sürətli uğursuzluğuna zəmanət verir.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` mövcud olduqda Torii/QUIC nəqliyyatlarının istifadə olunmasını və SoraNet relelərinin sessiyadan xaric edilməsini təmin edir.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` sənədlərin köməkçi utilitlərlə uyğun qalmasını təmin etmək üçün `docs/examples/sorafs_direct_mode_policy.json`-i təhlil edir.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_poli.json】
-- `fetch_command_respects_direct_transports` istehza edilmiş Torii şlüzinə qarşı `sorafs_cli fetch --transport-policy=direct-only` məşq edir, birbaşa nəqliyyatları bağlayan tənzimlənən mühitlər üçün tüstü testini təmin edir.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` istehza edilmiş Torii şlüzinə qarşı `sorafs_cli fetch --transport-policy=direct-only` məşq edir, birbaşa nəqliyyatları bağlayan tənzimlənən mühitlər üçün tüstü testini təmin edir.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` eyni əmri yayma avtomatlaşdırılması üçün JSON siyasəti və skorboard davamlılığı ilə əhatə edir.
 
 Yeniləmələri dərc etməzdən əvvəl fokuslanmış paketi işə salın:

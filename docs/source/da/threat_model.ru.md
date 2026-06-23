@@ -205,7 +205,7 @@ _Последняя проверка: 19 января 2026 г. — Следую�
   интеграция Torii в `crates/iroha_torii/src/da/ingest.rs`, которая обрабатывает
   проверка отпечатков пальцев через `/v1/da/ingest`.
 - Моделирование потоковой передачи PDP/PoTR осуществляется с помощью протокола проверки потока в
-  `crates/sorafs_car/tests/sorafs_cli.rs`, охватывающий потоки запросов PoR/PDP/PoTR.
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, охватывающий потоки запросов PoR/PDP/PoTR.
   и сценарии отказов, анимированные в модели угроз.
 - Результаты производительности и ремонтной выдержки соответствуют
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, а более широкий

@@ -77,7 +77,7 @@ description: ברירות מחדל מעשיות, הנחיות כיוונון ו�
 
 ## רפרנס דגלי CLI ו‑SDK
 
-`sorafs_cli fetch` (ראו `crates/sorafs_car/src/bin/sorafs_cli.rs`) והעטיפה
+`sorafs_cli fetch` (ראו `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) והעטיפה
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) משתמשים באותו
 משטח הגדרה של האורקסטרטור. השתמשו בדגלים הבאים בעת לכידת evidence או שחזור
 ה‑fixtures הקנוניים:

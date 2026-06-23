@@ -9,6 +9,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -386,6 +387,25 @@ pub struct AttestationBundle {
     pub envelope_bytes: Vec<u8>,
     /// Human-readable summary emitted for operators.
     pub summary_text: String,
+}
+
+/// Verified metadata extracted from a SoraFS gateway conformance attestation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedGatewayAttestation {
+    /// Profile version advertised by the embedded report.
+    pub profile_version: String,
+    /// Number of replay scenarios in the embedded report.
+    pub scenario_count: usize,
+    /// BLAKE3 digest of the canonical embedded report JSON.
+    pub payload_hash_hex: String,
+    /// Domainless account address that signed the report.
+    pub signer_account: String,
+    /// Signature algorithm used by the attestation signer.
+    pub algorithm: Algorithm,
+    /// Hex-encoded public key used to verify the report signature.
+    pub public_key_hex: String,
+    /// UNIX timestamp recorded in the attestation.
+    pub signed_at_unix: u64,
 }
 
 fn load_profile_to_value(profile: LoadProfile) -> Value {
@@ -1239,6 +1259,126 @@ pub fn generate_attestation(
         envelope_bytes,
         summary_text,
     })
+}
+
+/// Verify a SoraFS gateway conformance attestation envelope.
+///
+/// The verifier recomputes the BLAKE3 digest over the canonical embedded report
+/// JSON and verifies the declared signature with the embedded public key.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the payload hash does not
+/// match the embedded report, the signer metadata is invalid, or the signature
+/// fails verification.
+pub fn verify_attestation_envelope(
+    envelope_bytes: &[u8],
+) -> EyreResult<VerifiedGatewayAttestation> {
+    let envelope: Value = norito::json::from_slice(envelope_bytes)
+        .wrap_err("failed to parse SoraFS gateway attestation envelope")?;
+    let envelope_obj = attestation_object(&envelope, "envelope")?;
+    let attestation = attestation_object_field(envelope_obj, "attestation")?;
+    let report = envelope_obj
+        .get("report")
+        .ok_or_else(|| eyre!("attestation envelope missing `report`"))?;
+    let report_obj = attestation_object(report, "report")?;
+    let payload_hash = attestation_object_field(attestation, "payload_hash")?;
+    let signer = attestation_object_field(attestation, "signer")?;
+
+    let report_json =
+        norito::json::to_vec(report).wrap_err("failed to canonicalize embedded report JSON")?;
+    let digest_hex = blake3::hash(&report_json).to_hex().to_string();
+    let declared_digest = attestation_str_field(payload_hash, "blake3_hex")?;
+    if declared_digest != digest_hex {
+        return Err(eyre!(
+            "attestation payload hash mismatch: declared {declared_digest}, computed {digest_hex}"
+        ));
+    }
+    let declared_multibase = attestation_str_field(payload_hash, "blake3_multibase")?;
+    let expected_multibase = format!("z{digest_hex}");
+    if declared_multibase != expected_multibase {
+        return Err(eyre!(
+            "attestation multibase hash mismatch: declared {declared_multibase}, computed {expected_multibase}"
+        ));
+    }
+
+    let algorithm_label = attestation_str_field(signer, "algorithm")?;
+    let algorithm = Algorithm::from_str(algorithm_label)
+        .map_err(|_| eyre!("unsupported attestation signature algorithm `{algorithm_label}`"))?;
+    let public_key_hex = attestation_str_field(signer, "public_key_hex")?;
+    let public_key = PublicKey::from_hex(algorithm, public_key_hex)
+        .map_err(|err| eyre!("invalid attestation public key: {err}"))?;
+    let signer_account = attestation_str_field(signer, "account_id")?;
+    verify_attestation_signer_account(signer_account)?;
+
+    let signature_hex = attestation_str_field(attestation, "signature_hex")?;
+    let signature_bytes =
+        hex::decode(signature_hex).wrap_err("attestation signature is not valid hex")?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    signature
+        .verify(&public_key, &report_json)
+        .wrap_err("attestation signature did not verify")?;
+
+    let profile_version = attestation_str_field(report_obj, "profile_version")?.to_owned();
+    let scenario_count = report_obj
+        .get("scenarios")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("attestation report missing `scenarios` array"))?
+        .len();
+    let signed_at_unix = attestation_u64_field(attestation, "signed_at_unix")?;
+
+    Ok(VerifiedGatewayAttestation {
+        profile_version,
+        scenario_count,
+        payload_hash_hex: digest_hex,
+        signer_account: signer_account.to_owned(),
+        algorithm,
+        public_key_hex: public_key_hex.to_owned(),
+        signed_at_unix,
+    })
+}
+
+fn attestation_object<'a>(value: &'a Value, label: &str) -> EyreResult<&'a json::Map> {
+    value
+        .as_object()
+        .ok_or_else(|| eyre!("attestation {label} must be a JSON object"))
+}
+
+fn attestation_object_field<'a>(obj: &'a json::Map, field: &str) -> EyreResult<&'a json::Map> {
+    obj.get(field)
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("attestation envelope missing object `{field}`"))
+}
+
+fn attestation_str_field<'a>(obj: &'a json::Map, field: &str) -> EyreResult<&'a str> {
+    obj.get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("attestation envelope missing string `{field}`"))
+}
+
+fn attestation_u64_field(obj: &json::Map, field: &str) -> EyreResult<u64> {
+    obj.get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| eyre!("attestation envelope missing integer `{field}`"))
+}
+
+fn verify_attestation_signer_account(signer_account: &str) -> EyreResult<()> {
+    if let Some(hex) = signer_account
+        .strip_prefix("0x")
+        .or_else(|| signer_account.strip_prefix("0X"))
+    {
+        let bytes = hex::decode(hex).wrap_err("attestation signer account hex is invalid")?;
+        AccountAddress::from_canonical_bytes(&bytes)
+            .map_err(|err| eyre!("invalid canonical attestation signer account: {err}"))?;
+        return Ok(());
+    }
+
+    AccountAddress::parse_encoded(
+        signer_account,
+        Some(iroha_data_model::account::address::chain_discriminant()),
+    )
+    .map_err(|err| eyre!("invalid i105 attestation signer account `{signer_account}`: {err}"))?;
+    Ok(())
 }
 
 fn workspace_root() -> PathBuf {

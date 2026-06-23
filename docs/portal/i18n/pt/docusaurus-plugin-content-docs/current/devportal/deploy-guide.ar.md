@@ -12,12 +12,12 @@ translation_last_reviewed: 2026-02-07
 
 Você pode usar o **DOCS-7** (SoraFS) e o **DOCS-8** (o pino do CI/CD) para fazer isso. عملي لبوابة المطورين. Para construir / lint, use SoraFS, instale o Sigstore, instale o arquivo Sigstore, A máquina de lavar roupa pode ser usada para lavar roupas e roupas.
 
-O endpoint `sorafs_cli` (ou seja, `--features cli`) e o endpoint Torii são iguais Para alterar o registro de pinos, você pode substituir OIDC por Sigstore. Você pode usar o código de barras (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, número Torii) em CI, O que acontece é que as exportações são feitas através do shell.
+O endpoint `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target) e o endpoint Torii são iguais Para alterar o registro de pinos, você pode substituir OIDC por Sigstore. Você pode usar o código de barras (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, número Torii) em CI, O que acontece é que as exportações são feitas através do shell.
 
 ## المتطلبات المسبقة
 
 - Nó 18.18 e `npm` e `pnpm`.
-- `sorafs_cli` em `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` em `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - O Torii é o `/v1/sorafs/*`, o que significa que você pode usar o cabo de segurança para obter mais informações. المستعارة.
 - Use OIDC (GitHub Actions, GitLab, identidade de carga de trabalho), como `SIGSTORE_ID_TOKEN`.
 - `examples/sorafs_cli_quickstart.sh` para fluxos de trabalho no GitHub/GitLab.

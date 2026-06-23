@@ -50,7 +50,7 @@ translation_last_reviewed: 2026-01-30
 ### CLI quickstart
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 یہ کمانڈ chunk digests اور manifest کی تفصیلات پرنٹ کرتی ہے؛ جب `--manifest-out` اور/یا
@@ -135,7 +135,7 @@ descriptors فراہم ہوں تو CLI fetch شروع کرنے سے پہلے orc
 `--expect-payload-digest=<hex>` اور/یا `--expect-payload-len=<bytes>` پاس کریں تاکہ assembled payload لکھنے سے پہلے manifest expectations سے
 مطابقت کی تصدیق ہو جائے — یہ CI smoke-tests کے لیے مفید ہے جو یہ یقینی بنانا چاہتے ہیں کہ orchestrator نے خاموشی سے chunks drop یا reorder نہیں کیے۔
 
-اگر آپ کے پاس پہلے سے `sorafs-manifest-stub` سے بنا ہوا JSON رپورٹ موجود ہو تو اسے `--manifest-report=docs.report.json` کے ذریعے براہ راست پاس کریں۔
+اگر آپ کے پاس پہلے سے `sorafs_manifest_stub` سے بنا ہوا JSON رپورٹ موجود ہو تو اسے `--manifest-report=docs.report.json` کے ذریعے براہ راست پاس کریں۔
 fetch CLI embedded `chunk_fetch_specs`, `payload_digest_hex`, اور `payload_len` فیلڈز کو reuse کرتی ہے، اس لیے الگ plan یا validation فائلیں
 سنبھالنے کی ضرورت نہیں رہتی۔
 

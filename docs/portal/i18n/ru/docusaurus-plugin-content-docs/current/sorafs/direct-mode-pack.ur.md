@@ -48,7 +48,7 @@ JSON или `sorafs_cli fetch --config` (автоматизация) и прив
 - `direct_only_policy_rejects_soranet_only_providers` اس بات کو یقینی بناتا ہے کہ `TransportPolicy::DirectOnly` تیزی سے провалить کرے جب ہر кандидата объявление صرف SoraNet реле поддерживают کرتا ہو۔【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` یہ یقینی بناتا ہے کہ Torii/QUIC транспортирует транспортные средства в любое время. Чтобы настроить ретрансляторы SoraNet для сеанса, выберите папку 【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` `docs/examples/sorafs_direct_mode_policy.json` синтаксический анализ и помощники по документам выравниваются رہیں۔【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` — издевательский шлюз Torii — может быть использован в регулируемых средах для проверки дыма. ہے جہاں булавка для прямой транспортировки ہوتے ہیں۔【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` — издевательский шлюз Torii — может быть использован в регулируемых средах для проверки дыма. ہے جہاں булавка для прямой транспортировки ہوتے ہیں۔【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` — команда, политика JSON, постоянство табло, обертка, автоматизация развертывания.
 
 Обновления публикуют специальный пакет, ориентированный на:

@@ -47,7 +47,7 @@ To'g'ridan-to'g'ri rejimga tayyorlik endi orkestr va CLI qutilarini qamrab oladi
 - `direct_only_policy_rejects_soranet_only_providers`, `TransportPolicy::DirectOnly` tez ishlamay qolishini kafolatlaydi, agar har bir nomzod reklamasi faqat SoraNet relesini qo'llab-quvvatlasa.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` mavjud bo'lganda Torii/QUIC transportlaridan foydalanishni va SoraNet o'rni sessiyadan chiqarib tashlanishini ta'minlaydi.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` hujjatlarning yordamchi utilitlarga mos kelishini taʼminlash uchun `docs/examples/sorafs_direct_mode_policy.json`ni tahlil qiladi.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_1cy.json_1
-- `fetch_command_respects_direct_transports` masxara qilingan Torii shlyuziga qarshi `sorafs_cli fetch --transport-policy=direct-only` mashqlarini bajaradi, bu to'g'ridan-to'g'ri transportlarni bog'laydigan tartibga solinadigan muhitlar uchun tutun sinovini ta'minlaydi.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` masxara qilingan Torii shlyuziga qarshi `sorafs_cli fetch --transport-policy=direct-only` mashqlarini bajaradi, bu to'g'ridan-to'g'ri transportlarni bog'laydigan tartibga solinadigan muhitlar uchun tutun sinovini ta'minlaydi.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` ishga tushirishni avtomatlashtirish uchun JSON siyosati va skorbordning barqarorligi bilan bir xil buyruqni o'rab oladi.
 
 Yangilanishlarni nashr qilishdan oldin fokuslangan to'plamni ishga tushiring:

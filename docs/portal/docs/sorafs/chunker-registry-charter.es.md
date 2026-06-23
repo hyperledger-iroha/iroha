@@ -63,10 +63,10 @@ SDKs). Impone las invariantes de alias y handle verificadas por
      `docs/source/sorafs/proposals/`.
    - Incluye la salida del CLI de:
      ```bash
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envía un PR que contenga fixtures, propuesta, reporte de determinismo y

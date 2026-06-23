@@ -18,7 +18,7 @@ descripción: Tutorial centrado en tareas de superficie consolidada `sorafs_cli`
 :::nota مستند ماخذ
 :::
 
-Superficie consolidada `sorafs_cli` (جو `sorafs_car` caja کے ذریعے `cli` característica کے ساتھ فراہم ہوتا ہے) SoraFS artefactos تیار کرنے کے لیے درکار ہر قدم exponer کرتا ہے۔ اس libro de cocina کو عام flujos de trabajo پر سیدھا جانے کے لیے استعمال کریں؛ contexto operativo کے لیے اسے canalización de manifiesto اور runbooks del orquestador کے ساتھ par کریں۔
+Superficie consolidada `sorafs_cli` (provided by the `sorafs_orchestrator` crate) SoraFS artefactos تیار کرنے کے لیے درکار ہر قدم exponer کرتا ہے۔ اس libro de cocina کو عام flujos de trabajo پر سیدھا جانے کے لیے استعمال کریں؛ contexto operativo کے لیے اسے canalización de manifiesto اور runbooks del orquestador کے ساتھ par کریں۔
 
 ## Cargas útiles del paquete
 

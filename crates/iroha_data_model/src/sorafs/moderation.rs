@@ -1,14 +1,15 @@
-//! Moderation reproducibility schema (MINFO-1b).
+//! Moderation reproducibility and ballot schemas (MINFO-1b / SFM-4b4).
 //!
 //! These types capture the governance-signed fingerprints that allow gateways
-//! to verify that moderation runners, model artefacts, and threshold
-//! parameters match the canonical committee manifest. Validators use the
-//! `validate` helper to enforce schema versioning and signature coverage before
-//! accepting a new reproducibility package.
+//! to verify moderation runners, model artefacts, and threshold parameters, and
+//! the `SoraFS`-specific ballot context used by moderation panels. Validators use
+//! explicit helpers to enforce schema versioning, signature coverage, and
+//! commit/reveal binding before accepting moderation evidence.
 
 use std::collections::BTreeSet;
 
-use iroha_crypto::{PublicKey, SignatureOf};
+use blake2::digest::Digest;
+use iroha_crypto::{Blake2b256, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -18,6 +19,12 @@ pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
 
 /// Schema version for `ModerationReproManifestV1`.
 pub const MODERATION_REPRO_MANIFEST_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraFsModerationBallotContextV1`].
+pub const SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraFsModerationBallotCommitV1`].
+pub const SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraFsModerationBallotRevealV1`].
+pub const SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1: u16 = 1;
 
 /// Governance-signed moderation reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -234,6 +241,344 @@ impl ModerationReproManifestV1 {
             signer_count,
         })
     }
+}
+
+/// `SoraFS` moderation-panel vote choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
+    norito(tag = "choice", content = "value", rename_all = "kebab-case")
+)]
+pub enum SoraFsModerationVoteChoice {
+    /// Keep the original moderation action.
+    Uphold,
+    /// Reverse the original moderation action.
+    Overturn,
+    /// Change the moderation action without fully reversing it.
+    Modify,
+    /// Escalate the case for another review path.
+    Escalate,
+}
+
+impl SoraFsModerationVoteChoice {
+    fn discriminant(self) -> u8 {
+        match self {
+            Self::Uphold => 1,
+            Self::Overturn => 2,
+            Self::Modify => 3,
+            Self::Escalate => 4,
+        }
+    }
+}
+
+/// Immutable case scope that every moderation commit/reveal payload must bind.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraFsModerationBallotContextV1 {
+    /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1`].
+    pub version: u16,
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Digest of the evidence bundle reviewed by the panel.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub evidence_bundle_digest: [u8; 32],
+    /// Appeal pricing/settlement config version used for this case.
+    pub appeal_finance_config_version: String,
+    /// Digest of the selected panel roster and failover policy.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub panel_roster_hash: [u8; 32],
+    /// Moderation policy reference reviewed by the panel.
+    pub policy_reference: String,
+    /// Optional transparency or governance DAG reference for the evidence bundle.
+    #[norito(default)]
+    pub evidence_uri: Option<String>,
+}
+
+impl SoraFsModerationBallotContextV1 {
+    /// Validate structural fields that bind a moderation ballot to one case scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoraFsModerationBallotError`] when the context has an unsupported
+    /// version or misses required case, evidence, finance, roster, or policy data.
+    pub fn validate(&self) -> Result<(), SoraFsModerationBallotError> {
+        if self.version != SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1 {
+            return Err(SoraFsModerationBallotError::UnsupportedContextVersion {
+                expected: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                found: self.version,
+            });
+        }
+        if self.case_id.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingCaseId);
+        }
+        if is_zero_digest(&self.evidence_bundle_digest) {
+            return Err(SoraFsModerationBallotError::MissingEvidenceBundleDigest);
+        }
+        if self.appeal_finance_config_version.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingAppealFinanceConfigVersion);
+        }
+        if is_zero_digest(&self.panel_roster_hash) {
+            return Err(SoraFsModerationBallotError::MissingPanelRosterHash);
+        }
+        if self.policy_reference.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingPolicyReference);
+        }
+        Ok(())
+    }
+
+    fn update_hash(&self, hasher: &mut Blake2b256) {
+        hasher.update(self.version.to_le_bytes());
+        update_hash_string(hasher, &self.case_id);
+        hasher.update(self.evidence_bundle_digest);
+        update_hash_string(hasher, &self.appeal_finance_config_version);
+        hasher.update(self.panel_roster_hash);
+        update_hash_string(hasher, &self.policy_reference);
+        match self.evidence_uri.as_deref() {
+            Some(uri) => {
+                hasher.update([1u8]);
+                update_hash_string(hasher, uri);
+            }
+            None => hasher.update([0u8]),
+        }
+    }
+}
+
+/// Juror commitment for a `SoraFS` moderation case.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraFsModerationBallotCommitV1 {
+    /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1`].
+    pub version: u16,
+    /// Case scope this commitment is bound to.
+    pub context: SoraFsModerationBallotContextV1,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Stable juror identifier or pseudonym.
+    pub juror_id: String,
+    /// Blake2b commitment over context, round, juror, choice, and nonce.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub commitment_blake2b_256: [u8; 32],
+    /// UTC timestamp (milliseconds) when the commitment was recorded.
+    pub committed_at_unix_ms: u64,
+}
+
+impl SoraFsModerationBallotCommitV1 {
+    /// Validate this commitment and the supplied reveal against the shared `SoraFS` case context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoraFsModerationBallotError`] when either payload is malformed,
+    /// references a different case context, or the reveal does not match the commitment.
+    pub fn verify_reveal(
+        &self,
+        reveal: &SoraFsModerationBallotRevealV1,
+    ) -> Result<(), SoraFsModerationBallotError> {
+        self.validate()?;
+        reveal.validate()?;
+        if self.context != reveal.context {
+            return Err(SoraFsModerationBallotError::ContextMismatch);
+        }
+        if self.round_id != reveal.round_id {
+            return Err(SoraFsModerationBallotError::RoundMismatch {
+                commit: self.round_id.clone(),
+                reveal: reveal.round_id.clone(),
+            });
+        }
+        if self.juror_id != reveal.juror_id {
+            return Err(SoraFsModerationBallotError::JurorMismatch {
+                commit: self.juror_id.clone(),
+                reveal: reveal.juror_id.clone(),
+            });
+        }
+        if self.commitment_blake2b_256 != reveal.compute_commitment() {
+            return Err(SoraFsModerationBallotError::CommitmentMismatch);
+        }
+        Ok(())
+    }
+
+    /// Validate this commitment without requiring a reveal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoraFsModerationBallotError`] when the commitment has an
+    /// unsupported version, malformed context, blank round id, or blank juror id.
+    pub fn validate(&self) -> Result<(), SoraFsModerationBallotError> {
+        if self.version != SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1 {
+            return Err(SoraFsModerationBallotError::UnsupportedCommitVersion {
+                expected: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+                found: self.version,
+            });
+        }
+        self.context.validate()?;
+        if self.round_id.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingRoundId);
+        }
+        if self.juror_id.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingJurorId);
+        }
+        Ok(())
+    }
+}
+
+/// Juror reveal for a `SoraFS` moderation case.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraFsModerationBallotRevealV1 {
+    /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1`].
+    pub version: u16,
+    /// Case scope this reveal is bound to.
+    pub context: SoraFsModerationBallotContextV1,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Stable juror identifier or pseudonym.
+    pub juror_id: String,
+    /// Moderation outcome selected by the juror.
+    pub choice: SoraFsModerationVoteChoice,
+    /// Random nonce used when generating the commitment.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub nonce: Vec<u8>,
+    /// UTC timestamp (milliseconds) when the reveal was recorded.
+    pub revealed_at_unix_ms: u64,
+}
+
+impl SoraFsModerationBallotRevealV1 {
+    /// Compute the canonical commitment digest for this reveal.
+    #[must_use]
+    pub fn compute_commitment(&self) -> [u8; 32] {
+        let mut hasher = Blake2b256::new();
+        self.context.update_hash(&mut hasher);
+        update_hash_string(&mut hasher, &self.round_id);
+        update_hash_string(&mut hasher, &self.juror_id);
+        hasher.update([self.choice.discriminant()]);
+        hasher.update((self.nonce.len() as u64).to_le_bytes());
+        hasher.update(&self.nonce);
+        hasher.finalize().into()
+    }
+
+    /// Validate this reveal without requiring a stored commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoraFsModerationBallotError`] when the reveal has an unsupported
+    /// version, malformed context, blank round or juror id, or a short nonce.
+    pub fn validate(&self) -> Result<(), SoraFsModerationBallotError> {
+        if self.version != SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1 {
+            return Err(SoraFsModerationBallotError::UnsupportedRevealVersion {
+                expected: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
+                found: self.version,
+            });
+        }
+        self.context.validate()?;
+        if self.round_id.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingRoundId);
+        }
+        if self.juror_id.trim().is_empty() {
+            return Err(SoraFsModerationBallotError::MissingJurorId);
+        }
+        if self.nonce.len() < 16 {
+            return Err(SoraFsModerationBallotError::NonceTooShort {
+                length: self.nonce.len(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Errors surfaced while validating `SoraFS` moderation ballots.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum SoraFsModerationBallotError {
+    /// Context version mismatch.
+    #[error("unsupported SoraFS moderation ballot context version `{found}` (expected {expected})")]
+    UnsupportedContextVersion {
+        /// Version expected by the verifier.
+        expected: u16,
+        /// Version observed in the payload.
+        found: u16,
+    },
+    /// Commitment version mismatch.
+    #[error("unsupported SoraFS moderation ballot commit version `{found}` (expected {expected})")]
+    UnsupportedCommitVersion {
+        /// Version expected by the verifier.
+        expected: u16,
+        /// Version observed in the payload.
+        found: u16,
+    },
+    /// Reveal version mismatch.
+    #[error("unsupported SoraFS moderation ballot reveal version `{found}` (expected {expected})")]
+    UnsupportedRevealVersion {
+        /// Version expected by the verifier.
+        expected: u16,
+        /// Version observed in the payload.
+        found: u16,
+    },
+    /// Missing moderation case identifier.
+    #[error("SoraFS moderation ballot case id is required")]
+    MissingCaseId,
+    /// Missing evidence bundle digest.
+    #[error("SoraFS moderation ballot evidence bundle digest must be nonzero")]
+    MissingEvidenceBundleDigest,
+    /// Missing appeal finance configuration version.
+    #[error("SoraFS moderation ballot appeal finance config version is required")]
+    MissingAppealFinanceConfigVersion,
+    /// Missing panel roster hash.
+    #[error("SoraFS moderation ballot panel roster hash must be nonzero")]
+    MissingPanelRosterHash,
+    /// Missing moderation policy reference.
+    #[error("SoraFS moderation ballot policy reference is required")]
+    MissingPolicyReference,
+    /// Missing ballot round identifier.
+    #[error("SoraFS moderation ballot round id is required")]
+    MissingRoundId,
+    /// Missing juror identifier.
+    #[error("SoraFS moderation ballot juror id is required")]
+    MissingJurorId,
+    /// Reveal nonce too short for a secure commitment.
+    #[error("SoraFS moderation ballot reveal nonce must be >=16 bytes (found {length})")]
+    NonceTooShort {
+        /// Nonce length observed in the reveal.
+        length: usize,
+    },
+    /// Commit and reveal are not bound to the same context.
+    #[error("SoraFS moderation ballot context mismatch")]
+    ContextMismatch,
+    /// Reveal references a different round identifier.
+    #[error("SoraFS moderation ballot round mismatch: commit `{commit}`, reveal `{reveal}`")]
+    RoundMismatch {
+        /// Round identifier stored in the commit.
+        commit: String,
+        /// Round identifier supplied by the reveal.
+        reveal: String,
+    },
+    /// Reveal references a different juror identifier.
+    #[error("SoraFS moderation ballot juror mismatch: commit `{commit}`, reveal `{reveal}`")]
+    JurorMismatch {
+        /// Juror identifier stored in the commit.
+        commit: String,
+        /// Juror identifier supplied by the reveal.
+        reveal: String,
+    },
+    /// Revealed payload does not match the stored commitment.
+    #[error("SoraFS moderation ballot commitment mismatch")]
+    CommitmentMismatch,
+}
+
+fn update_hash_string(hasher: &mut Blake2b256, value: &str) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn is_zero_digest(digest: &[u8; 32]) -> bool {
+    digest.iter().all(|byte| *byte == 0)
 }
 
 /// Schema version for [`AdversarialCorpusManifestV1`].
@@ -500,6 +845,154 @@ mod tests {
         let manifest = sign_manifest(body, &["council"]);
         let err = manifest.validate().expect_err("missing models should fail");
         assert!(matches!(err, ModerationReproValidationError::MissingModels));
+    }
+
+    fn sample_ballot_context() -> SoraFsModerationBallotContextV1 {
+        SoraFsModerationBallotContextV1 {
+            version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            case_id: "SFM-CASE-2026-0007".to_string(),
+            evidence_bundle_digest: [0xA7; 32],
+            appeal_finance_config_version: "baseline-v1".to_string(),
+            panel_roster_hash: [0xB7; 32],
+            policy_reference: "gar:moderation:2026-q1".to_string(),
+            evidence_uri: Some("sorafs://governance/evidence/case-0007".to_string()),
+        }
+    }
+
+    fn sample_ballot_reveal(choice: SoraFsModerationVoteChoice) -> SoraFsModerationBallotRevealV1 {
+        SoraFsModerationBallotRevealV1 {
+            version: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
+            context: sample_ballot_context(),
+            round_id: "SFM-PANEL-2026-02".to_string(),
+            juror_id: "juror:pop:7".to_string(),
+            choice,
+            nonce: vec![0x42; 32],
+            revealed_at_unix_ms: 1_738_001_000_000,
+        }
+    }
+
+    fn sample_ballot_commit(choice: SoraFsModerationVoteChoice) -> SoraFsModerationBallotCommitV1 {
+        let reveal = sample_ballot_reveal(choice);
+        SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_738_000_000_000,
+        }
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_commit_reveal_roundtrip() {
+        let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Overturn);
+        let reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Overturn);
+
+        commit
+            .verify_reveal(&reveal)
+            .expect("SoraFS moderation reveal matches commitment");
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_binds_evidence_and_finance_context() {
+        let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Modify);
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Modify);
+        reveal.context.evidence_bundle_digest = [0xC7; 32];
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("evidence digest mismatch must fail");
+        assert!(matches!(err, SoraFsModerationBallotError::ContextMismatch));
+
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Modify);
+        reveal.context.appeal_finance_config_version = "baseline-v2".to_string();
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("finance config version mismatch must fail");
+        assert!(matches!(err, SoraFsModerationBallotError::ContextMismatch));
+
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Modify);
+        reveal.context.panel_roster_hash = [0xD7; 32];
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("panel roster hash mismatch must fail");
+        assert!(matches!(err, SoraFsModerationBallotError::ContextMismatch));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_rejects_mismatched_choice_and_short_nonce() {
+        let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Uphold);
+        let reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Escalate);
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("choice mismatch must fail");
+        assert!(matches!(
+            err,
+            SoraFsModerationBallotError::CommitmentMismatch
+        ));
+
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
+        reveal.nonce = vec![0x01; 8];
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("short nonce must fail");
+        assert!(matches!(
+            err,
+            SoraFsModerationBallotError::NonceTooShort { length: 8 }
+        ));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_requires_case_policy_and_roster_scope() {
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
+        reveal.context.case_id = "  ".to_string();
+        let commit = SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_738_000_000_000,
+        };
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("blank case id must fail");
+        assert!(matches!(err, SoraFsModerationBallotError::MissingCaseId));
+
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
+        reveal.context.policy_reference.clear();
+        let commit = SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_738_000_000_000,
+        };
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("blank policy reference must fail");
+        assert!(matches!(
+            err,
+            SoraFsModerationBallotError::MissingPolicyReference
+        ));
+
+        let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
+        reveal.context.panel_roster_hash = [0; 32];
+        let commit = SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms: 1_738_000_000_000,
+        };
+        let err = commit
+            .verify_reveal(&reveal)
+            .expect_err("zero roster hash must fail");
+        assert!(matches!(
+            err,
+            SoraFsModerationBallotError::MissingPanelRosterHash
+        ));
     }
 
     fn sample_family_manifest() -> AdversarialCorpusManifestV1 {

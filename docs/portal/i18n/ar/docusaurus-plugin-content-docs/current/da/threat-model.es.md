@@ -253,7 +253,7 @@ DA اللاحق (DA-2 و DA-10).
   والتكامل Torii و`crates/iroha_torii/src/da/ingest.rs`، الذي يكملها
   بصمات الأصابع عبر `/v1/da/ingest`.
 - يتم تشغيل محاكاة دفق PDP/PoTR عبر التيار المثبت
-  في `crates/sorafs_car/tests/sorafs_cli.rs`، قم بتعبئة تدفقات الطلب
+  في `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، قم بتعبئة تدفقات الطلب
   PoR/PDP/PoTR وسيناريوهات سقوط الرسوم المتحركة في نموذج الأمان.
 - نتائج السعة والإصلاح تنقع في الحياة
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`، أثناء وجود المصفوفة

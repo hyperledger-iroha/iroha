@@ -28,7 +28,7 @@ pub enum FetchPlanError {
 
 /// Parses chunk fetch specs from either an array of objects or an object that
 /// contains a `chunk_fetch_specs` array (as emitted by
-/// `sorafs-manifest-stub --json-out`).
+/// `sorafs_manifest_stub --json-out`).
 pub fn chunk_fetch_specs_from_json(value: &Value) -> Result<Vec<ChunkFetchSpec>, FetchPlanError> {
     if let Some(array) = value.as_array() {
         return parse_chunk_fetch_specs(array);

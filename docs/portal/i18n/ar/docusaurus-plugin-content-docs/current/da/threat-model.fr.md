@@ -255,7 +255,7 @@ pour les taches DA suivantes (DA-2 a DA-10).
   ذاكرة التخزين المؤقت) والتكامل Torii في `crates/iroha_torii/src/da/ingest.rs`، هذا الموضوع
   les checks de بصمة الإصبع عبر `/v1/da/ingest`.
 - يتم إجراء عمليات محاكاة دفق PDP/PoTR عبر دفق إثبات التسخير
-  في `crates/sorafs_car/tests/sorafs_cli.rs`، يغطي تدفق الطلب
+  في `crates/sorafs_orchestrator/tests/sorafs_cli.rs`، يغطي تدفق الطلب
   PoR/PDP/PoTR وسيناريوهات فشل الرسوم المتحركة في نموذج التهديدات.
 - نتائج الترطيب والإصلاح تنبض بالحياة
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`، بالإضافة إلى المصفوفة

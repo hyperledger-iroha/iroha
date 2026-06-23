@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-02-07
 - تدارک کے ٹکٹ سے لنک منسلک کریں (مثال کے طور پر ، `governance/tickets/SF6-SR-2026.md`) اور چیک کریں
   سیکیورٹی انجینئرنگ اور ٹولنگ ورکنگ گروپ سے منظوری۔
 - چیک کریں کہ میمو میں تدارک چیک لسٹ بند ہے۔ غیر کلوزڈ آئٹمز ریلیز کو روکتے ہیں۔
-- برابری کو ختم کرنے کے لئے تیار کریں (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- برابری کو ختم کرنے کے لئے تیار کریں (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   بنڈل مینی فیسٹ کے ساتھ۔
 - اس بات کو یقینی بنائیں کہ جس دستخطی کمانڈ پر آپ عملدرآمد کرنے کا ارادہ کرتے ہیں اس میں `--identity-token-provider` اور دونوں شامل ہیں
   واضح `--identity-token-audience=<aud>` تاکہ ریلیز شواہد میں اسکوپ فلسیو ریکارڈ کیا جائے۔
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 اسکرپٹ مندرجہ ذیل چیک انجام دیتا ہے:
 
 - `cargo fmt --all -- --check` (ورک اسپیس)
-- `cargo clippy --locked --all-targets` برائے `sorafs_car` (خصوصیت `cli` کے ساتھ) ،
-  `sorafs_manifest` اور `sorafs_chunker`
-- اسی کریٹوں کے لئے `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 اگر کوئی قدم ناکام ہوجاتا ہے تو ، ٹیگنگ سے پہلے رجعت کو ٹھیک کریں۔ ریلیز بلڈز چاہئے
 مین سے مستقل طور پر جائیں ؛ ریلیز برانچ میں چیری پک ٹھیک نہ کریں۔ گیٹ بھی

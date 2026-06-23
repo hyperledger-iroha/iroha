@@ -217,7 +217,7 @@ whitelist لمزودين خبيثين, او يخفي التنبيهات.
   `crates/iroha_core/src/da/replay_cache.rs` (cache de cache) e Torii em
   `crates/iroha_torii/src/da/ingest.rs` O número verifica a impressão digital em `/v1/da/ingest`.
 - Transmitir streaming PDP/PoTR تمارس عبر aproveitar fluxo de prova aqui
-  `crates/sorafs_car/tests/sorafs_cli.rs`, um dispositivo de teste para PoR/PDP/PoTR e um dispositivo PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, um dispositivo de teste para PoR/PDP/PoTR e um dispositivo PoR/PDP/PoTR
   O código de barras está disponível para download.
 - Capacidade de نتائج e imersão de reparo موجودة في
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, بينما مصفوفة embeber Sumeragi

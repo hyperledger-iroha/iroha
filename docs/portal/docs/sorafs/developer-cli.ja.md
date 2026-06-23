@@ -20,7 +20,7 @@ description: 統合された `sorafs_cli` サーフェスのタスク指向ウ�
 このページは `docs/source/sorafs/developer/cli.md` を反映しています。レガシーの Sphinx セットが退役するまで両方を同期してください。
 :::
 
-統合された `sorafs_cli` サーフェス（`cli` feature を有効化した `sorafs_car` crate が提供）は、SoraFS アーティファクトの準備に必要なすべての手順を公開します。このクックブックで一般的なワークフローに直行し、運用コンテキストとして manifest パイプラインと orchestrator の runbook を併用してください。
+統合された `sorafs_cli` サーフェス（provided by the `sorafs_orchestrator` crate）は、SoraFS アーティファクトの準備に必要なすべての手順を公開します。このクックブックで一般的なワークフローに直行し、運用コンテキストとして manifest パイプラインと orchestrator の runbook を併用してください。
 
 ## ペイロードのパッケージング
 

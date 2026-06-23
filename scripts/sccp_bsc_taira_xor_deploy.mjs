@@ -159,6 +159,10 @@ const BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-semantic-circuit-attestation/v1";
 const BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-circuit-security-attestation/v1";
+const BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-semantic-review-evidence/v1";
+const BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-circuit-security-audit-evidence/v1";
 const BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-trusted-setup-attestation/v1";
 const BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA =
@@ -4883,6 +4887,12 @@ function groth16AttestationAllowedFields(expectedSchema) {
   ];
   const bySchema = {
     [BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA]: [
+      "semanticReviewEvidenceSchema",
+      "semantic_review_evidence_schema",
+      "semanticReviewEvidenceSha256",
+      "semantic_review_evidence_sha256",
+      "semanticReviewReportSha256",
+      "semantic_review_report_sha256",
       "fullSccpMessageSemantics",
       "full_sccp_message_semantics",
       "sourceFinalitySemantics",
@@ -4895,6 +4905,12 @@ function groth16AttestationAllowedFields(expectedSchema) {
       "negative_case_coverage",
     ],
     [BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA]: [
+      "circuitSecurityAuditEvidenceSchema",
+      "circuit_security_audit_evidence_schema",
+      "circuitSecurityAuditEvidenceSha256",
+      "circuit_security_audit_evidence_sha256",
+      "circuitSecurityAuditReportSha256",
+      "circuit_security_audit_report_sha256",
       "auditResult",
       "audit_result",
       "approved",
@@ -5605,6 +5621,22 @@ function groth16AttestationBodyProblems({
 
 function groth16SemanticAttestationProblems({ record, label }) {
   return [
+    groth16ManifestStringProblem(
+      record,
+      ["semanticReviewEvidenceSchema", "semantic_review_evidence_schema"],
+      BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+      `${label} semanticReviewEvidenceSchema`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["semanticReviewEvidenceSha256", "semantic_review_evidence_sha256"],
+      `${label} semanticReviewEvidenceSha256`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["semanticReviewReportSha256", "semantic_review_report_sha256"],
+      `${label} semanticReviewReportSha256`,
+    ),
     groth16ManifestBooleanProblem(
       record,
       ["fullSccpMessageSemantics", "full_sccp_message_semantics"],
@@ -5640,6 +5672,22 @@ function groth16SemanticAttestationProblems({ record, label }) {
 
 function groth16CircuitSecurityAttestationProblems({ record, label }) {
   return [
+    groth16ManifestStringProblem(
+      record,
+      ["circuitSecurityAuditEvidenceSchema", "circuit_security_audit_evidence_schema"],
+      BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+      `${label} circuitSecurityAuditEvidenceSchema`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["circuitSecurityAuditEvidenceSha256", "circuit_security_audit_evidence_sha256"],
+      `${label} circuitSecurityAuditEvidenceSha256`,
+    ),
+    groth16ManifestHashPresentProblem(
+      record,
+      ["circuitSecurityAuditReportSha256", "circuit_security_audit_report_sha256"],
+      `${label} circuitSecurityAuditReportSha256`,
+    ),
     groth16ManifestStringProblem(
       record,
       ["auditResult", "audit_result"],

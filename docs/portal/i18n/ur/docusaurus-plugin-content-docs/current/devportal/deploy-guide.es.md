@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 عرف پروموشن ، توثیق اور رول بیک مشقیں تاکہ ہر پیش نظارہ اور ریلیز
 تولیدی اور قابل آڈٹیبل بنیں۔
 
-بہاؤ یہ فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری ہے (`--features cli` کے ساتھ بنایا گیا ہے) ، تک رسائی
+بہاؤ یہ فرض کرتا ہے کہ آپ کے پاس `sorafs_cli` بائنری ہے (built from the `sorafs_orchestrator` Cargo target) ، تک رسائی
 Torii PIN-REGISTIRY اجازت کے ساتھ اختتامی نقطہ ، اور OIDC اسناد Sigstore کے لئے۔ راز رکھیں
 آپ کے CI والٹ میں طویل عرصے تک (`IROHA_PRIVATE_KEY` ، `SIGSTORE_ID_TOKEN` ، Torii ٹوکن) ؛
 مقامی پھانسی ان کو شیل برآمدات سے لوڈ کرسکتی ہے۔
@@ -24,7 +24,7 @@ Torii PIN-REGISTIRY اجازت کے ساتھ اختتامی نقطہ ، اور O
 ## شرائط
 
 - `npm` یا `pnpm` کے ساتھ نوڈ 18.18+۔
-- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے۔
+- `sorafs_cli` `cargo run -p sorafs_orchestrator --bin sorafs_cli` سے۔
 - Torii URL جو `/v1/sorafs/*` کے علاوہ ایک اتھارٹی اکاؤنٹ/نجی کلید کو بے نقاب کرتا ہے جو ظاہر اور عرفی نام بھیج سکتا ہے۔
 - OIDC جاری کرنے والا (گٹ ہب ایکشنز ، گٹ لیب ، ورک بوجھ کی شناخت وغیرہ) `SIGSTORE_ID_TOKEN` جاری کرنے کے لئے۔
 - اختیاری: خشک رنز کے لئے `examples/sorafs_cli_quickstart.sh` اور Github/gitlab ورک فلو سہاروں کے لئے `docs/source/sorafs_ci_templates.md`۔

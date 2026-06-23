@@ -47,7 +47,7 @@ SoraNet хэлхээнүүд нь SoraFS-ийн өгөгдмөл тээвэрл�
 - `direct_only_policy_rejects_soranet_only_providers` нь нэр дэвшигчийн сурталчилгаа бүр зөвхөн SoraNet релейг дэмждэг үед `TransportPolicy::DirectOnly` хурдан амжилтгүй болохыг баталгаажуулдаг.【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` нь байгаа үед Torii/QUIC тээвэрлэлтүүдийг ашиглах ба SoraNet релейг сессээс хассан эсэхийг баталгаажуулдаг.【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` нь баримт бичгийг туслах хэрэгслүүдтэй нийцүүлэхийн тулд `docs/examples/sorafs_direct_mode_policy.json`-г задлан шинжилдэг.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_poli.jcy.
-- `fetch_command_respects_direct_transports` нь доог тохуу Torii гарцын эсрэг `sorafs_cli fetch --transport-policy=direct-only` дасгал хийж, шууд тээвэрлэлтийг тогтоодог зохицуулалттай орчинд утааны сорилт хийдэг.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` нь доог тохуу Torii гарцын эсрэг `sorafs_cli fetch --transport-policy=direct-only` дасгал хийж, шууд тээвэрлэлтийг тогтоодог зохицуулалттай орчинд утааны сорилт хийдэг.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` нь автоматжуулалтад зориулсан JSON бодлого болон онооны самбарын тогтвортой байдлын дагуу ижил тушаалыг багцалдаг.
 
 Шинэчлэлтүүдийг нийтлэхээс өмнө төвлөрсөн багцыг ажиллуулна уу:

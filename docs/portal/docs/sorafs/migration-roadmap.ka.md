@@ -11,45 +11,46 @@ title: "SoraFS Migration Roadmap"
 translator: machine-google-reviewed
 ---
 
-> ადაპტირებულია [`docs/source/sorafs/migration_roadmap.md`]-დან (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-# SoraFS მიგრაციის საგზაო რუკა (SF-1)
+# SoraFS Migration Roadmap (SF-1)
 
-ეს დოკუმენტი ახორციელებს მიგრაციის სახელმძღვანელო მითითებებს, რომლებიც აღბეჭდილია
-`docs/source/sorafs_architecture_rfc.md`. ის აფართოებს SF-1 მიწოდებას
-შესრულებისთვის მზად ეტაპები, კარიბჭის კრიტერიუმები და მფლობელის საკონტროლო სიები, ასე რომ შენახვა,
-არტეფაქტის ჰოსტინგი SoraFS-ით მხარდაჭერილი პუბლიკაციისთვის.
+This document operationalises the migration guidance captured in
+`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
+execution-ready milestones, gating criteria, and owner checklists so storage,
+governance, release engineering, and docs teams can coordinate SoraFS-backed
+publication.
 
-საგზაო რუკა განზრახ დეტერმინისტულია: ყოველი ეტაპი ასახელებს საჭიროს
-არტეფაქტები, ბრძანების გამოძახებები და ატესტაციის საფეხურები, ასე რომ, მილსადენების ქვემოთ
-აწარმოოს იდენტური შედეგები და მმართველობა ინარჩუნებს აუდიტის კვალს.
+The roadmap is intentionally deterministic: every milestone names the required
+artifacts, command invocations, and attestation steps so downstream pipelines
+produce identical outputs and governance retains an auditable trail.
 
-## Milestone მიმოხილვა
+## Milestone Overview
 
-| Milestone | ფანჯარა | ძირითადი მიზნები | უნდა გაიგზავნოს | მფლობელები |
-|-----------|--------|--------------|----------|--------|
-| **M1 – დეტერმინისტული აღსრულება** | 7–12 კვირა | აღასრულეთ ხელმოწერილი მოწყობილობები და სცენაზე მეტსახელის მტკიცებულებები, სანამ მილსადენები მიიღებენ მოლოდინის დროშებს. | ღამის სეზონის გადამოწმება, საბჭოს მიერ ხელმოწერილი მანიფესტები, მეტსახელად რეესტრის დადგმის ჩანაწერები. | შენახვა, მართვა, SDKs |
+| Milestone | Window | Primary Goals | Must Ship | Owners |
+|-----------|--------|---------------|-----------|--------|
+| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and expectation flags locally while rollout tickets carry fresh staging alias evidence. | Fixture verification, council-signed manifests, expectation-flag release checklists, and external alias evidence. | Storage, Governance, SDKs |
 
-Milestone-ის სტატუსს თვალყურს ადევნებთ `docs/source/sorafs/migration_ledger.md`-ში. ყველა
-ცვლილებები ამ საგზაო რუკაში უნდა განახლდეს წიგნი, რათა შეინარჩუნოს მმართველობა და გამოშვება
-ინჟინერია სინქრონულად.
+Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
+changes to this roadmap MUST update the ledger to keep governance and release
+engineering in sync.
 
-## სამუშაო ნაკადები
+## Workstreams
 
-### 2. დეტერმინისტული დამაგრების მიღება
+### 2. Deterministic Pinning Adoption
 
-| ნაბიჯი | Milestone | აღწერა | მფლობელ(ებ)ი | გამომავალი |
-|------|-----------|------------|---------|-------|
-| რეპეტიციები | M0 | ყოველკვირეული მშრალი გაშვებები, რომლებიც ადარებენ ადგილობრივ ნაწილაკებს `fixtures/sorafs_chunker`-თან. ანგარიშის გამოქვეყნება `docs/source/sorafs/reports/` ქვეშ. | შენახვის პროვაიდერები | `determinism-<date>.md` უღელტეხილზე/ჩავარდნის მატრიცით. |
-| ხელმოწერების აღსრულება | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` წარუმატებელია, თუ ხელმოწერები ან მანიფესტები დრიფტი. განვითარების უგულებელყოფა მოითხოვს მმართველობიდან უარის თქმას, რომელსაც თან ერთვის PR. | ინსტრუმენტები WG | CI ჟურნალი, უარის თქმის ბილეთის ბმული (ასეთის არსებობის შემთხვევაში). |
-| მოლოდინის დროშები | M1 | მილსადენები იძახებენ `sorafs_manifest_stub` გამომავალი შედეგების დამაგრების აშკარა მოლოდინებით: | Docs CI | განახლებული სკრიპტები, რომლებიც მიუთითებენ მოლოდინის დროშებზე (იხილეთ ბრძანების ბლოკი ქვემოთ). |
-| რეესტრის პირველი დამაგრება | M2 | `sorafs pin propose` და `sorafs pin approve` შეფუთვა მანიფესტის წარდგენით; CLI ნაგულისხმევად არის `--require-registry`. | მმართველობის ოპერაციები | რეესტრის CLI აუდიტის ჟურნალი, ტელემეტრია წარუმატებელი წინადადებებისთვის. |
-| დაკვირვებადობის პარიტეტი | M3 | Prometheus/Grafana დაფები გაფრთხილებენ, როდესაც ნაწილაკების მარაგები განსხვავდება რეესტრის მანიფესტებისგან; შეტყობინებები მოწოდებულია ოპერაციებზე. | დაკვირვებადობა | დაფის ბმული, გაფრთხილების წესების ID, GameDay-ის შედეგები. |
+| Step | Milestone | Description | Owner(s) | Output |
+|------|-----------|-------------|----------|--------|
+| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
+| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
+| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
+| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. Torii submissions include `manifest_b64` when full `ManifestV1` validation or council-signature enforcement is required. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
+| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
 
-#### კანონიკური გამოქვეყნების ბრძანება
+#### Canonical publishing command
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
@@ -60,50 +61,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-შეცვალეთ დაიჯესტი, ზომა და CID მნიშვნელობები ჩაწერილი მოსალოდნელი მითითებით
-მიგრაციის წიგნის ჩანაწერი არტეფაქტისთვის.
+Replace the digest, size, and CID values with the expected references recorded in
+the migration ledger entry for the artifact.
 
 ### 3. Alias Transition & Communications
 
-| ნაბიჯი | Milestone | აღწერა | მფლობელ(ებ)ი | გამომავალი |
-|------|-----------|------------|---------|-------|
-| მეტსახელის მტკიცებულებები დადგმაში | M1 | დაარეგისტრირეთ მეტსახელის პრეტენზიები Pin Registry-ის დადგმის გარემოში და მიამაგრეთ Merkle მტკიცებულებები მანიფესტებს (`--alias`). | მმართველობა, დოკუმენტები | მტკიცებულების ნაკრები ინახება manifest + ledger კომენტარის გვერდით, მეტსახელის სახელით. |
-| მტკიცებულების აღსრულება | M2 | კარიბჭეები უარყოფენ მანიფესტებს ახალი `Sora-Proof` ჰედერების გარეშე; CI იძენს `sorafs alias verify` ნაბიჯს მტკიცებულებების მოსაპოვებლად. | ქსელი | კარიბჭის კონფიგურაციის პაჩი + CI გამომავალი გადაღების გადამოწმების წარმატება. |
+| Step | Milestone | Description | Owner(s) | Output |
+|------|-----------|-------------|----------|--------|
+| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`) for live rollout tickets. | Governance, Docs | Proof bundle stored next to manifest plus external governance archive link. |
+| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
 
-### 4. კომუნიკაცია და აუდიტი
+### 4. Communication & Audit
 
-- **ლეჯერის დისციპლინა:** მდგომარეობის ყოველი ცვლილება (ფიქსირების დრიფტი, რეესტრის წარდგენა,
-  alias activation) უნდა დაერთოს დათარიღებული შენიშვნა
+- **Ledger discipline:** every state change (fixture drift, registry submission,
+  alias activation) must append a dated note to
   `docs/source/sorafs/migration_ledger.md`.
-- **მმართველობის ოქმები:** საკრებულოს სხდომები, რომლებიც ამტკიცებენ პინის რეესტრის ცვლილებებს ან
-  alias-ის პოლიტიკა უნდა მიუთითებდეს როგორც ამ საგზაო რუქაზე, ასევე წიგნში.
-- **გარე კომენტარები:** DevRel აქვეყნებს სტატუსის განახლებებს ყოველ ეტაპზე (ბლოგი +
-  ცვლილებათა ამონაწერი) ხაზს უსვამს დეტერმინისტულ გარანტიებს და მეტსახელის ვადებს.
+- **Governance minutes:** council sessions approving pin registry changes or
+  alias policies must reference both this roadmap and the ledger.
+- **External comms:** DevRel publishes status updates at each milestone (blog +
+  changelog excerpt) highlighting deterministic guarantees and alias timelines.
 
-## დამოკიდებულებები და რისკები
+## Dependencies & Risks
 
-| დამოკიდებულება | ზემოქმედება | შერბილება |
+| Dependency | Impact | Mitigation |
 |------------|--------|------------|
-| პინი რეესტრის კონტრაქტის ხელმისაწვდომობა | ბლოკავს M2 pin-პირველი გაშვებას. | ეტაპობრივი კონტრაქტი M2-ის წინ განმეორებითი ტესტებით; შეინარჩუნეთ კონვერტის სარეზერვო საშუალება რეგრესის გარეშე. |
-| საბჭოს ხელმოწერის გასაღებები | საჭიროა მანიფესტის კონვერტებისა და რეესტრის დამტკიცებისთვის. | `docs/source/sorafs/signing_ceremony.md`-ში დოკუმენტირებული ხელმოწერის ცერემონია; ატრიალეთ კლავიშები გადახურვით და წიგნის ჩანაწერით. |
-| SDK გამოშვების კადენცია | კლიენტებმა უნდა დაიცვან ალიას მტკიცებულებები M3-მდე. | SDK-ის გამოშვების ფანჯრების გასწორება საეტაპო კარიბჭით; დაამატეთ მიგრაციის სიები შაბლონების გამოსაშვებად. |
+| Pin Registry contract availability | Blocks hosted M2 pin-first rollout evidence. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
+| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
+| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
 
-ნარჩენი რისკები და შერბილებები აისახება `docs/source/sorafs_architecture_rfc.md`-ში
-და უნდა იყოს ჯვარედინი მითითება, როდესაც ხდება კორექტირება.
+Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
+and should be cross-referenced when adjustments are made.
 
-## გასასვლელი კრიტერიუმების ჩამონათვალი
+## Exit Criteria Checklist
 
-| Milestone | კრიტერიუმები |
+| Milestone | Criteria |
 |-----------|----------|
-| M1 | - ღამის გასათევი სამუშაო მწვანე შვიდი დღის განმავლობაში. <br /> - CI-ში დამოწმებული ალიასის მტკიცებულებების დადგმა. <br /> - მმართველობა ადასტურებს მოლოდინის დროშის პოლიტიკას. |
+| M1 | - `ci/check_sorafs_fixtures.sh` and fixture verification stay green. <br /> - Release checklists use explicit `--car-digest`/`--root-cid` expectations. <br /> - Staging alias proof evidence is attached to the external rollout archive. |
 
-## ცვლილების მენეჯმენტი
+## Change Management
 
-1. შესთავაზეთ კორექტირება ამ ფაილის განახლების PR მეშვეობით **და**
+1. Propose adjustments via PR updating this file **and**
    `docs/source/sorafs/migration_ledger.md`.
-2. დააკავშირეთ მმართველობის დამხმარე ოქმები და CI მტკიცებულებები PR აღწერილობაში.
-3. შერწყმისას შეატყობინეთ შენახვის + DevRel დაგზავნის სიას შეჯამებით და მოსალოდნელით
-   ოპერატორის მოქმედებები.
+2. Link supporting governance minutes and CI evidence in the PR description.
+3. On merge, notify storage + DevRel mailing list with summary and expected
+   operator actions.
 
-ამ პროცედურის შემდეგ უზრუნველყოფილია, რომ SoraFS განლაგება რჩება განმსაზღვრელი,
-აუდიტორული და გამჭვირვალე გუნდებში, რომლებიც მონაწილეობენ Nexus გაშვებაში.
+Following this procedure ensures the SoraFS rollout remains deterministic,
+auditable, and transparent across teams participating in the Nexus launch.

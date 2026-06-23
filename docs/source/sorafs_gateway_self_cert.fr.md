@@ -9,10 +9,6 @@ source_last_modified: "2026-01-03T18:07:57.602009+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
-title: SoraFS Gateway Self-Certification Kit
-summary: Operator workflow for generating signed gateway attestation bundles (SF-5a).
----
-
 # SoraFS Gateway Self-Certification Kit
 
 This guide explains how operators run the self-cert harness, produce a signed
@@ -20,13 +16,15 @@ attestation bundle, and archive the results as part of the onboarding checklist.
 
 ## Deliverables
 
-- **Harness runner:** `cargo xtask sorafs-gateway-attest` executes the replay + load scenarios, verifies success, and emits artefacts (`report.json`, attestation `.to`, human summary).
-- **Wrapper script:** `scripts/sorafs_gateway_self_cert.sh` wraps the xtask command with friendly flags so Ops can call it from CI or shell.
+- **Harness runner:** `cargo xtask sorafs-gateway-attest` executes the replay + load scenarios, verifies success, and emits artefacts (`sorafs_gateway_report.json`, attestation `.to`, human summary).
+- **Wrapper script:** `scripts/sorafs_gateway_self_cert.sh` wraps the xtask command with friendly flags so Ops can call it from CI or shell. It uses `cargo xtask` when available and falls back to `cargo run -p xtask --bin xtask -- ...`.
 - **Report template:** `docs/source/examples/sorafs_gateway_self_cert_template.json` demonstrates the JSON structure captured in every run (helpful for dashboard ingestion or compliance reviews).
 
 ## Prerequisites
 
-- Workspace with `xtask` available (`cargo xtask --help` should list `sorafs-gateway-attest`).
+- Workspace with Rust/Cargo available. `cargo xtask --help` should list
+  `sorafs-gateway-attest` when the cargo-xtask shim is installed; otherwise the
+  wrapper falls back to `cargo run -p xtask --bin xtask -- ...`.
 - Config file (key=value) that records the signing key path, signer account, and
   any optional manifest verification inputs. See
   `docs/examples/sorafs_gateway_self_cert.conf` for a template.
@@ -45,8 +43,8 @@ attestation bundle, and archive the results as part of the onboarding checklist.
   --manifest-bundle path/to/updated_manifest.bundle.json
 ```
 
-- The script forwards arguments to `cargo xtask sorafs-gateway-attest …` and, when
-  manifest inputs are present, to `sorafs_cli manifest verify-signature`.
+- The script forwards arguments to `sorafs-gateway-attest` and, when manifest
+  inputs are present, to `sorafs_cli manifest verify-signature`.
 - `--gateway` is optional; omit it (or remove it from the config file) to use the
   harness’ default fixture target.
 - Use `--workspace` if the repository root differs from your current directory.
@@ -72,10 +70,10 @@ The JSON report includes:
 1. Inspect the summary: `cat artifacts/.../sorafs_gateway_attestation.txt`.
 2. Verify the signature using `norito::decode_from_bytes` or the helper in `xtask`:
    ```bash
-   cargo xtask sorafs-verify-attestation \
-     --envelope artifacts/.../sorafs_gateway_attestation.to
+   cargo xtask sorafs-gateway-attest --verify \
+     artifacts/.../sorafs_gateway_attestation.to
    ```
-3. Archive `report.json` and the summary in the onboarding ticket; submit the `.to` envelope to governance tooling if required.
+3. Archive `sorafs_gateway_report.json` and the summary in the onboarding ticket; submit the `.to` envelope to governance tooling if required.
 
 ## Optional Manifest Verification
 

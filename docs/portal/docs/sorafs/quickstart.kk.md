@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Манифестті құрастырыңыз және оған қол қойыңыз
 
 Бөлшек жоспарын, бүркеншік аттарды және басқару қолтаңбаларын пайдалану арқылы манифестке ораңыз
-`sorafs-manifest-stub`. Төмендегі пәрмен бір файлдық пайдалы жүктемені көрсетеді; өту
+`sorafs_manifest_stub`. Төмендегі пәрмен бір файлдық пайдалы жүктемені көрсетеді; өту
 ағашты бумалау үшін каталог жолы (CLI оны лексикографиялық түрде жүргізеді).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

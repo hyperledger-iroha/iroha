@@ -9,29 +9,33 @@ source_last_modified: "2025-11-14T20:06:47.594457+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
 
-# Kit de auto-certificacion del gateway SoraFS
+# SoraFS Gateway Self-Certification Kit
 
-Esta guia explica como los operadores ejecutan el harness de self-cert, producen
-un bundle de atestacion firmado y archivan los resultados como parte del
-checklist de onboarding.
+This guide explains how operators run the self-cert harness, produce a signed
+attestation bundle, and archive the results as part of the onboarding checklist.
 
-## Entregables
+## Deliverables
 
-- **Runner del harness:** `cargo xtask sorafs-gateway-attest` ejecuta escenarios de replay + carga, verifica exito y emite artefactos (`report.json`, atestacion `.to`, resumen humano).
-- **Script wrapper:** `scripts/sorafs_gateway_self_cert.sh` envuelve el comando xtask con flags amigables para que Ops lo invoque desde CI o shell.
-- **Plantilla de reporte:** `docs/source/examples/sorafs_gateway_self_cert_template.json` muestra la estructura JSON capturada en cada corrida (util para ingestion en dashboards o revisiones de compliance).
+- **Harness runner:** `cargo xtask sorafs-gateway-attest` executes the replay + load scenarios, verifies success, and emits artefacts (`sorafs_gateway_report.json`, attestation `.to`, human summary).
+- **Wrapper script:** `scripts/sorafs_gateway_self_cert.sh` wraps the xtask command with friendly flags so Ops can call it from CI or shell. It uses `cargo xtask` when available and falls back to `cargo run -p xtask --bin xtask -- ...`.
+- **Report template:** `docs/source/examples/sorafs_gateway_self_cert_template.json` demonstrates the JSON structure captured in every run (helpful for dashboard ingestion or compliance reviews).
 
-## Prerrequisitos
+## Prerequisites
 
-- Workspace con `xtask` disponible (`cargo xtask --help` debe listar `sorafs-gateway-attest`).
-- Archivo de config (key=value) que registra la ruta de la key de firmado, cuenta firmante y cualquier input opcional de verificacion de manifiesto. Ver `docs/examples/sorafs_gateway_self_cert.conf` como plantilla.
-- Acceso al endpoint de gateway staging/produccion que quieres certificar.
-- Key de firmado Ed25519 en hex (sin prefijo) atada a la cuenta de admision del operador.
-- Opcional: directorio de salida custom; por defecto `artifacts/sorafs_gateway_attest`.
+- Workspace with Rust/Cargo available. `cargo xtask --help` should list
+  `sorafs-gateway-attest` when the cargo-xtask shim is installed; otherwise the
+  wrapper falls back to `cargo run -p xtask --bin xtask -- ...`.
+- Config file (key=value) that records the signing key path, signer account, and
+  any optional manifest verification inputs. See
+  `docs/examples/sorafs_gateway_self_cert.conf` for a template.
+- Access to the staging/production gateway endpoint you want to certify.
+- Ed25519 signing key in hex (no prefix) tied to the operator’s admission account.
+- Optional: custom output directory; defaults to `artifacts/sorafs_gateway_attest`.
 
-## Ejecutar el kit
+## Running the Kit
 
-- Proveer opciones directamente o colocarlas en un archivo de config (ver `docs/examples/sorafs_gateway_self_cert.conf`). Los flags sobreescriben entradas de config.
+- Provide options directly or place them in a config file (see
+  `docs/examples/sorafs_gateway_self_cert.conf`). Flags override config entries.
 
 ```bash
 ./scripts/sorafs_gateway_self_cert.sh \
@@ -39,75 +43,97 @@ checklist de onboarding.
   --manifest-bundle path/to/updated_manifest.bundle.json
 ```
 
-- El script reenvia argumentos a `cargo xtask sorafs-gateway-attest …` y, cuando hay inputs de manifiesto, a `sorafs_cli manifest verify-signature`.
-- `--gateway` es opcional; omitelo (o quitalo del archivo de config) para usar el target de fixtures por defecto del harness.
-- Usa `--workspace` si la raiz del repositorio difiere de tu directorio actual.
+- The script forwards arguments to `sorafs-gateway-attest` and, when manifest
+  inputs are present, to `sorafs_cli manifest verify-signature`.
+- `--gateway` is optional; omit it (or remove it from the config file) to use the
+  harness’ default fixture target.
+- Use `--workspace` if the repository root differs from your current directory.
 
-## Artefactos de salida
+## Output Artefacts
 
-La corrida crea tres archivos:
+The run creates three files:
 
-| Archivo | Descripcion |
-|---------|-------------|
-| `sorafs_gateway_report.json` | Reporte canonico Norito/JSON (coincide con la plantilla bajo `docs/source/examples/`). |
-| `sorafs_gateway_attestation.to` | Sobre Norito firmado que contiene hash de payload, metadata del firmante y firma Ed25519. |
-| `sorafs_gateway_attestation.txt` | Resumen legible para humanos, apto para tickets de cambio. |
+| File | Description |
+|------|-------------|
+| `sorafs_gateway_report.json` | Canonical Norito/JSON run report (matches the template under `docs/source/examples/`). |
+| `sorafs_gateway_attestation.to` | Signed Norito envelope containing payload hash, signer metadata, and Ed25519 signature. |
+| `sorafs_gateway_attestation.txt` | Human-readable summary suitable for change tickets. |
 
-El reporte JSON incluye:
-- Metadata del gateway (`gateway.target`, `gateway.version` opcional cuando se provee via env/flags).
-- Resultados de escenarios y metricas (ver plantilla).
-- Contadores de rechazo de stream-token, tasa de retry de chunk, reportes de provider.
-- Hash de payload + bloque de firma.
+The JSON report includes:
+- Gateway metadata (`gateway.target`, optional `gateway.version` when provided via env/flags).
+- Scenario results and metrics (see template).
+- Stream-token refusal counters, chunk retry rate, provider reports.
+- Payload hash + signature block.
 
-## Verificar la atestacion
+## Verifying the Attestation
 
-1. Inspeccionar el resumen: `cat artifacts/.../sorafs_gateway_attestation.txt`.
-2. Verificar la firma usando `norito::decode_from_bytes` o el helper en `xtask`:
+1. Inspect the summary: `cat artifacts/.../sorafs_gateway_attestation.txt`.
+2. Verify the signature using `norito::decode_from_bytes` or the helper in `xtask`:
    ```bash
-   cargo xtask sorafs-verify-attestation \
-     --envelope artifacts/.../sorafs_gateway_attestation.to
+   cargo xtask sorafs-gateway-attest --verify \
+     artifacts/.../sorafs_gateway_attestation.to
    ```
-3. Archivar `report.json` y el resumen en el ticket de onboarding; enviar el sobre `.to` a tooling de governance si se requiere.
+3. Archive `sorafs_gateway_report.json` and the summary in the onboarding ticket; submit the `.to` envelope to governance tooling if required.
 
-## Verificacion opcional de manifiestos
+## Optional Manifest Verification
 
-Si no se suministran flags o valores de config, el script cae a los fixtures de muestra en `fixtures/sorafs_manifest/ci_sample/` (incluyendo la key de muestra `gateway_attestor.hex`), permitiendo un dry-run listo para usar. Provee `--manifest` (sea en el archivo de config o por flags) junto con:
+If no flags or config values are supplied the script falls back to the sample
+fixtures under `fixtures/sorafs_manifest/ci_sample/` (including the sample key
+`gateway_attestor.hex`), allowing a dry-run out of the box. Provide `--manifest`
+(either via the config file or through flags) together with either:
 
-- `--manifest-bundle` (preferido, verifica metadata y firma del bundle), o
-- `--manifest-signature` + `--public-key-hex` (flujo de firma separada).
+- `--manifest-bundle` (preferred, verifies bundle metadata and signature), or
+- `--manifest-signature` plus `--public-key-hex` (detached signature flow).
 
-El wrapper invoca `sorafs_cli manifest verify-signature` despues de completar el harness y escribe el resumen de verificacion en `<out>/manifest.verify.summary.json`. Puedes pasar `--chunk-plan`, `--chunk-summary` o `--chunk-digest-sha3` para que el CLI tambien valide digests de chunks y metadata embebida en el bundle.
+The wrapper invokes `sorafs_cli manifest verify-signature` after the harness
+completes and writes the verification summary to
+`<out>/manifest.verify.summary.json`. You can pass `--chunk-plan`,
+`--chunk-summary`, or `--chunk-digest-sha3` so the CLI also cross-checks chunk
+digests and metadata embedded in the bundle.
 
-## Evidencia de diff de denylist (MINFO-6)
+## Denylist Diff Evidence (MINFO-6)
 
-Al rotar denylists del gateway SoraFS, governance espera un rastro before/after que resalte cada entrada cambiada. El wrapper de self-cert ahora se conecta directo al helper `cargo xtask sorafs-gateway denylist diff`:
+When rotating SoraFS gateway denylists, governance expects a before/after trail
+highlighting every entry that changed. The self-cert wrapper now wires directly
+into the `cargo xtask sorafs-gateway denylist diff` helper:
 
-- Proveer `--denylist-old <bundle.json>` y `--denylist-new <bundle.json>` (via flags o config). El script valida que ambas rutas existan y luego ejecuta el comando diff. Suministra `--denylist-report <path>` para overrides de la ruta del reporte JSON; de lo contrario usa `<out>/denylist_diff.json`.
-- El comando imprime los conteos de entradas agregadas/eliminadas y deja un bundle JSON de evidencia que refleja el output del xtask (formato de auditoria MINFO-6). Adjunta esto a los paquetes de governance del Ministry junto a los artefactos de atestacion.
-- Cuando solo una de las flags `--denylist-*` esta presente, el script omite el diff y emite una advertencia, evitando corridas parciales que produzcan evidencia engañosa.
+- Provide `--denylist-old <bundle.json>` and `--denylist-new <bundle.json>`
+  (either via flags or config). The script validates both paths exist and then
+  executes the diff command. Supply `--denylist-report <path>` to override where
+  the JSON report lands; otherwise it defaults to
+  `<out>/denylist_diff.json`.
+- The command prints the counts of added/removed entries and leaves a JSON
+  evidence bundle mirroring the xtask output (MINFO-6 audit format). Attach this
+  to the Ministry governance packets alongside the attestation artefacts.
+- When only one of the `--denylist-*` flags is present the script skips the
+  diff run and emits a warning, preventing partial runs from producing
+  misleading evidence.
 
 ## Troubleshooting
 
-- Si cualquier escenario falla, el comando xtask aborta y no se produce una atestacion. Revisa el output del harness y sigue la guia de rechazos en `docs/source/sorafs_gateway_refusal_guidance.md` antes de re-ejecutar.
-- 5xx persistentes o picos de rechazo deben tratarse como incidentes; recolecta telemetria de los dashboards listados en el manual de despliegue.
+- If any scenario fails, the xtask command aborts and no attestation is produced. Review the harness output and follow the refusal guidance in `docs/source/sorafs_gateway_refusal_guidance.md` before re-running.
+- Persistent 5xx or refusal spikes should be treated as incidents; collect telemetry from the dashboards listed in the deployment handbook.
 
-## Tips de automatizacion
+## Automation Tips
 
-- Integra el script en pipelines de CI (p. ej., GitHub Actions) para generar una atestacion fresca tras cada rollout de gateway.
-- `.github/workflows/sorafs-gateway-self-cert.yml` consume un archivo de config y archiva tanto los outputs de atestacion como `manifest.verify.summary.json`, manteniendo la verificacion reproducible sin depender de variables de entorno.
-- Disparar el workflow con:
+- Integrate the script into CI pipelines (e.g., GitHub Actions) to generate a fresh attestation after each gateway rollout.
+- `.github/workflows/sorafs-gateway-self-cert.yml` consumes a config file and
+  archives both the attestation outputs and `manifest.verify.summary.json`, keeping
+  the verification run reproducible without relying on environment variables.
+- Trigger the workflow with:
 
   ```bash
   gh workflow run sorafs-gateway-self-cert \
     --ref main \
     --field config_path=docs/examples/sorafs_gateway_self_cert.conf
   ```
-- Mantener los artefactos de manifiesto junto a los outputs del gateway para que CI invoque el script con `--manifest`/`--manifest-bundle` y falle rapido ante drift de firmas.
-- Usar `--gateway-manifest-id` / flags relacionados en `sorafs-fetch` (ver el manual de despliegue) para smoke tests complementarios antes de ejecutar el suite completo de self-cert.
+- Keep the manifest artefacts alongside the gateway outputs so CI can call the
+  script with `--manifest`/`--manifest-bundle` and fail fast on signature drift.
+- Use `--gateway-manifest-id` / related flags on `sorafs-fetch` (see the deployment handbook) for supplementary smoke tests prior to running the full self-cert suite.
 
-## Referencias
+## References
 
-- Manual de despliegue y operaciones: `docs/source/sorafs_gateway_deployment_handbook.md`
-- Harness de conformidad/carga: `docs/source/sorafs_gateway_conformance.md`
-- Plantilla de reporte: `docs/source/examples/sorafs_gateway_self_cert_template.json`
-- Plantilla de config: `docs/examples/sorafs_gateway_self_cert.conf`
+- Deployment & operations handbook: `docs/source/sorafs_gateway_deployment_handbook.md`
+- Conformance/load harness: `docs/source/sorafs_gateway_conformance.md`
+- Report template: `docs/source/examples/sorafs_gateway_self_cert_template.json`
+- Config template: `docs/examples/sorafs_gateway_self_cert.conf`

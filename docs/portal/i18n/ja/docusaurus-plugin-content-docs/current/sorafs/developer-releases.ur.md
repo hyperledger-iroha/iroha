@@ -30,7 +30,7 @@ SoraFS バイナリ (`sorafs_cli`、`sorafs_fetch`、ヘルパー) SDK クレー
 - 修復チケットのリンク (مثلاً `governance/tickets/SF6-SR-2026.md`)
   セキュリティ エンジニアリング ツール ワーキング グループ サインオフ承認者
 - 修復チェックリストのメモ未解決アイテムのリリース ブロック ہیں۔
-- パリティ ハーネス ログ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- パリティ ハーネス ログ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   マニフェスト バンドル アップロードする アップロードする
 - یہ بھی تصدیق کریں کہ 署名コマンド میں `--identity-token-provider` کے ساتھ
   واضح `--identity-token-audience=<aud>` شامل ہو تاکہ Fulcio スコープ解放証拠 میں Capture ہو۔
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 スクリプト アサーション スクリプト:
 
 - `cargo fmt --all -- --check` (ワークスペース)
-- `cargo clippy --locked --all-targets` `sorafs_car` 機能 (機能 `cli` 機能)
-  `sorafs_manifest` `sorafs_chunker`
-- `cargo test --locked --all-targets` 木枠箱
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 失敗する 失敗する タグ付けする 回帰する 回帰するリリースビルドのメイン
 کے ساتھ 連続 رہنا چاہیے؛ブランチをリリースし、チェリーピックを修正します。ゲート

@@ -80,6 +80,20 @@ whenever PoR/PoTR enforcement escalates.
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
 
+### Governance DAG publication
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_governance_dag_publish_total` | Counter | `payload_kind`, `result`, `sink` | Local SF-12 publication attempts for settlement, repair, GC, reconciliation, and reputation evidence. |
+| `sorafs_governance_dag_published_bytes_total` | Counter | `payload_kind`, `sink` | Successfully written Norito payload bytes for Governance DAG publication sinks. |
+| `sorafs_governance_dag_last_publish_timestamp_seconds` | Gauge | `payload_kind`, `sink` | Unix timestamp of the last successful local publication. |
+| `sorafs_governance_dag_backlog`, `sorafs_governance_dag_head_age_seconds` | Gauge | `sink` | Reserved for publisher, mirror, and public-head workers; dashboard panels are checked in before IPFS/IPNS rollout. |
+
+`dashboards/grafana/sorafs_governance_dag.json` visualizes publication
+outcomes, published bytes, backlog, head age, and last-success age. The
+filesystem publisher emits local outcomes today; public IPFS/IPNS head emission
+remains an SF-12 rollout gate.
+
 ### Repair & SLA
 
 | Metric | Type | Labels | Notes |
@@ -144,13 +158,15 @@ Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `t
 1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
 2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
 3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
-4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
+4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom, egress byte/drift reconciliation, repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
+5. **Governance DAG Publication** (`dashboards/grafana/sorafs_governance_dag.json`) — tracks SF-12 local publication health while public IPFS/IPNS workers are still pending.
 
 Alert bundles:
 
 - `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
 - `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC stall/blocked/error alerts for retention sweeps.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure, egress counter drift, repair SLA/backlog/lease-expiry, and GC stall/blocked/error alerts for retention sweeps.
+- `dashboards/alerts/sorafs_governance_dag_rules.yml` — local Governance DAG publication failures, backlog, stale head, and missing recent publication alerts.
 - `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.
@@ -190,6 +206,7 @@ Alert bundles:
   - Gateway metrics live under `torii_sorafs_*` and reuse conventions from `crates/iroha_core/src/telemetry.rs`.
   - The orchestrator emits `sorafs_orchestrator_*` metrics and `telemetry::sorafs.fetch.*` events (lifecycle, retry, provider failure, error, stall) tagged with manifest digest, job ID, region, and provider identifiers.
   - Nodes surface `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, and `torii_sorafs_por_*`.
+  - Governance DAG publication metrics use the `sorafs_governance_dag_*` prefix with bounded `payload_kind`, `result`, and `sink` labels; do not attach manifest, account, or path labels.
 - Coordinate with Observability to register the metric catalogue in the shared Prometheus naming doc, including label cardinality expectations (provider/manifests upper bounds).
 
 ## Data Pipeline

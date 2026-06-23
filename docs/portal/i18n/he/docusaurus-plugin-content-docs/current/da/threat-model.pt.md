@@ -241,7 +241,7 @@ passando desafios PDP/PoTR דרך respostas forjadas או colusao.
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia checks de
   טביעת אצבע דרך `/v1/da/ingest`.
 - כמו סימולציות של הזרמת PDP/PoTR או תרגול באמצעות זרם הוכחה או לרתום
-  em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
+  em `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
   PoR/PDP/PoTR e cenarios de falha animados no modelo de ameacas.
 - תוצאות קיבולת ותיקון להשרות חיים
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`

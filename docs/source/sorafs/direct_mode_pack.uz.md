@@ -87,7 +87,7 @@ Direct-mode readiness now includes coverage in both the orchestrator and CLI cra
   aligned with the helper utilities.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
 - `fetch_command_respects_direct_transports` exercises `sorafs_cli fetch
   --transport-policy=direct-only` against a mocked Torii gateway, providing a
-  smoke test for regulated environments that pin direct transports.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+  smoke test for regulated environments that pin direct transports.【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` wraps the same command with the policy
   JSON and scoreboard persistence for rollout automation.
 

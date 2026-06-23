@@ -86,7 +86,7 @@ I18NI000000065X དང་ སི་ཨེལ་ཨའི་ བཅུད་ད�
 
 ## CLI & SDK དར་ཚིག དཔྱད་གཞི།
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs`) དང་ནི།
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) དང་ནི།
 `iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
 སྙན་ཆའི་སྒྲིག་བཀོད་ཀྱི་ཁ་ཐོག་གཅིག་པ་བགོ་བཤའ་རྐྱབས། འོག་གི་དར་ཆ་ཚུ་ ག་དུས་ལུ་ལག་ལེན་འཐབ།
 བསྐོར་བའི་སྒྲུབ་བྱེད་འཛིན་ནི་དང་ ཡང་ན་ ཁྲིམས་ལུགས་ཀྱི་ བརྟན་ཏོག་ཏོ་ཚུ་ ལོག་སྟེ་རྩེད་ནི།

@@ -17,7 +17,9 @@ The `sorafs_cli` binary can now request Proof-of-Retrievability (PoR) samples
 or replay recorded Proof-of-Timed Retrieval (PoTR) receipts from a Torii gateway
 and emit structured metrics so operators can monitor proof quality alongside the
 rest of their pipeline. The streaming interface aligns with the unified
-`ProofStreamRequestV1` schema and will extend to PDP once SF-13 lands.
+`ProofStreamRequestV1` schema. `sorafs_cli proof stream` already accepts
+`--proof-kind=pdp` for schema-compatible request construction; current Torii
+gateways reject `proof_kind=pdp` until SF-13 provider protocol support lands.
 
 ## CLI Usage
 
@@ -116,7 +118,7 @@ The final JSON summary mirrors the following layout:
 }
 ```
 
-This data maps directly onto the metrics planned in
+This data maps directly onto the metrics documented in
 `docs/source/sorafs_proof_streaming_plan.md`:
 
 - `metrics.success_total` / `metrics.failure_total` feed into
@@ -135,8 +137,7 @@ provides a deterministic blob for CI gating when metrics export is disabled.
 A Grafana skeleton that tracks outcome totals and latency quantiles is
 available under
 `docs/examples/sorafs_proof_streaming_dashboard.json`. It assumes the metrics
-names listed above and can be imported directly once the Prometheus exporter
-lands. The main panels include:
+names listed above and can be imported directly with the Prometheus exporter enabled. The main panels include:
 
 1. Proof outcomes (`success_total` vs `failure_total`)
 2. Failure reasons split by taxonomy (timeout, invalid_proof, etc.)
@@ -148,7 +149,9 @@ lands. The main panels include:
   provider attestations remain on the roadmap and will be threaded once council
   distributes PQ keys to operators (tracked under SF-14 follow-ups).
 - **PDP streaming.** Proof-of-Data-Possession support remains on the roadmap
-  alongside the CDC commitment work (SF-13). The CLI will add `proof_kind=pdp`
-  once the provider protocol and CDC commitments ship.
+  alongside the CDC commitment work (SF-13). The CLI already accepts
+  `--proof-kind=pdp` so callers can generate schema-compatible requests, but
+  current Torii gateways reject `proof_kind=pdp` as an unsupported proof kind
+  until the provider protocol and CDC commitments ship.
 - **Event volume.** The CLI prints per-item NDJSON locally; set
   `--emit-events=false` when you only need the final summary blob for CI.

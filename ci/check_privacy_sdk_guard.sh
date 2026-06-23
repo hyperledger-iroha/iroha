@@ -6771,6 +6771,18 @@ def check_jvm_sdk_script_pins_jdk21(errors):
         "Privacy JVM SDK script must print the selected Java version",
         errors,
     )
+    require(
+        (
+            "javac \\\n"
+            '  -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \\\n'
+            '  -d "${JAVA_OUT}" \\\n'
+            "  java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \\\n"
+            "  java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java"
+        )
+        in script,
+        "Privacy JVM SDK script must compile Android privacy harnesses with project sourcepath",
+        errors,
+    )
 
 
 def run_checks():

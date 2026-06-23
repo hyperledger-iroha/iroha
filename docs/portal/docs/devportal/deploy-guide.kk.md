@@ -23,7 +23,7 @@ translator: machine-google-reviewed
 шығару артефакті қайталанатын және тексерілетін.
 
 Ағын сізде `sorafs_cli` екілік нұсқасы бар (құрылған
-`--features cli`), PIN-тізілім рұқсаттары бар Torii соңғы нүктесіне қатынасу және
+`sorafs_orchestrator` Cargo target), PIN-тізілім рұқсаттары бар Torii соңғы нүктесіне қатынасу және
 OIDC Sigstore үшін тіркелгі деректері. Ұзақ өмір сүретін құпияларды сақтаңыз (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii белгілері) сіздің CI қоймаңызда; жергілікті жүгірулер олардың көзі бола алады
 қабық экспортынан.
@@ -31,7 +31,7 @@ OIDC Sigstore үшін тіркелгі деректері. Ұзақ өмір с
 ## Алғышарттар
 
 - `npm` немесе `pnpm` бар 18.18+ түйіні.
-- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` бастап.
+- `sorafs_cli` `cargo run -p sorafs_orchestrator --bin sorafs_cli` бастап.
 - Torii URL мекенжайы `/v1/sorafs/*` плюс өкілетті тіркелгіні/жеке кілтті көрсетеді
   манифесттер мен бүркеншік аттарды жібере алады.
 - OIDC эмитенті (GitHub әрекеттері, GitLab, жұмыс жүктемесінің идентификациясы және т.б.)

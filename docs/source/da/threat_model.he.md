@@ -205,7 +205,7 @@ Maintenance cadence: Data Availability Working Group (<=90 days). כל תיקו�
   השילוב של Torii ב-`crates/iroha_torii/src/da/ingest.rs`, המשחיל את
   בדיקת טביעות אצבע דרך `/v1/da/ingest`.
 - סימולציות זרימת PDP/PoTR מופעלות באמצעות רתמת ההוכחה
-  `crates/sorafs_car/tests/sorafs_cli.rs`, המכסה זרימות בקשות PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, המכסה זרימות בקשות PoR/PDP/PoTR
   ותרחישי כשל המונפשים במודל האיום.
 - תוצאות השריית קיבולת ותיקון חיים מתחת
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, בעוד הרחב יותר

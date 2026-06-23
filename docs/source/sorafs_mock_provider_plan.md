@@ -1,9 +1,9 @@
 ---
-title: SoraFS Mock Provider Harness Plan (Draft)
-summary: Outline for SF-6c multi-provider test harness.
+title: SoraFS Mock Provider Harness Status
+summary: Implemented SF-6c deterministic multi-provider fixture harness and remaining service follow-ups.
 ---
 
-# SoraFS Mock Provider Harness Plan (Draft)
+# SoraFS Mock Provider Harness Status
 
 ## Objectives
 
@@ -11,84 +11,83 @@ summary: Outline for SF-6c multi-provider test harness.
 - Support success/failure injection, latency control, and token enforcement simulations.
 - Integrate with integration tests to validate multi-provider chunk ordering and proof checks.
 
+> **Status (Jun 2026):** SF-6c local coverage is implemented through
+> `sorafs_car::fixtures::MultiPeerFixture`, the shared
+> `sorafs_car::local_fetch` harness, `fixtures/sorafs_orchestrator/`, and the
+> Rust/SDK parity tests. The standalone loopback HTTP/gRPC mock-provider server
+> remains optional future tooling; local CI does not depend on a daemonized mock
+> provider control plane.
+
 ## Components
 
-1. **Mock provider server**
-   - Implements chunk-range endpoints (`GET /chunk`, `GET /car`) with configurable profiles.
-   - Reads fixtures (CAR + manifest) from `fixtures/sorafs_mock_providers/`.
-   - Configurable behavior: latency distribution, failure rates, proof tampering.
-2. **Harness controller** (Rust)
-   - Spins up N providers with config matrix.
-   - Exposes gRPC/REST control plane for tests to toggle failure modes.
+1. **Deterministic provider fixtures**
+   - `MultiPeerFixture::with_providers(N)` derives provider metadata,
+     per-provider payload replicas, range capability, stream budgets, and
+     telemetry from the canonical SF1 chunker vectors.
+   - `fixtures/sorafs_orchestrator/multi_peer_parity_v1/` stores the JSON
+     fixture bundle shared by Rust and SDK parity harnesses.
+2. **Local fetch harness**
+   - `sorafs_car::local_fetch::execute_local_fetch` converts plan/provider JSON
+     into the same multi-fetch scheduler inputs used by the orchestrator.
+   - Scoreboard filters, denied providers, boosted providers, retry budgets,
+     max peers, digest verification, and telemetry snapshots are configurable.
 3. **Integration utilities**
-   - Helper to issue stream tokens, admission envelopes.
-   - Assertion helpers for chunk ordering and digest parity.
+   - `crates/sorafs_orchestrator/tests/multi_peer_fetch.rs` injects transient
+     provider failures and corrupted chunks while proving the orchestrator
+     retries, verifies digests, and assembles the canonical payload.
+   - `integration_tests/tests/sorafs_orchestrator_parity.rs` replays the shared
+     JSON fixture across Rust and SDK bindings.
 
 ## Test Scenarios
 
 - Happy path: 3 providers, orchestrator splits chunks, proofs verified.
-- Provider failure: one provider returns 422/timeout, orchestrator retries others.
-- Token exhaustion: provider enforces stream token limits, orchestrator falls back.
-- Corrupted proof: provider tampered response, orchestrator rejects chunk.
+- Provider failure: one provider returns a simulated transport error,
+  orchestrator retries others.
+- Corrupted proof/payload: one provider returns a tampered chunk once,
+  orchestrator rejects it and retries.
+- Scoreboard filtering: stale or ineligible provider metadata is excluded before
+  scheduling.
 
 ## Observability
 
-- Expose metrics for requests served, induced failures.
-- Log proof failures / token denials for assertions.
+- Fetch outcomes expose provider reports, successes, failures, receipts, and
+  policy status for assertions.
+- Local scoreboard summaries can be returned by the harness for SDK parity and
+  governance evidence.
 
 ## Fixture Format
 
-- **Directory layout.** Reuse the SF-5a fixture catalogue so operators maintain
-  a single source of truth. The harness consumes:
-  - `fixtures/sorafs_gateway/<profile>/<scenario>/manifest.to` (Norito-encoded
-    `SignedGatewayReport` manifest).
-  - `fixtures/sorafs_gateway/<profile>/<scenario>/car/*.car` (CAR payloads).
-  - Optional `negative/` subdirectories housing intentionally corrupted proofs.
-- **Metadata index.** Add a `fixtures/sorafs_mock_providers/index.norito.json`
-  file that maps scenario IDs to fixture paths, expected provider behaviours,
-  and latency templates. The schema mirrors the SF-5a `fixture_index` but adds
-  provider-specific knobs (`failure_rate`, `proof_mutator`, `token_budget`).
-- **Versioning.** Every run records the fixture commit SHA in the harness
-  report; CI validates the SHA against the `fixtures/VERSION` file to ensure
-  deterministic playback.
+- **Directory layout.** The shared fixture bundle lives under
+  `fixtures/sorafs_orchestrator/multi_peer_parity_v1/`:
+  - `metadata.json` records the payload location and fixture summary.
+  - `plan.json` records chunk index, offset, length, and BLAKE3 digest.
+  - `providers.json` records provider metadata, range capability, stream
+    budgets, and transport hints.
+  - `telemetry.json` records QoS, latency, failure-rate, and staking inputs.
+  - `options.json` records orchestrator and scoreboard options.
+- **Regeneration.** `python3 scripts/build_sorafs_orchestrator_fixture.py`
+  rebuilds the JSON bundle from the canonical SF1 vectors.
+- **Versioning.** The checked-in fixture files are deterministic; CI compares
+  regenerated output and parity summaries instead of depending on a mutable
+  daemon state directory.
 
 ## CI Alignment
 
-- **Shared archive job.** Extend the existing SF-5a Buildkite pipeline to upload
-  the `fixtures/sorafs_gateway` bundle as an artifact; the mock provider job
-  fetches the same artifact to avoid drift.
-- **Matrix coverage.** Nightly CI executes the harness with two profiles:
-  `mock-smoke` (minimal happy-path) and `mock-chaos` (failure + latency). Each
-  profile publishes results to the telemetry dashboard under
-  `ci/sorafs-mock-provider:*`.
-- **Gatekeeping.** Merge CI introduces a `sorafs-mock-provider` step that must
-  pass for PRs touching:
-  - `crates/sorafs_mock_provider_*`
-  - `docs/source/sorafs_mock_provider_plan*`
-  - `fixtures/sorafs_gateway/**`
-  The step spins up the providers inside a container, runs the orchestrator
-  integration tests, and surfaces Norito-signed reports identical to SF-5a.
+- `ci/sdk_sorafs_orchestrator.sh` and
+  `crates/sorafs_orchestrator/tests/*` cover the deterministic multi-provider
+  fixture and scheduler behavior.
+- `scripts/build_sorafs_orchestrator_fixture.py` is the regeneration path for
+  changes to the chunker profile or provider template.
+- Future daemonized mock-provider work should be additive and must continue to
+  replay the same `fixtures/sorafs_orchestrator/` bundle.
 
 ## Control Interface
 
-- **Transport.** Expose a JSON over HTTP control plane on `127.0.0.1:5901`
-  (configurable). The harness also provides a gRPC facade generated from the
-  same protobuf definition for SDK tests needing typed clients.
-- **Endpoints.**
-  - `POST /providers` — create or update mock providers; payload lists provider
-    IDs, fixture scenarios, latency distributions, failure injection rules, and
-    token limits. Responses echo resolved configuration with assigned ports.
-  - `POST /providers/{id}/faults` — toggle runtime fault profiles (e.g.,
-    `{"mode":"timeout","rate":0.1}`).
-  - `POST /providers/{id}/reset` — clear counters and restore baseline config.
-  - `GET /providers/{id}/metrics` — return request counts, active tokens, proof
-    failures, and rolling latency stats for assertions.
-  - `DELETE /providers/{id}` — shut down a mock provider.
-  All endpoints accept/emit Norito JSON (`norito::json::Value`) ensuring
-  deterministic field ordering.
-- **Authentication.** Control API binds to loopback and requires a shared
-  bearer token (`mock_provider.auth_token`) supplied via config. Test harnesses
-  set the `Authorization: Bearer` header; unauthenticated calls return `401`.
-- **Event stream.** The controller optionally exposes a `GET /v1/events/ws` SSE feed
-  streaming provider state transitions (startup, fault injected, token
-  exhaustion) so tests can synchronise without polling.
+- **Current control surface.** Tests inject behavior through Rust closures,
+  `LocalFetchOptions`, and deterministic fixture files. This keeps local
+  scheduling tests hermetic and avoids binding test correctness to port
+  allocation or network timing.
+- **Future daemon surface.** A loopback JSON/gRPC controller can be added for
+  SDKs that need real socket behavior. It should bind only to loopback, require
+  explicit test configuration, emit Norito JSON, and reuse the checked-in
+  fixture bundle rather than inventing a second scenario format.

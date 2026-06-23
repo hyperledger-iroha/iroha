@@ -54,6 +54,8 @@ pub mod policy;
 pub mod proof_stream;
 #[path = "proof_stream_transport.rs"]
 pub mod proof_stream_transport;
+#[cfg(feature = "manifest")]
+pub mod reference;
 pub mod scoreboard;
 #[cfg(feature = "manifest")]
 pub mod streaming_verifier;
@@ -64,6 +66,8 @@ pub mod trustless;
 #[cfg(feature = "manifest")]
 pub mod verifier;
 
+#[cfg(feature = "manifest")]
+pub use reference::{validate_manifest_car_replay, validate_manifest_car_replay_bytes};
 #[cfg(feature = "manifest")]
 pub use trustless::{
     TrustlessVerificationError, TrustlessVerificationOutcome, TrustlessVerifier,

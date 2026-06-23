@@ -16,11 +16,13 @@ import {
   BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA,
   BSC_GROTH16_ATTESTATION_REQUEST_PACKAGE_SCHEMA,
   BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA,
+  BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
   BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA,
   BSC_GROTH16_PROOF_SELF_TEST_SCHEMA,
   BSC_GROTH16_PUBLIC_SIGNAL_NAMES,
   BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA,
   BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA,
+  BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
   BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA,
   BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
   DEFAULT_BSC_FULL_MESSAGE_CIRCUIT_SOURCE,
@@ -345,6 +347,105 @@ async function writeJson(pathName, value) {
   await writeFile(pathName, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function evidenceBase({ schema, context, extra = {} }) {
+  return {
+    schema,
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    bscNetwork: "testnet",
+    chain: "bsc-testnet",
+    chainIdHex: BSC_TESTNET_CHAIN_ID_HEX,
+    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    proofBackend: "evm-groth16-bn254-v1",
+    proofFamily: "stark-fri-v1",
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    publicInputCount: 9,
+    publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
+    verifierKeyHash: context.verifierKeyHash,
+    circuitSourceSha256: context.circuitSourceSha256,
+    r1csSha256: context.r1csSha256,
+    powersOfTauSha256: context.powersOfTauSha256,
+    provingKeySha256: context.provingKeySha256,
+    snarkjsVerificationKeySha256: context.snarkjsVerificationKeySha256,
+    bscVerifierKeySha256: context.bscVerifierKeySha256,
+    ...extra,
+  };
+}
+
+async function writeReviewEvidenceFiles(root, context, overrides = {}) {
+  const semanticReport = join(root, "semantic-review-report.md");
+  const circuitReport = join(root, "circuit-security-audit-report.md");
+  await writeFile(
+    semanticReport,
+    overrides.semanticReportText ??
+      "Independent semantic review confirms SCCP BSC full-message constraints.\n",
+  );
+  await writeFile(
+    circuitReport,
+    overrides.circuitReportText ??
+      "Independent circuit security audit confirms production Groth16 readiness.\n",
+  );
+  const semanticReviewEvidence = join(root, "semantic-review-evidence.json");
+  const circuitSecurityAuditEvidence = join(
+    root,
+    "circuit-security-audit-evidence.json",
+  );
+  await writeJson(
+    semanticReviewEvidence,
+    evidenceBase({
+      schema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+      context,
+      extra: {
+        reviewResult: "pass",
+        fullSccpMessageSemantics: true,
+        sourceFinalitySemantics: true,
+        destinationBindingSemantics: true,
+        publicSignalDerivationSemantics: true,
+        negativeCaseCoverage: true,
+        reviewerSignoffCount: 1,
+        unresolvedFindings: 0,
+        reviewReport: {
+          path: "semantic-review-report.md",
+          sha256: sha256Hex(await readFile(semanticReport)),
+        },
+        ...(overrides.semantic ?? {}),
+      },
+    }),
+  );
+  await writeJson(
+    circuitSecurityAuditEvidence,
+    evidenceBase({
+      schema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+      context,
+      extra: {
+        auditResult: "pass",
+        approved: true,
+        auditorSignoffCount: 1,
+        criticalFindings: 0,
+        highFindings: 0,
+        unresolvedFindings: 0,
+        auditReport: {
+          path: "circuit-security-audit-report.md",
+          sha256: sha256Hex(await readFile(circuitReport)),
+        },
+        ...(overrides.security ?? {}),
+      },
+    }),
+  );
+  return {
+    semanticReviewEvidence,
+    circuitSecurityAuditEvidence,
+    semanticReport,
+    circuitReport,
+    args: [
+      "--semantic-review-evidence",
+      semanticReviewEvidence,
+      "--circuit-security-audit-evidence",
+      circuitSecurityAuditEvidence,
+    ],
+  };
+}
+
 function snarkjsSelfCheckContext(overrides = {}) {
   return {
     r1csInfoSource: "snarkjs-cli",
@@ -405,6 +506,11 @@ async function writeBoundAttestations(root, context, overrides = {}) {
         schema: BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA,
         context,
         extra: {
+          semanticReviewEvidenceSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+          semanticReviewEvidenceSha256:
+            context.semanticReviewEvidenceSha256 ?? `0x${"11".repeat(32)}`,
+          semanticReviewReportSha256:
+            context.semanticReviewReportSha256 ?? `0x${"12".repeat(32)}`,
           fullSccpMessageSemantics: true,
           sourceFinalitySemantics: true,
           destinationBindingSemantics: true,
@@ -423,6 +529,12 @@ async function writeBoundAttestations(root, context, overrides = {}) {
         schema: BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA,
         context,
         extra: {
+          circuitSecurityAuditEvidenceSchema:
+            BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+          circuitSecurityAuditEvidenceSha256:
+            context.circuitSecurityAuditEvidenceSha256 ?? `0x${"13".repeat(32)}`,
+          circuitSecurityAuditReportSha256:
+            context.circuitSecurityAuditReportSha256 ?? `0x${"14".repeat(32)}`,
           auditResult: "pass",
           approved: true,
           criticalFindings: 0,
@@ -883,7 +995,7 @@ async function writePreflightCandidate(root, options = {}) {
   };
 }
 
-async function writeAttestationRequestCandidate(root) {
+async function writeAttestationRequestCandidate(root, options = {}) {
   const inputs = await writeMaterialInputs(root);
   const snarkjsStub = await writeSnarkjsStub(root, inputs.verificationKeyPath);
   const result = await materializeBscGroth16Material({
@@ -896,7 +1008,20 @@ async function writeAttestationRequestCandidate(root) {
     ...transcriptOptions(inputs),
     "out-dir": join(root, "out"),
   });
-  return { inputs, result, manifest: result.manifest };
+  const evidence =
+    options.evidence === false
+      ? null
+      : await writeReviewEvidenceFiles(
+          root,
+          inputs.context,
+          options.evidenceOverrides ?? {},
+        );
+  if (evidence) {
+    result.attestationRequestEvidenceArgs = evidence.args;
+    result.semanticReviewEvidence = evidence.semanticReviewEvidence;
+    result.circuitSecurityAuditEvidence = evidence.circuitSecurityAuditEvidence;
+  }
+  return { inputs, result, manifest: result.manifest, evidence };
 }
 
 test("BSC Groth16 material converter maps SnarkJS verifier key to Solidity constructor order", () => {
@@ -2711,6 +2836,7 @@ test("attestation-request emits deterministic unsigned role payloads", async () 
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       toolchainSha256,
       "--out",
@@ -2720,6 +2846,7 @@ test("attestation-request emits deterministic unsigned role payloads", async () 
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       toolchainSha256,
       "--out",
@@ -2757,6 +2884,38 @@ test("attestation-request emits deterministic unsigned role payloads", async () 
       firstPackage.roles.semanticSccpCircuit.body.schema,
       BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA,
     );
+    assert.equal(
+      firstPackage.evidence.semanticReview.sha256,
+      sha256Hex(await readFile(result.semanticReviewEvidence)),
+    );
+    assert.equal(
+      firstPackage.evidence.circuitSecurityAudit.sha256,
+      sha256Hex(await readFile(result.circuitSecurityAuditEvidence)),
+    );
+    assert.equal(
+      firstPackage.roles.semanticSccpCircuit.body.semanticReviewEvidenceSchema,
+      BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+    );
+    assert.equal(
+      firstPackage.roles.semanticSccpCircuit.body.semanticReviewEvidenceSha256,
+      firstPackage.evidence.semanticReview.sha256,
+    );
+    assert.equal(
+      firstPackage.roles.semanticSccpCircuit.body.semanticReviewReportSha256,
+      firstPackage.evidence.semanticReview.report.sha256,
+    );
+    assert.equal(
+      firstPackage.roles.circuitSecurity.body.circuitSecurityAuditEvidenceSchema,
+      BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+    );
+    assert.equal(
+      firstPackage.roles.circuitSecurity.body.circuitSecurityAuditEvidenceSha256,
+      firstPackage.evidence.circuitSecurityAudit.sha256,
+    );
+    assert.equal(
+      firstPackage.roles.circuitSecurity.body.circuitSecurityAuditReportSha256,
+      firstPackage.evidence.circuitSecurityAudit.report.sha256,
+    );
     for (const role of Object.values(firstPackage.roles)) {
       assert.equal(role.body.proofBackend, "evm-groth16-bn254-v1");
       assert.equal(role.body.proofFamily, "stark-fri-v1");
@@ -2791,6 +2950,202 @@ test("attestation-request emits deterministic unsigned role payloads", async () 
   }
 });
 
+test("attestation-request blocks semantic and circuit roles without review evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-no-evidence-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root, {
+      evidence: false,
+    });
+    const requestPath = join(root, "request.json");
+    const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
+
+    const requestResult = await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+
+    assert.deepEqual(requestResult.readyForSignature, {
+      semanticSccpCircuit: false,
+      circuitSecurity: false,
+      trustedSetup: true,
+      reproducibleBuild: true,
+    });
+    assert.match(
+      request.roles.semanticSccpCircuit.blockers.join("\n"),
+      /missing semantic SCCP circuit review evidence artifact/u,
+    );
+    assert.match(
+      request.roles.circuitSecurity.blockers.join("\n"),
+      /missing circuit security audit evidence artifact/u,
+    );
+    assert.equal(request.evidence.semanticReview, null);
+    assert.equal(request.evidence.circuitSecurityAudit, null);
+    await assert.rejects(
+      () =>
+        signBscGroth16AttestationRole({
+          request: requestPath,
+          role: "semantic",
+          "private-key-pem": privateKeyPath,
+          out: join(root, "semantic-attestation.json"),
+        }),
+      /semantic SCCP circuit role is not ready for signature: missing semantic SCCP circuit review evidence artifact/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("attestation-request blocks malformed and adversarial review evidence", async () => {
+  const cases = [
+    {
+      name: "semantic-false-coverage",
+      role: "semanticSccpCircuit",
+      evidenceOverrides: { semantic: { negativeCaseCoverage: false } },
+      pattern: /negativeCaseCoverage must be true/u,
+    },
+    {
+      name: "semantic-material-drift",
+      role: "semanticSccpCircuit",
+      evidenceOverrides: { semantic: { r1csSha256: `0x${"aa".repeat(32)}` } },
+      pattern: /r1csSha256 must match/u,
+    },
+    {
+      name: "semantic-secret",
+      role: "semanticSccpCircuit",
+      evidenceOverrides: { semantic: { privateKey: "not-for-public-release" } },
+      pattern: /privateKey|private key|secret/iu,
+    },
+    {
+      name: "semantic-duplicate-key",
+      role: "semanticSccpCircuit",
+      mutate: async ({ result }) => {
+        await writeFile(
+          result.semanticReviewEvidence,
+          `{"schema":"${BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA}","schema":"${BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA}"}\n`,
+        );
+      },
+      pattern: /duplicate key/u,
+    },
+    {
+      name: "semantic-report-drift",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        await writeFile(evidence.semanticReport, "Changed semantic review report.\n");
+      },
+      pattern: /report sha256 must match/u,
+    },
+    {
+      name: "circuit-high-finding",
+      role: "circuitSecurity",
+      evidenceOverrides: { security: { highFindings: 1 } },
+      pattern: /highFindings must be 0/u,
+    },
+    {
+      name: "circuit-placeholder-label",
+      role: "circuitSecurity",
+      evidenceOverrides: { security: { auditId: "placeholder-audit" } },
+      pattern: /must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    },
+    {
+      name: "circuit-report-drift",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        await writeFile(evidence.circuitReport, "Changed circuit audit report.\n");
+      },
+      pattern: /report sha256 must match/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const root = await mkdtemp(
+      join(tmpdir(), `iroha-bsc-groth16-evidence-${testCase.name}-`),
+    );
+    try {
+      const candidate = await writeAttestationRequestCandidate(root, {
+        evidenceOverrides: testCase.evidenceOverrides ?? {},
+      });
+      if (testCase.mutate) {
+        await testCase.mutate(candidate);
+      }
+      const requestPath = join(root, "request.json");
+      const result = await main([
+        "attestation-request",
+        "--manifest",
+        candidate.result.manifest,
+        ...candidate.result.attestationRequestEvidenceArgs,
+        "--toolchain-sha256",
+        `0x${"ef".repeat(32)}`,
+        "--out",
+        requestPath,
+      ]);
+      const request = JSON.parse(await readFile(requestPath, "utf8"));
+
+      assert.equal(result.readyForSignature[testCase.role], false, testCase.name);
+      assert.match(
+        request.roles[testCase.role].blockers.join("\n"),
+        testCase.pattern,
+        testCase.name,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("sign-attestation refuses tampered evidence references even when role hashes are refreshed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-evidence-tamper-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    request.evidence.semanticReview.sha256 = `0x${"77".repeat(32)}`;
+    const role = request.roles.semanticSccpCircuit;
+    const bodyHash = sha256Hex(canonicalJson(role.body));
+    role.signedPayloadSha256 = bodyHash;
+    role.signatureTemplate.signedPayloadSha256 = bodyHash;
+    await writeJson(requestPath, request);
+
+    await assert.rejects(
+      () =>
+        signBscGroth16AttestationRole({
+          request: requestPath,
+          role: "semantic",
+          "private-key-pem": privateKeyPath,
+          out: join(root, "semantic-attestation.json"),
+        }),
+      /body evidence sha256 must match evidence reference/u,
+    );
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+    });
+    assert.equal(status.requestReadyForSignature.semanticSccpCircuit, false);
+    assert.match(
+      status.roles.semanticSccpCircuit.blockers.join("\n"),
+      /body evidence sha256 must match evidence reference/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("attestation-request refuses manifests without transcript artifacts", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-missing-"));
   try {
@@ -2805,6 +3160,7 @@ test("attestation-request refuses manifests without transcript artifacts", async
           "attestation-request",
           "--manifest",
           result.manifest,
+          ...result.attestationRequestEvidenceArgs,
           "--toolchain-sha256",
           `0x${"ef".repeat(32)}`,
           "--out",
@@ -2835,6 +3191,7 @@ test("attestation-request refuses transcript hash drift", async () => {
           "attestation-request",
           "--manifest",
           result.manifest,
+          ...result.attestationRequestEvidenceArgs,
           "--toolchain-sha256",
           `0x${"ef".repeat(32)}`,
           "--out",
@@ -2861,6 +3218,7 @@ test("attestation-request refuses manifest public signal drift", async () => {
           "attestation-request",
           "--manifest",
           result.manifest,
+          ...result.attestationRequestEvidenceArgs,
           "--toolchain-sha256",
           `0x${"ef".repeat(32)}`,
           "--out",
@@ -2884,6 +3242,7 @@ test("attestation-request requires a reproducible-build toolchain hash source", 
           "attestation-request",
           "--manifest",
           result.manifest,
+          ...result.attestationRequestEvidenceArgs,
           "--out",
           join(root, "request.json"),
         ]),
@@ -2905,6 +3264,7 @@ test("sign-attestation writes one request-bound Ed25519 role attestation", async
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -2962,6 +3322,7 @@ test("sign-attestation refuses blocked request roles", async () => {
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -2997,6 +3358,7 @@ test("sign-attestation refuses tampered request body and template hashes", async
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3046,6 +3408,7 @@ test("sign-attestation refuses request role bodies with unknown shadow fields", 
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3106,6 +3469,7 @@ test("sign-attestation refuses mismatched fingerprints, non-Ed25519 keys, and ke
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3157,6 +3521,7 @@ test("attestation-status reports unsigned ready requests without finalizing", as
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3207,6 +3572,7 @@ test("attestation-status accepts signer-produced role files as ready to finalize
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3248,6 +3614,7 @@ test("attestation-status flags blocked roles and supplied signatures for unready
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3292,6 +3659,7 @@ test("attestation-status flags stale request bodies, forged signatures, and sign
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3353,6 +3721,7 @@ test("attestation-status rejects untrusted signer fingerprints without leaking k
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -3407,6 +3776,7 @@ test("finalize-attestations accepts role files produced by sign-attestation", as
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4033,6 +4403,7 @@ test("finalize-attestations materializes production-ready manifests from signed 
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4085,6 +4456,7 @@ test("finalize-attestations refuses signed role bodies that drift from the reque
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4128,6 +4500,7 @@ test("finalize-attestations refuses stale request role payload hashes", async ()
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4170,6 +4543,7 @@ test("finalize-attestations refuses request packages whose manifest binding drif
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4212,6 +4586,7 @@ test("finalize-attestations refuses request roles that are not ready for signatu
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4255,6 +4630,7 @@ test("finalize-attestations refuses production blockers after signed request mat
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4557,6 +4933,7 @@ test("preflight summarizes present attestation request readiness", async () => {
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4623,6 +5000,7 @@ test("preflight reports attestation requests with fixture-labelled manifest refe
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",
@@ -4681,6 +5059,7 @@ test("preflight reports stale attestation request packages", async () => {
       "attestation-request",
       "--manifest",
       result.manifest,
+      ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
       `0x${"ef".repeat(32)}`,
       "--out",

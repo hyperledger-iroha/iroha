@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-02-07
 - Ссылка на заявку на исправление (مثلاً `governance/tickets/SF6-SR-2026.md`).
   Рабочая группа по разработке средств обеспечения безопасности и утверждающие лица.
 - Используйте памятку и контрольный список исправлений. выпуск неразрешенных элементов کو блок کرتے ہیں۔
-- Журналы контроля четности (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).
+- Журналы контроля четности (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`).
   Пакет манифеста, который можно загрузить, или пакет манифеста, который вы хотите загрузить.
 - یہ بھی تصدیق کریں کہ команда подписи `--identity-token-provider` کے ساتھ
   واضح `--identity-token-audience=<aud>` شامل ہو تاکہ Доказательства выпуска области Fulcio и захват ہو۔
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 В сценарии есть утверждения:
 
 - `cargo fmt --all -- --check` (рабочая область)
-- `cargo clippy --locked --all-targets` `sorafs_car` کے لیے (функция `cli` کے ساتھ),
-  `sorafs_manifest` или `sorafs_chunker`
-- `cargo test --locked --all-targets` в ящиках کے لیے
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Если вы потерпели неудачу или пометили теги, вы можете использовать регрессию. Релизные сборки в основном
 کے ساتھ непрерывное رہنا چاہیے؛ выпуск ветвей میں исправления вишневого выбора نہ کریں۔ Ворота

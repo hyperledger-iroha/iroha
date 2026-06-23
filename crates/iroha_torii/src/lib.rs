@@ -1515,6 +1515,7 @@ struct AppState {
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
+    sorafs_repair_auditor_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     soracloud_public_rate_limiter: limits::RateLimiter,
@@ -2591,15 +2592,24 @@ impl AppState {
 
     #[cfg(feature = "app_api")]
     fn provider_supports_chunk_range(&self, provider_id: &[u8; 32]) -> Option<bool> {
+        self.provider_supports_capability(provider_id, CapabilityType::ChunkRangeFetch)
+    }
+
+    #[cfg(feature = "app_api")]
+    fn provider_supports_capability(
+        &self,
+        provider_id: &[u8; 32],
+        capability: CapabilityType,
+    ) -> Option<bool> {
         if let Some(override_entry) = self.sorafs_chunk_range_overrides.get(provider_id) {
-            return Some(*override_entry);
+            if capability == CapabilityType::ChunkRangeFetch {
+                return Some(*override_entry);
+            }
         }
         let cache = self.sorafs_cache.as_ref()?;
         let guard = cache.try_read().ok()?;
         let record = guard.record_by_provider(provider_id)?;
-        let supported = record
-            .known_capabilities()
-            .contains(&CapabilityType::ChunkRangeFetch);
+        let supported = record.known_capabilities().contains(&capability);
         Some(supported)
     }
 
@@ -28984,6 +28994,22 @@ async fn handler_post_sorafs_capacity_failure(
 }
 
 #[cfg(feature = "app_api")]
+async fn enforce_sorafs_repair_auditor_rate_limit(
+    app: &SharedAppState,
+    auditor_account: &str,
+) -> Result<(), Error> {
+    let key = format!("sorafs-repair-auditor:{auditor_account}");
+    if app.sorafs_repair_auditor_rate_limiter.allow(&key).await {
+        return Ok(());
+    }
+    app.telemetry
+        .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    )))
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_sorafs_repair_report(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -29020,11 +29046,15 @@ async fn handler_post_sorafs_repair_report(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let (auditor_account, nonce) = submission.signed_nonce();
+    let signed_nonce = (auditor_account.to_owned(), nonce);
     let report = submission.into_report()?;
+    enforce_sorafs_repair_auditor_rate_limit(&app, &signed_nonce.0).await?;
     match crate::routing::handle_post_sorafs_repair_report(
         app.telemetry.clone(),
         app.sorafs_node.clone(),
         report,
+        signed_nonce,
     )
     .await
     {
@@ -29074,11 +29104,15 @@ async fn handler_post_sorafs_repair_slash(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let (auditor_account, nonce) = submission.signed_nonce();
+    let signed_nonce = (auditor_account.to_owned(), nonce);
     let proposal = submission.into_proposal()?;
+    enforce_sorafs_repair_auditor_rate_limit(&app, &signed_nonce.0).await?;
     match crate::routing::handle_post_sorafs_repair_slash(
         app.telemetry.clone(),
         app.sorafs_node.clone(),
         proposal,
+        signed_nonce,
     )
     .await
     {
@@ -29476,6 +29510,79 @@ async fn handler_get_sorafs_repair_status_all(
             Err(err)
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_sorafs_repair_events(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    raw_query: axum::extract::RawQuery,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/sorafs/audit/repair/events",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(crate::sorafs::api::handle_get_sorafs_repair_events(State(app), headers, raw_query).await)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_sorafs_repair_events_stream(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    raw_query: axum::extract::RawQuery,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/sorafs/audit/repair/events/stream",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(crate::sorafs::api::handle_get_sorafs_repair_events_stream(State(app), raw_query).await)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_sorafs_repair_events_ws(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    raw_query: axum::extract::RawQuery,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/sorafs/audit/repair/events/ws",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(crate::sorafs::api::handle_get_sorafs_repair_events_ws(State(app), raw_query, ws).await)
 }
 
 async fn handler_iso_pacs008(
@@ -35677,6 +35784,7 @@ pub struct Torii {
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
+    sorafs_repair_auditor_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     soracloud_public_rate_limiter: limits::RateLimiter,
@@ -36677,6 +36785,108 @@ impl Torii {
                 .route(
                     "/v1/sorafs/capacity/failure",
                     post(handler_post_sorafs_capacity_failure),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/orders",
+                    post(sorafs::api::handle_post_sorafs_orderbook_order),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/cancel",
+                    post(sorafs::api::handle_post_sorafs_orderbook_cancel),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/receipts",
+                    post(sorafs::api::handle_post_sorafs_orderbook_receipt)
+                        .get(sorafs::api::handle_get_sorafs_orderbook_receipts),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/book",
+                    get(sorafs::api::handle_get_sorafs_orderbook_book),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/trades",
+                    get(sorafs::api::handle_get_sorafs_orderbook_trades),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/channels",
+                    get(sorafs::api::handle_get_sorafs_orderbook_channels),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/events",
+                    get(sorafs::api::handle_get_sorafs_orderbook_events),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/events/stream",
+                    get(sorafs::api::handle_get_sorafs_orderbook_events_stream),
+                )
+                .route(
+                    "/v1/sorafs/orderbook/events/ws",
+                    get(sorafs::api::handle_get_sorafs_orderbook_events_ws),
+                )
+                .route(
+                    "/v1/sorafs/appeals/pricing/config",
+                    get(sorafs::api::handle_get_sorafs_appeal_pricing_config),
+                )
+                .route(
+                    "/v1/sorafs/appeals/pricing/status",
+                    get(sorafs::api::handle_get_sorafs_appeal_pricing_status),
+                )
+                .route(
+                    "/v1/sorafs/appeals/pricing/quote",
+                    post(sorafs::api::handle_post_sorafs_appeal_pricing_quote),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/settle",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_settle),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/disburse",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_disburse),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/deposits",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_deposit),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/deposits/confirm",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_confirm),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/deposits/settle",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/deposits/reconcile",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile),
+                )
+                .route(
+                    "/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_appeal_finance_deposit),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots",
+                    post(sorafs::api::handle_post_sorafs_moderation_ballot_announce)
+                        .get(sorafs::api::handle_get_sorafs_moderation_ballots),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/{case_id}/{round_id}",
+                    get(sorafs::api::handle_get_sorafs_moderation_ballot),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/commits",
+                    post(sorafs::api::handle_post_sorafs_moderation_ballot_commit),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/reveals",
+                    post(sorafs::api::handle_post_sorafs_moderation_ballot_reveal),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/tally",
+                    post(sorafs::api::handle_post_sorafs_moderation_ballot_tally),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/events",
+                    get(sorafs::api::handle_get_sorafs_moderation_ballot_events),
                 );
             let group = group
                 .route(
@@ -36710,6 +36920,18 @@ impl Torii {
                 .route(
                     "/v1/sorafs/audit/repair/status/{manifest_hex}",
                     get(handler_get_sorafs_repair_status),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/events",
+                    get(handler_get_sorafs_repair_events),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/events/stream",
+                    get(handler_get_sorafs_repair_events_stream),
+                )
+                .route(
+                    "/v1/sorafs/audit/repair/events/ws",
+                    get(handler_get_sorafs_repair_events_ws),
                 );
             let group = group
                 .route(
@@ -37672,6 +37894,108 @@ impl Torii {
                         axum::routing::get(sorafs::api::handle_get_sorafs_capacity_state),
                     )
                     .route(
+                        "/v1/sorafs/governance/dag/dashboard",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_governance_dag_dashboard),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/head",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_governance_dag_head),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/blocks/{block_cid_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_governance_dag_block),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/nodes/{node_cid_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_governance_dag_node),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/publish-index",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_publish_index,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/publish-index/digests/{encoded_blake3_hex}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_publish_digest,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/publish-index/kinds/{payload_kind}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_publish_kind,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/appeals/finance/reports",
+                        axum::routing::post(sorafs::api::handle_post_sorafs_appeal_finance_report)
+                            .get(sorafs::api::handle_get_sorafs_appeal_finance_reports),
+                    )
+                    .route(
+                        "/v1/sorafs/appeals/finance/weekly-rollups",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_appeal_finance_weekly_rollups,
+                        )
+                        .post(sorafs::api::handle_post_sorafs_appeal_finance_weekly_rollup),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/car-queue",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_governance_dag_car_queue),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/car-queue/digests/{encoded_blake3_hex}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_car_queue_digest,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/car-queue/kinds/{payload_kind}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_car_queue_kind,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/car-queue/archives/{car_archive_blake3_hex}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_car_queue_archive,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/runtime",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_governance_dag_runtime),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/runtime/head",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_runtime_head,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/runtime/blocks/{block_cid_hex}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_runtime_block,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/runtime/nodes/{node_cid_hex}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_runtime_node,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/runtime/digests/{encoded_blake3_hex}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_runtime_digest,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/governance/dag/runtime/kinds/{payload_kind}",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_governance_dag_runtime_kind,
+                        ),
+                    )
+                    .route(
                         "/v1/sorafs/reputation/latest",
                         axum::routing::get(sorafs::api::handle_get_sorafs_reputation_latest)
                             .post(sorafs::api::handle_post_sorafs_reputation_snapshot),
@@ -38320,6 +38644,16 @@ impl Torii {
                 .deploy_burst_per_origin
                 .map(std::num::NonZeroU32::get),
         );
+        let sorafs_repair_auditor_rate_limiter = limits::RateLimiter::new(
+            config
+                .sorafs_repair
+                .auditor_rate_per_sec
+                .map(std::num::NonZeroU32::get),
+            config
+                .sorafs_repair
+                .auditor_burst
+                .map(std::num::NonZeroU32::get),
+        );
         let mcp_rate_per_sec = config.mcp.rate_per_minute.map(|rate| {
             let per_minute = rate.get();
             let per_sec = per_minute.div_ceil(60);
@@ -38563,7 +38897,8 @@ impl Torii {
                 Err(err) => panic!("invalid SoraFS stream token configuration: {err}"),
             };
         #[cfg(feature = "app_api")]
-        let (por_coordinator, por_runtime) = build_por_components(&config, &sorafs_node);
+        let (por_coordinator, por_runtime) =
+            build_por_components(&config, &sorafs_node, telemetry.clone());
         #[cfg(feature = "app_api")]
         let repair_runtime = build_repair_runtime(&sorafs_node);
         #[cfg(feature = "app_api")]
@@ -38689,6 +39024,7 @@ impl Torii {
             pipeline_status_rate_limiter: pipeline_status_rl,
             tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
+            sorafs_repair_auditor_rate_limiter,
             proof_rate_limiter,
             proof_egress_limiter,
             soracloud_public_rate_limiter,
@@ -39079,6 +39415,7 @@ impl Torii {
             pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
+            sorafs_repair_auditor_rate_limiter: self.sorafs_repair_auditor_rate_limiter.clone(),
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
@@ -40869,6 +41206,7 @@ fn build_sorafs_quota_config(
 fn build_por_components(
     config: &Config,
     sorafs_node: &sorafs_node::NodeHandle,
+    telemetry: routing::MaybeTelemetry,
 ) -> (
     Arc<sorafs::PorCoordinator>,
     Option<Arc<sorafs::PorCoordinatorRuntime>>,
@@ -40917,15 +41255,18 @@ fn build_por_components(
     let vrf_provider: Arc<dyn sorafs::VrfProvider> = Arc::new(sorafs::EmptyVrfProvider);
     let storage: Arc<dyn sorafs::PorStorage> = Arc::new(sorafs_node.clone());
 
-    let runtime = Arc::new(sorafs::PorCoordinatorRuntime::new(
-        storage,
-        coordinator.clone(),
-        randomness,
-        vrf_provider,
-        publisher,
-        por_cfg.epoch_interval_secs,
-        por_cfg.response_window_secs,
-    ));
+    let runtime = Arc::new(
+        sorafs::PorCoordinatorRuntime::new(
+            storage,
+            coordinator.clone(),
+            randomness,
+            vrf_provider,
+            publisher,
+            por_cfg.epoch_interval_secs,
+            por_cfg.response_window_secs,
+        )
+        .with_telemetry(telemetry),
+    );
 
     iroha_logger::info!(
         epoch_interval_secs = por_cfg.epoch_interval_secs,
@@ -43092,6 +43433,7 @@ pub(crate) mod tests_runtime_handlers {
             pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
             tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
+            sorafs_repair_auditor_rate_limiter: limits::RateLimiter::new(None, None),
             proof_rate_limiter: limits::RateLimiter::new(None, None),
             proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
             soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
@@ -60293,8 +60635,8 @@ mod tests {
     use nonzero_ext::nonzero;
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairTicketId, RepairWorkerActionV1,
-        RepairWorkerSignaturePayloadV1,
+        RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1, RepairReportV1, RepairTicketId,
+        RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
     };
 
     use super::*;
@@ -61281,9 +61623,9 @@ mod tests {
                 manifest_digest,
                 provider_id,
                 por_history_id: None,
-                cause: RepairCauseV1::Manual {
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
                     reason: "test".into(),
-                },
+                }),
                 evidence_json: None,
                 notes: None,
             },
@@ -61449,6 +61791,30 @@ mod tests {
             &signature,
         );
         assert_eq!(auth.expect("signed worker should be accepted"), worker_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_auditor_rate_limit_keys_by_auditor_account() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_repair_auditor_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+
+        enforce_sorafs_repair_auditor_rate_limit(&app, "auditor-a")
+            .await
+            .expect("first auditor-a request allowed");
+        let second = enforce_sorafs_repair_auditor_rate_limit(&app, "auditor-a").await;
+        assert!(matches!(
+            second,
+            Err(Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            )))
+        ));
+
+        enforce_sorafs_repair_auditor_rate_limit(&app, "auditor-b")
+            .await
+            .expect("distinct auditor has independent budget");
     }
 
     #[cfg(feature = "app_api")]

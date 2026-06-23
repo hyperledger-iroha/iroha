@@ -21,7 +21,7 @@ imzalama, ləqəb təşviqi, doğrulama və geri qaytarma təlimləri beləlikl�
 buraxılış artefaktı təkrarlana bilər və yoxlanıla bilər.
 
 Axın güman edir ki, sizdə `sorafs_cli` binar (quraşdırılmışdır)
-`--features cli`), pin-reyestr icazələri ilə Torii son nöqtəsinə giriş və
+`sorafs_orchestrator` Cargo target), pin-reyestr icazələri ilə Torii son nöqtəsinə giriş və
 OIDC Sigstore üçün etimadnamələr. Uzunömürlü sirləri saxla (`IROHA_PRIVATE_KEY`,
 `SIGSTORE_ID_TOKEN`, Torii nişanları) CI anbarınızda; yerli qaçışlar onları mənbə edə bilər
 qabıq ixracından.
@@ -29,7 +29,7 @@ qabıq ixracından.
 ## İlkin şərtlər
 
 - `npm` və ya `pnpm` ilə qovşaq 18.18+.
-- `cargo run -p sorafs_car --features cli --bin sorafs_cli`-dən `sorafs_cli`.
+- `cargo run -p sorafs_orchestrator --bin sorafs_cli`-dən `sorafs_cli`.
 - Torii URL-i `/v1/sorafs/*` üstəgəl səlahiyyət hesabı/şəxsi açarı ifşa edir
   manifestlər və ləqəblər təqdim edə bilər.
 - OIDC emitenti (GitHub Actions, GitLab, iş yükünün identifikasiyası və s.)

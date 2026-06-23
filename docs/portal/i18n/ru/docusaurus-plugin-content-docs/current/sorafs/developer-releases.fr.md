@@ -31,7 +31,7 @@ ci-dessous pour chaque тег кандидат.
 - Ждите залогового билета на исправление ситуации (например, `governance/tickets/SF6-SR-2026.md`) и примечаний.
   les approbateurs de Security Engineering et du Tooling Рабочая группа.
 - Проверьте наличие контрольного списка исправлений записки; элементы, не блокирующие выпуск.
-- Подготовка к загрузке журналов проводки (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Подготовка к загрузке журналов проводки (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   с пакетом манифеста.
 - Подтвердите команду подписи, которую вы выполняете, включая `--identity-token-provider` и т. д.
   UN `--identity-token-audience=<aud>` явно предназначен для захвата области Fulcio в пределах прав на выпуск.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Скрипт действует на следующие утверждения:
 
 - `cargo fmt --all -- --check` (рабочая область)
-- `cargo clippy --locked --all-targets` для `sorafs_car` (с функцией `cli`),
-  `sorafs_manifest` и `sorafs_chunker`
-- `cargo test --locked --all-targets` для ящиков этих мемов
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Если этот этап отзвучит, исправьте регрессию перед меткой. Сборки выпуска
 doivent être continus avec main ; не вишнёвые па-де-корректировки в ветках

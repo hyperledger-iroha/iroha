@@ -29,7 +29,7 @@ SoraFS بائنریز (`sorafs_cli` ، `sorafs_fetch` ، مددگار) اور SD
 - پروسیسنگ ٹکٹ لنک (جیسے `governance/tickets/SF6-SR-2026.md`) منسلک کریں اور رجسٹر ہوں
   سیکیورٹی انجینئرنگ اور ٹولنگ ورکنگ گروپ سے منظوری۔
 - تصدیق کریں کہ میمو میں پروسیسنگ مینو بند ہے۔ حل طلب اشیا رہائی سے منع کرتے ہیں۔
-- استعمال کی برابری کے رجسٹروں کو بڑھانے کے لئے تیار کریں (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- استعمال کی برابری کے رجسٹروں کو بڑھانے کے لئے تیار کریں (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   ظاہر پیکیج کے آگے۔
 - اس بات کو یقینی بنائیں کہ جس دستخطی کمانڈ پر آپ عملدرآمد کریں گے اس میں `--identity-token-provider` اور شامل ہے
   `--identity-token-audience=<aud>` واضح ہے تاکہ ریلیز ڈائریکٹریوں میں فلسیو اسکوپ کو پکڑا جائے۔
@@ -49,8 +49,7 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 اسکرپٹ مندرجہ ذیل چیک انجام دیتا ہے:
 
 - `cargo fmt --all -- --check` (ورک اسپیس)
-- `cargo clippy --locked --all-targets` برائے `sorafs_car` پیکیج (خصوصیت `cli` کے ساتھ) ،
-  `sorafs_manifest` اور `sorafs_chunker`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 انہی پیکجوں کے لئے -18ni00000028x
 
 اگر کوئی اقدام ناکام ہوجاتا ہے تو ، ٹیگ رکھنے سے پہلے رول بیک کو ٹھیک کریں۔ تعمیری ہونا ضروری ہے

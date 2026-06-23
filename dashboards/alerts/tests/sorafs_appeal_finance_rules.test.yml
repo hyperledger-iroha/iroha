@@ -1,0 +1,90 @@
+rule_files:
+  - ../sorafs_appeal_finance_rules.yml
+evaluation_interval: 5m
+tests:
+  - interval: 5m
+    input_series:
+      - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_report",result="failure",sink="filesystem"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
+        values: '0+0x40'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup",sink="filesystem"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - alertname: SoraFSAppealFinancePublishFailures
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinancePublishFailures
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels:
+              payload_kind: appeal_finance_report
+              result: failure
+              severity: critical
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance publication failures detected"
+      - alertname: SoraFSAppealFinanceReportStale
+        eval_time: 2h
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceReportStale
+        eval_time: 2h20m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance reports are stale"
+  - interval: 1h
+    input_series:
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
+        values: '200000+0x80'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup",sink="filesystem"}'
+        values: '0+0x80'
+    alert_rule_test:
+      - alertname: SoraFSAppealFinanceWeeklyRollupStale
+        eval_time: 48h
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceWeeklyRollupStale
+        eval_time: 49h
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceWeeklyRollupStale
+        eval_time: 50h
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance weekly rollups are stale"
+      - alertname: SoraFSAppealFinanceRollupLaggingReports
+        eval_time: 25m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceRollupLaggingReports
+        eval_time: 35m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS appeal finance rollups lag reports"
+  - interval: 5m
+    input_series:
+      - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_report",result="failure",sink="filesystem"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
+        values: '0 300 600 900 1200 1500 1800 2100 2400 2700 3000 3300'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup",sink="filesystem"}'
+        values: '0 300 600 900 1200 1500 1800 2100 2400 2700 3000 3300'
+    alert_rule_test:
+      - alertname: SoraFSAppealFinancePublishFailures
+        eval_time: 55m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceReportStale
+        eval_time: 55m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceWeeklyRollupStale
+        eval_time: 55m
+        exp_alerts: []
+      - alertname: SoraFSAppealFinanceRollupLaggingReports
+        eval_time: 55m
+        exp_alerts: []

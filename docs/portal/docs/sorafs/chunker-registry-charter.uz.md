@@ -58,10 +58,10 @@ SDK). U taxallusni va tekshirilgan invariantlarni ishlatadi
      `docs/source/sorafs/proposals/`.
    - Quyidagidan CLI chiqishini qo'shing:
      ```bash
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Armatura, taklif, determinizm hisoboti va reestrni o'z ichiga olgan PRni yuboring

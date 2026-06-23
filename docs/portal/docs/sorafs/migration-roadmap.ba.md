@@ -11,45 +11,46 @@ title: "SoraFS Migration Roadmap"
 translator: machine-google-reviewed
 ---
 
-> [`docs/source/sorafs/migration_roadmap.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-# SoraFS Миграция юл картаһы (SF-1)
+# SoraFS Migration Roadmap (SF-1)
 
-Был документта 2018 йылда төшөрөлгән миграция йүнәлеше операционанализлана.
-`docs/source/sorafs_architecture_rfc.md`. Ул SF-1 тапшырыуҙарын киңәйтә.
-башҡарырға әҙер осҡон, ҡапҡа критерийҙары, һәм хужа тикшерелгән исемлектәр шулай һаҡлау,
-артефакт хостинг I18NT0000000003X-арҡалы баҫма.
+This document operationalises the migration guidance captured in
+`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
+execution-ready milestones, gating criteria, and owner checklists so storage,
+governance, release engineering, and docs teams can coordinate SoraFS-backed
+publication.
 
-Юл картаһы аңлы рәүештә детерминистик: һәр осҡон кәрәкле тип атаған
-артефакттар, команда саҡырыуҙары һәм аттестация аҙымдары шулай аҫҡы ағым торбалары
-етештереү һәм идара итеү бер үк сығыштар аудит эҙен һаҡлай.
+The roadmap is intentionally deterministic: every milestone names the required
+artifacts, command invocations, and attestation steps so downstream pipelines
+produce identical outputs and governance retains an auditable trail.
 
-## Мильстоун дөйөм ҡараш
+## Milestone Overview
 
-| Мильстоун | Тәҙрә | Беренсел маҡсаттар | Кәмә | Хужалары |
-|---------|---------|---------------------------|----------||
-| **М1 – Детерминистик үтәү** | 7–12-се аҙналар | Ҡул ҡуйылған ҡорамалдарҙы һәм сәхнә псевдонимы дәлилдәрен үтәй, ә торба үткәргестәр көтөү флагтарын ҡабул итә. | Төнгө ҡоролма тикшерергә, совет ҡултамғаһы манифестар, псевдоним реестр стадияһы яҙмалары. | Һаҡлау, Идара итеү, СДК |
+| Milestone | Window | Primary Goals | Must Ship | Owners |
+|-----------|--------|---------------|-----------|--------|
+| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and expectation flags locally while rollout tickets carry fresh staging alias evidence. | Fixture verification, council-signed manifests, expectation-flag release checklists, and external alias evidence. | Storage, Governance, SDKs |
 
-Мильстоун статусы `docs/source/sorafs/migration_ledger.md`-та күҙәтелә. Бөтә
-был юл картаһына үҙгәрештәр MUST яңыртыу баш китабы идара итеү һәм сығарыу өсөн
-синхронлаштырыу буйынса инженерлыҡ.
+Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
+changes to this roadmap MUST update the ledger to keep governance and release
+engineering in sync.
 
-## Эш ағымдары
+## Workstreams
 
-### 2. Детерминистик прививка ҡабул итеү
+### 2. Deterministic Pinning Adoption
 
-| Аҙым | Мильстоун | Тасуирлама | Хужа(тар) | Сығыш |
-|-----|-----------|--------------|----------|---------|
-| Фикстура репетициялары | М0 | Аҙналыҡ ҡоро йүгерә сағыштырыу урындағы өлөшө дигестисть менән I18NI000000011X. `docs/source/sorafs/reports/` буйынса нәшриәт отчеты. | Һаҡлау менән тәьмин итеүселәр | `determinism-<date>.md` менән пропуск/уңышһыҙлыҡ матрицаһы. |
-| Ҡултамғаларҙы үтәү | М1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` ҡултамғалар йәки дрейфтар күрһәтһә, уңышһыҙлыҡҡа осрай. Үҫеш өҫтөнлөктәре идара итеүҙән баш тартыуҙы талап итә, PR-ға беркетелгән. | Ҡолғау WG | CI журнал, отказ билет һылтанмаһы (әгәр ҙә ҡағыла). |
-| Көтөү флагтары | М1 | Торбалар шылтыратыу I18NI000000016X менән асыҡ өмөттәр менән булавка сығыштары: | Доктар CI | Яңыртылған сценарийҙар һылтанма көтөү флагтары (аҫтағы команда блогын ҡарағыҙ). |
-| Реестр-беренсе пиннинг | М2 | `sorafs pin propose` һәм I18NI000000018X уратып манифест тапшырыу; CLI ғәҙәттәгесә `--require-registry`. | Идара итеү Опстары | Реестр CLI аудит журналы, телеметрия өсөн уңышһыҙ тәҡдимдәр. |
-| Күҙәтеүсәнлек паритеты | М3 | I18NT000000000000000000001X приборҙар таҡталары иҫкәртмәһе, ҡасан өлөшләтә запастар реестр манифестарынан айырыла; иҫкәртмәләр сымлы опс-шылтыратыу. | Күҙәтеүсән | Приборҙар таҡтаһы һылтанма, иҫкәртмә ҡағиҙәһе идентификаторҙары, GameDay һөҙөмтәләре. |
+| Step | Milestone | Description | Owner(s) | Output |
+|------|-----------|-------------|----------|--------|
+| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
+| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
+| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
+| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. Torii submissions include `manifest_b64` when full `ManifestV1` validation or council-signature enforcement is required. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
+| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
 
-#### Каноник нәшриәт командаһы
+#### Canonical publishing command
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
@@ -60,50 +61,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Алмаштырыу distest, күләме, һәм CID ҡиммәттәре менән көтөлгән һылтанмалар теркәлгән 2019 йылда.
-артефакт өсөн миграция баш китабына инеүе.
+Replace the digest, size, and CID values with the expected references recorded in
+the migration ledger entry for the artifact.
 
-### 3. Псевдоним күсеү & Элемтә
+### 3. Alias Transition & Communications
 
-| Аҙым | Мильстоун | Тасуирлама | Хужа(тар) | Сығыш |
-|-----|-----------|--------------|----------|---------|
-| Псевдоним стажировкала дәлилдәр | М1 | Теркәү псевдонимы дәғүәләре Pin Registry стадияһы мөхитендә һәм беркетергә Меркл иҫбатлауҙары манифест (`--alias`). | Идара итеү, Доктар | Дәлилдәр өйөмө янында һаҡланған + баш derger комментарий менән псевдоним исем. |
-| Дәлилдәр үтәү | М2 | Ҡапҡалар кире ҡаға манифесттары яңы `Sora-Proof` башлыҡтары булмаған; CI өҫтөнлөктәре I18NI000000022Х аҙым өсөн дәлилдәр килтерергә. | Селтәрҙәр | Ҡапҡа конфигурация патч + CI сығышты тотоу тикшерелгән уңыш. |
+| Step | Milestone | Description | Owner(s) | Output |
+|------|-----------|-------------|----------|--------|
+| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`) for live rollout tickets. | Governance, Docs | Proof bundle stored next to manifest plus external governance archive link. |
+| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
 
-### 4. Аралашыу & Аудит
+### 4. Communication & Audit
 
-- **Клегр дисциплинаһы:** һәр дәүләт үҙгәрә (фикстура дрейф, реестр тапшырыу,
-  псевдонимын әүҙемләштереү) 1990 йылға тиклем даталы иҫкәрмә ҡушырға тейеш.
+- **Ledger discipline:** every state change (fixture drift, registry submission,
+  alias activation) must append a dated note to
   `docs/source/sorafs/migration_ledger.md`.
-- **Идара итеү минуттары:** совет сессиялары раҫлай булавка реестр үҙгәрештәре йәки
-  псевдоним сәйәсәте был юл картаһына ла, баш китабына ла һылтанма яһарға тейеш.
-- **Тышҡы комс:** DevRel һәр этапта статусты яңыртыуҙы баҫтырып сығара (блог +
-  үҙгәрештәр журналы өҙөк) детерминистик гарантиялар һәм псевдоним ваҡыт һыҙыҡтарын айырып күрһәтеү.
+- **Governance minutes:** council sessions approving pin registry changes or
+  alias policies must reference both this roadmap and the ledger.
+- **External comms:** DevRel publishes status updates at each milestone (blog +
+  changelog excerpt) highlighting deterministic guarantees and alias timelines.
 
-## Зависимость & Хәүефтәр
+## Dependencies & Risks
 
-| Зависимый | Һөҙөмтә | Йомшартыу |
-|----------|---------|------------ |
-| Пин Реестр килешүе доступность | Блоктар М2 булавка-беренсе ролл-аут. | Этап килешеп алда М2 менән реплей һынауҙары; конверттарҙы регрессияһыҙ тиклем һаҡларға. |
-| совет асҡыстарына ҡул ҡуйыу | Кәрәкле өсөн асыҡ конверттар һәм реестр раҫлауҙары. | Ҡул ҡуйыу тантанаһы документлаштырылған I18NI000000024X; әйләндереп асҡыстар менән ҡапланыу һәм баш китабы иҫкәрмәһе. |
-| SDK сығарыу каденцияһы | Клиенттар М3 алдынан псевдонимға дәлилдәрҙе хөрмәт итергә тейеш. | SDK тура килтереп, ҡапҡалар менән тәҙрәләр сығарыу; шаблондар сығарыу өсөн миграция тикшерелгән исемлектәр өҫтәй. |
+| Dependency | Impact | Mitigation |
+|------------|--------|------------|
+| Pin Registry contract availability | Blocks hosted M2 pin-first rollout evidence. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
+| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
+| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
 
-Ҡалдыҡ хәүефтәр һәм йомшартыуҙар `docs/source/sorafs_architecture_rfc.md`-та көҙгөләндерелә.
-һәм төҙәтмәләр индергәндә һылтанмалы булырға тейеш.
+Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
+and should be cross-referenced when adjustments are made.
 
-## Сығыу критерийҙар тикшерелгән исемлек
+## Exit Criteria Checklist
 
-| Мильстоун | Критерийҙар |
-|----------|-----------|
-| М1 | - Төнгө ҡоролма эше йәшел ете көн рәттән. <br /> - CI-ла раҫланған псевдонимдарҙы сәхнәләштереү. <br /> - Идара итеү көтөү флагы сәйәсәтен ратификациялай. |
+| Milestone | Criteria |
+|-----------|----------|
+| M1 | - `ci/check_sorafs_fixtures.sh` and fixture verification stay green. <br /> - Release checklists use explicit `--car-digest`/`--root-cid` expectations. <br /> - Staging alias proof evidence is attached to the external rollout archive. |
 
-## Үҙгәрештәр менән идара итеү
+## Change Management
 
-1. PR аша төҙәтмәләр тәҡдим итеү был файлды яңыртыу ** һәм **
+1. Propose adjustments via PR updating this file **and**
    `docs/source/sorafs/migration_ledger.md`.
-2. Һылтанма идара итеү минуттарын һәм CI дәлилдәрен раҫлаусы PR тасуирламаһында.
-3. Берләштереү тураһында, һаҡлау тураһында хәбәр итеү + DevRel рассылка исемлеге менән дөйөм һәм көтөлгән
-   оператор ғәмәлдәре.
+2. Link supporting governance minutes and CI evidence in the PR description.
+3. On merge, notify storage + DevRel mailing list with summary and expected
+   operator actions.
 
-Был процедуранан һуң I18NT0000000004X роллоуты детерминистик булып ҡала,
-аудитлы, һәм асыҡтан-асыҡ командалар араһында ҡатнашҡан I18NT00000000005X старт.
+Following this procedure ensures the SoraFS rollout remains deterministic,
+auditable, and transparent across teams participating in the Nexus launch.

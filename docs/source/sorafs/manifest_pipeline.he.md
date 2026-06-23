@@ -49,7 +49,7 @@ translation_last_reviewed: 2026-01-30
 ### Quickstart של CLI
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 הפקודה מדפיסה דיגסטים של chunks ופרטי מניפסט; כאשר `--manifest-out` ו/או `--car-out`
@@ -142,7 +142,7 @@ fetch רב‑מקורות מיושרת עם מדיניות הקבלה של המ�
 המורכב תואם את ציפיות המניפסט לפני כתיבת הפלט — שימושי ל‑CI smoke-tests שרוצים לוודא שהאורקסטרטור
 לא השמיט או סידר מחדש chunks בשקט.
 
-אם כבר יש לכם דוח JSON שנוצר על ידי `sorafs-manifest-stub`, העבירו אותו ישירות באמצעות
+אם כבר יש לכם דוח JSON שנוצר על ידי `sorafs_manifest_stub`, העבירו אותו ישירות באמצעות
 `--manifest-report=docs.report.json`. ה‑CLI של fetch ישתמש מחדש בשדות המוטמעים
 `chunk_fetch_specs`, `payload_digest_hex`, ו‑`payload_len`, כך שאין צורך לנהל קובצי תוכנית או
 אימות נפרדים.

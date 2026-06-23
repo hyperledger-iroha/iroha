@@ -28,7 +28,7 @@ SoraFS ბინარები (`sorafs_cli`, `sorafs_fetch`, დამხმ�
 - მიამაგრეთ გამოსასწორებელი ბილეთის ბმული (მაგ., `governance/tickets/SF6-SR-2026.md`) და გაითვალისწინეთ გაფორმება
   დამმტკიცებლები უსაფრთხოების საინჟინრო და Tooling სამუშაო ჯგუფიდან.
 - გადაამოწმეთ, რომ მემორანდუმის გამოსწორების საკონტროლო სია დახურულია; გადაუჭრელი ელემენტები ბლოკავს გათავისუფლებას.
-- მოემზადეთ პარიტეტული აღკაზმულობის ჟურნალების ასატვირთად (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- მოემზადეთ პარიტეტული აღკაზმულობის ჟურნალების ასატვირთად (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   მანიფესტის პაკეტთან ერთად.
 - დაადასტურეთ ხელმოწერის ბრძანება, რომლის შესრულებასაც აპირებთ, მოიცავს როგორც `--identity-token-provider`, ასევე აშკარა
   `--identity-token-audience=<aud>` ასე რომ, Fulcio-ს ფარგლები აღბეჭდილია გამოშვების მტკიცებულებებში.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 სკრიპტი ასრულებს შემდეგ მტკიცებულებებს:
 
 - `cargo fmt --all -- --check` (სამუშაო სივრცე)
-- `cargo clippy --locked --all-targets` `sorafs_car`-ისთვის (`cli` ფუნქციით),
-  `sorafs_manifest` და `sorafs_chunker`
-- `cargo test --locked --all-targets` იმავე ყუთებისთვის
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 თუ რომელიმე ნაბიჯი ვერ მოხერხდა, დააფიქსირეთ რეგრესია მონიშვნამდე. გამოშვების კონსტრუქციები უნდა იყოს
 უწყვეტი მთავართან; არ აკრიფოთ ჩიპები გამოშვების ტოტებში. კარიბჭე

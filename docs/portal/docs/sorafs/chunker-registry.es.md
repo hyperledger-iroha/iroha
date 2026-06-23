@@ -61,7 +61,7 @@ primera entrada en `profile_aliases`, seguida de cualquier alias heredado.
 Para inspeccionar el registro desde tooling, ejecuta el CLI helper:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -113,7 +113,7 @@ Para inspeccionar un testigo PoR específico, proporciona índices de chunk/segm
 persiste la prueba a disco:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -125,7 +125,7 @@ Usa `--promote-profile=<handle>` para emitir un bloque JSON de metadatos (incluy
 registrados) que puede pegarse en `chunker_registry_data.rs` al promover un nuevo perfil por defecto:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -138,7 +138,7 @@ Para validar una prueba existente contra un payload, pasa la ruta vía
 coincide con la raíz calculada):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -147,7 +147,7 @@ El CLI garantiza un orden determinista (sembrado con `splitmix64`) y truncará d
 la solicitud supere las hojas disponibles:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -157,7 +157,7 @@ El manifest stub refleja los mismos datos, lo que es conveniente al automatizar 
 (`--profile=sorafs.sf1@1.0.0`) para que los scripts de build puedan evitar hard-codear IDs numéricos:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

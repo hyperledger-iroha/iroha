@@ -22,7 +22,7 @@ outcome of each command in the table to maintain an auditable trail.
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | All tests pass; `vectors` parity test succeeds. | Confirms canonical fixtures compile and match Rust implementation. |
 | 2 | `ci/check_sorafs_fixtures.sh` | Script exits 0; reports manifest digests below. | Verifies fixtures regenerate cleanly and signatures remain attached. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Entry for `sorafs.sf1@1.0.0` matches registry descriptor (`profile_id=1`). | Ensures registry metadata stays in sync. |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | Entry for `sorafs.sf1@1.0.0` matches registry descriptor (`profile_id=1`). | Ensures registry metadata stays in sync. |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds without `--allow-unsigned`; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | Reports no diff between generated TypeScript, Rust, and Go fixtures and verifies manifest signatures. | Runs in CI when Node is available; ensures parity across generated runtime bindings. |
 

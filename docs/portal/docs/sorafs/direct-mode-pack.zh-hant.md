@@ -49,7 +49,7 @@ SoraNet 電路仍然是 SoraFS 的默認傳輸，但路線圖項目 **SNNet-5a**
 - 當每個候選廣告僅支持SoraNet中繼時，`direct_only_policy_rejects_soranet_only_providers`保證`TransportPolicy::DirectOnly`快速失敗。 【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` 確保存在 Torii/QUIC 傳輸時使用，並且 SoraNet 中繼被排除在會話之外。 【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` 解析 `docs/examples/sorafs_direct_mode_policy.json` 以確保文檔與幫助程序實用程序保持一致。 【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` 針對模擬的 Torii 網關練習 `sorafs_cli fetch --transport-policy=direct-only`，為固定直接傳輸的受監管環境提供煙霧測試。 【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` 針對模擬的 Torii 網關練習 `sorafs_cli fetch --transport-policy=direct-only`，為固定直接傳輸的受監管環境提供煙霧測試。 【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` 將相同的命令與策略 JSON 和記分板持久性包裝在一起，以實現部署自動化。
 
 在發布更新之前運行重點套件：

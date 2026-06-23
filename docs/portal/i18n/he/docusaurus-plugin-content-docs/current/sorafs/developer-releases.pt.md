@@ -31,7 +31,7 @@ revisao de seguranca:
 - Anexe o link do ticket de remediacao (לדוגמה, `governance/tickets/SF6-SR-2026.md`) e ante
   אושרו של הנדסת אבטחה וקבוצת עבודה של כלי עבודה.
 - Verifique que a checklist de remediacao no memo esta fechada; itens pendentes bloqueiam o שחרור.
-- הכן או העלאת יומני dos dos do harness de paridade (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- הכן או העלאת יומני dos dos do harness de paridade (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   junto com o bundle de manifest.
 - אשר que o comando de assinatura que voce vai executar inclui `--identity-token-provider` e
   um `--identity-token-audience=<aud>` מפורש למען השגת שחרור.
@@ -51,9 +51,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 הו תסריט יופיע בתור אימות מפורט:
 
 - `cargo fmt --all -- --check` (סביבת עבודה)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (com a feature `cli`),
-  `sorafs_manifest` e `sorafs_chunker`
-- `cargo test --locked --all-targets` עבור ארגזי מסמוס
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Se algum passo falhar, corrija a regressao antes de taguear. בונה devem שחרור
 ser continuos com main; נאו faca cherry-pick de correcoes em branches de release. O

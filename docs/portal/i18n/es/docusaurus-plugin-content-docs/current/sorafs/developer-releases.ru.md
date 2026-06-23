@@ -30,7 +30,7 @@ Antes de la revisión técnica de la puerta de liberación, consulte la revisió
 - Solicite un ticket de remediación (por ejemplo, `governance/tickets/SF6-SR-2026.md`) y elimine
   aprobar-ответственных из Grupo de trabajo de ingeniería de seguridad y herramientas.
 - Asegúrese de que la lista de verificación de remediación esté en el memorándum; незакрытые пункты блокируют релиз.
-- Подготовьте загрузку логов paridad arnés (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Подготовьте загрузку логов paridad arnés (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   вместе с paquete manifiesto.
 - Убедитесь, что команда подписи, которую вы планируете выполнить, включает и `--identity-token-provider`, и
   явный `--identity-token-audience=<aud>`, чтобы alcance Fulcio был зафиксирован в релизных evidencia.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Script выполняет следующие проверки:
 
 - `cargo fmt --all -- --check` (espacio de trabajo)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (con la característica `cli`),
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` para estas cajas
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Si el cable de descarga se bloquea, no se debe realizar una regresión al etiquetado. Релизные сборки должны
 идти непрерывно от principal; No elimine las películas Cherry-pick en Release-ветки. Puerta de entrada

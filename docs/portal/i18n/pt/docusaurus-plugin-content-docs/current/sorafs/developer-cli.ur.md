@@ -18,7 +18,7 @@ descrição: Superfície `sorafs_cli` consolidada کا passo a passo focado em t
 :::nota مستند ماخذ
 :::
 
-Superfície `sorafs_cli` consolidada (caixa `sorafs_car` کے ذریعے recurso `cli` کے ساتھ فراہم ہوتا ہے) Artefatos SoraFS تیار کرنے کے لیے درکار ہر قدم expor کرتا ہے۔ O livro de receitas e os fluxos de trabalho são os mais importantes para você contexto operacional کے لیے اسے pipeline de manifesto اور runbooks do orquestrador کے ساتھ par کریں۔
+Superfície `sorafs_cli` consolidada (provided by the `sorafs_orchestrator` crate) Artefatos SoraFS تیار کرنے کے لیے درکار ہر قدم expor کرتا ہے۔ O livro de receitas e os fluxos de trabalho são os mais importantes para você contexto operacional کے لیے اسے pipeline de manifesto اور runbooks do orquestrador کے ساتھ par کریں۔
 
 ## Cargas úteis do pacote
 

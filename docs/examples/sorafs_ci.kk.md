@@ -81,7 +81,7 @@ jobs:
 
 ## Ескертпелер
 
-- `sorafs_cli` жүгіргіште қолжетімді болуы керек (мысалы, `cargo install --path crates/sorafs_car --features cli` осы қадамдарға дейін).
+- `sorafs_cli` жүгіргіште қолжетімді болуы керек (мысалы, `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` осы қадамдарға дейін).
 - Жұмыс процесі анық OIDC аудиториясын қамтамасыз етуі керек (мұнда `sorafs`); Fulcio саясатыңызға сәйкестендіру үшін `--identity-token-audience` реттеңіз.
 - Шығарылым құбыры басқаруды тексеру үшін `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` және `artifacts/proof.json` мұрағаттауы керек.
 - Детерминистік үлгі артефактілері `fixtures/sorafs_manifest/ci_sample` ішінде өмір сүреді; Құбырды қайта есептемей, алтын манифесттер, бөліктік жоспарлар немесе JSON бумасы қажет болғанда оларды сынақтарға көшіріңіз.

@@ -58,10 +58,10 @@ description: Чеклист для предложения новых профи�
 
 ```bash
 # JSON список всех зарегистрированных дескрипторов (ids, handles, aliases, multihash)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 
 # Эмитить метаданные для кандидата на профиль по умолчанию (канонический handle + aliases)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
@@ -134,12 +134,12 @@ CAR метаданные и PoR proofs остаются согласованны
 
 ```bash
 # Проверить метаданные чанка + PoR с новым профилем
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf2@1.0.0 \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Сгенерировать manifest + CAR и сохранить chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -148,7 +148,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Повторно запустить с сохраненным планом fetch (защищает от устаревших offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

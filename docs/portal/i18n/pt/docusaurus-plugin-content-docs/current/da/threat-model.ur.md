@@ -230,7 +230,7 @@ provedores maliciosos کو whitelist کرتا ہے، یا alertas suprimir کر�
   `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے impressão digital
   verifica o tópico کرتا ہے۔
 - Simulações de streaming PDP / PoTR chicote de fluxo de prova کے ذریعے چلتی ہیں:
-  `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ Fluxos de solicitação PoR/PDP/PoTR
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`۔ یہ Fluxos de solicitação PoR/PDP/PoTR
   cobertura de cenários de falha کرتا ہے جو modelo de ameaça میں بیان ہیں۔
 - Capacidade de absorção de reparo `docs/source/sorafs/reports/sf2c_capacity_soak.md`
   میں ہیں, جبکہ Sumeragi matriz de imersão `docs/source/sumeragi_soak_matrix.md` میں ہے

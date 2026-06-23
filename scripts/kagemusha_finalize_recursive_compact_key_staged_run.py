@@ -641,8 +641,11 @@ def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]
     except device_lab.DuplicateJsonKeyError as exc:
         key = device_lab._display_path(exc.key)
         return None, [f"{label} contains duplicate JSON object key {key}"]
-    except device_lab.NonFiniteJsonConstantError as exc:
-        return None, [f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed"]
+    except device_lab.NonFiniteJsonConstantError:
+        return None, [
+            f"{label} is not strict JSON: non-finite constant "
+            f"{device_lab.JSON_NONFINITE_CONSTANT_REDACTION} is not allowed"
+        ]
     except json.JSONDecodeError:
         return None, [f"{label} is not valid JSON"]
 

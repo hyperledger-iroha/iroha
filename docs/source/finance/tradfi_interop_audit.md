@@ -414,7 +414,29 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   or network delivery, rejects secret-looking `message_type` markers and
   malformed secret-looking `payload_sha256` values plus all-zero payload digest
   placeholders before unsupported-type handling, and keeps payload digest
-  mismatch diagnostics label-only instead of echoing compared hashes, rejects
+  mismatch diagnostics label-only instead of echoing compared hashes or local
+  source XML paths, reports missing required source XML/sidecar files without
+  echoing local paths, reports missing notary anchor/audit-index/audit-record
+  source files without echoing local paths, keeps missing latest-anchor
+  digest-peer diagnostics free of derived local peer paths, keeps notary anchor
+  and digest-addressed peer symlink diagnostics free of embedded source paths,
+  keeps exported audit-index mismatch diagnostics free of exported index paths
+  in both receipt verification and audit-notary preflight, keeps live rail
+  gateway sidecar JSON/XML read-limit/payload-digest mismatch diagnostics free
+  of operator inbox paths before network delivery, keeps malformed live notary
+  anchor JSON, exported-index JSON, store-directory, and persisted record-source
+  diagnostics free of operator export/store paths before network delivery,
+  reports audit-notary `--export-dir` discovery and empty `--all` anchor
+  discovery failures with role labels instead of local export paths,
+  reports malformed source sidecar JSON and source XML read-limit failures with
+  receipt-relative labels instead of local source paths, reports rail gateway
+  `--inbox-dir` discovery failures with the `inbox_dir` role label instead of
+  local operator inbox paths,
+  reports top-level receipt file read, malformed JSON/UTF-8, object-shape,
+  version, receipt-kind, symlink-ancestor, size-limit, and `--receipt-dir`
+  discovery failures with indexed receipt labels instead of local operator
+  receipt paths,
+  rejects
   unknown sidecar fields, rejects secret-looking material in known sidecar fields before
   unsupported-value diagnostics can echo message types, profiles, payload
   digests, or rail-message IDs, bounds sidecar JSON before parsing,
@@ -601,10 +623,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   embedded in canary stdout, and direct archive receipt-verifier stdout. This
   prevents shadowed keys, non-finite numeric values, or invalid Unicode strings
   from changing the release-evidence meaning after digest or policy checks, and
-  duplicate-key diagnostics now avoid echoing the repeated key name.
-  Secret-looking unknown JSON field names now get label-only unknown-key
-  diagnostics across the ISO validators while ordinary unknown-field typos
-  continue to list the field names for operator debugging.
+  duplicate-key and non-finite numeric constant diagnostics now avoid echoing
+  the repeated key name or `NaN`/`Infinity` spelling.
+  Unknown JSON field names now get label-only unknown-key diagnostics across
+  the ISO validators, including ordinary unknown-field typos that previously
+  listed field names for operator debugging.
   Recursive trust-bundle, receipt, evidence, and readiness secret-material
   scanners likewise report only label-level forbidden-field failures, and
   receipt value secret checks no longer echo the receipt field label that
@@ -744,7 +767,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   checked-in `fixtures/iso20022/` artifacts, and compact replay rejects
   anchor/store/index paths under those artifacts. The audit notary adapter
   rejects checked-in notary anchor/store fixture inputs before network delivery
-  or receipt output.
+  or receipt output. Malformed notary source replay diagnostics for anchor JSON,
+  exported-index JSON, store directories, and persisted record-source files use
+  receipt-relative labels rather than copying operator archive/store paths into
+  stderr.
   Canary runbooks,
   trust bundles, evidence/readiness summaries, XSD manifests, profile catalogs,
   schema files, XML fixtures, and receipt archive directories must reject
@@ -859,10 +885,23 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   archive/canary kind, filename, or metadata mismatch blockers avoid printing
   receipt kind values, receipt leaf names, or full metadata tuples.
   XSD profile-catalog enum values such as rails, embedded signature policies,
-  reference datasets, and structured-address modes also reject overlong ASCII
-  spellings before unknown-value diagnostics can print them.
-  Profile-catalog profile IDs are capped before duplicate-ID or
-  missing-schema-version diagnostics can print them.
+  reference datasets, and structured-address modes now report unknown values by
+  class without printing the supplied enum value.
+  Profile-catalog profile IDs, family aliases, concrete version IDs, skipped
+  family aliases, and strict missing-schema-version failures use label-only
+  diagnostics for duplicate, mismatch, and schema-backed gate errors in both
+  direct XSD verification and final readiness replay.
+  XSD source filename, schema `targetNamespace`, schema payload-root, XML
+  fixture namespace/payload-root, unknown schema-reference, and linked
+  schema/fixture mismatch diagnostics likewise report only the mismatch class
+  and affected label.
+  XSD document/payload complex-type cardinality and direct-child diagnostics
+  also report only the schema role rather than the concrete type names parsed
+  from the schema.
+  XSD blocked-source already-checked-in and missing-gap diagnostics also report
+  only the affected class, keeping candidate message definition IDs out of
+  direct verifier stderr and final readiness blocker text while preserving the
+  normalized public blocked-source evidence.
   Profile-catalog business-service entries are capped before overlong service
   identifiers can be emitted or archived.
   XSD/XML schema and fixture identifiers are capped before schema/root mismatch
@@ -878,6 +917,18 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   trust profile IDs, override IDs, embedded signature policy strings, and
   trust-source authority/version/timestamp provenance are capped before trust
   diagnostics can print or archive them.
+  Top-level trust-bundle read, malformed JSON/UTF-8, symlink-ancestor, and
+  semantic validation diagnostics now use bundle-index labels instead of local
+  operator bundle paths, while successful summaries retain the path for audit
+  evidence.
+  Top-level XSD fixture manifest and profile-catalog read, malformed
+  JSON/UTF-8, raw-string, symlink-ancestor, and size-limit diagnostics now use
+  input role labels instead of local operator manifest/catalog paths, while
+  accepted summaries retain the paths for audit evidence.
+  Manifest-referenced XSD schema and XML fixture read, parse, DTD/entity,
+  restricted-terms, symlink-ancestor, and size-limit diagnostics now use
+  manifest entry labels instead of resolved local source paths, while accepted
+  summaries retain the manifest-relative paths for audit evidence.
   Live rail/notary adapter timeouts must be
   positive finite numbers, and their response/payload byte caps must be positive
   integers rather than JSON/Python boolean aliases before any local read or
@@ -919,13 +970,25 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   canary and trust-bundle context summaries must keep provider/environment
   labels printable ASCII. Expected provider/environment mismatch diagnostics
   remain label-only and do not print observed or expected context values.
+  Canary runbook config read, malformed JSON/UTF-8, symlink-ancestor, and
+  size-limit failures use the `config` label rather than local operator runbook
+  paths before planning or child command execution.
+  Operator evidence canary/trust summary read, malformed JSON/UTF-8,
+  symlink-ancestor, size-limit, and semantic validation failures use indexed
+  summary labels rather than local archive paths, while accepted compact
+  evidence still records the paths for audit traceability.
+  Production readiness XSD/evidence summary read, malformed JSON/UTF-8,
+  symlink-ancestor, and size-limit failures use indexed summary labels rather
+  than local release input paths before blocker replay, while accepted summaries
+  and blocker locations still preserve paths for audit traceability.
   Archived canary command replays reject unsupported secret-looking or
   non-ASCII flag names with label-only diagnostics before evidence summaries can
   echo the flag spelling.
-  Unknown JSON field names that are secret-looking, control-bearing,
-  non-ASCII, overlong, too numerous, or collectively oversized are likewise
-  reported with label-only diagnostics while ordinary ASCII typos remain listed
-  for operator ergonomics.
+  Unknown JSON field names are likewise reported with label-only diagnostics,
+  including ordinary ASCII typos as well as secret-looking, control-bearing,
+  non-ASCII, overlong, too numerous, or collectively oversized names.
+  Non-finite JSON numeric constants are reported by class without echoing the
+  `NaN`/`Infinity` spelling supplied in adapter, canary, or receipt inputs.
   Duplicate record, list, digest, OID, DER, compact-summary, archived
   receipt-reuse, and trust-material diagnostics now report label/index-only
   structural failures without echoing the rejected duplicate value.
@@ -997,8 +1060,22 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   unsupported canary stage-name diagnostics no longer echo the unexpected stage
   label. Direct evidence replay and final readiness trust blockers also report
   non-production or unsupported embedded-signature policies without echoing the
-  archived policy value. Direct evidence replay also rejects unsupported or
-  local-only child command flags without echoing the archived flag text.
+  archived policy value. Trust-bundle verification and direct evidence replay
+  also report unsupported internal DER material kinds without echoing the
+  supplied kind string. XSD profile-catalog rail, embedded-signature policy,
+  reference-dataset, and structured-address-mode enum diagnostics also report
+  the unknown class without echoing the supplied enum value; duplicate profile
+  IDs, family aliases, concrete version mismatches, duplicate concrete
+  versions, skipped-family mismatches, and strict schema-backed gate failures
+  similarly avoid copying the supplied profile/version strings in direct XSD
+  verification and final readiness replay. XSD source filename, schema
+  `targetNamespace`, payload-root, fixture namespace, unknown schema-reference,
+  and linked schema/fixture mismatch diagnostics also avoid copying the
+  supplied values. Final readiness trust-profile source, pin, policy, and
+  revocation-material blockers also avoid copying archived profile IDs. Direct
+  evidence replay also rejects
+  unsupported or local-only child command flags without echoing the archived
+  flag text.
   Archived profile-catalog paths, including checked-in fixture coordinates, get
   the same readiness recheck when production readiness consumes archived XSD
   summaries.
@@ -1707,7 +1784,8 @@ tampering. Evidence summaries or nested receipt summaries that were produced wit
 `allow_legacy_colr007=true`, or canary summaries that do not prove
 `--require-explicit-policy`, are production blockers. Trust profiles that disable
 CRL/OCSP revocation checks or carry zero required revocation material are also
-production blockers. Compact trust profiles whose source authority/version still
+production blockers, with blocker messages kept to role labels rather than
+copying compact profile IDs. Compact trust profiles whose source authority/version still
 contains template markers such as `dummy`, `fake`, `placeholder`,
 `replace-before-production`, `sample`, or `template`, including
 separator-obfuscated variants, or whose source URL still

@@ -9,16 +9,12 @@ source_last_modified: "2026-01-22T07:34:23.474301+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-title: SoraFS Gateway Conformance Harness
-summary: Replay and load-testing plan for the SF-5 trustless delivery profile.
----
-
 # SoraFS Gateway Conformance Harness
 
-This note outlines the proposed architecture for the SF-5a conformance harness.
-It is an implementation plan, not the final deliverable. The intent is to give
-QA and Tooling a shared blueprint before integration work begins.
+This note records the implemented SF-5a conformance harness and the remaining
+rollout evidence hand-offs. The local regression contract is fixture-backed,
+deterministic, and signed through the same attestation envelope operators use
+for gateway self-certification.
 
 ## Objectives
 
@@ -35,11 +31,12 @@ QA and Tooling a shared blueprint before integration work begins.
 
 The deterministic replay suite now runs as part of the workspace CI helpers via
 `ci/check_sorafs_gateway_conformance.sh`. The script executes
-`cargo test --locked -p integration_tests sorafs_gateway_conformance -- --nocapture`
+`cargo test --locked -p integration_tests --test nexus_and_streaming sorafs_gateway_conformance -- --nocapture`
 to replay the canonical fixture matrix and fails fast when regressions surface.
-Nightly pipelines should invoke the script alongside `ci/check_sorafs_fixtures.sh`
-so conformance stays gated on the same proofs, manifests, and refusal scenarios
-used for operator attestations.
+Hosted nightly pipelines should invoke the script alongside
+`ci/check_sorafs_fixtures.sh` once rollout secrets and artifact retention are
+available, so conformance stays gated on the same proofs, manifests, and
+refusal scenarios used for operator attestations.
 
 The same test binary now drives the deterministic load harness
 (`run_deterministic_load_test`) which spawns ≥1,000 concurrent requests across
@@ -148,12 +145,13 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
    `iroha_crypto::KeyPair::from_private_key` that enforces filesystem ACL checks
    and supports hardware-backed adapters.
 5. **Persist artifacts.** Write three files per run:
-   - `report.json` — the unsigned JSON report (canonical formatting).
-   - `report.attestation.to` — Norito-encoded attestation envelope.
-   - `report.attestation.txt` — human-readable summary (hash + signer).
+   - `sorafs_gateway_report.json` — the unsigned JSON report (canonical formatting).
+   - `sorafs_gateway_attestation.to` — Norito-encoded attestation envelope.
+   - `sorafs_gateway_attestation.txt` — human-readable summary (hash + signer).
 
-6. **Verification CLI.** Ship `sorafs-gateway-cert verify` (part of the planned
-   `sorafs-gateway-cert` crate) that performs the inverse operation:
+6. **Verification CLI.** Use
+   `cargo xtask sorafs-gateway-attest --verify <attestation.to>` to perform the
+   inverse operation:
    - Parse the Norito attestation.
    - Recompute BLAKE3 over the embedded report.
    - Verify the signature with `iroha_crypto::Signature::verify`.
@@ -162,7 +160,11 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
 You can generate the report/attestation bundle locally via `cargo xtask sorafs-gateway-attest`.
 The command accepts `--signing-key <path>` (hex-encoded private key),
 `--signer-account <<i105-account-id>>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
-Artifacts default to `artifacts/sorafs_gateway_attest/`.
+Artifacts default to `artifacts/sorafs_gateway_attest/`. Verify a generated or
+operator-supplied envelope with
+`cargo xtask sorafs-gateway-attest --verify <attestation.to>`; verification
+recomputes the embedded report BLAKE3 digest and checks the Ed25519 signature
+against the declared signer key.
 
 By keeping the signing hook inside the harness binary, nightly CI runs can
 auto-publish signed artifacts, and operators only need to provide a keypair
@@ -206,7 +208,7 @@ feeds or integration tests.
 
 ## Reporting Format
 
-The harness should emit a signed JSON document:
+The harness emits a signed JSON document:
 
 ```json
 {
@@ -224,7 +226,8 @@ The harness should emit a signed JSON document:
 }
 ```
 
-Operators can append their signature (Norito-signed envelope) for self-certification.
+Operators archive the Norito-signed envelope for self-certification and
+governance review.
 
 ## Manual Gateway Smoke Test (`sorafs-fetch`)
 
@@ -242,15 +245,21 @@ sorafs-fetch \
 
 The resulting report mirrors the conformance output (including `provider_reports[].metadata`) and can be attached to change tickets during blue/green rollouts.
 
-## Open Questions / Next Steps
+## Rollout Follow-ups
 
-- Determine fixture repository layout (likely `fixtures/sorafs_gateway/`).
-- Decide on PoR sampling defaults for load tests (tie-in with SF-13).
-- Select concurrency driver (Tokio vs external load generator).
-- Integrate with CI (GitHub Actions & internal Jenkins).
+- Archive signed local conformance reports from
+  `ci/check_sorafs_gateway_conformance.sh` for each release candidate.
+- Run the same fixture bundle against live staging hardware and record gateway
+  version, cache state, duration, and hardware profile alongside the signed
+  report.
+- Add a live-target adapter only if operators need the integration test to
+  exercise deployed gateways directly instead of the deterministic fixture
+  adapter.
+- Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed
+  HTTP/3 endpoint and configuration surface.
 
 Downgrade/missing-header refusal and HEAD probe coverage now live in the
 integration harness (`integration_tests/tests/sorafs_gateway_conformance.rs:295`
 and `integration_tests/tests/sorafs_gateway_conformance.rs:442`).
 
-Feedback is welcome—track comments under SF-5a in the roadmap.
+Track rollout evidence under the SF-5a entries in `roadmap.md` and `status.md`.

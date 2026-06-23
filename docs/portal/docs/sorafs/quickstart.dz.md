@@ -66,11 +66,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. གསལ་སྟོན་དང་མཚན་རྟགས་བཀོད་པ།
 
 ཆ་ཤས་འཆར་གཞི་དང་ མིང་གཞན་དང་ གཞུང་སྐྱོང་མཚན་རྟགས་ཚུ་ ལག་ལེན་འཐབ་སྟེ་ མངོན་གསལ་ལུ་ གསལ་སྟོན་འབད།
-`sorafs-manifest-stub`. འོག་གི་བརྡ་བཀོད་འདི་གིས་ ཡིག་སྣོད་གཅིག་པའི་ པེ་ལོཌི་ཅིག་སྟོནམ་ཨིན། མཐར༌འཁྱོལ༌
+`sorafs_manifest_stub`. འོག་གི་བརྡ་བཀོད་འདི་གིས་ ཡིག་སྣོད་གཅིག་པའི་ པེ་ལོཌི་ཅིག་སྟོནམ་ཨིན། མཐར༌འཁྱོལ༌
 ཤིང་ཅིག་ཐུམ་སྒྲིལ་འབད་ནིའི་དོན་ལུ་ སྣོད་ཐོ་འགྲུལ་ལམ་ (CLI གིས་ ཚིག་མཛོད་ཀྱི་ འགྲུལ་བསྐྱོད་འབདཝ་ཨིན།)།
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

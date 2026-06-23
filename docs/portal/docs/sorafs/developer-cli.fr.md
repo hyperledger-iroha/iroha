@@ -19,7 +19,7 @@ description: Parcours orienté tâches de la surface consolidée `sorafs_cli`.
 :::note Source canonique
 :::
 
-La surface consolidée `sorafs_cli` (fournie par le crate `sorafs_car` avec la feature `cli` activée) expose chaque étape nécessaire pour préparer les artefacts SoraFS. Utilisez ce cookbook pour aller directement aux workflows courants ; associez-le au pipeline de manifest et aux runbooks de l'orchestrateur pour le contexte opérationnel.
+La surface consolidée `sorafs_cli` (provided by the `sorafs_orchestrator` crate) expose chaque étape nécessaire pour préparer les artefacts SoraFS. Utilisez ce cookbook pour aller directement aux workflows courants ; associez-le au pipeline de manifest et aux runbooks de l'orchestrateur pour le contexte opérationnel.
 
 ## Empaqueter les payloads
 

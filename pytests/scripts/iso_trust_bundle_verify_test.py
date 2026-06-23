@@ -764,6 +764,52 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn("must not be a symlink", stderr)
 
+    def test_input_bundle_path_diagnostics_do_not_echo_path(self):
+        cases = (
+            ("malformed-json", b"{", "is not valid JSON"),
+            ("non-utf8-json", b"\xff", "is not UTF-8 JSON"),
+            ("not-object", b"[]", "must be a JSON object"),
+        )
+        for name, payload, expected in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden_dir = root / f"local-trust-leak-{name}"
+                    hidden_dir.mkdir()
+                    path = hidden_dir / "operator-trust-bundle.json"
+                    path.write_bytes(payload)
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertIn("bundle[0]", stderr)
+                    self.assertNotIn(str(path), stderr)
+                    self.assertNotIn(hidden_dir.name, stderr)
+
+    def test_symlinked_bundle_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "bundle-target"
+            target_dir.mkdir()
+            target = write_bundle(target_dir, valid_bundle())
+            hidden_link = root / "local-trust-leak-ancestor"
+            try:
+                hidden_link.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            bundle = hidden_link / target.name
+
+            rc, stdout, stderr = run_verify(["--bundle", str(bundle)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+            self.assertIn("bundle[0]", stderr)
+            self.assertNotIn(str(bundle), stderr)
+            self.assertNotIn(hidden_link.name, stderr)
+
     def test_directory_bundle_is_rejected_before_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
             bundle = Path(raw_root) / "bundle-dir"
@@ -794,6 +840,23 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertIn("exceeds", stderr)
+
+    def test_parsed_bundle_validation_does_not_echo_input_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden_dir = root / "local-trust-leak-validation"
+            hidden_dir.mkdir()
+            bundle = valid_bundle()
+            bundle["version"] = False
+            path = write_bundle(hidden_dir, bundle)
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("bundle[0].version must be 1", stderr)
+            self.assertNotIn(str(path), stderr)
+            self.assertNotIn(hidden_dir.name, stderr)
 
     def test_bundle_cli_path_rejects_raw_smuggling_before_read(self):
         cases = (
@@ -1204,7 +1267,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             rc, _stdout, stderr = run_verify(["--bundle", str(path)])
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_bundle_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1256,6 +1320,29 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             )
             self.assertEqual(rc, 2)
             self.assertIn("profile_id duplicates", stderr)
+
+    def test_internal_unsupported_der_kind_diagnostics_do_not_echo_kind(self):
+        cases = (
+            "token=trust-der-kind-secret",
+            "unsupported\u202etrust-der-kind",
+        )
+        for kind in cases:
+            with self.subTest(kind=kind):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._require_der_kind(b"", "bundle.der", kind)
+
+                message = str(caught.exception)
+                self.assertIn("has unsupported DER kind", message)
+                self.assertNotIn(kind, message)
+                self.assertNotIn("trust-der-kind", message)
+
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._raise_der_kind_error("bundle.der", kind)
+
+                message = str(caught.exception)
+                self.assertIn("has unsupported DER kind", message)
+                self.assertNotIn(kind, message)
+                self.assertNotIn("trust-der-kind", message)
 
     def test_declared_der_digest_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

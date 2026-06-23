@@ -97,6 +97,28 @@ artifacts under `reputation/snapshots/<snapshot_id>/` and updates
 `reputation/latest.to` plus `reputation/latest.json` pointers. Each artifact has
 a `.blake3` sidecar.
 
+## Observability
+
+After Torii validates and accepts a reputation snapshot, it exports:
+
+- `sorafs_reputation_ingest_lag_seconds`
+- `sorafs_reputation_snapshot_age_seconds`
+- `sorafs_reputation_snapshot_generated_at_unix`
+- `sorafs_reputation_provider_count`
+- `sorafs_reputation_low_score_providers`
+- `sorafs_reputation_score{provider_id}`
+- `sorafs_reputation_threshold_crossings_total{level}`
+
+The `sorafs_reputation_score{provider_id}` gauge is bounded to the top 100
+providers in the latest accepted snapshot. Providers that fall out of that set
+are removed from the exported label set.
+
+Import `dashboards/grafana/sorafs_reputation_health.json` for operator views of
+snapshot freshness, publisher lag, provider counts, low-score providers,
+top-score trends, and low-score threshold crossings. Install
+`dashboards/alerts/sorafs_reputation_rules.yml`; the matching promtool fixture is
+`dashboards/alerts/tests/sorafs_reputation_rules.test.yml`.
+
 ## Proof Verification
 
 For a provider lookup, call `snapshot.merkle_proof(provider_id)` and return the
@@ -221,8 +243,20 @@ CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-node CARGO_INCREMENTAL=0 \
 CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-node CARGO_INCREMENTAL=0 \
   cargo test -j 1 -p iroha_torii reputation -- --nocapture
 
+CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-metrics CARGO_INCREMENTAL=0 \
+  cargo test -j 1 -p iroha_telemetry \
+  records_sorafs_reputation_snapshot_metrics -- --nocapture
+
 CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-node CARGO_INCREMENTAL=0 \
   cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths -- --nocapture
+
+jq empty dashboards/grafana/sorafs_reputation_health.json
+
+ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' \
+  dashboards/alerts/sorafs_reputation_rules.yml
+
+ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' \
+  dashboards/alerts/tests/sorafs_reputation_rules.test.yml
 
 cd javascript/iroha_js && \
   node --test --test-name-pattern "SoraFS reputation|sorafs reputation" \

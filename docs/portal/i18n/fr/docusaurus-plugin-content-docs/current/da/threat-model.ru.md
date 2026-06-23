@@ -208,7 +208,7 @@ liste blanche des fournisseurs malveillants ou diffusion d'alertes.
   `crates/iroha_core/src/da/replay_cache.rs` (logique de cache) et intégration Torii dans
   `crates/iroha_torii/src/da/ingest.rs`, les contrôles d'empreintes digitales sont effectués à partir de `/v1/da/ingest`.
 - Les simulations de streaming PDP/PoTR utilisent le harnais proof-stream dans
-  `crates/sorafs_car/tests/sorafs_cli.rs`, recherche des flux de requêtes PoR/PDP/PoTR et
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, recherche des flux de requêtes PoR/PDP/PoTR et
   scénarios d'échec из модели угроз.
 - Capacité et réparation des résultats de trempage
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, matrice de trempage Sumeragi

@@ -247,7 +247,7 @@ Nexus لین اور خرابیوں کے تحت بازیافت گورننس نم�
   کیشے) اور `crates/iroha_torii/src/da/ingest.rs` میں انضمام Torii ، جو تھریڈ ہے
   `/v1/da/ingest` کے ذریعے فنگر پرنٹ چیک کرتا ہے۔
 - PDP/POTR اسٹریمنگ تخروپن پروف اسٹریم کنٹرول کے ذریعے انجام دیئے جاتے ہیں
-  `crates/sorafs_car/tests/sorafs_cli.rs` میں ، درخواست کے سلسلے کا احاطہ کرنا
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs` میں ، درخواست کے سلسلے کا احاطہ کرنا
   POR/PDP/POTR اور ناکامی کے منظرنامے خطرے کے ماڈل میں متحرک ہیں۔
 - صلاحیت اور مرمت کو بھگانا نتائج کے تحت زندہ رہتے ہیں
   `docs/source/sorafs/reports/sf2c_capacity_soak.md` ، جبکہ میٹرکس

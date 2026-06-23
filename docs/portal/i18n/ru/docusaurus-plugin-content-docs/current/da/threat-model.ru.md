@@ -222,7 +222,7 @@ Nexus полосовые объекты и артефакты управлени
   `crates/iroha_core/src/da/replay_cache.rs` (логика кэша) и интеграция Torii в
   `crates/iroha_torii/src/da/ingest.rs`, где проверки отпечатков пальцев проходят через `/v1/da/ingest`.
 - Моделирование потоковой передачи PDP/PoTR упражняется через систему доказательства потока в
-  `crates/sorafs_car/tests/sorafs_cli.rs`, покрывающий потоки запросов PoR/PDP/PoTR и
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, покрывающий потоки запросов PoR/PDP/PoTR и
   сценарии отказа из угрозы модели.
 - Результаты емкости и ремонтной выдержки в
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, Sumeragi замачивающая матрица в

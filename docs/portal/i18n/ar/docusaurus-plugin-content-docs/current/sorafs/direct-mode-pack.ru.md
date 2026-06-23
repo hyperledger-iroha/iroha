@@ -44,7 +44,7 @@ Sidebar_label: حزمة نظام ممتاز
 يتضمن النظام الأساسي لمستوى الحرارة التغطية كما في الأوركسترا، وكذلك في وحدات CLI:- `direct_only_policy_rejects_soranet_only_providers` يضمن أن `TransportPolicy::DirectOnly` هو الحل الأمثل عندما يقوم كل مرشح بالإعلان بنفس القدر SoraNet.[صناديق/sorafs_orchestrator/src/lib.rs:7238]
 - `direct_only_policy_prefers_direct_transports_when_available` يضمن استخدام Torii/QUIC، عند توفرها، باستثناء بكرة SoraNet من сессии.[صناديق/sorafs_orchestrator/src/lib.rs:7285]
 - `direct_mode_policy_example_is_valid` البارسيت `docs/examples/sorafs_direct_mode_policy.json`، لتوثيق التوثيق مع utилитами-helperamи.【crates/sorafs_orchestrator/src/lib.rs:7509】 【docs/examples/sorafs_direct_mode_policy.json:1】
-- تم إغلاق `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` للحماية من بوابة Torii، التي تتيح اختبار الدخان للشبكة المنتظمة، وسائل النقل الثابتة.[crates/sorafs_car/tests/sorafs_cli.rs:2733]
+- تم إغلاق `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` للحماية من بوابة Torii، التي تتيح اختبار الدخان للشبكة المنتظمة، وسائل النقل الثابتة.[crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733]
 - `scripts/sorafs_direct_mode_smoke.sh` يدعمه الأمر JSON-politico ولوحة النتائج لأتمتة الطرح.
 
 قم بإنهاء مجموعة الاختبارات المركّزة قبل نشرها:

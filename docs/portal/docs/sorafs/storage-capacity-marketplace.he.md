@@ -9,166 +9,281 @@ source_last_modified: "2025-11-20T07:32:59.870730+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
----
-id: storage-capacity-marketplace
-title: מרקטפלייס קיבולת אחסון SoraFS
-sidebar_label: מרקטפלייס קיבולת
-description: תוכנית SF-2c למרקטפלייס הקיבולת, replication orders, טלמטריה ו-hooks של ממשל.
----
-
-:::note מקור קנוני
-עמוד זה משקף את `docs/source/sorafs/storage_capacity_marketplace.md`. שמרו על התאמה בין שני המיקומים כל עוד התיעוד הישן פעיל.
+:::note Canonical Source
 :::
 
-# מרקטפלייס קיבולת אחסון SoraFS (טיוטת SF-2c)
+# SoraFS Storage Capacity Marketplace (SF-2c)
 
-פריט ה-roadmap SF-2c מציג מרקטפלייס מנוהל שבו providers של אחסון מצהירים על קיבולת מחויבת, מקבלים replication orders ומרוויחים fees ביחס לזמינות שסופקה. מסמך זה מגדיר את ה-deliverables הנדרשים לריליס הראשון ומפרק אותם למסלולים ישימים.
+The SF-2c roadmap item introduces a governed marketplace where storage
+providers declare committed capacity, receive replication orders, and earn fees
+proportional to delivered availability. This document tracks the implemented
+first-release schemas, Torii/node surfaces, CLI helpers, metering evidence, and
+rollout checks required before hosted production settlement.
 
-## יעדים
+## Objectives
 
-- להציג התחייבויות קיבולת של providers (סך בתים, מגבלות לכל lane, תפוגה) בצורה ניתנת לאימות שיכולה לשמש את governance, תעבורת SoraNet ו-Torii.
-- להקצות pins בין providers בהתאם לקיבולת המוצהרת, stake ומגבלות policy תוך שמירה על התנהגות דטרמיניסטית.
-- למדוד אספקת אחסון (הצלחת replication, uptime, integrity proofs) ולהוציא טלמטריה לחלוקת fees.
-- לספק תהליכי revocation ו-dispute כדי שספקים לא הוגנים ייענשו או יוסרו.
+- Express provider capacity commitments (total bytes, per-lane limits, expiry)
+  in a verifiable form consumable by governance, SoraNet transport, and Torii.
+- Allocate pins across providers according to declared capacity, stake, and
+  policy constraints while maintaining deterministic behaviour.
+- Meter storage delivery (replication success, uptime, integrity proofs) and
+  export telemetry for fee distribution.
+- Provide revocation and dispute processes so dishonest providers can be
+  penalised or removed.
 
-## מושגי תחום
+## Domain Concepts
 
-| מושג | תיאור | Deliverable ראשוני |
-|---------|-------------|---------------------|
-| `CapacityDeclarationV1` | Norito payload שמתאר מזהה provider, תמיכת פרופיל chunker, GiB מחויבים, מגבלות לכל lane, pricing hints, התחייבות staking ותוקף. | סכמה + ולידטור ב-`sorafs_manifest::capacity`. |
-| `ReplicationOrder` | הוראה שמונפקת על ידי governance שמקצה CID של manifest ל-provider אחד או יותר, כולל רמת יתירות ומדדי SLA. | סכמה Norito משותפת עם Torii + API של smart contract. |
-| `CapacityLedger` | רישום on-chain/off-chain שעוקב אחר הצהרות קיבולת פעילות, replication orders, מדדי ביצועים והצטברות fees. | מודול smart contract או stub של שירות off-chain עם snapshot דטרמיניסטי. |
-| `MarketplacePolicy` | מדיניות governance שמגדירה stake מינימלי, דרישות ביקורת ועקומות ענישה. | config struct ב-`sorafs_manifest` + מסמך ממשל. |
+| Concept | Description | Implemented / Tracked Surface |
+|---------|-------------|-------------------------------|
+| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema, validator, fixtures, and CLI helpers in `sorafs_manifest::capacity` / `sorafs_manifest_stub capacity declaration`. |
+| `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | `ReplicationOrderV1` schema, fixture generator, Torii scheduling endpoint, and node reservation hooks. |
+| `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | `/v1/sorafs/capacity/state`, fee/credit ledger export, dispute records, and reconciliation tooling. |
+| `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Policy defaults, telemetry penalty hooks, dispute/slash runbook, and governance archive evidence. |
 
-### סכמות ממומשות (סטטוס)
+### Implemented Schemas (Status)
 
-## פירוט עבודה
+## Work Breakdown
 
-### 1. שכבת סכמות ורישום
+### 1. Schema & Registry Layer
 
-| משימה | Owner(s) | הערות |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| להגדיר `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Storage Team / Governance | להשתמש ב-Norito; לכלול versioning סמנטי והפניות capabilities. |
-| לממש מודולי parser + validator ב-`sorafs_manifest`. | Storage Team | לאכוף IDs מונוטוניים, גבולות קיבולת ודרישות stake. |
-| להרחיב את metadata של chunker registry עם `min_capacity_gib` לכל פרופיל. | Tooling WG | מסייע ללקוחות לאכוף דרישות חומרה מינימליות לכל פרופיל. |
-| לנסח מסמך `MarketplacePolicy` שמתעד guardrails של admission ולוח זמנים של ענישה. | Governance Council | לפרסם ב-docs לצד policy defaults. |
+| Define `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Storage Team / Governance | Use Norito; include semantic versioning and capability references. |
+| Implement parser + validator modules in `sorafs_manifest`. | Storage Team | Enforce monotonic IDs, capacity bounds, stake requirements. |
+| Extend chunker registry metadata with `min_capacity_gib` per profile. | Tooling WG | Helps clients enforce per-profile minimum hardware requirements. |
+| Maintain `MarketplacePolicy` admission guardrails and penalty schedule. | Governance Council | Keep policy defaults, dispute thresholds, and governance evidence in sync with live rollout decisions. |
 
-#### הגדרות סכמה (ממומש)
+#### Schema Definitions (Implemented)
 
-- `CapacityDeclarationV1` לוכד התחייבויות קיבולת חתומות לכל provider, כולל handles קנוניים של chunker, הפניות capabilities, caps אופציונליים לכל lane, pricing hints, חלונות תוקף ו-metadata. הוולידציה מבטיחה stake שאינו אפס, handles קנוניים, aliases ללא כפילויות, caps לליין בתוך הסכום המוצהר ומעקב GiB מונוטוני.【crates/sorafs_manifest/src/capacity.rs:28】
-- `ReplicationOrderV1` קושר manifests להקצאות שהונפקו על ידי governance עם יעדי יתירות, ספי SLA והבטחות לכל assignment; הוולידטורים אוכפים handles קנוניים של chunker, providers ייחודיים ומגבלות deadline לפני ש-Torii או הרישום בולעים את ה-order.【crates/sorafs_manifest/src/capacity.rs:301】
-- `CapacityTelemetryV1` מבטא snapshots של epochs (GiB מוצהרים מול מנוצלים, מוני replication, אחוזי uptime/PoR) שמזינים חלוקת fees. בדיקות גבול שומרות את הניצול בתוך ההצהרות ואת האחוזים בטווח 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
-- helpers משותפים (`CapacityMetadataEntry`, `PricingScheduleV1`, ולידטורי lane/assignment/SLA) מספקים ולידציה דטרמיניסטית למפתחות ודיווחי שגיאות שניתנים לשימוש חוזר ב-CI וב-downstream tooling.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` מציג כעת snapshot on-chain דרך `/v1/sorafs/capacity/state`, תוך שילוב הצהרות providers ורשומות fee ledger מאחורי Norito JSON דטרמיניסטי.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
-- כיסוי הולידציה בודק אכיפת handles קנוניים, זיהוי כפילויות, גבולות לכל lane, guards של הקצאות replication ובדיקות טווח לטלמטריה כדי שרגרסיות יבלטו מיד ב-CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- tooling למפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ממיר specs קריאים לאדם ל-Norito payloads קנוניים, base64 blobs וסיכומי JSON כך שמפעילים יוכלו להכין fixtures עבור `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` ו-replication order fixtures עם ולידציה מקומית.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures נמצאים ב-`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ונוצרים באמצעות `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- `CapacityDeclarationV1` captures signed capacity commitments per provider, including canonical chunker handles, capability references, optional lane caps, pricing hints, validity windows, and metadata. Validation ensures non-zero stake, canonical handles, deduplicated aliases, per-lane caps within the declared total, and monotonic GiB accounting.【crates/sorafs_manifest/src/capacity.rs:28】
+- `ReplicationOrderV1` binds manifests to governance-issued assignments with redundancy targets, SLA thresholds, and per-assignment guarantees; validators enforce canonical chunker handles, unique providers, and deadline constraints before Torii or the registry ingest the order.【crates/sorafs_manifest/src/capacity.rs:301】
+- `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
+- Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
+- `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
+- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
 
-### 2. אינטגרציית control plane
+### 2. Smart Contract / Control Plane
 
-| משימה | Owner(s) | הערות |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| להוסיף handlers של Torii עבור `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` עם Norito JSON payloads. | Torii Team | לשקף את לוגיקת הוולידציה; להחזיר שימוש ב-Norito JSON helpers. |
-| להעביר snapshots של `CapacityDeclarationV1` אל metadata של orchestrator scoreboard ולתוכניות fetch של gateway. | Tooling WG / Orchestrator team | להרחיב `provider_metadata` בהפניות קיבולת כדי ש-scoring רב-מקורי יכבד מגבלות lane. |
-| להזין replication orders אל clients של orchestrator/gateway כדי להנחות assignments ו-failover hints. | Networking TL / Gateway team | Scoreboard builder צורך replication orders חתומים על ידי governance. |
-| tooling של CLI: להרחיב את `sorafs_cli` עם `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | לספק JSON דטרמיניסטי + outputs של scoreboard. |
+| Prototype registry contract (`PinProviderRegistry`) with CRUD for capacity declarations and replication orders. | Core Infra / Smart Contract Team | Ensure deterministic hashing and Norito encoding parity. |
+| Expose gRPC/REST service (`/v1/sorafs/capacity`) mirroring contract state for Torii/gateways. | Core Infra | Provide pagination + attestation (block hash, proof). |
+| Implement fee accrual ledger with basic rate card (GiB · hour * price). | Economics WG / Core Infra | Export ledger snapshots for billing integration. |
+| Add dispute/resolution hooks (challenge window, evidence submission). | Governance Council | Determine default timeouts and penalties. |
 
-### 3. מדיניות מרקטפלייס וממשל
+### 3. Torii & SoraFS Node Integration
 
-| משימה | Owner(s) | הערות |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| לאשר את `MarketplacePolicy` (stake מינימלי, מכפילי ענישה, תדירות ביקורת). | Governance Council | לפרסם ב-docs ולתעד היסטוריית תיקונים. |
-| להוסיף governance hooks כדי ש-Parliament יאשר, יחדש ויבטל declarations. | Governance Council / Smart Contract team | להשתמש ב-Norito events + manifest ingestion. |
-| לממש לוח זמנים של ענישה (הפחתת fees, slashing של bond) הקשור להפרות SLA שנמדדות בטלמטריה. | Governance Council / Treasury | ליישר קו עם outputs של settlement ב-`DealEngine`. |
-| לתעד תהליך dispute ומטריצת הסלמה. | Docs / Governance | לקשר ל-dispute runbook + CLI helpers. |
+| Torii: ingest `CapacityDeclarationV1` and expose via discovery API. | Networking TL | Align with existing provider advert flows. |
+| `sorafs-node`: persist replication assignments, schedule downloads, enforce per-provider quotas. | Storage Team | Build on top of multi-source fetch orchestrator. |
+| CLI updates: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`, `sorafs_fetch --capacity-plan`. | Tooling WG | Provide JSON reports for operators. |
+| Telemetry: publish `capacity_commitment_bytes`, `capacity_utilisation_percent`, `replication_order_backlog`. | Observability | Feed dashboards + alerts. |
 
-### 4. Metering וחלוקת fees
+- Torii app API now accepts capacity registry submissions via dedicated endpoints:
+  - `POST /v1/sorafs/capacity/declare` wraps a signed `CapacityDeclarationV1` and queues the
+    corresponding `RegisterCapacityDeclaration` instruction.【crates/iroha_torii/src/routing.rs:4390】【crates/iroha_torii/src/lib.rs:3175】
+  - `POST /v1/sorafs/capacity/telemetry` records per-epoch utilisation snapshots through
+    `RecordCapacityTelemetry`, enforcing sanity bounds before dispatch.【crates/iroha_torii/src/routing.rs:4744】【crates/iroha_torii/src/lib.rs:3248】
+- Telemetry payloads now include PDP/PoTR counters so governance can correlate proof failures with
+  billing and enforcement. Submitters must provide `pdp_challenges`/`pdp_failures` and
+  `potr_windows`/`potr_breaches`; Torii validates that failures never exceed the total window and
+  surfaces descriptive errors when probes are missing. These counters feed the new
+  `SorafsPenaltyPolicy.max_pdp_failures` and `.max_potr_breaches` knobs so any proof failure can
+  trigger an immediate strike/slash without waiting for utilisation/uptime caps.
+- Proof failure governance evidence is now emitted automatically. Whenever `RecordCapacityTelemetry`
+  receives a snapshot whose PDP or PoTR counters exceed the configured limits, the runtime files a
+  `proof_failure` `CapacityDisputeRecord` with a canonical `CapacityDisputeV1` payload. The evidence
+  digest references the Norito-encoded telemetry payload (retrievable via the URI
+  `norito://sorafs/capacity_telemetry/<provider_hex>/<start_epoch>-<end_epoch>`), so governance,
+  Taikai/CDN reviewers, and auditors can fetch the exact snapshot that triggered the strike without
+  relying on ad hoc bundles.
+- `POST /v1/sorafs/capacity/schedule` allows operators to submit governance-issued `ReplicationOrderV1`
+  payloads; the embedded `sorafs-node` manager validates the order, tracks outstanding assignments,
+  and returns a scheduling summary with remaining capacity so orchestration tooling can act on the
+  result. `POST /v1/sorafs/capacity/complete` releases reservations once ingestion finishes, feeding
+  release telemetry back into local capacity snapshots. The node seeds a `TelemetryAccumulator`
+  alongside the scheduler so operators (or background workers) can derive canonical
+  `CapacityTelemetryV1` payloads capturing GiB·hour, uptime, and PoR success metrics before posting
+  through Torii.【crates/iroha_torii/src/routing.rs:4806】【crates/sorafs_node/src/lib.rs:110】【crates/sorafs_node/src/telemetry.rs:1】
+- Local metering now surfaces dedicated observation endpoints. `POST /v1/sorafs/capacity/uptime`,
+  `POST /v1/sorafs/capacity/por`, and `POST /v1/sorafs/capacity/failure` update the embedded
+  `CapacityMeter`, telemetry accumulator, and Prometheus gauges without issuing transactions,
+  ensuring probe data and replication failures feed dashboards and fee accrual logic immediately.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
+- The trustless gateway profile enumerates the HTTP request/response matrix, proof formats, and
+  telemetry expectations that gateways must satisfy before joining the SF-5 conformance suite. See
+  `docs/source/sorafs_gateway_profile.md` for the normative specification.
+- `GET /v1/sorafs/capacity/state` now includes a `local_usage` projection that reports the node’s
+  committed/allocated GiB, per-chunker reserves, lane utilisation, outstanding orders, and live
+  metering counters (GiB·hour, uptime/PoR samples, replication counts) sourced from the embedded
+  meter. A `telemetry_preview` payload mirrors the canonical `CapacityTelemetryV1` submission so
+  operators can compare dashboard values against the Norito snapshot before broadcasting new
+  adverts.【crates/iroha_torii/src/sorafs/api.rs:144】
+- Credit ledgers are exported alongside fee ledgers in the same response. Each entry reports
+  available credit, bonded collateral, strike counters, penalty totals, and low-balance timestamps so
+  treasury automation and dashboards can gate payouts before settlement windows close.【crates/iroha_torii/src/sorafs/registry.rs:123】【crates/iroha_torii/src/sorafs/api.rs:5096】
+- Capacity disputes are first-class in the capacity registry: `/v1/sorafs/capacity/state`
+  now emits a `disputes` array (with base64 payloads, evidence digests, and status metadata) while
+  `/v1/sorafs/capacity/dispute` accepts governance-signed submissions. Use the CLI helper to craft
+  requests and note the response’s `dispute_id_hex` for revocation and audit tracking.【crates/iroha_torii/src/sorafs/api.rs:520】【crates/iroha_torii/src/routing.rs:4889】【docs/source/sorafs/dispute_revocation_runbook.md:45】
+- `sorafs_manifest_stub capacity dispute` accepts a declarative spec when filing governance disputes.
+  Required fields: `provider_id_hex`, `complainant_id_hex`, `kind` (`replication_shortfall`, `uptime_breach`,
+  `proof_failure`, `fee_dispute`, or `other`), `submitted_epoch`, `description`, and an `evidence` object with
+  `digest_hex` (BLAKE3-256). Optional fields include `replication_order_id_hex`, `requested_remedy`, `evidence.media_type`,
+  `evidence.uri`, and `evidence.size_bytes`. The CLI emits canonical Norito bytes, base64 payloads, and a Torii-ready
+  request body so operators can lodge disputes or archive evidence deterministically. See
+  `docs/source/sorafs/dispute_revocation_runbook.md` for the end-to-end governance playbook.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:35】
+- `sorafs_manifest_stub capacity {declaration, telemetry, replication-order, complete}` gained `--request-out`
+  helpers (with `--authority`/`--private-key` for declarations and telemetry) so operators can emit
+  ready-to-post JSON payloads for the Torii endpoints without hand-assembling request
+  bodies.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:20】
 
-| משימה | Owner(s) | הערות |
+### 4. Metering & Fee Distribution
+
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| להרחיב ingest של metering ב-Torii כדי לקבל `CapacityTelemetryV1`. | Torii Team | לאמת GiB-hour, הצלחת PoR, uptime. |
-| לעדכן את צינור ה-metering של `sorafs_node` כדי לדווח ניצול לפי order + סטטיסטיקות SLA. | Storage Team | ליישר קו עם replication orders ו-chunker handles. |
-| pipeline של settlement: להמיר טלמטריה + נתוני replication ל-payouts נקובי XOR, להפיק סיכומים מוכנים לממשל, ולרשום מצב ledger. | Treasury / Storage Team | לחבר ל-Deal Engine / Treasury exports. |
-| לייצא dashboards/alerts לבריאות metering (ingestion backlog, טלמטריה ישנה). | Observability | להרחיב את חבילת Grafana שמוזכרת ב-SF-6/SF-7. |
+| Define proof types (PoR success, uptime intervals, ticket acknowledgements). | Storage Team / Observability | Reuse existing PoR tree metadata. |
+| Build metering pipeline that aggregates per-provider metrics per epoch. | Observability / Economics WG | Output JSON snapshots consumed by billing. |
+| Implement reward calculation (baseline share + performance multiplier). | Economics WG | Document formulas; ensure deterministic rounding. |
+| Governance workflow for payout approval and penalty enforcement. | Governance Council | Provide CLI + docs for treasury review. |
 
-- Torii חושף כעת `/v1/sorafs/capacity/telemetry` ו-`/v1/sorafs/capacity/state` (JSON + Norito) כדי שמפעילים יוכלו להגיש telemetry snapshots של epochs ומבקרים יוכלו למשוך ledger קנוני לצורך ביקורת או אריזת ראיות.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
-- אינטגרציית `PinProviderRegistry` מבטיחה ש-replication orders נגישים דרך אותו endpoint; helpers של CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) מאמתים ומפרסמים טלמטריה מהרצות אוטומציה עם hashing דטרמיניסטי ופתרון aliases.
-- metering snapshots מייצרים רשומות `CapacityTelemetrySnapshot` הצמודות ל-snapshot `metering`, ו-Prometheus exports מזינים את לוח Grafana המוכן לייבוא ב-`docs/source/grafana_sorafs_metering.json` כדי שצוותי בילינג יעקבו אחר צבירת GiB-hour, fees nano-SORA צפויים ועמידה ב-SLA בזמן אמת.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
-- כאשר metering smoothing פעיל, ה-snapshot כולל `smoothed_gib_hours` ו-`smoothed_por_success_bps` כדי לאפשר השוואת ערכי EMA מול הספירות הגולמיות שהממשל משתמש בהן ל-payouts.【crates/sorafs_node/src/metering.rs:401】
+- `sorafs_node` now ships with a lightweight `CapacityMeter` that tracks scheduled/completed
+  orders, declared GiB, and outstanding slices so telemetry windows can be populated directly
+  from the embedded worker without re-deriving utilisation off-chain.【crates/sorafs_node/src/metering.rs:1】【crates/sorafs_node/src/lib.rs:27】
+- `/v1/sorafs/capacity/state` now emits a deterministic `fee_projection` payload alongside the live
+  `metering` snapshot, and Prometheus exports feed the ready-to-import Grafana board at
+  `docs/source/grafana_sorafs_metering.json` so billing teams can monitor GiB·hour accrual,
+  projected nano-SORA fees, and SLA compliance in real time.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
+- When metering smoothing is enabled, the snapshot includes `smoothed_gib_hours` and
+  `smoothed_por_success_bps` so operators can compare EMA-trended values against the raw
+  counters that governance uses for payouts.【crates/sorafs_node/src/metering.rs:401】【crates/iroha_torii/src/sorafs/api.rs:816】
 
-### 5. טיפול ב-dispute וב-revocation
+### 5. Dispute & Revocation Handling
 
-| משימה | Owner(s) | הערות |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| להגדיר payload של `CapacityDisputeV1` (מתלונן, evidence, provider יעד). | Governance Council | סכמה Norito + ולידטור. |
-| תמיכת CLI להגשת disputes ולמענה (עם attachments של evidence). | Tooling WG | להבטיח hashing דטרמיניסטי של bundle evidence. |
-| להוסיף בדיקות אוטומטיות להפרות SLA חוזרות (auto-escalate ל-dispute). | Observability | ספי alert ו-governance hooks. |
-| לתעד playbook של revocation (תקופת חסד, פינוי נתוני pinned). | Docs / Storage Team | לקשר ל-policy doc ול-operator runbook. |
+| Define `CapacityDisputeV1` payload (complainant, evidence, target provider). | Governance Council | Norito schema + validator. |
+| CLI support to file disputes and respond (with evidence attachments). | Tooling WG | Ensure deterministic hashing of evidence bundle. |
+| Add automated checks for repeated SLA breaches (auto-escalate to dispute). | Observability | Alert thresholds and governance hooks. |
+| Document revocation playbook (grace period, evacuation of pinned data). | Docs / Storage Team | Link to policy doc and operator runbook. |
 
-## דרישות בדיקות ו-CI
+## Testing & CI Requirements
 
-- בדיקות יחידה לכל הוולידטורים החדשים של הסכמה (`sorafs_manifest`).
-- בדיקות אינטגרציה המדמות: declaration → replication order → metering → payout.
-- workflow ב-CI שמחדש הצהרות/טלמטריה לדוגמה ומוודא סנכרון חתימות (להרחיב `ci/check_sorafs_fixtures.sh`).
-- בדיקות עומס ל-registry API (לדמות 10k providers ו-100k orders).
+- Unit tests for all new schema validators (`sorafs_manifest`).
+- Integration tests that simulate: declaration → replication order → metering → payout.
+- CI workflow to regenerate sample capacity declarations/telemetry and ensure signatures remain in sync (extend `ci/check_sorafs_fixtures.sh`).
+- Load tests for the registry API (simulate 10k providers, 100k orders).
 
-## טלמטריה ודשבורדים
+## Telemetry & Dashboards
 
-- פאנלי dashboard:
-  - קיבולת מוצהרת מול מנוצלת לכל provider.
-  - backlog של replication orders וזמן עיכוב ממוצע בהקצאה.
-  - עמידה ב-SLA (uptime %, שיעור הצלחת PoR).
-  - צבירת fees וקנסות לכל epoch.
+- Dashboard panels:
+  - Capacity declared vs utilised per provider.
+  - Replication order backlog and average assignment delay.
+  - SLA compliance (uptime %, PoR success rate).
+  - Fee accrual and penalties per epoch.
 - Alerts:
-  - provider מתחת לקיבולת המינימלית המוצהרת.
-  - replication order תקוע מעבר ל-SLA.
-  - כשלים ב-metering pipeline.
+  - Provider below minimum committed capacity.
+  - Replication order stuck > SLA.
+  - Metering pipeline failures.
 
-## Deliverables תיעודיים
+## Documentation Deliverables
 
-- מדריך מפעיל להצהרת קיבולת, חידוש התחייבויות ומעקב ניצול.
-- מדריך governance לאישור הצהרות, הנפקת orders וטיפול ב-disputes.
-- API reference ל-endpoints של הקיבולת ולפורמט replication order.
-- Marketplace FAQ למפתחים.
+- Operator guide for declaring capacity, renewing commitments, and monitoring utilisation.
+- Governance guide for approving declarations, issuing orders, handling disputes.
+- API reference for the capacity endpoints and replication order format.
+- Marketplace FAQ for developers.
+- Provider onboarding & exit runbook covering artefact storage, role-based approvals,
+  and Torii verification commands (`docs/source/sorafs/capacity_onboarding_runbook.md`).
 
-## צ'קליסט מוכנות ל-GA
+## GA Readiness Checklist
 
-פריט roadmap **SF-2c** מגביל פריסה לפרודקשן לפי ראיות קונקרטיות בתחום החשבונאות, טיפול ב-dispute והאונבורדינג. השתמשו בארטיפקטים להלן כדי לשמור על קריטריוני הקבלה מסונכרנים עם המימוש.
+Roadmap item **SF-2c** gates production rollout on concrete evidence across accounting,
+dispute handling, and onboarding. Use the artefacts below to keep the acceptance criteria
+in-sync with the implementation.
 
 ### Nightly accounting & XOR reconciliation
-- יצאו snapshot של מצב הקיבולת ו-XOR ledger export לאותו חלון, ואז הריצו:
-  ```bash
-  python3 scripts/telemetry/capacity_reconcile.py \
-    --snapshot artifacts/sorafs/capacity/state_$(date +%F).json \
-    --ledger artifacts/sorafs/capacity/ledger_$(date +%F).ndjson \
-    --label nightly-capacity \
-    --json-out artifacts/sorafs/capacity/reconcile_$(date +%F).json \
-    --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
-  ```
-  ההלפר מסיים בקוד שונה מאפס כאשר קיימות settlement או קנסות חסרים/עודפים ומפיק סיכום Prometheus textfile.
-- ה-alert `SoraFSCapacityReconciliationMismatch` (ב-`dashboards/alerts/sorafs_capacity_rules.yml`)
-  מופעל כאשר מדדי reconciliation מדווחים על פערים; הדשבורדים נמצאים תחת
-  `dashboards/grafana/sorafs_capacity_penalties.json`.
-- ארכבו את ה-JSON summary וה-hashes תחת `docs/examples/sorafs_capacity_marketplace_validation/`
-  לצד governance packets.
+
+1. Export the XOR transfers that treasury executed during the previous window and the
+   matching `/v1/sorafs/capacity/state` snapshot. Reconcile them with the new helper:
+   ```bash
+   python3 scripts/telemetry/capacity_reconcile.py \
+     --snapshot artifacts/sorafs/capacity/state_$(date +%F).json \
+     --ledger /var/lib/iroha/exports/sorafs-capacity-ledger-$(date +%F).ndjson \
+     --label nightly-capacity \
+     --json-out artifacts/sorafs/capacity/reconcile_$(date +%F).json \
+     --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
+   ```
+   The script exits non-zero when settlements/penalties are missing or overpaid and emits a
+   Prometheus textfile mirroring the JSON summary so governance can replay evidence.
+2. Triangulate the reconciliation output with `dashboards/grafana/sorafs_capacity_penalties.json`
+   and Alertmanager rule `SoraFSCapacityReconciliationMismatch`
+   (`dashboards/alerts/sorafs_capacity_rules.yml`). The rule fires whenever reconciliation
+   metrics report missing/overpaid settlements or unexpected provider transfers.
+   Capacity telemetry can also carry gateway/orchestrator egress counters for the same
+   settlement window; `SoraFSEgressCounterDrift` alerts when either source stays more than
+   10% away from billing `egress_bytes` for 10 minutes.
+3. Archive the nightly reconciliation digest alongside the governance packets in
+   `docs/examples/sorafs_capacity_marketplace_validation/` so treasury approvals can
+   reference deterministic evidence. The validation checklist in
+   `docs/source/sorafs/reports/capacity_marketplace_validation.md` links to the latest
+   sign-off bundle—extend that table when new exports are reviewed.
 
 ### Dispute & slashing evidence
-- הגישו disputes דרך `sorafs_manifest_stub capacity dispute` (tests:
-  `cargo test -p sorafs_car --test capacity_cli`) כדי שה-payloads יישארו קנוניים.
-- הריצו `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` ומבחני הענישה
-  (`record_capacity_telemetry_penalises_persistent_under_delivery`) כדי להוכיח ש-disputes ו-slashes משוחזרים דטרמיניסטית.
-- פעלו לפי `docs/source/sorafs/dispute_revocation_runbook.md` ללכידת ראיות ולהסלמה;
-  קישרו אישורי strike חזרה לדוח ה-validation.
+
+1. Generate dispute payloads with the CLI harness
+   (`sorafs_manifest_stub capacity dispute` and
+   `cargo test -p sorafs_car --test capacity_cli`) so every `CapacityDisputeV1` bundle has
+   canonical JSON/Norito artefacts.
+2. Exercise the deterministic ledger hooks by running
+   `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` plus the penalty
+   suites the roadmap references (`record_capacity_telemetry_penalises_persistent_under_delivery`).
+   These tests live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` and guarantee
+   that disputes, penalties, and slashes replay faithfully across nodes.
+3. Follow the escalation workflow in `docs/source/sorafs/dispute_revocation_runbook.md`—
+   the runbook covers evidence capture, council ballots, and revocation/failover procedures.
+   Link the resulting meeting minutes or strike approvals back into
+   `docs/source/sorafs/reports/capacity_marketplace_validation.md` so reviewers can trace
+   individual disputes from CLI payload → ledger mutation → governance approval.
 
 ### Provider onboarding & exit smoke tests
-- צרו מחדש artefacts של declaration/telemetry עם `sorafs_manifest_stub capacity ...` והריצו CLI tests לפני ההגשה (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- הגישו דרך Torii (`/v1/sorafs/capacity/declare`) ואז תעדו `/v1/sorafs/capacity/state` לצד צילומי Grafana. עקבו אחרי ה-exit flow ב-`docs/source/sorafs/capacity_onboarding_runbook.md`.
-- ארכבו artefacts חתומים ו-reconciliation outputs בתוך `docs/examples/sorafs_capacity_marketplace_validation/`.
 
-## תלותים ותזמון
+1. Stage declarations with `sorafs_manifest_stub capacity declaration --spec <file>` and
+   replay the CLI regression (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)
+   before handing submissions to Torii. The helper emits Norito `.to`, JSON, and Base64
+   outputs plus the chunk-plan metadata described earlier in this guide.
+2. Verify Torii behaviour by calling `POST /v1/sorafs/capacity/declare` and
+   `GET /v1/sorafs/capacity/state`—records should match the governance defaults captured in
+   `docs/source/sorafs/provider_admission_policy.md` and the runbook at
+   `docs/source/sorafs/runbooks/multi_source_rollout.md`.
+3. Exercise the exit path once per release candidate:
+   - Drain pending assignments by replaying `iroha app sorafs replication list --status pending`
+     (filters live in `crates/iroha/src/client.rs:294`) and queuing reassignment ballots for
+     any manifest digests that still reference the retiring provider.
+   - Use `sorafs_manifest_stub capacity telemetry` to publish the final telemetry snapshot
+     and confirm Torii marks the provider inactive.
+   - Capture the operator checklist (access revocation, manifest cache cleanup, treasury
+     sign-off) in `docs/source/sorafs/runbooks/sorafs_node_ops.md` and update the validation
+     evidence bundle with the exit ticket ID.
+4. Archive the signed artefact bundle described in
+   `docs/source/sorafs/capacity_onboarding_runbook.md` so governance, treasury, and SRE
+   reviewers can trace the onboarding/exit through a single runbook entry.
 
-1. לסיים SF-2b (admission policy) - ה-marketplace נשען על providers שעברו בדיקה.
-2. לממש את שכבת הסכמה + registry (מסמך זה) לפני אינטגרציית Torii.
-3. להשלים metering pipeline לפני הפעלת payouts.
-4. שלב סופי: להפעיל חלוקת fees בשליטת governance לאחר אימות metering data ב-staging.
+Completing the steps above provides the auditors referenced in roadmap item SF-2c with the
+same artefacts the acceptance checklist expects—nightly XOR reconciliations, deterministic
+dispute handling, and repeatable onboarding/exit smoke tests.
 
-יש לעקוב אחרי ההתקדמות ב-roadmap עם הפניות למסמך זה. עדכנו את ה-roadmap כאשר כל חלק מרכזי (סכמות, control plane, אינטגרציה, metering, טיפול ב-disputes) מגיע ל-feature complete.
+## Rollout Sequencing
+
+1. Keep SF-2b admission artefacts current for every provider before accepting
+   capacity declarations.
+2. Archive signed declaration, replication-order, telemetry, dispute, and
+   reconciliation evidence for each hosted rollout window.
+3. Verify `/v1/sorafs/capacity/state`, Grafana panels, alert rules, and XOR
+   reconciliation outputs before treasury approval.
+4. Enable governance-controlled fee distribution only after staging evidence
+   proves metering, disputes, and settlement replay deterministically.
+
+Progress should be tracked in `roadmap.md`, `status.md`, and
+`docs/source/sorafs/reports/capacity_marketplace_validation.md` as rollout
+evidence changes.

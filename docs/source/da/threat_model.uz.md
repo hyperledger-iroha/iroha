@@ -205,7 +205,7 @@ zararli provayderlarni oq ro'yxatga kiritadi yoki ogohlantirishlarni bostiradi.
   `crates/iroha_torii/src/da/ingest.rs` da Torii integratsiyasi, bu
   barmoq izlari `/v1/da/ingest` orqali tekshiriladi.
 - PDP/PoTR oqim simulyatsiyalari proof-stream jabduqlari orqali amalga oshiriladi
-  `crates/sorafs_car/tests/sorafs_cli.rs`, PoR/PDP/PoTR soʻrov oqimlarini qamrab oladi
+  `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, PoR/PDP/PoTR soʻrov oqimlarini qamrab oladi
   va tahdid modelida jonlantirilgan muvaffaqiyatsizlik stsenariylari.
 - Imkoniyatlar va ta'mirlash ho'llash natijalari ostida yashaydi
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, kengroq esa

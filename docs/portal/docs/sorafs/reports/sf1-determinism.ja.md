@@ -27,7 +27,7 @@ summary: 正規 chunker プロファイル `sorafs.sf1@1.0.0` を検証するた
 |------|---------|------------------|-------|
 | 1 | `cargo test -p sorafs_chunker` | すべてのテストが通過し、`vectors` parity test が成功する。 | 正規 fixtures がコンパイルされ、Rust 実装と一致することを確認。 |
 | 2 | `ci/check_sorafs_fixtures.sh` | スクリプトが 0 で終了し、下記の manifest digests を報告する。 | Fixtures がクリーンに再生成され、署名が付与されたままであることを確認。 |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` のエントリが registry descriptor (`profile_id=1`) と一致。 | Registry metadata が同期されていることを保証。 |
+| 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` のエントリが registry descriptor (`profile_id=1`) と一致。 | Registry metadata が同期されていることを保証。 |
 | 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | `--allow-unsigned` なしで再生成に成功し、manifest と signature ファイルは不変。 | Chunk 境界と manifests の determinism を示す証明。 |
 | 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript fixtures と Rust JSON の diff がないと報告。 | オプションの helper。runtimes 間の parity を確認 (script は Tooling WG が維持)。 |
 

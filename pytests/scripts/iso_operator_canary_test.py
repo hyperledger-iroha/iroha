@@ -1037,6 +1037,64 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("must not be a symlink", stderr)
 
+    def test_config_path_diagnostics_do_not_echo_path(self):
+        cases = (
+            ("malformed-json", b"{", "is not valid JSON"),
+            ("non-utf8-json", b"\xff", "is not UTF-8 JSON"),
+            ("not-object", b"[]", "must be a JSON object"),
+        )
+        for name, payload, expected in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden_dir = root / f"local-canary-leak-{name}"
+                    hidden_dir.mkdir()
+                    config = hidden_dir / "operator-canary.json"
+                    config.write_bytes(payload)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertIn("config", stderr)
+                    self.assertNotIn(str(config), stderr)
+                    self.assertNotIn(hidden_dir.name, stderr)
+
+    def test_symlinked_config_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "config-target"
+            target_dir.mkdir()
+            target = write_config(
+                target_dir,
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "missing-inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                    },
+                },
+            )
+            hidden_link = root / "local-canary-leak-ancestor"
+            try:
+                hidden_link.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            config = hidden_link / target.name
+
+            rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+            self.assertIn("config", stderr)
+            self.assertNotIn(str(config), stderr)
+            self.assertNotIn(hidden_link.name, stderr)
+
     def test_directory_config_is_rejected_before_plan(self):
         with tempfile.TemporaryDirectory() as raw_root:
             config = Path(raw_root) / "config-dir"
@@ -1061,6 +1119,27 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("exceeds", stderr)
+
+    def test_oversized_config_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden_dir = root / "local-canary-leak-oversized"
+            hidden_dir.mkdir()
+            config = hidden_dir / "operator-canary.json"
+            config.write_text(
+                '{"provider":"local-bank","environment":"preprod","padding":"'
+                + ("a" * CANARY.MAX_CONFIG_JSON_BYTES)
+                + '"}',
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("exceeds", stderr)
+            self.assertNotIn(str(config), stderr)
+            self.assertNotIn(hidden_dir.name, stderr)
 
     def test_symlinked_summary_output_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2361,7 +2440,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant Infinity", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("Infinity", stderr)
 
     def test_runbook_json_surrogate_strings_are_rejected_before_planning(self):
         with tempfile.TemporaryDirectory() as raw_root:

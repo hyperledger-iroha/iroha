@@ -12,10 +12,10 @@ translation_last_reviewed: 2026-02-07
 
 Cet achat contient des cartes **DOCS-7** (publication SoraFS) et **DOCS-8** (automation des broches dans CI/CD) dans le cadre de la pratique. procédure pour le portail de démarrage. Dans l'étape suivante build/lint, recherchez SoraFS, fournissez des composants à partir de Sigstore, en fournissant des fournisseurs, des fournisseurs et des fournisseurs. Les séances d'entraînement sont terminées, ce qui correspond à l'aperçu et à la sortie en fonction des utilisateurs et des auditeurs.
 
-Il est prévu que vous soyez un binaire `sorafs_cli` (associé à `--features cli`), en téléchargeant le point de terminaison Torii en utilisant le registre des broches et OIDC est disponible pour Sigstore. Les secrets des logiciels (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, tokens Torii) sont stockés dans le coffre-fort CI ; Les opérations locales peuvent être effectuées via l'exportation vers le shell.
+Il est prévu que vous soyez un binaire `sorafs_cli` (built from the `sorafs_orchestrator` Cargo target), en téléchargeant le point de terminaison Torii en utilisant le registre des broches et OIDC est disponible pour Sigstore. Les secrets des logiciels (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, tokens Torii) sont stockés dans le coffre-fort CI ; Les opérations locales peuvent être effectuées via l'exportation vers le shell.
 
 ## Предварительные условия- Nœud 18.18+ avec `npm` ou `pnpm`.
-- `sorafs_cli` à `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- `sorafs_cli` à `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - L'URL Torii, qui ouvre `/v1/sorafs/*`, et votre clé d'accès/privée, vous permet d'ouvrir les manifestes et les alias.
 - Émetteur OIDC (GitHub Actions, GitLab, identité de charge de travail et. п.) pour la livraison `SIGSTORE_ID_TOKEN`.
 - En option : `examples/sorafs_cli_quickstart.sh` pour l'exécution à sec et `docs/source/sorafs_ci_templates.md` pour les workflows GitHub/GitLab.

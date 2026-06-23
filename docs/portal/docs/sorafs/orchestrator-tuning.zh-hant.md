@@ -86,7 +86,7 @@ translator: machine-google-reviewed
 
 ## CLI 和 SDK 標誌參考
 
-`sorafs_cli fetch`（參見 `crates/sorafs_car/src/bin/sorafs_cli.rs`）和
+`sorafs_cli fetch`（參見 `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`）和
 `iroha_cli app sorafs fetch` 包裝器 (`crates/iroha_cli/src/commands/sorafs.rs`)
 共享相同的協調器配置表面。使用以下標誌時
 捕獲推出證據或重播規範賽程：

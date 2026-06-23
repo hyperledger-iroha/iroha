@@ -1054,6 +1054,21 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn(hidden, message)
                 self.assertNotIn("evidence-string-leak", message)
 
+    def test_internal_unsupported_der_kind_diagnostics_do_not_echo_kind(self):
+        cases = (
+            "token=evidence-der-kind-secret",
+            "unsupported\u202eevidence-der-kind",
+        )
+        for kind in cases:
+            with self.subTest(kind=kind):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._require_der_kind(b"", "summary.der", kind)
+
+                message = str(caught.exception)
+                self.assertIn("has unsupported DER kind", message)
+                self.assertNotIn(kind, message)
+                self.assertNotIn("evidence-der-kind", message)
+
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (
             "https://pki.local-bank.bank/source:debug",
@@ -2460,6 +2475,101 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn("must not be a symlink", stderr)
 
+    def test_summary_input_path_diagnostics_do_not_echo_paths(self):
+        cases = (
+            ("canary", "--canary-summary", "canary_summaries[0]"),
+            ("trust", "--trust-summary", "trust_summaries[0]"),
+        )
+        payloads = (
+            ("malformed-json", b"{", "is not valid JSON"),
+            ("non-utf8-json", b"\xff", "is not UTF-8 JSON"),
+            ("not-object", b"[]", "must be a JSON object"),
+        )
+        for kind, flag, label in cases:
+            for name, payload, expected in payloads:
+                with self.subTest(kind=kind, name=name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = Path(raw_root)
+                        hidden_dir = root / f"local-evidence-leak-{kind}-{name}"
+                        hidden_dir.mkdir()
+                        summary_path = hidden_dir / f"{kind}.summary.json"
+                        summary_path.write_bytes(payload)
+                        canary_path = (
+                            summary_path
+                            if kind == "canary"
+                            else write_canary(root)
+                        )
+                        trust_path = (
+                            summary_path
+                            if kind == "trust"
+                            else write_trust_summary(root / "trust")
+                        )
+
+                        rc, stdout, stderr = run_evidence(
+                            [
+                                "--canary-summary",
+                                str(canary_path),
+                                "--trust-summary",
+                                str(trust_path),
+                            ]
+                        )
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        self.assertIn(expected, stderr)
+                        self.assertIn(label, stderr)
+                        self.assertNotIn(str(summary_path), stderr)
+                        self.assertNotIn(hidden_dir.name, stderr)
+
+    def test_summary_input_symlink_ancestor_diagnostics_do_not_echo_paths(self):
+        cases = (
+            ("canary", "--canary-summary", "canary_summaries[0]"),
+            ("trust", "--trust-summary", "trust_summaries[0]"),
+        )
+        for kind, _flag, label in cases:
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    target_dir = root / f"{kind}-target"
+                    target_dir.mkdir()
+                    target = (
+                        write_canary(target_dir)
+                        if kind == "canary"
+                        else write_trust_summary(target_dir)
+                    )
+                    hidden_link = root / f"local-evidence-leak-{kind}-ancestor"
+                    try:
+                        hidden_link.symlink_to(target_dir, target_is_directory=True)
+                    except OSError as error:
+                        self.skipTest(f"symlink creation unavailable: {error}")
+                    summary_path = hidden_link / target.name
+                    canary_path = (
+                        summary_path
+                        if kind == "canary"
+                        else write_canary(root)
+                    )
+                    trust_path = (
+                        summary_path
+                        if kind == "trust"
+                        else write_trust_summary(root / "trust")
+                    )
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("must not be a symlink", stderr)
+                    self.assertIn(label, stderr)
+                    self.assertNotIn(str(summary_path), stderr)
+                    self.assertNotIn(hidden_link.name, stderr)
+
     def test_directory_summary_inputs_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2524,6 +2634,97 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("exceeds", stderr)
+
+    def test_oversized_summary_input_diagnostics_do_not_echo_paths(self):
+        cases = (
+            ("canary", "canary_summaries[0]"),
+            ("trust", "trust_summaries[0]"),
+        )
+        for kind, label in cases:
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden_dir = root / f"local-evidence-leak-{kind}-oversized"
+                    hidden_dir.mkdir()
+                    summary_path = hidden_dir / f"{kind}.summary.json"
+                    summary_path.write_text(
+                        '{"padding":"'
+                        + ("a" * EVIDENCE.MAX_SUMMARY_JSON_BYTES)
+                        + '"}',
+                        encoding="utf-8",
+                    )
+                    canary_path = (
+                        summary_path
+                        if kind == "canary"
+                        else write_canary(root)
+                    )
+                    trust_path = (
+                        summary_path
+                        if kind == "trust"
+                        else write_trust_summary(root / "trust")
+                    )
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("exceeds", stderr)
+                    self.assertIn(label, stderr)
+                    self.assertNotIn(str(summary_path), stderr)
+                    self.assertNotIn(hidden_dir.name, stderr)
+
+    def test_summary_semantic_diagnostics_do_not_echo_paths(self):
+        cases = (
+            (
+                "canary",
+                lambda body: body.__setitem__("version", False),
+                "canary_summaries[0].version must be 1",
+            ),
+            (
+                "trust",
+                lambda body: body.__setitem__("version", False),
+                "trust_summaries[0].version must be 1",
+            ),
+        )
+        for kind, mutate, expected in cases:
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden_dir = root / f"local-evidence-leak-{kind}-semantic"
+                    hidden_dir.mkdir()
+                    if kind == "canary":
+                        body = valid_canary_summary()
+                        mutate(body)
+                        canary_path = write_canary(hidden_dir, digest_summary(body))
+                        trust_path = write_trust_summary(root / "trust")
+                        summary_path = canary_path
+                    else:
+                        canary_path = write_canary(root)
+                        trust_path = write_trust_summary(hidden_dir)
+                        rewrite_trust_summary(trust_path, mutate)
+                        summary_path = trust_path
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(str(summary_path), stderr)
+                    self.assertNotIn(hidden_dir.name, stderr)
 
     def test_canary_config_path_is_canonical(self):
         cases = (
@@ -3041,7 +3242,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_canary_summary_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3090,7 +3292,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_receipt_stdout_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3171,7 +3374,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 EVIDENCE._run_command_bounded = original_run
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant Infinity", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("Infinity", stderr)
 
     def test_direct_receipt_verifier_stdout_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

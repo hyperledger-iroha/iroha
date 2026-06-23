@@ -59,7 +59,7 @@ IDs לא ידועים; רשימת ה-aliases מבטיחה שלקוחות HTTP י
 כדי לבדוק את הרישום מכלי tooling, הריצו את CLI helper:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 [
   {
     "namespace": "sorafs",
@@ -105,7 +105,7 @@ Rollout טלמטריה:
 כדי לבדוק עד witness PoR ספציפי, ספקו אינדקסים של chunk/segment/leaf ובמידת הצורך שמרו את ההוכחה לדיסק:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -117,7 +117,7 @@ namespace/name/semver ישירות ממטאדאטת ממשל.
 הרשומים) שניתן להדביק ל-`chunker_registry_data.rs` כאשר מקדמים פרופיל ברירת מחדל חדש:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -129,7 +129,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 `--por-proof-verify` (ה-CLI מוסיף `"por_proof_verified": true` כשה-witness תואם לשורש המחושב):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -138,7 +138,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 חוצה את מספר העלים הזמין:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 ```
@@ -148,7 +148,7 @@ manifest stub משקף את אותם נתונים, מה שנוח לסקריפט�
 (`--profile=sorafs.sf1@1.0.0`) כדי שסקריפטי build יימנעו מהטמעת IDs מספריים קשיחים:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

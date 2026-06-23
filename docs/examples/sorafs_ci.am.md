@@ -81,7 +81,7 @@ jobs:
 
 ## ማስታወሻዎች
 
-- `sorafs_cli` በሩጫው ላይ መገኘት አለበት (ለምሳሌ፣ `cargo install --path crates/sorafs_car --features cli` ከእነዚህ እርምጃዎች በፊት)።
+- `sorafs_cli` በሩጫው ላይ መገኘት አለበት (ለምሳሌ፣ `cargo install --path crates/sorafs_orchestrator --bin sorafs_cli` ከእነዚህ እርምጃዎች በፊት)።
 - የስራ ሂደቱ ግልጽ የሆነ OIDC ታዳሚ ማቅረብ አለበት (እዚህ `sorafs`); ከእርስዎ Fulcio ፖሊሲ ጋር እንዲዛመድ `--identity-token-audience` ያስተካክሉ።
 - የሚለቀቀው የቧንቧ መስመር `artifacts/manifest.bundle.json`፣ `artifacts/manifest.sig` እና `artifacts/proof.json`ን ለአስተዳደር ግምገማ ማስቀመጥ አለበት።
 - ቆራጥ ናሙና ቅርሶች በ `fixtures/sorafs_manifest/ci_sample` ውስጥ ይኖራሉ; የቧንቧ መስመርን እንደገና ሳያስሉ ወርቃማ መግለጫዎችን፣ ቸንክ እቅዶችን ወይም JSONን ጠቅልለው ሲፈልጉ ወደ ሙከራዎች ይቅዱዋቸው።

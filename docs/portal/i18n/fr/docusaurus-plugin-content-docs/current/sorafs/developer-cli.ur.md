@@ -18,7 +18,7 @@ description : Surface `sorafs_cli` consolidée - Procédure pas à pas axée su
 :::note مستند ماخذ
 :::
 
-Surface `sorafs_cli` consolidée (avec la caisse `sorafs_car` et la fonctionnalité `cli` et les artefacts SoraFS تیار کرنے کے لیے درکار ہر قدم exposer کرتا ہے۔ Il s'agit d'un livre de recettes et de flux de travail pour tous les utilisateurs. contexte opérationnel pour un pipeline de manifeste et des runbooks d'orchestrateur pour une paire de fichiers
+Surface `sorafs_cli` consolidée (avec la caisse `sorafs_orchestrator` et les artefacts SoraFS تیار کرنے کے لیے درکار ہر قدم exposer کرتا ہے۔ Il s'agit d'un livre de recettes et de flux de travail pour tous les utilisateurs. contexte opérationnel pour un pipeline de manifeste et des runbooks d'orchestrateur pour une paire de fichiers
 
 ## Charges utiles des packages
 

@@ -50,7 +50,7 @@ translation_last_reviewed: 2026-01-30
 ### CLI クイックスタート
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
+cargo run -p sorafs_car --bin sorafs_manifest_stub   ./docs.tar   --root-cid=0155aa   --car-cid=017112...   --alias-file=docs:sora:alias_proof.bin   --council-signature-file=0123...cafe:council.sig   --metadata=build:ci-123   --manifest-out=docs.manifest   --manifest-signatures-out=docs.manifest.signatures.json   --car-out=docs.car   --json-out=docs.report.json
 ```
 
 このコマンドはチャンクのダイジェストとマニフェスト詳細を出力します。`--manifest-out`
@@ -150,7 +150,7 @@ JSON スナップショットは `--scoreboard-out=<path>` が指定されてい
 書き込む前に組み立てた payload がマニフェストの期待値に一致することを確認できます。これは
 オーケストレーターがチャンクを静かに欠落/並べ替えしないことを保証したい CI スモークテストに有用です。
 
-すでに `sorafs-manifest-stub` で生成された JSON レポートがある場合は、`--manifest-report=docs.report.json`
+すでに `sorafs_manifest_stub` で生成された JSON レポートがある場合は、`--manifest-report=docs.report.json`
 で直接渡してください。fetch CLI は埋め込み済みの `chunk_fetch_specs`、`payload_digest_hex`、`payload_len`
 を再利用するため、別のプラン/検証ファイルを管理する必要はありません。
 

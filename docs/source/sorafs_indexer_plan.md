@@ -1,9 +1,17 @@
 ---
-title: Sora Network Indexer & Delegated Routing Plan (Draft)
-summary: Outline for SFM-1 indexer API.
+title: Sora Network Indexer & Delegated Routing Plan
+summary: SFM-1 indexer architecture, implemented provider-discovery baseline, and future delegated-routing rollout.
 ---
 
-# Sora Network Indexer Plan (Draft)
+# Sora Network Indexer Plan
+
+> **Status (Jun 2026):** The local provider-discovery baseline is implemented:
+> Torii ingests signed `ProviderAdvertV1` payloads at
+> `/v1/sorafs/providers/advert`, serves the current in-memory advert cache at
+> `/v1/sorafs/providers`, validates chunk-range capability metadata, and exports
+> range-capability telemetry. The IPNI-compatible `/routing/v1/*` delegated
+> routing indexer described below remains a future service/deployment track, not
+> a local Torii endpoint available today.
 
 ## Objectives
 - Mirror IPNI/delegated routing v1 API.
@@ -11,10 +19,12 @@ summary: Outline for SFM-1 indexer API.
 - Co-locate indexer at gateways for low-latency lookups.
 
 ## Components
-- Ingest pipeline for adverts/proofs (from governance DAG).
-- API endpoints (`/routing/v1/find`, etc.).
-- Caching layer and TTL policies.
-- Metrics for query volume and freshness.
+- Implemented baseline: Torii provider advert ingest/list endpoints,
+  in-memory TTL pruning, capability validation, and range-capability metrics.
+- Future service: governance-DAG ingest pipeline for adverts/proofs.
+- Future service: API endpoints (`/routing/v1/find`, etc.).
+- Future service: durable caching layer and regional TTL policies.
+- Future service: metrics for delegated-routing query volume and freshness.
 
 ## Data Schema & Storage Strategy
 
@@ -81,9 +91,9 @@ low for clients colocated with gateways.
   - Expose `sorafs_indexer_ingest_lag_seconds`, `sorafs_indexer_cache_hit_ratio`,
     `sorafs_indexer_query_latency_seconds`, and `sorafs_indexer_replica_lag_seconds`.
   - Alerts fire when ingest lag exceeds 10 seconds, when any region’s cache hit ratio dips
-    below 90%, or when RockDB compaction backlog exceeds 5 GB.
+    below 90%, or when RocksDB compaction backlog exceeds 5 GB.
 
-Rollout checklist:
+Future rollout checklist:
 
 1. Deploy ingest cluster + PostgreSQL primary in staging; validate end-to-end sync from DAG.
 2. Bring up two regional replicas, simulate adverts/PoR updates, and verify delegated routing

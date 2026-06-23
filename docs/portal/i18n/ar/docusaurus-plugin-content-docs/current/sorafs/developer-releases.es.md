@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-02-07
 - إضافة ربط تذكرة الإصلاح (على سبيل المثال، `governance/tickets/SF6-SR-2026.md`) والتعليق
   خبراء الهندسة الأمنية ومجموعة عمل الأدوات.
 - التحقق من أن قائمة معالجة المذكرة مغلقة؛ تعمل العناصر دون حل على حظر التفريغ.
-- التحضير لإرسال سجلات شريط الحزام (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- التحضير لإرسال سجلات شريط الحزام (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   جنبًا إلى جنب مع حزمة البيان.
 - تأكد من أن الأمر الثابت الذي يتم تنفيذه يتضمن `--identity-token-provider` مثل `--identity-token-provider`
   `--identity-token-audience=<aud>` يوضح أن كمية فولسيو قد تم التقاطها في دليل الإصدار.
@@ -49,9 +49,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 يحقق البرنامج المشاكل التالية:
 
 - `cargo fmt --all -- --check` (مساحة العمل)
-- `cargo clippy --locked --all-targets` لـ `sorafs_car` (مع الميزة `cli`)،
-  `sorafs_manifest` و `sorafs_chunker`
-- `cargo test --locked --all-targets` لنفس الصناديقإذا فشلت إحدى الخطوات، قم بتصحيح التراجع السابق للآداب. يبني الإصدار
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 deben estar continuos con main; لا حاجة إلى اختيار الكرز للإصلاحات ونتائج الإصدار.
 البوابة أيضًا تتأكد من أن أعلام الشركة لا تحتوي على أزرار (`--identity-token-issuer`,
 `--identity-token-audience`) يتم تقديمه وفقًا للمراسلة؛ لوس الحجج

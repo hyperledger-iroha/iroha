@@ -3458,6 +3458,28 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
+    writeln!(stop_file, "pid_matches_peer() {{")?;
+    writeln!(stop_file, "  pid=\"$1\"")?;
+    writeln!(stop_file, "  config=\"$2\"")?;
+    writeln!(
+        stop_file,
+        "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+    )?;
+    writeln!(stop_file, "  command -v ps >/dev/null 2>&1 || return 1")?;
+    writeln!(
+        stop_file,
+        "  command_line=\"$(ps -p \"$pid\" -o command= 2>/dev/null || true)\""
+    )?;
+    writeln!(stop_file, "  [ -n \"$command_line\" ] || return 1")?;
+    writeln!(
+        stop_file,
+        "  printf '%s' \"$command_line\" | grep -F -- \"--config $config\" >/dev/null \\"
+    )?;
+    writeln!(
+        stop_file,
+        "    || printf '%s' \"$command_line\" | grep -F -- \"--config=$config\" >/dev/null"
+    )?;
+    writeln!(stop_file, "}}")?;
     writeln!(stop_file, "for pidfile in \"$DIR\"/peer*.pid; do")?;
     writeln!(stop_file, "  [ -f \"$pidfile\" ] || continue")?;
     writeln!(
@@ -3466,6 +3488,32 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     )?;
     writeln!(stop_file, "  if [ -z \"$pid\" ]; then")?;
     writeln!(stop_file, "    rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "    continue")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  case \"$pid\" in")?;
+    writeln!(stop_file, "    ''|*[!0-9]*)")?;
+    writeln!(
+        stop_file,
+        "      echo \"removing malformed pidfile $pidfile (pid=$pid)\" >&2"
+    )?;
+    writeln!(stop_file, "      rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "      continue")?;
+    writeln!(stop_file, "      ;;")?;
+    writeln!(stop_file, "  esac")?;
+    writeln!(stop_file, "  if ! kill -0 \"$pid\" 2>/dev/null; then")?;
+    writeln!(stop_file, "    rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "    continue")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  peer_name=\"$(basename \"$pidfile\" .pid)\"")?;
+    writeln!(stop_file, "  config=\"$DIR/${{peer_name}}.toml\"")?;
+    writeln!(
+        stop_file,
+        "  if ! pid_matches_peer \"$pid\" \"$config\"; then"
+    )?;
+    writeln!(
+        stop_file,
+        "    echo \"leaving $pidfile in place: live pid $pid does not match $config\" >&2"
+    )?;
     writeln!(stop_file, "    continue")?;
     writeln!(stop_file, "  fi")?;
     writeln!(stop_file, "  kill \"$pid\" 2>/dev/null || true")?;
@@ -7546,8 +7594,20 @@ mod tests {
         );
         let stop_contents = fs::read_to_string(&stop_path).expect("read stop script");
         assert!(
+            stop_contents.contains("pid_matches_peer()"),
+            "stop script should validate pid ownership before signaling"
+        );
+        assert!(
+            stop_contents.contains("grep -F -- \"--config $config\""),
+            "stop script should bind live pid checks to the peer config path"
+        );
+        assert!(
+            stop_contents.contains("live pid $pid does not match $config"),
+            "stop script should leave reused pidfiles untouched"
+        );
+        assert!(
             stop_contents.contains("kill -9 \"$pid\" 2>/dev/null || true"),
-            "stop script should force-stop stubborn peers"
+            "stop script should force-stop stubborn owned peers"
         );
         assert!(
             stop_contents.contains("rm -f \"$pidfile\""),

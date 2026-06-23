@@ -28,7 +28,7 @@ artefaktlar:
 - Ta'mirlash chiptasi havolasini ilova qiling (masalan, `governance/tickets/SF6-SR-2026.md`) va ro'yxatdan o'tishga e'tibor bering
   Xavfsizlik muhandisligi va asboblar ishchi guruhidan tasdiqlovchilar.
 - eslatmadagi tuzatish nazorat ro'yxati yopilganligini tekshiring; hal qilinmagan elementlar chiqarishni bloklaydi.
-- Paritet jabduqlar jurnallarini yuklashga tayyorlaning (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Paritet jabduqlar jurnallarini yuklashga tayyorlaning (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   manifest to'plami bilan birga.
 - Ishlamoqchi bo'lgan imzolash buyrug'iga `--identity-token-provider` ham, aniq ham kiradi.
   `--identity-token-audience=<aud>` shuning uchun Fulcio qamrovi chiqarilgan dalillarda ushlangan.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Skript quyidagi tasdiqlarni bajaradi:
 
 - `cargo fmt --all -- --check` (ish maydoni)
-- `cargo clippy --locked --all-targets` `sorafs_car` uchun (`cli` xususiyati bilan),
-  `sorafs_manifest` va `sorafs_chunker`
-- Xuddi shu qutilar uchun `cargo test --locked --all-targets`
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 Har qanday qadam muvaffaqiyatsiz bo'lsa, teglashdan oldin regressiyani tuzating. Reliz tuzilmalari bo'lishi kerak
 asosiy bilan uzluksiz; bo'shatish shoxlariga tuzatmalarni tanlamang. Darvoza

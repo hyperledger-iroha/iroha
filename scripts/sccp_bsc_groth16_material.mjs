@@ -64,6 +64,10 @@ export const BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-semantic-circuit-attestation/v1";
 export const BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-circuit-security-attestation/v1";
+export const BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-semantic-review-evidence/v1";
+export const BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-groth16-circuit-security-audit-evidence/v1";
 export const BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA =
   "iroha-sccp-bsc-groth16-trusted-setup-attestation/v1";
 export const BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA =
@@ -100,6 +104,16 @@ export const BSC_GROTH16_PUBLIC_SIGNAL_LABEL_HASHES = Object.freeze([
   "0xd07ef0087259b42adc11497be275f42091c6ef51becccd113be860e1b48a5109",
   "0xa4895607d62c8e116357ba7d102e08b5636840e0816a608f3a1fc9d0a1077569",
   "0x094cf24d193ac65c8a450188d16282fba8ee8c5a7539b751857d231f4380c2dd",
+]);
+const BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES = Object.freeze([
+  "semantic-review-evidence",
+  "semantic-sccp-review-evidence",
+  "semantic-evidence",
+]);
+const BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES = Object.freeze([
+  "circuit-security-audit-evidence",
+  "circuit-security-evidence",
+  "circuit-audit-evidence",
 ]);
 const BSC_GROTH16_ATTESTATION_ROLE_SPECS = Object.freeze([
   Object.freeze({
@@ -2188,6 +2202,12 @@ function attestationBodyAllowedFields(expectedSchema) {
   ];
   const bySchema = {
     [BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA]: [
+      "semanticReviewEvidenceSchema",
+      "semantic_review_evidence_schema",
+      "semanticReviewEvidenceSha256",
+      "semantic_review_evidence_sha256",
+      "semanticReviewReportSha256",
+      "semantic_review_report_sha256",
       "fullSccpMessageSemantics",
       "full_sccp_message_semantics",
       "sourceFinalitySemantics",
@@ -2200,6 +2220,12 @@ function attestationBodyAllowedFields(expectedSchema) {
       "negative_case_coverage",
     ],
     [BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA]: [
+      "circuitSecurityAuditEvidenceSchema",
+      "circuit_security_audit_evidence_schema",
+      "circuitSecurityAuditEvidenceSha256",
+      "circuit_security_audit_evidence_sha256",
+      "circuitSecurityAuditReportSha256",
+      "circuit_security_audit_report_sha256",
       "auditResult",
       "audit_result",
       "approved",
@@ -2426,6 +2452,7 @@ function validateSemanticAttestation(entry, context) {
     ),
     ...(isRecord(record)
       ? [
+          ...semanticAttestationEvidenceBlockers(record, label),
           booleanTrueBlocker(
             record,
             ["fullSccpMessageSemantics", "full_sccp_message_semantics"],
@@ -2468,6 +2495,7 @@ function validateCircuitSecurityAttestation(entry, context) {
     ),
     ...(isRecord(record)
       ? [
+          ...circuitSecurityAttestationEvidenceBlockers(record, label),
           stringEqualsBlocker(record, ["auditResult", "audit_result"], "pass", `${label} auditResult`),
           booleanTrueBlocker(record, ["approved", "productionApproved"], `${label} approved`),
           integerZeroBlocker(record, ["criticalFindings", "critical_findings"], `${label} criticalFindings`),
@@ -2750,6 +2778,397 @@ async function validateReproducibleBuildTranscript(pathName, selfCheck) {
       ["zkeyVerifyResult", "zkey_verify_result"],
       selfCheck?.zkeyVerifyResult,
       `${label} zkeyVerifyResult`,
+    ),
+  ].filter(Boolean);
+}
+
+function evidenceReportReference(record, key, label) {
+  const report = attestationValue(record, [key, key.replace(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`)]);
+  if (!isRecord(report)) {
+    return { reference: null, blockers: [`${label} report reference is required`] };
+  }
+  const reportPath = trim(attestationValue(report, ["path", "reportPath", "report_path"]));
+  if (!reportPath) {
+    return { reference: null, blockers: [`${label} report path is required`] };
+  }
+  const blockers = productionEvidenceTextBlockers(report, `${label} report`);
+  let sha256 = null;
+  try {
+    sha256 = normalizeHex32(
+      attestationValue(report, ["sha256", "hash", "reportSha256", "report_sha256"]),
+      `${label} report sha256`,
+    );
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : String(error));
+  }
+  return {
+    reference: sha256 ? { path: reportPath, sha256 } : null,
+    blockers,
+  };
+}
+
+async function validateEvidenceReportFile({
+  evidencePath,
+  reportReference,
+  label,
+}) {
+  if (!reportReference) {
+    return [];
+  }
+  const candidates = [
+    reportReference.path,
+    ...(isAbsolute(reportReference.path)
+      ? []
+      : [
+          resolve(dirname(evidencePath), reportReference.path),
+          resolve(REPO_ROOT, reportReference.path),
+          resolve(process.cwd(), reportReference.path),
+        ]),
+  ];
+  let lastError = null;
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const resolved = await assertReadableRegularFile(candidate, `${label} report`);
+      const bytes = await readFile(resolved);
+      const actualSha256 = sha256Hex(bytes);
+      const text = bytes.toString("utf8");
+      const secretReason = unsafeSecretReason(text, `${label} report`);
+      return [
+        actualSha256 === reportReference.sha256
+          ? ""
+          : `${label} report sha256 must match ${actualSha256}`,
+        secretReason ?? "",
+        ...productionEvidenceTextBlockers(text, `${label} report`),
+      ].filter(Boolean);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return [
+    `${label} report could not be read: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  ];
+}
+
+function evidenceMaterialBindingBlockers({
+  record,
+  expectedSchema,
+  context,
+  label,
+}) {
+  const blockers = [
+    ...productionEvidenceTextBlockers(record, label),
+    stringEqualsBlocker(record, "schema", expectedSchema, `${label} schema`),
+    stringEqualsBlocker(record, ["routeId", "route_id"], ROUTE_ID, `${label} routeId`),
+    stringEqualsBlocker(record, ["assetKey", "asset_key"], ASSET_KEY, `${label} assetKey`),
+    stringEqualsBlocker(
+      record,
+      ["bscNetwork", "bsc_network", "network"],
+      context.profile.key,
+      `${label} bscNetwork`,
+    ),
+    stringEqualsBlocker(record, "chain", context.profile.chain, `${label} chain`),
+    stringEqualsBlocker(
+      record,
+      ["chainIdHex", "chain_id_hex"],
+      context.profile.chainIdHex,
+      `${label} chainIdHex`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["networkIdHex", "network_id_hex"],
+      context.profile.networkIdHex,
+      `${label} networkIdHex`,
+    ),
+    stringEqualsBlocker(
+      record,
+      ["proofBackend", "proof_backend"],
+      BSC_EVM_GROTH16_BACKEND,
+      `${label} proofBackend`,
+    ),
+    stringEqualsBlocker(
+      record,
+      ["proofFamily", "proof_family"],
+      SCCP_PROOF_FAMILY_STARK_FRI,
+      `${label} proofFamily`,
+    ),
+    stringEqualsBlocker(
+      record,
+      ["circuitProfile", "circuit_profile"],
+      context.circuitProfile,
+      `${label} circuitProfile`,
+    ),
+    integerEqualsBlocker(
+      record,
+      ["publicInputCount", "public_input_count"],
+      9,
+      `${label} publicInputCount`,
+    ),
+    publicSignalsBlocker(record, context, label),
+    hashEqualsBlocker(
+      record,
+      ["verifierKeyHash", "verifier_key_hash"],
+      context.verifierKeyHash,
+      `${label} verifierKeyHash`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["circuitSourceSha256", "circuit_source_sha256"],
+      context.artifacts.circuitSource?.sha256,
+      `${label} circuitSourceSha256`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["r1csSha256", "r1cs_sha256", "proofArtifactHash", "proof_artifact_hash"],
+      context.artifacts.r1cs.sha256,
+      `${label} r1csSha256`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["powersOfTauSha256", "powers_of_tau_sha256", "ptauSha256", "ptau_sha256"],
+      context.artifacts.powersOfTau.sha256,
+      `${label} powersOfTauSha256`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["provingKeySha256", "proving_key_sha256", "provingKeyHash", "proving_key_hash"],
+      context.artifacts.provingKey.sha256,
+      `${label} provingKeySha256`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["snarkjsVerificationKeySha256", "snarkjs_verification_key_sha256"],
+      context.artifacts.snarkjsVerificationKey.sha256,
+      `${label} snarkjsVerificationKeySha256`,
+    ),
+    hashEqualsBlocker(
+      record,
+      ["bscVerifierKeySha256", "bsc_verifier_key_sha256"],
+      context.artifacts.bscVerifierKey.sha256,
+      `${label} bscVerifierKeySha256`,
+    ),
+  ];
+  return blockers.filter(Boolean);
+}
+
+async function bscGroth16EvidenceReference({
+  pathName,
+  label,
+  expectedSchema,
+  reportKey,
+  context,
+  bodyFields,
+  specificBlockers,
+}) {
+  if (!pathName) {
+    return {
+      reference: null,
+      bodyFields: {},
+      blockers: [`missing ${label} evidence artifact`],
+    };
+  }
+  const resolved = resolve(pathName);
+  let sha256 = null;
+  let record = null;
+  const blockers = [];
+  try {
+    await assertReadableRegularFile(resolved, `${label} evidence`);
+    sha256 = await fileSha256(resolved);
+    record = await readJson(resolved, `${label} evidence`);
+  } catch (error) {
+    return {
+      reference: null,
+      bodyFields: {},
+      blockers: [error instanceof Error ? error.message : String(error)],
+    };
+  }
+  if (!isRecord(record)) {
+    blockers.push(`${label} evidence must be a JSON object`);
+  } else {
+    const secretReason = unsafeSecretReason(record, `${label} evidence`);
+    if (secretReason) {
+      blockers.push(secretReason);
+    }
+    const { reference: reportReference, blockers: reportReferenceBlockers } =
+      evidenceReportReference(record, reportKey, `${label} evidence`);
+    blockers.push(
+      ...evidenceMaterialBindingBlockers({
+        record,
+        expectedSchema,
+        context,
+        label: `${label} evidence`,
+      }),
+      ...reportReferenceBlockers,
+      ...(await validateEvidenceReportFile({
+        evidencePath: resolved,
+        reportReference,
+        label: `${label} evidence`,
+      })),
+      ...specificBlockers(record, `${label} evidence`),
+    );
+    return {
+      reference: {
+        path: repoRelativePath(resolved),
+        sha256,
+        schema: trim(ownValue(record, "schema")) || null,
+        ...(reportReference
+          ? { report: { path: reportReference.path, sha256: reportReference.sha256 } }
+          : {}),
+      },
+      bodyFields: blockers.length === 0
+        ? bodyFields({
+            evidenceSha256: sha256,
+            reportSha256: reportReference?.sha256 ?? null,
+          })
+        : {},
+      blockers: blockers.filter(Boolean),
+    };
+  }
+  return {
+    reference: {
+      path: repoRelativePath(resolved),
+      sha256,
+      schema: null,
+    },
+    bodyFields: {},
+    blockers: blockers.filter(Boolean),
+  };
+}
+
+function semanticReviewEvidenceBlockers(record, label) {
+  return [
+    stringEqualsBlocker(
+      record,
+      ["reviewResult", "review_result"],
+      "pass",
+      `${label} reviewResult`,
+    ),
+    booleanTrueBlocker(
+      record,
+      ["fullSccpMessageSemantics", "full_sccp_message_semantics"],
+      `${label} fullSccpMessageSemantics`,
+    ),
+    booleanTrueBlocker(
+      record,
+      ["sourceFinalitySemantics", "source_finality_semantics"],
+      `${label} sourceFinalitySemantics`,
+    ),
+    booleanTrueBlocker(
+      record,
+      ["destinationBindingSemantics", "destination_binding_semantics"],
+      `${label} destinationBindingSemantics`,
+    ),
+    booleanTrueBlocker(
+      record,
+      ["publicSignalDerivationSemantics", "public_signal_derivation_semantics"],
+      `${label} publicSignalDerivationSemantics`,
+    ),
+    booleanTrueBlocker(
+      record,
+      ["negativeCaseCoverage", "negative_case_coverage"],
+      `${label} negativeCaseCoverage`,
+    ),
+    integerAtLeastBlocker(
+      record,
+      ["reviewerSignoffCount", "reviewer_signoff_count"],
+      1,
+      `${label} reviewerSignoffCount`,
+    ),
+    integerZeroBlocker(
+      record,
+      ["unresolvedFindings", "unresolved_findings"],
+      `${label} unresolvedFindings`,
+    ),
+  ].filter(Boolean);
+}
+
+function circuitSecurityAuditEvidenceBlockers(record, label) {
+  return [
+    stringEqualsBlocker(record, ["auditResult", "audit_result"], "pass", `${label} auditResult`),
+    booleanTrueBlocker(record, ["approved", "productionApproved"], `${label} approved`),
+    integerAtLeastBlocker(
+      record,
+      ["auditorSignoffCount", "auditor_signoff_count"],
+      1,
+      `${label} auditorSignoffCount`,
+    ),
+    integerZeroBlocker(record, ["criticalFindings", "critical_findings"], `${label} criticalFindings`),
+    integerZeroBlocker(record, ["highFindings", "high_findings"], `${label} highFindings`),
+    integerZeroBlocker(record, ["unresolvedFindings", "unresolved_findings"], `${label} unresolvedFindings`),
+  ].filter(Boolean);
+}
+
+async function buildBscGroth16RequestEvidence(options, context) {
+  return {
+    semanticReview: await bscGroth16EvidenceReference({
+      pathName: optionalPath(options, BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES),
+      label: "semantic SCCP circuit review",
+      expectedSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+      reportKey: "reviewReport",
+      context,
+      bodyFields: ({ evidenceSha256, reportSha256 }) => ({
+        semanticReviewEvidenceSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+        semanticReviewEvidenceSha256: evidenceSha256,
+        semanticReviewReportSha256: reportSha256,
+      }),
+      specificBlockers: semanticReviewEvidenceBlockers,
+    }),
+    circuitSecurityAudit: await bscGroth16EvidenceReference({
+      pathName: optionalPath(options, BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES),
+      label: "circuit security audit",
+      expectedSchema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+      reportKey: "auditReport",
+      context,
+      bodyFields: ({ evidenceSha256, reportSha256 }) => ({
+        circuitSecurityAuditEvidenceSchema:
+          BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+        circuitSecurityAuditEvidenceSha256: evidenceSha256,
+        circuitSecurityAuditReportSha256: reportSha256,
+      }),
+      specificBlockers: circuitSecurityAuditEvidenceBlockers,
+    }),
+  };
+}
+
+function semanticAttestationEvidenceBlockers(record, label) {
+  return [
+    stringEqualsBlocker(
+      record,
+      ["semanticReviewEvidenceSchema", "semantic_review_evidence_schema"],
+      BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+      `${label} semanticReviewEvidenceSchema`,
+    ),
+    hashPresentBlocker(
+      record,
+      ["semanticReviewEvidenceSha256", "semantic_review_evidence_sha256"],
+      `${label} semanticReviewEvidenceSha256`,
+    ),
+    hashPresentBlocker(
+      record,
+      ["semanticReviewReportSha256", "semantic_review_report_sha256"],
+      `${label} semanticReviewReportSha256`,
+    ),
+  ].filter(Boolean);
+}
+
+function circuitSecurityAttestationEvidenceBlockers(record, label) {
+  return [
+    stringEqualsBlocker(
+      record,
+      ["circuitSecurityAuditEvidenceSchema", "circuit_security_audit_evidence_schema"],
+      BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+      `${label} circuitSecurityAuditEvidenceSchema`,
+    ),
+    hashPresentBlocker(
+      record,
+      ["circuitSecurityAuditEvidenceSha256", "circuit_security_audit_evidence_sha256"],
+      `${label} circuitSecurityAuditEvidenceSha256`,
+    ),
+    hashPresentBlocker(
+      record,
+      ["circuitSecurityAuditReportSha256", "circuit_security_audit_report_sha256"],
+      `${label} circuitSecurityAuditReportSha256`,
     ),
   ].filter(Boolean);
 }
@@ -4574,6 +4993,14 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
       snarkjsSelfCheck,
     );
   const commonBody = attestationRequestCommonBody(manifest, artifacts);
+  const evidenceContext = {
+    profile,
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
+    verifierKeyHash: commonBody.verifierKeyHash,
+    artifacts,
+  };
+  const evidence = await buildBscGroth16RequestEvidence(options, evidenceContext);
   const setupBody = {
     schema: BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA,
     ...commonBody,
@@ -4630,6 +5057,22 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
     publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
     verifierKeyHash: commonBody.verifierKeyHash,
     artifacts,
+    evidence: {
+      semanticReview: evidence.semanticReview.reference,
+      circuitSecurityAudit: evidence.circuitSecurityAudit.reference,
+    },
+    evidenceValidation: {
+      semanticReview: {
+        path: evidence.semanticReview.reference?.path ?? null,
+        sha256: evidence.semanticReview.reference?.sha256 ?? null,
+        blockers: evidence.semanticReview.blockers,
+      },
+      circuitSecurityAudit: {
+        path: evidence.circuitSecurityAudit.reference?.path ?? null,
+        sha256: evidence.circuitSecurityAudit.reference?.sha256 ?? null,
+        blockers: evidence.circuitSecurityAudit.blockers,
+      },
+    },
     transcriptValidation: {
       trustedSetup: {
         path: repoRelativePath(trustedSetupTranscript.path),
@@ -4648,24 +5091,28 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
         body: {
           schema: BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA,
           ...commonBody,
+          ...evidence.semanticReview.bodyFields,
           fullSccpMessageSemantics: true,
           sourceFinalitySemantics: true,
           destinationBindingSemantics: true,
           publicSignalDerivationSemantics: true,
           negativeCaseCoverage: true,
         },
+        blockers: evidence.semanticReview.blockers,
       }),
       circuitSecurity: attestationRequestRole({
         signerRole: "circuit-security-auditor",
         body: {
           schema: BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA,
           ...commonBody,
+          ...evidence.circuitSecurityAudit.bodyFields,
           auditResult: "pass",
           approved: true,
           criticalFindings: 0,
           highFindings: 0,
           unresolvedFindings: 0,
         },
+        blockers: evidence.circuitSecurityAudit.blockers,
       }),
       trustedSetup: attestationRequestRole({
         signerRole: "trusted-setup-ceremony-attester",
@@ -4965,7 +5412,226 @@ function requestRolePayloadForSpec(request, spec) {
   if (unknownFields.length > 0) {
     throw new Error(unknownFields.join("; "));
   }
+  const intrinsicBlockers = attestationRequestRoleBodyIntrinsicBlockers(
+    body,
+    spec.expectedSchema,
+    spec.label,
+  );
+  const evidenceBlockers = attestationRequestRoleEvidenceReferenceBlockers(
+    request,
+    body,
+    spec.expectedSchema,
+    spec.label,
+  );
+  if (intrinsicBlockers.length > 0 || evidenceBlockers.length > 0) {
+    throw new Error([...intrinsicBlockers, ...evidenceBlockers].join("; "));
+  }
   return { body, signedPayloadSha256 };
+}
+
+function requestEvidenceBlock(request, key, label) {
+  const evidence = ownValue(request, "evidence");
+  if (!isRecord(evidence)) {
+    return { reference: null, blockers: ["attestation request package evidence block is required"] };
+  }
+  const reference = ownValue(evidence, key);
+  if (!isRecord(reference)) {
+    return {
+      reference: null,
+      blockers: [`attestation request package ${label} evidence reference is required`],
+    };
+  }
+  return {
+    reference,
+    blockers: productionEvidenceTextBlockers(
+      reference,
+      `attestation request package ${label} evidence`,
+    ),
+  };
+}
+
+function requestEvidenceValidationBlockers(request, key, label) {
+  const validation = ownValue(request, "evidenceValidation");
+  if (!isRecord(validation)) {
+    return [];
+  }
+  const entry = ownValue(validation, key);
+  if (!isRecord(entry)) {
+    return [];
+  }
+  const blockers = ownValue(entry, "blockers");
+  return Array.isArray(blockers) && blockers.length > 0
+    ? blockers.map((blocker) => `attestation request package ${label} evidence blocker: ${String(blocker)}`)
+    : [];
+}
+
+function attestationRequestRoleEvidenceReferenceBlockers(
+  request,
+  body,
+  expectedSchema,
+  label,
+) {
+  const configs = {
+    [BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA]: {
+      key: "semanticReview",
+      evidenceSchema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+      schemaKeys: ["semanticReviewEvidenceSchema", "semantic_review_evidence_schema"],
+      evidenceHashKeys: [
+        "semanticReviewEvidenceSha256",
+        "semantic_review_evidence_sha256",
+      ],
+      reportHashKeys: ["semanticReviewReportSha256", "semantic_review_report_sha256"],
+    },
+    [BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA]: {
+      key: "circuitSecurityAudit",
+      evidenceSchema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+      schemaKeys: [
+        "circuitSecurityAuditEvidenceSchema",
+        "circuit_security_audit_evidence_schema",
+      ],
+      evidenceHashKeys: [
+        "circuitSecurityAuditEvidenceSha256",
+        "circuit_security_audit_evidence_sha256",
+      ],
+      reportHashKeys: [
+        "circuitSecurityAuditReportSha256",
+        "circuit_security_audit_report_sha256",
+      ],
+    },
+  };
+  const config = configs[expectedSchema];
+  if (!config) {
+    return [];
+  }
+  const { reference, blockers } = requestEvidenceBlock(request, config.key, label);
+  blockers.push(...requestEvidenceValidationBlockers(request, config.key, label));
+  if (!reference) {
+    return blockers;
+  }
+  blockers.push(
+    stringEqualsBlocker(
+      body,
+      config.schemaKeys,
+      config.evidenceSchema,
+      `attestation request package ${label} body evidence schema`,
+    ),
+    stringEqualsBlocker(
+      reference,
+      "schema",
+      config.evidenceSchema,
+      `attestation request package ${label} evidence schema`,
+    ),
+  );
+  try {
+    const bodyEvidenceSha256 = normalizeHex32(
+      attestationValue(body, config.evidenceHashKeys),
+      `attestation request package ${label} body evidence sha256`,
+    );
+    const referenceSha256 = normalizeHex32(
+      ownValue(reference, "sha256"),
+      `attestation request package ${label} evidence sha256`,
+    );
+    if (bodyEvidenceSha256 !== referenceSha256) {
+      blockers.push(
+        `attestation request package ${label} body evidence sha256 must match evidence reference`,
+      );
+    }
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : String(error));
+  }
+  const report = ownValue(reference, "report");
+  if (!isRecord(report)) {
+    blockers.push(
+      `attestation request package ${label} evidence report reference is required`,
+    );
+  } else {
+    try {
+      const bodyReportSha256 = normalizeHex32(
+        attestationValue(body, config.reportHashKeys),
+        `attestation request package ${label} body report sha256`,
+      );
+      const reportSha256 = normalizeHex32(
+        ownValue(report, "sha256"),
+        `attestation request package ${label} evidence report sha256`,
+      );
+      if (bodyReportSha256 !== reportSha256) {
+        blockers.push(
+          `attestation request package ${label} body report sha256 must match evidence report reference`,
+        );
+      }
+    } catch (error) {
+      blockers.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return blockers.filter(Boolean);
+}
+
+function attestationRequestRoleBodyIntrinsicBlockers(body, expectedSchema, label) {
+  if (expectedSchema === BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA) {
+    return [
+      ...semanticAttestationEvidenceBlockers(body, `attestation request package ${label} body`),
+      booleanTrueBlocker(
+        body,
+        ["fullSccpMessageSemantics", "full_sccp_message_semantics"],
+        `attestation request package ${label} body fullSccpMessageSemantics`,
+      ),
+      booleanTrueBlocker(
+        body,
+        ["sourceFinalitySemantics", "source_finality_semantics"],
+        `attestation request package ${label} body sourceFinalitySemantics`,
+      ),
+      booleanTrueBlocker(
+        body,
+        ["destinationBindingSemantics", "destination_binding_semantics"],
+        `attestation request package ${label} body destinationBindingSemantics`,
+      ),
+      booleanTrueBlocker(
+        body,
+        ["publicSignalDerivationSemantics", "public_signal_derivation_semantics"],
+        `attestation request package ${label} body publicSignalDerivationSemantics`,
+      ),
+      booleanTrueBlocker(
+        body,
+        ["negativeCaseCoverage", "negative_case_coverage"],
+        `attestation request package ${label} body negativeCaseCoverage`,
+      ),
+    ].filter(Boolean);
+  }
+  if (expectedSchema === BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA) {
+    return [
+      ...circuitSecurityAttestationEvidenceBlockers(
+        body,
+        `attestation request package ${label} body`,
+      ),
+      stringEqualsBlocker(
+        body,
+        ["auditResult", "audit_result"],
+        "pass",
+        `attestation request package ${label} body auditResult`,
+      ),
+      booleanTrueBlocker(
+        body,
+        ["approved", "productionApproved"],
+        `attestation request package ${label} body approved`,
+      ),
+      integerZeroBlocker(
+        body,
+        ["criticalFindings", "critical_findings"],
+        `attestation request package ${label} body criticalFindings`,
+      ),
+      integerZeroBlocker(
+        body,
+        ["highFindings", "high_findings"],
+        `attestation request package ${label} body highFindings`,
+      ),
+      integerZeroBlocker(
+        body,
+        ["unresolvedFindings", "unresolved_findings"],
+        `attestation request package ${label} body unresolvedFindings`,
+      ),
+    ].filter(Boolean);
+  }
+  return [];
 }
 
 function attestationRequestRoleStatus(request, spec) {
@@ -5040,6 +5706,17 @@ function attestationRequestRoleStatus(request, spec) {
       body,
       spec.expectedSchema,
       `attestation request package ${spec.label} body`,
+    ),
+    ...attestationRequestRoleBodyIntrinsicBlockers(
+      body,
+      spec.expectedSchema,
+      spec.label,
+    ),
+    ...attestationRequestRoleEvidenceReferenceBlockers(
+      request,
+      body,
+      spec.expectedSchema,
+      spec.label,
     ),
   );
   status.signedPayloadSha256 = sha256Hex(attestationSignaturePayload(body));

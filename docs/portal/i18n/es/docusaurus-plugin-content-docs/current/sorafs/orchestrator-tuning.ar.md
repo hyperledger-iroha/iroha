@@ -71,7 +71,7 @@ Aquí están `OrchestratorConfig::default()` y `FetchOptions::default()`.| ال�
 
 ## مرجع أعلام CLI y SDK
 
-`sorafs_cli fetch` (راجع `crates/sorafs_car/src/bin/sorafs_cli.rs`) y واجهة
+`sorafs_cli fetch` (راجع `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`) y واجهة
 `iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) تشترك في
 سطح إعداد المُنسِّق نفسه. استخدم الأعلام التالية عند التقاط أدلة الإطلاق أو
 إعادة تشغيل الـ accesorios القياسية:

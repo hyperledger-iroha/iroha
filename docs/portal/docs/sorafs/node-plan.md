@@ -2,7 +2,7 @@
 id: node-plan
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
-description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+description: Track the SF-3 storage implementation status, remaining rollout evidence, and operator-facing SoraFS node surfaces.
 ---
 
 :::note Canonical Source
@@ -57,6 +57,19 @@ Implementation notes:
   `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
   `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
+## M2 Integration Status
+
+The M2 local implementation items are now represented by the runtime and CLI
+surfaces below. Remaining SF-3 work is operational hardening: hosted rollout
+evidence, governance policy tuning, and SDK management ergonomics.
+
+| Capability | Status | References |
+|------------|--------|------------|
+| PoR ingestion worker and status endpoint | Implemented locally. | `crates/sorafs_node/src/lib.rs`, `crates/iroha_torii/src/sorafs/api.rs`, `crates/iroha_torii/src/routing.rs`. |
+| Challenge queue and replay plumbing | Implemented locally through `PorCoordinatorRuntime` storage interactions and operator replay. | `crates/sorafs_node/src/por.rs`, `crates/sorafs_node/src/bin/sorafs-node.rs`. |
+| Governance telemetry | Implemented locally for ingest backlog/failure counters and dashboard export. | `crates/iroha_telemetry/src/metrics.rs`, `docs/source/sorafs_observability_plan.md`. |
+| Operator tooling | Implemented locally with `sorafs-node ingest por` and runbook coverage. | `crates/sorafs_node/src/bin/sorafs-node.rs`, `docs/source/sorafs/runbooks/sorafs_node_ops.md`. |
+
 ### D. Scheduler & Quota Enforcement
 
 | Task | Details |
@@ -107,4 +120,4 @@ Logs / events:
 
 - Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
 - Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- Keep API references for `/sorafs/*` endpoints wired into the developer portal and OpenAPI manifest as Torii handlers change.

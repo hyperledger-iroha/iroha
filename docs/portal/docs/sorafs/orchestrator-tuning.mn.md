@@ -86,7 +86,7 @@ translator: machine-google-reviewed
 
 ## CLI & SDK тугийн лавлагаа
 
-`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs`-г үзнэ үү) ба
+`sorafs_cli fetch` (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`-г үзнэ үү) ба
 `iroha_cli app sorafs fetch` боодол (`crates/iroha_cli/src/commands/sorafs.rs`)
 Оркестрийн тохиргооны ижил гадаргууг хуваалцах. Дараах тугуудыг ашиглах үед
 танилцуулах нотлох баримтыг олж авах эсвэл каноник бэхэлгээг дахин тоглуулах:

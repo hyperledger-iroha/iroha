@@ -56,7 +56,7 @@ Gateway 側の強制ノブは `docs/examples/sorafs_gateway_direct_mode.toml` �
 - `direct_only_policy_rejects_soranet_only_providers` は `TransportPolicy::DirectOnly` が候補 advert が SoraNet リレーのみをサポートする場合に素早く失敗することを保証します。【crates/sorafs_orchestrator/src/lib.rs:7238】
 - `direct_only_policy_prefers_direct_transports_when_available` は Torii/QUIC トランスポートが存在するときに使用され、SoraNet リレーがセッションから除外されることを保証します。【crates/sorafs_orchestrator/src/lib.rs:7285】
 - `direct_mode_policy_example_is_valid` は `docs/examples/sorafs_direct_mode_policy.json` をパースし、ドキュメントがヘルパーと整合していることを保証します。【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` は `sorafs_cli fetch --transport-policy=direct-only` をモックの Torii gateway に対して実行し、直通トランスポートを固定する規制環境向けのスモークテストを提供します。【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `fetch_command_respects_direct_transports` は `sorafs_cli fetch --transport-policy=direct-only` をモックの Torii gateway に対して実行し、直通トランスポートを固定する規制環境向けのスモークテストを提供します。【crates/sorafs_orchestrator/tests/sorafs_cli.rs:2733】
 - `scripts/sorafs_direct_mode_smoke.sh` は同じコマンドをポリシー JSON と scoreboard 保存で包み、ロールアウト自動化に使います。
 
 更新を公開する前にフォーカスしたスイートを実行してください:

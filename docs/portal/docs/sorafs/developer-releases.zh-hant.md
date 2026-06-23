@@ -30,7 +30,7 @@ SoraFS 二進製文件（`sorafs_cli`、`sorafs_fetch`、幫助程序）和 SDK 
 - 附上補救票鏈接（例如 `governance/tickets/SF6-SR-2026.md`）並記下簽字
   來自安全工程和工具工作組的批准者。
 - 驗證備忘錄中的補救清單是否已關閉；未解決的項目會阻止發布。
-- 準備上傳奇偶校驗線束日誌 (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- 準備上傳奇偶校驗線束日誌 (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   與清單包一起。
 - 確認您計劃運行的簽名命令包括 `--identity-token-provider` 和顯式
   `--identity-token-audience=<aud>` 因此 Fulcio 範圍在發布證據中被捕獲。
@@ -50,9 +50,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 該腳本執行以下斷言：
 
 - `cargo fmt --all -- --check`（工作區）
-- `cargo clippy --locked --all-targets` 用於 `sorafs_car`（具有 `cli` 功能），
-  `sorafs_manifest` 和 `sorafs_chunker`
-- `cargo test --locked --all-targets` 對於那些相同的板條箱
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 如果任何步驟失敗，請在標記之前修復回歸。發布版本必須是
 與主線連續；不要將修復挑選到發布分支中。大門

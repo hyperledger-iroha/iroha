@@ -233,7 +233,7 @@ conservation, liste blanche des fournisseurs malveillants ou suppression des ale
   cache) et l'intégration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui thread
   les contrôles d'empreintes digitales via `/v1/da/ingest`.
 - Les simulations de streaming PDP/PoTR sont exercées via le harnais proof-stream
-  dans `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de demande
+  dans `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, couvrant les flux de demande
   PoR/PDP/PoTR et les scénarios de échec animés dans le modèle de menaces.
 - Les résultats de capacité et de réparation sont vivants sous
   `docs/source/sorafs/reports/sf2c_capacity_soak.md`, tandis que la matrice de

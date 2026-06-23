@@ -36,15 +36,12 @@ Frames are mapped into a square grid of `grid_size × grid_size` cells.
   largest frame so scanners do not have to rescale between frames. The reference
   encoder uses the canonical size ladder `33..69` in steps of 4 (see
   `PETAL_STREAM_GRID_SIZES`).
-- **Future Katakana presets:** the current CLI exposes deterministic
-  `--channel katakana-base94` PNG rendering and feature-gated GIF rendering
-  with the regular Petal grid sizing flags. Additional chunk-size and
-  distance-safe preset flags are planned but not wired yet:
-  - `balanced` (default): `chunk_size=176`, `grid_size>=41` with `41` preferred.
-  - `distance-safe`: `chunk_size=96`, `grid_size>=33` with `33` preferred for
-    larger per-cell boxes at longer camera distances. When `--parity-group` is not
-    forced, this preset also defaults to `parity_group=4` for stronger recovery in
-    camera-capture conditions.
+- **Katakana presets:** `--channel katakana-base94` accepts
+  `--katakana-preset balanced|distance-safe` when `--grid-size 0` lets the CLI
+  choose geometry automatically. `balanced` is the default and prefers grid size
+  `41` or larger; `distance-safe` prefers grid size `33` or larger for larger
+  per-cell boxes at longer camera distances. An explicit `--grid-size` always
+  overrides the preset floor.
 
 If the header + payload bits exceed capacity, the encoder must choose a larger grid size
 or fail.
@@ -87,17 +84,16 @@ The implemented commands in the current CLI are:
   Feature-gated GIF output for both channels, including bounded multi-frame
   animation via `--animation-frames`, is also available when `iroha_cli` is
   built with `--features offline-visual-codecs`.
-- `eval-capture` for replaying binary-grid or Katakana-base94 PNG frames
-  through the deterministic Petal decoder, optionally applying deterministic
-  capture perturbation, and gating on a basis-point or decimal success ratio.
-- `simulate-realtime` for replaying binary-grid or Katakana-base94 PNG frames in
-  deterministic loop order, optionally applying deterministic capture
-  perturbation, and writing the first recovered payload.
-- `score-styles`, which exercises the core deterministic Petal grid and capture
-  scorer.
-
-Distance-safe preset flags, GIF replay, and richer renderer-specific Katakana
-style scoring are planned but not wired yet.
+- `eval-capture` for replaying binary-grid or Katakana-base94 PNG frames, plus
+  GIF manifests when built with `--features offline-visual-codecs`, through the
+  deterministic Petal decoder. It can optionally apply deterministic capture
+  perturbation and gate on a basis-point or decimal success ratio.
+- `simulate-realtime` for replaying binary-grid or Katakana-base94 PNG frames,
+  plus feature-gated GIF manifests, in deterministic loop order, optionally
+  applying deterministic capture perturbation, and writing the first recovered
+  payload.
+- `score-styles`, which exercises the deterministic Petal capture scorer for
+  binary-grid or Katakana-base94 style candidates.
 
 Implemented binary-grid PNG `encode` example:
 
@@ -106,11 +102,12 @@ iroha offline petal encode --input payload.bin --output ./petal_out --format png
 ```
 
 The encode manifest uses schema `iroha.offline.petal.encode.v1` and records the
-input path, output directory, payload size, format, style, channel, fps,
-animation frame count, dimension, requested/resolved grid options, rendered file
-paths, and each file's encoded frame count. For PNG, `--animation-frames <n>`
-writes `n` deterministic PNG files named `frame_0000.png`, `frame_0001.png`,
-and so on. `--animation-frames` must be in `1..=120`.
+input path, output directory, payload size, format, style, channel, Katakana
+preset when applicable, fps, animation frame count, dimension,
+requested/resolved grid options, rendered file paths, and each file's encoded
+frame count. For PNG, `--animation-frames <n>` writes `n` deterministic PNG
+files named `frame_0000.png`, `frame_0001.png`, and so on.
+`--animation-frames` must be in `1..=120`.
 
 Feature-gated GIF `encode` example:
 
@@ -131,15 +128,17 @@ cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine
 Implemented Katakana base94 PNG example:
 
 ```bash
-iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --style sora-temple-command --dimension 1024
+iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --style sora-temple-command --dimension 1024 --katakana-preset distance-safe
 ```
 
 The current Katakana renderer writes RGB PNG/GIF command tiles while preserving
-the decode-critical luminance value at each PNG cell center and leaving
+the decode-critical luminance value at each sampled cell center and leaving
 calibration cells solid. This lets `eval-capture` and `simulate-realtime` use
-the same sample decoder as the binary-grid channel for PNG manifests. GIF
-manifests are encode artifacts until GIF replay is wired. Use `--dimension
-1024` for distance-safe validation until explicit preset flags are wired.
+the same sample decoder as the binary-grid channel for PNG and feature-gated
+GIF manifests. Use `--katakana-preset balanced` or omit the flag for ordinary
+camera distances; use `--katakana-preset distance-safe` with a larger
+`--dimension` for longer-distance validation. Passing `--grid-size <n>` keeps
+that exact grid size and records the requested/resolved value in the manifest.
 
 Implemented binary-grid `eval-capture` example:
 
@@ -148,12 +147,13 @@ iroha offline petal eval-capture --input-dir ./petal_out/png --channel binary-gr
 ```
 
 The current `eval-capture` path finds the encode `manifest.json`, samples each
-PNG frame at deterministic cell centers, decodes the Petal frame, and fails if
-the success ratio drops below `--min-success-ratio` or
-`--min-success-ratio-bps`. It reports both executed attempts (`attempts`) and
-total scheduled attempts (`planned_attempts`) plus `aborted_early=true` when the
-remaining frames can no longer satisfy the gate. Manifest-free PNG directories
-are supported only when `--grid-size` is supplied.
+PNG frame or feature-gated GIF internal frame at deterministic cell centers,
+decodes the Petal frame, and fails if the success ratio drops below
+`--min-success-ratio` or `--min-success-ratio-bps`. It reports both executed
+attempts (`attempts`) and total scheduled attempts (`planned_attempts`) plus
+`aborted_early=true` when the remaining frames can no longer satisfy the gate.
+Manifest-free directories are supported only for PNG frames and only when
+`--grid-size` is supplied.
 
 Perturbed binary-grid `eval-capture` example:
 
@@ -182,27 +182,28 @@ Additional deterministic cell-grid perturbation flags are available under
   saturating bounds before decoding.
 
 These values are recorded in the JSON report and also apply to Katakana-base94
-PNG replay because the renderer preserves decode-critical center luminance.
+PNG/GIF replay because the renderer preserves decode-critical center luminance.
 Renderer-specific Katakana style scoring beyond the current binary-grid style
 sets remains planned.
 
-Implemented PNG `simulate-realtime` example:
+Implemented PNG/GIF `simulate-realtime` example:
 
 ```bash
 iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel binary-grid --profile default --simulate-fps 24 --realtime-loops 3 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
 ```
 
 The current `simulate-realtime` path replays rendered binary-grid or
-Katakana-base94 PNG frames in manifest order with deterministic looped playback
-via `--realtime-loops <n>`.
+Katakana-base94 PNG frames, plus feature-gated GIF internal frames, in manifest
+order with deterministic looped playback via `--realtime-loops <n>`.
 It reports `loop_index` and `source_index` per attempt, records the first
 successful source frame, and writes `--output-payload` only after a frame decodes
 successfully.
 When `--perturb-capture` is enabled, realtime attempts expand to
 `loop * source frame * capture attempt`; the report adds
 `capture_attempt_index` and records the first successful capture-attempt index.
-For distance-safe katakana validation, keep encode dimension at `1024` so realtime results
-reflect the larger-box operating point.
+For distance-safe Katakana validation, encode with `--katakana-preset
+distance-safe` and keep `--dimension` large enough that realtime results reflect
+the larger-box operating point.
 
 Implemented `score-styles` example (repeatable style ranking report):
 
@@ -212,7 +213,8 @@ iroha offline petal score-styles --input payload.bin --output-report ./petal_out
 
 `score-styles` is implemented as the core deterministic capture/report gate for
 the published `sora-temple-default` style set. The report includes the selected
-profile, seed, requested and resolved grid options, per-style capture profile,
+profile, channel, Katakana preset when applicable, seed, requested and resolved
+grid options, per-style channel/preset metadata, per-style capture profile,
 capture attempts/successes, `capture_success_ratio_bps`,
 `effective_payload_bytes_per_second`, `effective_payload_bits_per_second`,
 `throughput_score_bps`, `overall_score_bps`, and `recommended_style`. The
@@ -227,6 +229,14 @@ bounds. If both candidates tie, the report keeps `sora-temple` as the
 recommendation for the default baseline; under a collapsed low-contrast profile
 such as `dark_luma=128`, `light_luma=129`, `luminance_jitter=0`, the expanded
 set recommends `sora-temple-high-contrast`.
+
+For Katakana-base94 scoring, pass `--channel katakana-base94`. The default
+candidate becomes `sora-temple-command`, `--katakana-preset` resolves the same
+balanced or distance-safe grid floors used by `encode`, and
+`--style-set sora-temple-expanded` adds
+`sora-temple-command-high-contrast`. Under the same collapsed low-contrast
+profile, the Katakana expanded set recommends the high-contrast command
+candidate while preserving deterministic sample-decoder behavior.
 
 The default deterministic CLI baseline for the `sora-temple-capture-baseline`
 payload is `recommended_style=sora-temple`, 12/12 successful decode attempts

@@ -77,7 +77,7 @@ _ ბოლოს განახლდა `python3 scripts/inventory_env_toggle
 
 ## CARGO_BIN_EXE_sorafs_cli (ტესტი: 1)
 
-- ტესტი: crates/sorafs_car/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
+- ტესტი: crates/sorafs_orchestrator/tests/sorafs_cli.rs:42 — `let path = env::var("CARGO_BIN_EXE_sorafs_cli")`
 
 ## CARGO_BIN_EXE_sorafs_fetch (ტესტი: 1)
 
@@ -85,7 +85,7 @@ _ ბოლოს განახლდა `python3 scripts/inventory_env_toggle
 
 ## CARGO_BIN_EXE_taikai_car (ტესტი: 1)
 
-- ტესტი: crates/sorafs_car/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
+- ტესტი: crates/sorafs_orchestrator/tests/sorafs_cli.rs:48 — `let path = env::var("CARGO_BIN_EXE_taikai_car")`
 
 ## CARGO_BIN_NAME (პროდუქტი: 3)
 

@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-02-07
 - رابط تذكرة المعالجة (مثلاً `governance/tickets/SF6-SR-2026.md`) منسلک کریں و
   مجموعة عمل الهندسة الأمنية والأدوات هي الموافقون على التوقيع.
 - التحقق من مذكرة قائمة مراجعة الإصلاح؛ يتم تحرير العناصر التي لم يتم حلها من خلال حظر الحظر.
-- سجلات تسخير التكافؤ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) کو
+- سجلات تسخير التكافؤ (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`) کو
   يتم حاليًا تحميل حزمة البيان بشكل مستمر.
 - هناك أيضًا زر لتوقيع الأمر `--identity-token-provider`
   يتضمن `--identity-token-audience=<aud>` الواضح إمكانية التقاط دليل إصدار نطاق Fulcio.
@@ -48,9 +48,8 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 هناك تأكيدات ضمن البرنامج النصي:
 
 - `cargo fmt --all -- --check` (مساحة العمل)
-- `cargo clippy --locked --all-targets` `sorafs_car` کے لیے (الميزة `cli` کے ساتھ)،
-  `sorafs_manifest` و`sorafs_chunker`
-- `cargo test --locked --all-targets` الصناديق المخصصة
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
+- `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
 إذا فشل التقدم، فيمكنك وضع العلامات على الانحدار الصحيح. الإصدار يبني کو الرئيسي
 استمرار الرفاه المستمر؛ تحرير الفروع يعمل على إصلاح عدم اختيار الكرز. بوابة

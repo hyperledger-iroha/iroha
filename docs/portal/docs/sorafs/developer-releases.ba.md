@@ -30,7 +30,7 @@ I18NT000000001X бинарҙары (`sorafs_cli`, `sorafs_fetch`, ярҙамсы
 - Ҡушымта билет һылтанмаһы беркетергә (мәҫәлән, `governance/tickets/SF6-SR-2026.md`) һәм билдәләп ҡарағыҙ
   хәүефһеҙлекте тәьмин итеү һәм инструменталь эшсе төркөмдән раҫлаусылар.
 - Тикшерергә, тип тергеҙеү тикшерелгән исемлек памятка ябылған; хәл ителмәгән әйберҙәр релизды блоклай.
-- Паритет йүгән журналдарын тейәүгә әҙерләнергә (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Паритет йүгән журналдарын тейәүгә әҙерләнергә (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   манифест өйөмө менән бер рәттән.
 - Һеҙ эшләргә планлаштырған ҡул ҡуйыу командаһын раҫлау `--identity-token-provider` һәм асыҡтан-асыҡ инә.
   I18NI000000018X шулай Фульцио даирәһе релиз дәлилдәрендә тотола.
@@ -50,7 +50,7 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 Сценарий түбәндәге раҫлауҙарҙы башҡара:
 
 - `cargo fmt --all -- --check` (эш киңлеге)
-- `cargo clippy --locked --all-targets` `sorafs_car` өсөн (`cli` функцияһы менән),
+- `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
   I18NI000000025X, һәм `sorafs_chunker`
 - Шул уҡ йәшниктәр өсөн I18NI000000027X
 
