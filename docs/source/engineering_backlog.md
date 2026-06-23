@@ -750,7 +750,7 @@ redistributable schemas, and official trust/revocation bundles.
   slot-index, ciphertext, proof-mode, and residual/noise-bound commitments
   before proof artifacts are accepted. Crypto tests also pin the canonical
   typed proof schema artifact digest
-  `b9d8ff97d4dcfed1229115d17f90407233843f02e52a3f6fc214fee17a527b95`
+  `2df07f4287dfd54d050081363f85440038957694efa11e34b9d1f5f016cc66c3`
   and prover-key material commitment digest.
   Data-model tests pin the Soracloud FHE public-input schema hashes that Core
   verifier records use for input admission, bootstrap-key proof,

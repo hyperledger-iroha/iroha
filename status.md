@@ -2,6 +2,21 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 Soracloud BFV Full-Bootstrap Schema Fixture Alignment
+
+- Re-aligned the Soracloud full-bootstrap material profile gate so it compares
+  `BfvFullBootstrapCircuitMaterialV1::proof_public_input_schema_digest` against
+  the governed BFV proof public-input schema artifact digest, not the Soracloud
+  proof-envelope public-input schema hash.
+- Refreshed the shared BFV identifier operation-vector fixture and the crypto
+  schema-artifact/prover-key commitment goldens to the current canonical
+  artifact digest `2df07f4287dfd54d050081363f85440038957694efa11e34b9d1f5f016cc66c3`.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core soracloud_bfv_operation_vectors --lib -- --nocapture`
+  - `cargo test -p iroha_core soracloud_fhe_full_bootstrap_material_profile --lib -- --nocapture`
+  - `cargo test -p iroha_crypto full_bootstrap_proof_schema_artifact_digest_is_stable --lib -- --nocapture`
+
 ## 2026-06-23 Kagemusha JS Package Native Material Alias Guard
 
 - Extended the JavaScript package declaration accumulator-material denylist
