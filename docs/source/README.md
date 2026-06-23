@@ -27,6 +27,7 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 - Governance: `../../gov.md`
 - Domain endorsements (committees, policies, validation): `domain_endorsements.md`
 - JDG attestations (offline validation tooling): `jdg_attestations.md`
+- Offline Note V2 device attestation: `offline_note_v2_attestation.md`
 - Clarification coordination prompts: `coordination_llm_prompts.md`
 - Roadmap: `../../roadmap.md`
 - Docker builder image usage: `docker_build.md`

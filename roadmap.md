@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -11,6 +11,25 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
+- Offline Note V2 device attestation now supports both the centralized
+  middleware certificate flow and a receiptless on-chain registration flow. The
+  middleware path preserves signed receipt admission while rejecting
+  contradictory client profile and usage-limit binding fields before Torii
+  issues a one-use certificate. The
+  on-chain path carries raw platform report/evidence bytes, binds them to
+  replay digests, anchors the challenge to recent ledger state, validates Apple
+  App Attest CBOR/authenticator data/nonce-extension/X.509 chains with
+  duplicate-key rejection and Android KeyMint certificate
+  arrays/challenge/security-level/app-identity extensions with duplicate
+  package/signer/all-applications and ambiguous authorization-list rejection,
+  and authorizes future certificates by attested certificate-payload hash. The
+  on-chain verifier now has a governed policy instruction for deterministic
+  platform root rotation, certificate-DER revocation digests, and optional
+  iOS/Android app allowlists while preserving built-in first-release roots as
+  the no-policy default. Swift, Kotlin/JVM, and Java Android SDK parity now
+  carries the registration model, canonical challenge-preimage hash, and
+  `RegisterOfflineDeviceAttestation` instruction bytes through the shared
+  Offline Note V2 interop fixture.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
 - Privacy production readiness now requires a 4-peer localnet

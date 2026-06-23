@@ -1,6 +1,92 @@
 # Status
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
+
+## 2026-06-23 Offline Note V2 on-chain device attestation admission
+
+- Added a `RegisterOfflineDeviceAttestation` instruction and registration model
+  for receiptless Offline Note V2 key admission alongside the existing
+  middleware-signed certificate flow.
+- Hardened the existing Torii Offline V2 middleware receipt path so optional
+  client-supplied device-binding profile fields must match the signed receipt,
+  and supplied assertion usage limits must be exactly one before Torii issues a
+  one-use key certificate.
+- Expanded Torii middleware receipt adversarial coverage with freshly signed
+  negative receipts for account/device replay, note-key replay, assertion-key
+  replay, report-hash replay, expired validity windows, and non-one-use
+  hardware attestations.
+- The on-chain path now binds a canonical Norito challenge preimage to account,
+  asset, key, platform profile, recent block height/hash, and expiry; records
+  replay markers for the attested certificate, challenge, report, and evidence;
+  and authorizes later Offline Note issue/audit certificates through either an
+  on-chain attestation marker or the existing issuer signature.
+- Registration now carries raw report/evidence bytes, checks their Iroha hashes
+  against the submitted digests, enforces bounded sizes, and validates iOS App
+  Attest reports through CBOR/authenticator-data parsing, app identity binding,
+  credential-key binding, Apple-rooted X.509 chain checks, and the nonce
+  extension over the canonical Iroha challenge hash. Known duplicate CBOR keys
+  in App Attest and COSE maps are rejected instead of being first-match parsed.
+- Android KeyMint registration validates the CBOR certificate array, X.509
+  chain, leaf KeyMint extension, subject-key binding, attestation challenge,
+  hardware-backed security levels, `usageCountLimit == 1`, app package, and
+  signing-certificate digest.
+- Hardened Android KeyMint app-identity parsing so duplicate package names,
+  duplicate signing-certificate digests, and duplicate `allApplications` tags
+  are rejected instead of being silently collapsed by membership checks. KeyMint
+  authorization fields consumed by the verifier must not be duplicated across
+  software/hardware lists, and KeyDescription payloads with trailing fields are
+  rejected.
+- Added `SetOfflineDeviceAttestationPolicy`, a governed on-chain verifier policy
+  for deterministic trusted-root rotation, certificate-DER SHA-256 revocations,
+  optional iOS app allowlists, and optional Android package/signing-certificate
+  allowlists. The default path keeps built-in first-release roots when no policy
+  has been stored.
+- Expanded negative coverage for malformed policies, including unsupported
+  versions, duplicate trusted roots, zero/duplicate revocation digests, required
+  empty app allowlists, and duplicate Android signer digests.
+- Regenerated the Offline Note V2 interop fixture with an
+  `attestation_registration` vector that pins the registration Norito archive,
+  canonical challenge hash, report/evidence hashes, derived certificate payload
+  hash, and `RegisterOfflineDeviceAttestation` instruction payload.
+- Added Swift, Kotlin/JVM, and Java Android SDK surfaces for constructing,
+  validating, encoding, and instruction-wrapping on-chain attestation
+  registrations while preserving the middleware certificate flow as an optional
+  path. The SDK constructors recompute the same challenge preimage hash and
+  reject mismatched report/evidence digests before callers submit bytes.
+- Expanded SDK adversarial coverage for malformed attestation registrations:
+  challenge/report/evidence hash mismatches, short Android signing digests,
+  short note public keys, malformed recent-block hashes, non-one-use
+  registrations, invalid asset-definition IDs, and mutable byte-array aliasing
+  across Kotlin/JVM and Java Android constructors/getters.
+- Added `docs/source/offline_note_v2_attestation.md` as the byte-level contract
+  reference for the optional middleware receipt flow and the trustless on-chain
+  registration flow.
+- Validation passed:
+  - `cargo check -p iroha_data_model --lib`
+  - `cargo check -p iroha_core --lib`
+  - `cargo test -p iroha_data_model offline::offline_note_tests::offline_device_attestation_challenge_binds_registration_preimage --lib`
+  - `cargo test -p iroha_data_model isi::offline::tests::offline_note --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core offline_device_attestation --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core on_chain_attested_certificate_authorizes_without_issuer_signature --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core middleware_signed_certificate_authorization_still_works_without_attestation_marker --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii attestation_receipt --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii offline_v2_issuer::tests --lib`
+  - `cargo fmt --all -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo run -j 1 -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core offline_device_attestation --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model offline_device_attestation --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain` from `java/iroha_android`
+  - `git diff --check -- docs/source/offline_note_v2_attestation.md docs/source/README.md status.md crates/iroha_torii/src/offline_v2_issuer.rs`
+  - `git diff --check`
+- Swift `swift test --filter OfflineNoteV2Tests` is still blocked locally at
+  package-manifest evaluation until `dist/NoritoBridge.xcframework` exists; the
+  checked-in Swift package symlink points there and no bridge artifact is
+  tracked.
 
 ## 2026-06-22 BFV diagnostic repack lint surface cleanup
 

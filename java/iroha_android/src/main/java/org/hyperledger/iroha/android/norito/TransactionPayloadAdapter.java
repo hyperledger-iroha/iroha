@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
@@ -212,6 +213,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           Optional.ofNullable(value.creationTimeMs()));
       encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.feeSponsor()));
       encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.memo()));
+      encodeSizedField(
+          encoder,
+          OPTIONAL_STRING_ADAPTER,
+          optionalValidationFeePolicyVersion(value.validationFeePolicyVersion()));
+      encodeSizedField(
+          encoder,
+          OPTIONAL_STRING_ADAPTER,
+          optionalValidationFeePolicyHash(value.validationFeePolicyHash()));
       encodeSizedField(encoder, ENCODED_INSTRUCTION_LIST_ADAPTER, value.instructions());
     }
 
@@ -514,6 +523,41 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return Optional.of(normalized);
   }
 
+  private static Optional<String> optionalValidationFeePolicyVersion(final Long value) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    if (value.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeePolicyVersion must be non-negative");
+    }
+    return Optional.of(value.toString());
+  }
+
+  private static Optional<String> optionalValidationFeePolicyHash(final String value) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    return Optional.of(normalizeValidationFeePolicyHash(value));
+  }
+
+  private static String normalizeValidationFeePolicyHash(final String value) {
+    final String normalized =
+        requireNonBlank(value, "validationFeePolicyHash").toLowerCase(Locale.ROOT);
+    if (normalized.length() != 64) {
+      throw new IllegalArgumentException("validationFeePolicyHash must contain 64 hex characters");
+    }
+    for (int index = 0; index < normalized.length(); index++) {
+      final char character = normalized.charAt(index);
+      final boolean isHex =
+          (character >= '0' && character <= '9')
+              || (character >= 'a' && character <= 'f');
+      if (!isHex) {
+        throw new IllegalArgumentException("validationFeePolicyHash must contain 64 hex characters");
+      }
+    }
+    return normalized;
+  }
+
   private static String requireNonBlank(final String value, final String fieldName) {
     if (value == null) {
       throw new IllegalArgumentException(fieldName + " must not be null");
@@ -542,6 +586,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     if (request.creationTimeMs() != null && request.creationTimeMs().longValue() < 0L) {
       throw new IllegalArgumentException("creationTimeMs must be non-negative");
     }
+    final boolean hasPolicyVersion = request.validationFeePolicyVersion() != null;
+    final boolean hasPolicyHash = request.validationFeePolicyHash() != null;
+    if (hasPolicyVersion != hasPolicyHash) {
+      throw new IllegalArgumentException(
+          "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
+    }
+    optionalValidationFeePolicyVersion(request.validationFeePolicyVersion());
+    optionalValidationFeePolicyHash(request.validationFeePolicyHash());
   }
 
   private static InstructionBox tryDecodeWireInstruction(

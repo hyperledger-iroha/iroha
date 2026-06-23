@@ -25,6 +25,36 @@
     "offline_telemetry"
   ],
   "chain_vectors": {
+    "attestation_registration": {
+      "account_id": "sorauﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC",
+      "android_package_name": null,
+      "android_signing_certificate_sha256": null,
+      "assertion_key_algorithm": "app-attest-p256",
+      "assertion_public_key": "BC0KG7NgovFQ06Z4TqaY95lEMuTCbF8HH/OFLYSrCGNf96Z2YOKN3W65q4qxOb66Ls8XzAcXZRYmrmHZdpiSbfE=",
+      "assertion_scheme": "apple-appattest-counter-v1",
+      "assertion_usage_count_limit": null,
+      "asset_definition_id": "86tJfbBYLgFqmKeTK6v5SDyzKid2",
+      "attestation_report_base64": "b2ZmbGluZS12Mi12ZWN0b3ItaW9zLWFwcGF0dGVzdC1yZXBvcnQ=",
+      "attestation_report_hash": "928ee923ef8b26d258318559fc59f78672b035ae50453e929c3e5c0dcbf9542d",
+      "challenge_hash": "fa16789a0a32a5ed0b31434862cb1e55700a2f7eeaf94a5c2018de83712b2229",
+      "device_id": "sender-device-v2-1",
+      "evidence_base64": "b2ZmbGluZS12Mi12ZWN0b3ItaW9zLWFwcGF0dGVzdC1ldmlkZW5jZQ==",
+      "evidence_hash": "b592b37488d2bf35fc57bda780c5a2336088b1c13786a45b941e7ad0fc105161",
+      "expires_at_ms": 1706000300000,
+      "instruction_norito_base64": "TlJUMAAAdgZ9qZV31X7a0PdFSG+CUwCHAgAAAAAAAB0qIti03UO/AoUFAgEADg1pb3MtYXBwYXR0ZXN0EA9zZW5kZXIta2V5LXYyLTETEnNlbmRlci1kZXZpY2UtdjItMU8AAAAASiEAAAAAAAAAAQABiAFLAYgBVwH0AeoBoQFhATwBYQFQAU0BswFNAUsB6gHzAUYBUQF6AQ4BMQHeATwB3QHUAdkBtAEgAR0BnQELIgEgAf0BvAEGAWwBRAGRAUwBNgGjAQcBMwHoAfgBCQF2AeUNAQsKVEVBTUlEMTIzNCABHh1qcC5jby5zb3JhbWl0c3UuaXJvaGEub2ZmbGluZQ0BCwpwcm9kdWN0aW9uAQABACggAAAAAAAAAEgHWll+choVbi4Hmd5cwMUyTcbn6vHN1GJQho7FMhXdGxphcHBsZS1hcHBhdHRlc3QtY291bnRlci12MRAPYXBwLWF0dGVzdC1wMjU2SUEAAAAAAAAABC0KG7NgovFQ06Z4TqaY95lEMuTCbF8HH/OFLYSrCGNf96Z2YOKN3W65q4qxOb66Ls8XzAcXZRYmrmHZdpiSbfEBAAEBIPoWeJoKMqXtCzFDSGLLHlVwCi9+6vlKXCAY3oNxKyIpIJKO6SPviybSWDGFWfxZ94ZysDWuUEU+kpw+XA3L+VQtLiYAAAAAAAAAb2ZmbGluZS12Mi12ZWN0b3ItaW9zLWFwcGF0dGVzdC1yZXBvcnQgtZKzdIjSvzX8V72ngMWiM2CIscE3hqRblB560PwQUWEwKAAAAAAAAABvZmZsaW5lLXYyLXZlY3Rvci1pb3MtYXBwYXR0ZXN0LWV2aWRlbmNlCCoAAAAAAAAAIJDCSo4dYLhE9kU5u26EeNifixpgTamQpjJ/P5WLXU4ZCOC3ijWNAQAA",
+      "ios_bundle_id": "jp.co.soramitsu.iroha.offline",
+      "ios_environment": "production",
+      "ios_team_id": "TEAMID1234",
+      "key_certificate_payload_hash": "c7664842f10e9f6f5ce3eea03f2818b5174e1891b96f7001d5315325e5a9b1b3",
+      "key_id": "sender-key-v2-1",
+      "norito_base64": "TlJUMAAASiwl2fkFKv4yxKBoG4fK/wCFAgAAAAAAALXr6W7vgVGnAgIBAA4NaW9zLWFwcGF0dGVzdBAPc2VuZGVyLWtleS12Mi0xExJzZW5kZXItZGV2aWNlLXYyLTFPAAAAAEohAAAAAAAAAAEAAYgBSwGIAVcB9AHqAaEBYQE8AWEBUAFNAbMBTQFLAeoB8wFGAVEBegEOATEB3gE8Ad0B1AHZAbQBIAEdAZ0BCyIBIAH9AbwBBgFsAUQBkQFMATYBowEHATMB6AH4AQkBdgHlDQELClRFQU1JRDEyMzQgAR4danAuY28uc29yYW1pdHN1Lmlyb2hhLm9mZmxpbmUNAQsKcHJvZHVjdGlvbgEAAQAoIAAAAAAAAABIB1pZfnIaFW4uB5neXMDFMk3G5+rxzdRiUIaOxTIV3RsaYXBwbGUtYXBwYXR0ZXN0LWNvdW50ZXItdjEQD2FwcC1hdHRlc3QtcDI1NklBAAAAAAAAAAQtChuzYKLxUNOmeE6mmPeZRDLkwmxfBx/zhS2EqwhjX/emdmDijd1uuauKsTm+ui7PF8wHF2UWJq5h2XaYkm3xAQABASD6FniaCjKl7QsxQ0hiyx5VcAovfur5SlwgGN6DcSsiKSCSjukj74sm0lgxhVn8WfeGcrA1rlBFPpKcPlwNy/lULS4mAAAAAAAAAG9mZmxpbmUtdjItdmVjdG9yLWlvcy1hcHBhdHRlc3QtcmVwb3J0ILWSs3SI0r81/Fe9p4DFojNgiLHBN4akW5QeetD8EFFhMCgAAAAAAAAAb2ZmbGluZS12Mi12ZWN0b3ItaW9zLWFwcGF0dGVzdC1ldmlkZW5jZQgqAAAAAAAAACCQwkqOHWC4RPZFObtuhHjYn4saYE2pkKYyfz+Vi11OGQjgt4o1jQEAAA==",
+      "one_use": true,
+      "platform": "ios-appattest",
+      "public_key": "SAdaWX5yGhVuLgeZ3lzAxTJNxufq8c3UYlCGjsUyFd0=",
+      "recent_block_hash": "90c24a8e1d60b844f64539bb6e8478d89f8b1a604da990a6327f3f958b5d4e19",
+      "recent_block_height": 42,
+      "version": 1
+    },
     "audit": {
       "input_claim_hashes": [
         "894451c726d56b1ccf387a651d903b00f9c518cf523c809f0c43a10e53e68795"

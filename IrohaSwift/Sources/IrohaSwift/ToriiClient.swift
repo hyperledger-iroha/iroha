@@ -10946,6 +10946,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
     public var signatureB64: String?
     public var creationTimeMs: UInt64?
     public var feeSponsor: String?
+    public var validationFeePolicyVersion: UInt64?
+    public var validationFeePolicyHash: String?
     public var instructions: [ToriiMultisigProposeInstruction]
 
     public init(selector: ToriiMultisigAccountSelector,
@@ -10954,6 +10956,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 feeSponsor: String? = nil,
+                validationFeePolicyVersion: UInt64? = nil,
+                validationFeePolicyHash: String? = nil,
                 instructions: [ToriiMultisigProposeInstruction]) {
         self.selector = selector
         self.signerAccountId = signerAccountId
@@ -10961,6 +10965,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         self.signatureB64 = signatureB64
         self.creationTimeMs = creationTimeMs
         self.feeSponsor = feeSponsor
+        self.validationFeePolicyVersion = validationFeePolicyVersion
+        self.validationFeePolicyHash = validationFeePolicyHash
         self.instructions = instructions
     }
 
@@ -10970,6 +10976,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 feeSponsor: String? = nil,
+                validationFeePolicyVersion: UInt64? = nil,
+                validationFeePolicyHash: String? = nil,
                 noritoInstructionBoxBytes: [Data]) throws {
         throw ToriiClientError.invalidPayload(
             "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
@@ -10984,6 +10992,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         case signatureB64 = "signature_b64"
         case creationTimeMs = "creation_time_ms"
         case feeSponsor = "fee_sponsor"
+        case validationFeePolicyVersion = "validation_fee_policy_version"
+        case validationFeePolicyHash = "validation_fee_policy_hash"
         case instructions
     }
 
@@ -11000,6 +11010,16 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         let normalizedFeeSponsor = try feeSponsor.map {
             try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
         }
+        let normalizedValidationFeePolicyVersion = validationFeePolicyVersion.map { String($0) }
+        let normalizedValidationFeePolicyHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
+            validationFeePolicyHash,
+            field: "validation_fee_policy_hash"
+        )
+        if (normalizedValidationFeePolicyVersion == nil) != (normalizedValidationFeePolicyHash == nil) {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_policy_version and validation_fee_policy_hash must be provided together."
+            )
+        }
         guard !instructions.isEmpty else {
             throw ToriiClientError.invalidPayload("instructions must not be empty.")
         }
@@ -11012,6 +11032,8 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
         try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
+        try container.encodeIfPresent(normalizedValidationFeePolicyVersion, forKey: .validationFeePolicyVersion)
+        try container.encodeIfPresent(normalizedValidationFeePolicyHash, forKey: .validationFeePolicyHash)
         try container.encode(instructions, forKey: .instructions)
     }
 }

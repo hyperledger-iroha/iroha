@@ -731,6 +731,12 @@ fn verify_device_attestation(
             "Offline Notes V2 attestation receipt does not certify hardware one-use semantics.",
         ));
     }
+    if assertion_usage_limit(request)?.is_some_and(|limit| limit != 1) {
+        return Err(validation(
+            "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT",
+            "Offline Notes V2 assertion_usage_count_limit must be one when present.",
+        ));
+    }
     let issued_at = required_u64(receipt, "issued_at_ms")?;
     let expires_at = required_u64(receipt, "expires_at_ms")?;
     if issued_at > now_ms || expires_at <= now_ms || issued_at >= expires_at {
@@ -796,13 +802,35 @@ fn verify_device_attestation(
         }
     }
 
+    let platform = required_string(receipt, "platform")?.to_string();
+    verify_optional_attestation_binding(
+        request,
+        "platform",
+        &platform,
+        "Offline Notes V2 device_binding.platform does not match attestation receipt.",
+    )?;
+    let assertion_scheme = required_string(receipt, "assertion_scheme")?.to_string();
+    verify_optional_attestation_binding(
+        request,
+        "assertion_scheme",
+        &assertion_scheme,
+        "Offline Notes V2 device_binding.assertion_scheme does not match attestation receipt.",
+    )?;
+    let assertion_key_algorithm = required_string(receipt, "assertion_key_algorithm")?.to_string();
+    verify_optional_attestation_binding(
+        request,
+        "assertion_key_algorithm",
+        &assertion_key_algorithm,
+        "Offline Notes V2 device_binding.assertion_key_algorithm does not match attestation receipt.",
+    )?;
+
     Ok(VerifiedDeviceAttestation {
-        platform: required_string(receipt, "platform")?.to_string(),
+        platform,
         key_id: required_string(receipt, "attestation_key_id")?.to_string(),
         public_key,
         public_key_base64: BASE64_STANDARD.encode(&request_public_key),
-        assertion_scheme: required_string(receipt, "assertion_scheme")?.to_string(),
-        assertion_key_algorithm: required_string(receipt, "assertion_key_algorithm")?.to_string(),
+        assertion_scheme,
+        assertion_key_algorithm,
         assertion_public_key_base64: BASE64_STANDARD.encode(&assertion_public_key),
         assertion_public_key,
     })
@@ -1932,6 +1960,23 @@ fn verify_optional_assertion_public_key(
     Ok(())
 }
 
+fn verify_optional_attestation_binding(
+    request: &ParsedOfflineRequest,
+    field: &'static str,
+    expected: &str,
+    message: &'static str,
+) -> Result<(), Error> {
+    if let Some(actual) = optional_string(&request.device_binding, field)
+        && actual != expected
+    {
+        return Err(validation(
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            message,
+        ));
+    }
+    Ok(())
+}
+
 fn json_object(entries: Vec<(&str, Value)>) -> Value {
     Value::Object(
         entries
@@ -2143,6 +2188,30 @@ mod tests {
         assertion_key: &[u8],
         hardware_one_use: bool,
     ) -> Value {
+        signed_attestation_receipt_with_validity(
+            verifier,
+            account_id,
+            device_id,
+            note_key,
+            assertion_key,
+            hardware_one_use,
+            REPORT_BYTES,
+            NOW_MS - 1_000,
+            NOW_MS + 60_000,
+        )
+    }
+
+    fn signed_attestation_receipt_with_validity(
+        verifier: &KeyPair,
+        account_id: &str,
+        device_id: &str,
+        note_key: &[u8],
+        assertion_key: &[u8],
+        hardware_one_use: bool,
+        report_bytes: &[u8],
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> Value {
         let unsigned = json_object(vec![
             ("version", number_value(1)),
             ("platform", string_value("ios-app-attest")),
@@ -2162,10 +2231,10 @@ mod tests {
             ("hardware_one_use", Value::Bool(hardware_one_use)),
             (
                 "attestation_report_hash_hex",
-                string_value(sha256_hex(REPORT_BYTES)),
+                string_value(sha256_hex(report_bytes)),
             ),
-            ("issued_at_ms", number_value(NOW_MS - 1_000)),
-            ("expires_at_ms", number_value(NOW_MS + 60_000)),
+            ("issued_at_ms", number_value(issued_at_ms)),
+            ("expires_at_ms", number_value(expires_at_ms)),
         ]);
         let signature = {
             let bytes = json::to_vec(&unsigned).expect("receipt json");
@@ -2177,6 +2246,15 @@ mod tests {
             string_value(BASE64_STANDARD.encode(signature.payload())),
         );
         Value::Object(map)
+    }
+
+    fn replace_attestation_receipt(request: &mut ParsedOfflineRequest, receipt: Value) {
+        insert_field(&mut request.device_binding, "attestation_receipt", receipt);
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
     }
 
     fn insert_field(value: &mut Value, field: &str, field_value: Value) {
@@ -2520,6 +2598,200 @@ mod tests {
         assert_eq!(
             validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
             "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_account_replay() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt(
+            &verifier,
+            "attacker-account",
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_ACCOUNT_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_device_replay() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            "attacker-device",
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_DEVICE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_note_key_replay() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let replayed_note_key = [0xC7; 32];
+        let receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &replayed_note_key,
+            &assertion_key,
+            true,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_KEY_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_assertion_key_replay() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let replayed_assertion_key = vec![0xD8; 65];
+        let receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &replayed_assertion_key,
+            true,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ASSERTION_PUBLIC_KEY_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_non_one_use_hardware() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            false,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_NOT_ONE_USE"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_expired_signed_receipt() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt_with_validity(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+            REPORT_BYTES,
+            NOW_MS - 10_000,
+            NOW_MS - 1,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_report_hash_replay() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = vec![0xB6; 65];
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt_with_validity(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+            b"different-platform-attestation",
+            NOW_MS - 1_000,
+            NOW_MS + 60_000,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_REPORT_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_mismatched_device_binding_profile() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        insert_field(
+            &mut request.device_binding,
+            "assertion_scheme",
+            string_value("attacker-profile"),
+        );
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_non_one_assertion_usage_limit() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        insert_field(
+            &mut request.device_binding,
+            "assertion_usage_count_limit",
+            number_value(2),
+        );
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT"
         );
     }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TransferRequest {
+public struct TransferRequest: Sendable {
     public let chainId: String
     public let authority: String
     public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
@@ -29,6 +29,53 @@ public struct TransferRequest {
         self.feeSponsor = feeSponsor
         self.ttlMs = ttlMs
         self.nonce = nonce
+    }
+}
+
+public enum IrohaValidationFeeTransactionMetadataKey {
+    public static let policyVersion = "validation_fee_policy_version"
+    public static let policyHash = "validation_fee_policy_hash"
+    public static let instructionIndex = "validation_fee_instruction_index"
+    public static let transferEntryIndex = "validation_fee_transfer_entry_index"
+}
+
+public enum ValidationFeeTransferRequestError: Error, LocalizedError, Equatable {
+    case invalidPolicyVersion
+    case malformedPolicyHash(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidPolicyVersion:
+            return "Validation fee policy version must be positive."
+        case let .malformedPolicyHash(value):
+            return "Validation fee policy hash must be exactly 64 lowercase or uppercase hex characters with no whitespace (received '\(value)')."
+        }
+    }
+}
+
+public struct ValidationFeeTransferRequest: Sendable {
+    public let principal: TransferRequest
+    public let feeAssetDefinitionId: String
+    public let feeQuantity: String
+    public let treasuryAccountId: String
+    public let policyVersion: UInt64
+    public let policyHashHex: String
+    public let transactionMetadata: [String: ToriiJSONValue]
+
+    public init(principal: TransferRequest,
+                feeAssetDefinitionId: String? = nil,
+                feeQuantity: String,
+                treasuryAccountId: String,
+                policyVersion: UInt64,
+                policyHashHex: String,
+                transactionMetadata: [String: ToriiJSONValue] = [:]) {
+        self.principal = principal
+        self.feeAssetDefinitionId = feeAssetDefinitionId ?? principal.assetDefinitionId
+        self.feeQuantity = feeQuantity
+        self.treasuryAccountId = treasuryAccountId
+        self.policyVersion = policyVersion
+        self.policyHashHex = policyHashHex
+        self.transactionMetadata = transactionMetadata
     }
 }
 
@@ -1021,6 +1068,25 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeTransfer(transfer: transfer,
                                                           signingKey: signingKey,
                                                           creationTimeMs: creationTimeMs)
+    }
+
+    /// Build a signed transfer transaction containing the principal transfer and
+    /// the aggregate validation-fee transfer in the same user-signed envelope.
+    public func buildSignedTransferWithValidationFee(request: ValidationFeeTransferRequest,
+                                                     keypair: Keypair) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeValidationFeeTransfer(request: request,
+                                                                       keypair: keypair,
+                                                                       creationTimeMs: creationTimeMs)
+    }
+
+    /// Build a signed validation-fee transfer transaction using a `SigningKey`.
+    public func buildSignedTransferWithValidationFee(request: ValidationFeeTransferRequest,
+                                                     signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeValidationFeeTransfer(request: request,
+                                                                       signingKey: signingKey,
+                                                                       creationTimeMs: creationTimeMs)
     }
 
     /// Build and submit a transfer transaction using the experimental Swift encoder.

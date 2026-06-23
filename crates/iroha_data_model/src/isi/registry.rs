@@ -51,6 +51,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::AuditOfflineNote>,
     InstructionRegistry::register_slice::<offline::KagemushaTransfer>,
     InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursive>,
+    InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
+    InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
     InstructionRegistry::register_slice::<zk::RegisterAssetHiddenZkPool>,
     InstructionRegistry::register_slice::<zk::AssetHiddenZkTransfer>,
     InstructionRegistry::register_slice::<zk::RegisterZkAceIdentityCommitment>,

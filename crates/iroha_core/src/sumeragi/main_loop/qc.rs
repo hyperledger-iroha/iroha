@@ -7516,6 +7516,8 @@ impl Actor {
                 self.qc_cache.insert(qc_cache_key, qc.clone());
                 if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
                     let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+                    let _ = self
+                        .maybe_start_validation_for_pending_after_new_view_qc(&qc, "new_view_qc");
                     let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
                         &qc,
                         topology.as_ref(),
@@ -7839,6 +7841,7 @@ impl Actor {
         self.qc_cache.insert(qc_cache_key, qc.clone());
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+            let _ = self.maybe_start_validation_for_pending_after_new_view_qc(&qc, "new_view_qc");
             let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
                 &qc,
                 topology.as_ref(),

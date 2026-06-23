@@ -18798,6 +18798,11 @@ export interface MultisigProposeNoritoRequest {
   creationTimeMs?: number | string | bigint | null;
   fee_sponsor?: string | null;
   feeSponsor?: string | null;
+  memo?: string | null;
+  validation_fee_policy_version?: string | null;
+  validationFeePolicyVersion?: string | null;
+  validation_fee_policy_hash?: string | null;
+  validationFeePolicyHash?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(
