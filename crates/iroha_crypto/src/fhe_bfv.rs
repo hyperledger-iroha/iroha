@@ -46,15 +46,19 @@
 
 use std::{fmt, string::String, vec::Vec};
 
+use blake2::{Blake2b, digest::consts::U32};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf, sha256};
+
+type BfvBlake2b256 = Blake2b<U32>;
 
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.v1";
@@ -186,11 +190,11 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 3
 /// Version of the BFV full-bootstrap release audit proof-key payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-key payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1: u16 = 9;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1: u16 = 10;
 /// Version of the BFV full-bootstrap release audit signoff payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit signoff payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1: u16 = 14;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1: u16 = 15;
 /// Version of the BFV full-bootstrap release audit signoff envelope.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit signoff envelope.
@@ -208,7 +212,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1: u16 = 8;
 /// Version of the BFV full-bootstrap release audit manifest.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit manifest.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1: u16 = 19;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1: u16 = 20;
 /// Canonical scope string for BFV full-bootstrap release audit manifests.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SCOPE_V1: &str =
     "iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1";
@@ -227,18 +231,23 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1: &[u8] =
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap.release_audit_archive.v1\n";
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES: usize = 512;
-const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_NESTED_HEADER_DIGEST_PREFIXES: &[&[u8]] = &[
-    b"",
-    b" ",
-    b"\n",
-    b"\r\n",
-    b"\t",
-    b" \n\t",
-    b"audited BFV release report body prefix before nested artifact header: ",
-];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_NESTED_HEADER_DIGEST_PREFIXES: &[&[u8]] =
+    &[b"", b" ", b"\n", b"\r\n", b"\t", b" \n\t"];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_BLANK_BODY_DIGEST_BYTES: &[u8] = b" \n\r\t";
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES: &[&[u8]] =
     &[b" ", b"\n", b"\r\n", b"\t", b" \n\t"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES: &[&[u8]] = &[
+    b"audited BFV release body before placeholder: ",
+    b"external review body before placeholder: ",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES: usize =
+    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1;
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_X_PADDING: [u8;
+    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES] =
+    [b'x'; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_SPACE_PADDING: [u8;
+    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES] =
+    [b' '; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"placeholder audit report",
     b"placeholder external audit report",
@@ -260,6 +269,8 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES: &[&[u8
     b"todo",
     b"dummy",
     b"fake",
+    b"mock",
+    b"fixture",
     b"pending audit",
     b"sample",
     b"template",
@@ -291,63 +302,207 @@ const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] =
     b"todo",
     b"dummy",
     b"fake",
+    b"mock",
+    b"fixture",
     b"sample",
     b"template",
     b"example",
 ];
+const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES: &[&[u8]] = &[
+    b"native proof material before placeholder: ",
+    b"native verifier payload before placeholder: ",
+];
+const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES: usize =
+    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1;
+const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_ZERO_PADDING: [u8;
+    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES] =
+    [0_u8; BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES];
+const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING: [u8;
+    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES] =
+    [b'x'; BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES];
+const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING: [u8;
+    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES] =
+    [b' '; BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES];
 
-fn bfv_full_bootstrap_release_audit_placeholder_body_digest_preimages_v1() -> Vec<Vec<u8>> {
-    let mut preimages = Vec::with_capacity(
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES.len() * 20,
-    );
-    for body in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES {
-        let canonical_body = body.to_vec();
-        let uppercase_body = body.to_ascii_uppercase();
-        let mut body_variants = Vec::with_capacity(2);
-        body_variants.push(canonical_body);
-        if body_variants[0] != uppercase_body {
-            body_variants.push(uppercase_body);
-        }
-        for body_variant in body_variants {
-            preimages.push(body_variant.clone());
+fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_variant_v1(
+    digest: &Hash,
+    artifact_header: &[u8],
+    body: &[u8],
+    uppercase_body: bool,
+) -> bool {
+    if *digest
+        == hash_chunks_with_optional_ascii_upper_body(&[artifact_header], body, uppercase_body, &[])
+    {
+        return true;
+    }
 
-            let mut long_body = body_variant.clone();
-            long_body.resize(
-                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
-                b'x',
+    let long_body_padding_len = BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES
+        .checked_sub(body.len())
+        .expect("BFV full-bootstrap release-audit placeholder bodies fit padding sentinel length");
+    if *digest
+        == hash_chunks_with_optional_ascii_upper_body(
+            &[artifact_header],
+            body,
+            uppercase_body,
+            &[
+                &BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_X_PADDING
+                    [..long_body_padding_len],
+            ],
+        )
+    {
+        return true;
+    }
+
+    let spaced_long_body_padding_len =
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES
+            .checked_sub(body.len() + 1)
+            .expect(
+                "BFV full-bootstrap release-audit placeholder bodies fit spaced padding sentinel length",
             );
-            preimages.push(long_body);
+    if *digest
+        == hash_chunks_with_optional_ascii_upper_body(
+            &[artifact_header],
+            body,
+            uppercase_body,
+            &[
+                b" ",
+                &BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_X_PADDING
+                    [..spaced_long_body_padding_len],
+            ],
+        )
+    {
+        return true;
+    }
 
-            let mut spaced_long_body = body_variant.clone();
-            spaced_long_body.push(b' ');
-            spaced_long_body.resize(
-                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
-                b'x',
-            );
-            preimages.push(spaced_long_body);
+    if *digest
+        == hash_chunks_with_optional_ascii_upper_body(
+            &[
+                artifact_header,
+                &BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_SPACE_PADDING,
+            ],
+            body,
+            uppercase_body,
+            &[],
+        )
+    {
+        return true;
+    }
 
-            let mut whitespace_prefixed_body = vec![
-                b' ';
-                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES
-                    + 1
-            ];
-            whitespace_prefixed_body.extend_from_slice(&body_variant);
-            preimages.push(whitespace_prefixed_body);
-
-            for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
-                let mut prefix_wrapped_body = Vec::with_capacity(prefix.len() + body_variant.len());
-                prefix_wrapped_body.extend_from_slice(prefix);
-                prefix_wrapped_body.extend_from_slice(&body_variant);
-                preimages.push(prefix_wrapped_body);
-            }
-
-            let mut binary_decorated_body = Vec::with_capacity(body_variant.len() + 1);
-            binary_decorated_body.push(0xff);
-            binary_decorated_body.extend_from_slice(&body_variant);
-            preimages.push(binary_decorated_body);
+    for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
+        if *digest
+            == hash_chunks_with_optional_ascii_upper_body(
+                &[artifact_header, *prefix],
+                body,
+                uppercase_body,
+                &[],
+            )
+        {
+            return true;
         }
     }
-    preimages
+
+    if is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_body_variant_v1(
+        digest,
+        artifact_header,
+        body,
+        uppercase_body,
+    ) {
+        return true;
+    }
+
+    *digest
+        == hash_chunks_with_optional_ascii_upper_body(
+            &[artifact_header, &[0xff]],
+            body,
+            uppercase_body,
+            &[],
+        )
+}
+
+fn is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_body_variant_v1(
+    digest: &Hash,
+    artifact_header: &[u8],
+    body: &[u8],
+    uppercase_body: bool,
+) -> bool {
+    for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES {
+        if *digest
+            == hash_chunks_with_optional_ascii_upper_body(
+                &[artifact_header, *prefix],
+                body,
+                uppercase_body,
+                &[],
+            )
+        {
+            return true;
+        }
+        if *digest
+            == hash_chunks_with_optional_ascii_upper_body(
+                &[
+                    artifact_header,
+                    &BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_SPACE_PADDING,
+                    *prefix,
+                ],
+                body,
+                uppercase_body,
+                &[],
+            )
+        {
+            return true;
+        }
+        for leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
+            if *digest
+                == hash_chunks_with_optional_ascii_upper_body(
+                    &[artifact_header, *leading_prefix, *prefix],
+                    body,
+                    uppercase_body,
+                    &[],
+                )
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_v1(
+    digest: &Hash,
+    artifact_header: &[u8],
+    body: &[u8],
+) -> bool {
+    if is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_variant_v1(
+        digest,
+        artifact_header,
+        body,
+        false,
+    ) {
+        return true;
+    }
+    if !body.iter().any(u8::is_ascii_lowercase) {
+        return false;
+    }
+    is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_variant_v1(
+        digest,
+        artifact_header,
+        body,
+        true,
+    )
+}
+
+fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+    digest: &Hash,
+    artifact_header: &[u8],
+) -> bool {
+    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES
+        .iter()
+        .any(|body| {
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_v1(
+                digest,
+                artifact_header,
+                body,
+            )
+        })
 }
 
 fn bfv_full_bootstrap_release_audit_inert_body_digest_lengths_v1(
@@ -361,63 +516,167 @@ fn bfv_full_bootstrap_release_audit_inert_body_digest_lengths_v1(
     ]
 }
 
-fn bfv_full_bootstrap_native_payload_inert_digest_preimages_v1() -> Vec<Vec<u8>> {
-    let mut preimages = Vec::with_capacity(
-        1 + BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGEST_ZERO_LENGTHS.len()
-            + BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES.len() * 20,
-    );
-    preimages.push(Vec::new());
+fn sha256_chunks_with_optional_ascii_upper_body(
+    prefix_chunks: &[&[u8]],
+    body: &[u8],
+    uppercase_body: bool,
+    suffix_chunks: &[&[u8]],
+) -> [u8; Hash::LENGTH] {
+    let mut hasher = Sha256::new();
+    for chunk in prefix_chunks {
+        hasher.update(chunk);
+    }
+    if uppercase_body {
+        for byte in body {
+            hasher.update([byte.to_ascii_uppercase()]);
+        }
+    } else {
+        hasher.update(body);
+    }
+    for chunk in suffix_chunks {
+        hasher.update(chunk);
+    }
+    hasher.finalize().into()
+}
+
+fn hash_chunks_with_optional_ascii_upper_body(
+    prefix_chunks: &[&[u8]],
+    body: &[u8],
+    uppercase_body: bool,
+    suffix_chunks: &[&[u8]],
+) -> Hash {
+    let mut hasher = BfvBlake2b256::new();
+    for chunk in prefix_chunks {
+        hasher.update(chunk);
+    }
+    if uppercase_body {
+        for byte in body {
+            hasher.update([byte.to_ascii_uppercase()]);
+        }
+    } else {
+        hasher.update(body);
+    }
+    for chunk in suffix_chunks {
+        hasher.update(chunk);
+    }
+    Hash::prehashed(hasher.finalize().into())
+}
+
+fn is_bfv_full_bootstrap_native_payload_placeholder_body_digest_v1(
+    digest: &[u8; Hash::LENGTH],
+    body: &[u8],
+    uppercase_body: bool,
+) -> bool {
+    if *digest == sha256_chunks_with_optional_ascii_upper_body(&[], body, uppercase_body, &[]) {
+        return true;
+    }
+
+    let long_body_padding_len = BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES
+        .checked_sub(body.len())
+        .expect("BFV full-bootstrap native placeholder bodies fit padding sentinel length");
+    if *digest
+        == sha256_chunks_with_optional_ascii_upper_body(
+            &[],
+            body,
+            uppercase_body,
+            &[&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING[..long_body_padding_len]],
+        )
+    {
+        return true;
+    }
+
+    let spaced_long_body_padding_len = BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES
+        .checked_sub(body.len() + 1)
+        .expect("BFV full-bootstrap native placeholder bodies fit spaced padding sentinel length");
+    if *digest
+        == sha256_chunks_with_optional_ascii_upper_body(
+            &[],
+            body,
+            uppercase_body,
+            &[
+                b" ",
+                &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING[..spaced_long_body_padding_len],
+            ],
+        )
+    {
+        return true;
+    }
+
+    if *digest
+        == sha256_chunks_with_optional_ascii_upper_body(
+            &[&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING],
+            body,
+            uppercase_body,
+            &[],
+        )
+    {
+        return true;
+    }
+
+    for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
+        if *digest
+            == sha256_chunks_with_optional_ascii_upper_body(&[*prefix], body, uppercase_body, &[])
+        {
+            return true;
+        }
+    }
+
+    for prefix in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES {
+        if *digest
+            == sha256_chunks_with_optional_ascii_upper_body(&[*prefix], body, uppercase_body, &[])
+        {
+            return true;
+        }
+        if *digest
+            == sha256_chunks_with_optional_ascii_upper_body(
+                &[
+                    &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING,
+                    *prefix,
+                ],
+                body,
+                uppercase_body,
+                &[],
+            )
+        {
+            return true;
+        }
+        for leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
+            if *digest
+                == sha256_chunks_with_optional_ascii_upper_body(
+                    &[*leading_prefix, *prefix],
+                    body,
+                    uppercase_body,
+                    &[],
+                )
+            {
+                return true;
+            }
+        }
+    }
+
+    *digest == sha256_chunks_with_optional_ascii_upper_body(&[&[0xff]], body, uppercase_body, &[])
+}
+
+fn is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest: &[u8; Hash::LENGTH]) -> bool {
+    if *digest == sha256([]) {
+        return true;
+    }
     for len in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGEST_ZERO_LENGTHS {
-        preimages.push(vec![0_u8; *len]);
+        if *digest == sha256(&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_ZERO_PADDING[..*len]) {
+            return true;
+        }
     }
     for body in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES {
-        let canonical_body = body.to_vec();
-        let uppercase_body = body.to_ascii_uppercase();
-        let mut body_variants = Vec::with_capacity(2);
-        body_variants.push(canonical_body);
-        if body_variants[0] != uppercase_body {
-            body_variants.push(uppercase_body);
+        if is_bfv_full_bootstrap_native_payload_placeholder_body_digest_v1(digest, body, false) {
+            return true;
         }
-        for body_variant in body_variants {
-            preimages.push(body_variant.clone());
-
-            let mut long_body = body_variant.clone();
-            long_body.resize(
-                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
-                b'x',
-            );
-            preimages.push(long_body);
-
-            let mut spaced_long_body = body_variant.clone();
-            spaced_long_body.push(b' ');
-            spaced_long_body.resize(
-                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
-                b'x',
-            );
-            preimages.push(spaced_long_body);
-
-            let mut whitespace_prefixed_body = vec![
-                b' ';
-                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES
-                    + 1
-            ];
-            whitespace_prefixed_body.extend_from_slice(&body_variant);
-            preimages.push(whitespace_prefixed_body);
-
-            for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
-                let mut prefix_wrapped_body = Vec::with_capacity(prefix.len() + body_variant.len());
-                prefix_wrapped_body.extend_from_slice(prefix);
-                prefix_wrapped_body.extend_from_slice(&body_variant);
-                preimages.push(prefix_wrapped_body);
-            }
-
-            let mut binary_decorated_body = Vec::with_capacity(body_variant.len() + 1);
-            binary_decorated_body.push(0xff);
-            binary_decorated_body.extend_from_slice(&body_variant);
-            preimages.push(binary_decorated_body);
+        if body.iter().any(u8::is_ascii_lowercase)
+            && is_bfv_full_bootstrap_native_payload_placeholder_body_digest_v1(digest, body, true)
+        {
+            return true;
         }
     }
-    preimages
+    false
 }
 const BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1: u16 = 16;
@@ -517,8 +776,11 @@ pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1: &str =
 pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the native BFV full-bootstrap proof-key material payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1: u16 = 20;
+const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_VERSION_V1: u16 = 1;
+const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1: u16 = 30;
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 32;
+const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 33;
+const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 = 32;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
@@ -549,9 +811,9 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1: &str = "stark-fri-
 pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap proof-key material envelope.
 pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1: u16 = 28;
-const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 = 15;
+const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 = 17;
 /// Number of top-level fields in the canonical native STARK/FRI verifier payload.
-pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 15;
+pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 17;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_CIRCUIT_ID_MAX_BYTES: usize = 256;
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_STATEMENT_HASH_LIMB_COUNT_V1: u16 = 4;
 /// Maximum diagonal entries admitted in one BFV full-bootstrap linear transform.
@@ -1271,7 +1533,9 @@ impl BfvRnsModulusChain {
                     .collect::<Result<Vec<_>, BfvError>>()
             })
             .collect::<Result<Vec<_>, BfvError>>()?;
-        Ok(BfvRnsPolynomial { residues_by_limb })
+        let output = BfvRnsPolynomial { residues_by_limb };
+        validate_rns_polynomial(params, target_chain, &output)?;
+        Ok(output)
     }
 
     /// Extend an RNS polynomial directly into target-chain limbs.
@@ -1379,7 +1643,9 @@ impl BfvRnsModulusChain {
             }
         }
 
-        Ok(BfvRnsPolynomial { residues_by_limb })
+        let output = BfvRnsPolynomial { residues_by_limb };
+        validate_rns_polynomial(params, target_chain, &output)?;
+        Ok(output)
     }
 
     /// Extend one canonical key-switch digit polynomial into another RNS chain.
@@ -1437,7 +1703,9 @@ impl BfvRnsModulusChain {
                     .collect::<Result<Vec<_>, BfvError>>()
             })
             .collect::<Result<Vec<_>, BfvError>>()?;
-        Ok(BfvRnsPolynomial { residues_by_limb })
+        let output = BfvRnsPolynomial { residues_by_limb };
+        validate_rns_polynomial(params, target_chain, &output)?;
+        Ok(output)
     }
 
     /// Add two RNS polynomials coefficient-wise in the chain product ring.
@@ -2183,6 +2451,8 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub enforces_duplicate_free_openings: bool,
     /// Domain used before deriving AIR composition challenges.
     pub composition_challenge_domain: Vec<u8>,
+    /// Number of digest bytes reduced into the Goldilocks challenge field.
+    pub composition_challenge_digest_bytes: u16,
     /// Whether AIR composition challenges bind the public statement hash.
     pub binds_composition_challenges_to_statement_hash: bool,
     /// Whether AIR composition challenges bind the row-major trace material digest.
@@ -2358,6 +2628,40 @@ pub struct BfvFullBootstrapNativeProofKeyMaterialV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
+    version: u16,
+    field_count: u16,
+    circuit_id: String,
+    native_payload_circuit_id: String,
+    backend: String,
+    key_format: String,
+    proof_system: String,
+    field: String,
+    arithmetic_trace_profile_digest: Hash,
+    arithmetic_air_constraint_system_digest: Hash,
+    hash_fn: u8,
+    n_log2: u8,
+    blowup_log2: u8,
+    fold_arity: u8,
+    queries: u16,
+    merkle_arity: u8,
+    statement_material_version: u16,
+    statement_material_field_count: u16,
+    claim_version: u16,
+    claim_field_count: u16,
+    witness_digest_domain: Vec<u8>,
+    witness_digest_material_version: u16,
+    witness_digest_material_field_count: u16,
+    witness_trace_field_count: u16,
+    witness_trace_bounds_field_count: u16,
+    public_input_hash_count: u16,
+    public_input_hash_bytes: u16,
+    supports_exact_residual_multiple: bool,
+    supports_bounded_noise: bool,
+    arithmetic_air_constraint_system_body: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     version: u16,
     field_count: u16,
@@ -2368,6 +2672,8 @@ struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     field: String,
     arithmetic_trace_profile_digest: Hash,
     arithmetic_air_constraint_system_digest: Hash,
+    generated_circuit_body_digest: [u8; Hash::LENGTH],
+    generated_circuit_body: Vec<u8>,
     hash_fn: u8,
     n_log2: u8,
     blowup_log2: u8,
@@ -2397,6 +2703,10 @@ pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
     pub arithmetic_trace_profile_digest: Hash,
     /// Digest of the arithmetic AIR constraint contract bound by this native payload.
     pub arithmetic_air_constraint_system_digest: Hash,
+    /// Raw SHA-256 commitment bytes for the generated native circuit body.
+    pub generated_circuit_body_digest: [u8; Hash::LENGTH],
+    /// Canonical generated native circuit body bytes.
+    pub generated_circuit_body: Vec<u8>,
     /// Log2 of the STARK evaluation domain size.
     pub n_log2: u8,
     /// Log2 of the FRI blowup factor.
@@ -2692,6 +3002,7 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
 }
 
 /// STARK/FRI and public-input layout recorded in release audit evidence.
+#[allow(clippy::struct_excessive_bools)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
@@ -2783,6 +3094,8 @@ pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
     pub native_circuit_fingerprint: Hash,
     /// Raw SHA-256 commitment bytes for the native payload.
     pub native_payload_digest: [u8; Hash::LENGTH],
+    /// Raw SHA-256 commitment bytes for the generated native circuit body.
+    pub generated_circuit_body_digest: [u8; Hash::LENGTH],
 }
 
 /// Typed release audit evidence for BFV full-bootstrap generated artifacts.
@@ -2870,6 +3183,8 @@ pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
     pub verifier_key_digest: Hash,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
+    /// Digest of the generated native circuit body committed by the proof keys.
+    pub generated_circuit_body_digest: Hash,
     /// Digest of the external audit report artifact.
     pub audit_report_digest: Hash,
     /// Digest of the archived evidence bundle reviewed by the auditor.
@@ -2963,6 +3278,8 @@ pub struct BfvFullBootstrapReleaseAuditManifestV1 {
     pub verifier_key_digest: Hash,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
+    /// Digest of the generated native circuit body committed by the proof keys.
+    pub generated_circuit_body_digest: Hash,
     /// Digest of the external audit report artifact.
     pub audit_report_digest: Hash,
     /// Digest of the archived evidence bundle reviewed by the auditor.
@@ -3399,6 +3716,8 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
     pub enforces_duplicate_free_openings: bool,
     /// Domain used before deriving AIR composition challenges.
     pub composition_challenge_domain: Vec<u8>,
+    /// Number of digest bytes reduced into the Goldilocks challenge field.
+    pub composition_challenge_digest_bytes: u16,
     /// Whether composition challenges bind the public statement hash.
     pub binds_composition_challenges_to_statement_hash: bool,
     /// Whether composition challenges bind the row-major trace material digest.
@@ -3415,6 +3734,7 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
     pub supports_bounded_noise: bool,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Encode)]
 struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     version: u16,
@@ -3701,6 +4021,7 @@ impl BfvEvaluationKeyBundle {
             }
             (Some(bootstrap_key), None) => {
                 if bootstrap_key.mode == BfvBootstrapKeyMode::FullBootstrapV1 {
+                    validate_bootstrap_key_public_key_digest(params, public_key, bootstrap_key)?;
                     return Ok(());
                 }
                 return Err(BfvError::ShapeMismatch(format!(
@@ -3781,7 +4102,9 @@ impl BfvEvaluationKeyBundle {
     /// refresh transcript inventory, then binds the parameter set, public key,
     /// evaluation-key digest, refresh-transcript digest, bootstrap transcript
     /// metadata, and public bootstrap refresh ciphertexts. The returned
-    /// statement is `None` when the bundle has no bootstrap key.
+    /// statement is `None` when the bundle has no bootstrap key. Governed
+    /// `FullBootstrapV1` keys must use
+    /// [`Self::full_bootstrap_material_proof_statement_digest`] instead.
     ///
     /// # Errors
     /// Returns [`BfvError`] when transcript validation fails or canonical
@@ -3905,6 +4228,12 @@ impl BfvEvaluationKeyBundle {
         let Some(bootstrap_key) = self.bootstrap_key.as_ref() else {
             return Ok(None);
         };
+        if bootstrap_key.mode == BfvBootstrapKeyMode::FullBootstrapV1 {
+            return Err(BfvError::ShapeMismatch(
+                "full BFV bootstrap keys must use full-bootstrap material proof statements instead of deterministic zero-refresh transcript statements"
+                    .to_owned(),
+            ));
+        }
         let Some(bootstrap_transcript) = bootstrap_transcript else {
             return Err(BfvError::ShapeMismatch(format!(
                 "missing deterministic transcript seed for bootstrap key {}",
@@ -5994,7 +6323,11 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
     let key_id = key_id.into();
     validate_bootstrap_key_metadata(&key_id, max_refresh_rounds)?;
     validate_refresh_transcript_seed("bootstrap refresh transcript seed", seed)?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        max_refresh_rounds,
+        "BFV bootstrap key",
+    )?;
     validate_public_key(params, public_key)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
@@ -6066,7 +6399,11 @@ pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
     let key_id = key_id.into();
     validate_bootstrap_key_metadata(&key_id, max_refresh_rounds)?;
     validate_refresh_transcript_seed("bounded-noise bootstrap refresh transcript seed", seed)?;
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        max_refresh_rounds,
+        "BFV bounded-noise bootstrap key",
+    )?;
     validate_public_key(params, public_key)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
@@ -6109,6 +6446,11 @@ pub fn validate_bootstrap_key_zero_refreshes(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
     validate_bootstrap_key(params, bootstrap_key)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bootstrap key",
+    )?;
     for (index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
         validate_refresh_ciphertext_decrypts_to_zero(
             params,
@@ -6151,7 +6493,11 @@ fn validate_bootstrap_key_bounded_noise_zero_refreshes_with_label(
     label_prefix: &str,
 ) -> Result<(), BfvError> {
     validate_bootstrap_key(params, bootstrap_key)?;
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        label_prefix,
+    )?;
     let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
     for (index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
         validate_bounded_noise_zero_refresh_ciphertext(
@@ -6186,7 +6532,11 @@ pub fn validate_bootstrap_key_zero_refresh_transcript(
 ) -> Result<(), BfvError> {
     validate_refresh_transcript_seed("bootstrap refresh transcript seed", seed)?;
     validate_bootstrap_key_shape_metadata(bootstrap_key)?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bootstrap key",
+    )?;
     validate_public_key(params, public_key)?;
     validate_bootstrap_key_public_key_digest(params, public_key, bootstrap_key)?;
     validate_bootstrap_key_entries(params, bootstrap_key)?;
@@ -6236,7 +6586,11 @@ pub fn validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
 ) -> Result<(), BfvError> {
     validate_refresh_transcript_seed("bounded-noise bootstrap refresh transcript seed", seed)?;
     validate_bootstrap_key_shape_metadata(bootstrap_key)?;
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise bootstrap key",
+    )?;
     validate_public_key(params, public_key)?;
     validate_bootstrap_key_public_key_digest(params, public_key, bootstrap_key)?;
     validate_bootstrap_key_entries(params, bootstrap_key)?;
@@ -6325,10 +6679,18 @@ fn bootstrap_key_zero_refresh_proof_statement_digest_for_mode(
     validate_bootstrap_key_shape_metadata(bootstrap_key)?;
     match mode {
         BfvRefreshTranscriptMode::Exact => {
-            validate_bfv_seeded_encryption_residual_capacity(params)?
+            validate_bfv_seeded_bootstrap_refresh_round_capacity(
+                params,
+                bootstrap_key.max_refresh_rounds,
+                "BFV bootstrap key proof statement",
+            )?;
         }
         BfvRefreshTranscriptMode::BoundedNoise => {
-            validate_bfv_bounded_noise_encryption_capacity(params)?;
+            validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+                params,
+                bootstrap_key.max_refresh_rounds,
+                "BFV bounded-noise bootstrap key proof statement",
+            )?;
         }
     }
     validate_public_key(params, public_key)?;
@@ -6558,6 +6920,13 @@ pub fn validate_bfv_full_bootstrap_circuit_material_v1(
             "BFV full-bootstrap max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
         )));
     }
+    validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
+        "BFV full-bootstrap circuit material",
+        params,
+        material.max_bootstrap_depth,
+        &material.proof_public_input_schema_digest,
+        &material.arithmetic_air_constraint_system_artifact_digest,
+    )?;
     Ok(())
 }
 
@@ -7825,7 +8194,7 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_se
 /// Returns [`BfvError`] when the switch key or raw sample is malformed, the raw
 /// sample does not match the key metadata, or registered RNS key switching
 /// fails.
-pub fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -7868,7 +8237,7 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exac
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the switch key
 /// or raw sample is malformed, the raw sample does not match the key metadata,
 /// or registered target-limb RNS key switching fails.
-pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -7920,7 +8289,7 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_regis
 /// Returns [`BfvError`] when the key shape is malformed, the raw sample bound
 /// exceeds centered capacity, or the propagated output bound exceeds centered
 /// capacity.
-pub fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     raw_sample_bound: u128,
@@ -7965,7 +8334,7 @@ fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_boun
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the key shape
 /// is malformed, the raw sample bound exceeds decoding capacity, or the
 /// propagated output bound exceeds decoding capacity.
-pub fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     raw_sample_noise_bound: u128,
@@ -8083,7 +8452,7 @@ fn full_bootstrap_sample_extraction_switch_component(
 /// # Errors
 /// Returns [`BfvError`] when the sample-extraction metadata or ciphertext shape
 /// is invalid.
-pub fn apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
+pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
     params: &BfvParameters,
     ciphertext: &BfvCiphertext,
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
@@ -8125,7 +8494,7 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, or when the
 /// sample-extraction metadata or ciphertext shape is invalid.
-pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
+pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
     params: &BfvParameters,
     ciphertext: &BfvCiphertext,
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
@@ -8146,7 +8515,7 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
 /// # Errors
 /// Returns [`BfvError`] when the sample-extraction metadata is malformed or the
 /// input bound exceeds centered residual capacity.
-pub fn bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
     input_bound: u128,
@@ -8169,7 +8538,7 @@ pub fn bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the
 /// sample-extraction metadata is malformed, or the input bound exceeds rounded
 /// decoding capacity.
-pub fn bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
     input_noise_bound: u128,
@@ -8192,7 +8561,7 @@ pub fn bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
 /// # Errors
 /// Returns [`BfvError`] when the sample coefficient index, constant term, or
 /// secret-coefficient vector is outside the BFV parameter set.
-pub fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
+pub(crate) fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<(), BfvError> {
@@ -8242,7 +8611,7 @@ pub fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
 ///
 /// # Errors
 /// Returns [`BfvError`] when the raw sample is malformed.
-pub fn repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
+pub(crate) fn repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
@@ -8274,7 +8643,7 @@ pub fn repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow or the raw
 /// sample is malformed.
-pub fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
+pub(crate) fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
@@ -8775,6 +9144,8 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1()
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_FORBIDS_DUPLICATE_OPENINGS_V1,
         composition_challenge_domain:
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN.to_vec(),
+        composition_challenge_digest_bytes:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1,
         binds_composition_challenges_to_statement_hash: true,
         binds_composition_challenges_to_trace_material_digest: true,
         binds_composition_challenges_to_row_index: true,
@@ -8918,6 +9289,15 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
                 .to_owned(),
         ));
     }
+    if material.composition_challenge_digest_bytes
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic AIR constraint-system material composition challenge digest byte length {} does not match canonical length {}",
+            material.composition_challenge_digest_bytes,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
+        )));
+    }
     macro_rules! require_contract_flag {
         ($field:ident, $label:literal) => {
             if !material.$field {
@@ -9052,6 +9432,60 @@ fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
     Ok(())
 }
 
+fn canonical_bfv_full_bootstrap_proof_public_input_schema_artifact_digest_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+) -> Result<Hash, BfvError> {
+    let artifact = encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+        params,
+        max_bootstrap_depth,
+        &bfv_full_bootstrap_proof_public_input_schema_v1(),
+    )?;
+    Ok(Hash::new(&artifact))
+}
+
+fn canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_digest_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+) -> Result<Hash, BfvError> {
+    let artifact = encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+        params,
+        max_bootstrap_depth,
+        &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
+    )?;
+    Ok(Hash::new(&artifact))
+}
+
+fn validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
+    context: &str,
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    proof_public_input_schema_digest: &Hash,
+    arithmetic_air_constraint_system_artifact_digest: &Hash,
+) -> Result<(), BfvError> {
+    let expected_schema_digest =
+        canonical_bfv_full_bootstrap_proof_public_input_schema_artifact_digest_v1(
+            params,
+            max_bootstrap_depth,
+        )?;
+    if *proof_public_input_schema_digest != expected_schema_digest {
+        return Err(BfvError::InvalidParameters(format!(
+            "{context} proof public-input schema artifact digest does not match the canonical first-release schema artifact"
+        )));
+    }
+    let expected_air_artifact_digest =
+        canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_digest_v1(
+            params,
+            max_bootstrap_depth,
+        )?;
+    if *arithmetic_air_constraint_system_artifact_digest != expected_air_artifact_digest {
+        return Err(BfvError::InvalidParameters(format!(
+            "{context} arithmetic AIR artifact digest does not match the canonical first-release AIR artifact"
+        )));
+    }
+    Ok(())
+}
+
 /// Return the canonical BFV full-bootstrap proof public-input schema.
 #[must_use]
 pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProofPublicInputSchemaV1
@@ -9110,6 +9544,8 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_FORBIDS_DUPLICATE_OPENINGS_V1,
         composition_challenge_domain:
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN.to_vec(),
+        composition_challenge_digest_bytes:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1,
         binds_composition_challenges_to_statement_hash: true,
         binds_composition_challenges_to_trace_material_digest: true,
         binds_composition_challenges_to_row_index: true,
@@ -9301,6 +9737,13 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_hash_shape_v1(
 fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_bindings_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_shape_v1(schema)?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_enforcement_flags_v1(schema)
+}
+
+fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_shape_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
     if schema.arithmetic_air_contract_version
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1
     {
@@ -9327,6 +9770,21 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_bindings_v
                 .to_owned(),
         ));
     }
+    if schema.composition_challenge_digest_bytes
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema composition challenge digest byte length {} does not match canonical length {}",
+            schema.composition_challenge_digest_bytes,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_enforcement_flags_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
     for (label, is_bound) in [
         (
             "arithmetic AIR constraint-system digest",
@@ -9760,6 +10218,9 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
         "BFV full-bootstrap native verifier-key payload circuit id",
         native_payload_circuit_id,
     )?;
+    let generated_circuit_body =
+        bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
+    let generated_circuit_body_digest = sha256(&generated_circuit_body);
     let payload = BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
         version: BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1,
@@ -9778,6 +10239,8 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
             canonical_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(),
         arithmetic_air_constraint_system_digest:
             canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
+        generated_circuit_body_digest,
+        generated_circuit_body,
     };
     norito::to_bytes(&payload).map_err(|err| {
         BfvError::InvalidParameters(format!(
@@ -10373,18 +10836,7 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
 ) -> Result<BfvFullBootstrapProofKeyV1, BfvError> {
     validate_bfv_full_bootstrap_proof_key_role(role)?;
     let label = full_bootstrap_artifact_label_for_role(role);
-    if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
-    }
-    if bytes.len() > role.max_bytes() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} length {} exceeds maximum {}",
-            bytes.len(),
-            role.max_bytes()
-        )));
-    }
+    validate_full_bootstrap_artifact_envelope_bytes_shape_v1(label, role.max_bytes(), bytes)?;
     if max_bootstrap_depth == 0 {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap max_bootstrap_depth must be greater than zero".to_owned(),
@@ -10401,11 +10853,7 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
                 "{label} must be a Norito-encoded BFV full-bootstrap artifact payload: {err}"
             ))
         })?;
-    if artifact.payload.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be empty"
-        )));
-    }
+    validate_full_bootstrap_artifact_inner_payload_shape_v1(label, &artifact.payload)?;
     if artifact.role != role {
         return Err(BfvError::InvalidParameters(format!(
             "{label} role {:?} does not match expected role {:?}",
@@ -10545,8 +10993,9 @@ pub fn decode_bfv_full_bootstrap_proof_key_artifact_v1(
 /// statements.
 ///
 /// # Errors
-/// Returns [`BfvError`] when material validation fails, an artifact is empty or
-/// oversized, or an artifact digest does not match the governed material.
+/// Returns [`BfvError`] when material validation fails, an artifact is empty,
+/// all-zero, oversized, or an artifact digest does not match the governed
+/// material.
 pub fn validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -10872,6 +11321,41 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_v1(
     validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(evidence)
 }
 
+fn validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(
+    evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
+) -> Result<(), BfvError> {
+    let params = ram_lfe_bfv_parameters_v1();
+    let expected_parameter_digest = registered_bfv_parameter_digest(&params)?;
+    if evidence.parameter_digest != expected_parameter_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit evidence parameter digest does not match registered parameters"
+                .to_owned(),
+        ));
+    }
+    let expected_rns_digest = registered_bfv_rns_modulus_chain_digest(&params)?;
+    if evidence.rns_modulus_chain_digest != expected_rns_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit evidence RNS modulus-chain digest does not match registered parameters"
+                .to_owned(),
+        ));
+    }
+    let expected_decomposition_digest =
+        registered_bfv_key_switch_decomposition_chain_digest(&params)?;
+    if evidence.key_switch_decomposition_chain_digest != expected_decomposition_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit evidence key-switch decomposition-chain digest does not match registered parameters"
+                .to_owned(),
+        ));
+    }
+    validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
+        "BFV full-bootstrap release audit evidence",
+        &params,
+        evidence.max_bootstrap_depth,
+        &evidence.proof_public_input_schema_digest,
+        &evidence.arithmetic_air_constraint_system_artifact_digest,
+    )
+}
+
 /// Return the digest of typed BFV full-bootstrap release audit evidence.
 ///
 /// # Errors
@@ -10941,6 +11425,9 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
         prover_key_digest: evidence.prover_key.key_digest,
         verifier_key_digest: evidence.verifier_key.key_digest,
         native_circuit_fingerprint: evidence.prover_key.native_circuit_fingerprint,
+        generated_circuit_body_digest: Hash::prehashed(
+            evidence.prover_key.generated_circuit_body_digest,
+        ),
         audit_report_digest,
         audit_evidence_archive_digest,
         reviewer_id: reviewer_id.to_owned(),
@@ -10954,8 +11441,8 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
 /// Sign BFV full-bootstrap release audit evidence with a reviewer key.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `reviewer_private_key` is not an Ed25519 key,
-/// payload construction fails, the public key cannot be derived from
+/// Returns [`BfvError`] when `reviewer_private_key` is not a well-formed
+/// Ed25519 key, payload construction fails, the public key cannot be derived from
 /// `reviewer_private_key`, or the signature does not verify.
 pub fn sign_bfv_full_bootstrap_release_audit_signoff_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
@@ -11097,7 +11584,7 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
 ///
 /// # Errors
 /// Returns [`BfvError`] when the reviewer id is malformed, `reviewer_private_key`
-/// is not an Ed25519 key, external audit digests are malformed, evidence
+/// is not a well-formed Ed25519 key, external audit digests are malformed, evidence
 /// derivation fails, the signoff payload is malformed, or the reviewer signature
 /// cannot be produced or verified.
 pub fn bfv_full_bootstrap_release_audit_record_v1(
@@ -11261,6 +11748,9 @@ pub fn bfv_full_bootstrap_release_audit_manifest_v1(
         prover_key_digest: payload.prover_key_digest,
         verifier_key_digest: payload.verifier_key_digest,
         native_circuit_fingerprint: payload.native_circuit_fingerprint,
+        generated_circuit_body_digest: Hash::prehashed(
+            record.evidence.prover_key.generated_circuit_body_digest,
+        ),
         audit_report_digest: payload.audit_report_digest,
         audit_evidence_archive_digest: payload.audit_evidence_archive_digest,
         reviewer_id: payload.reviewer_id.clone(),
@@ -11355,6 +11845,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         &manifest.circuit_id,
         &manifest.native_circuit_fingerprint,
     )?;
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap release audit manifest generated circuit body digest",
+        &manifest.generated_circuit_body_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
         "manifest",
         &manifest.audit_report_digest,
@@ -11388,6 +11882,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         (
             "native circuit fingerprint",
             &manifest.native_circuit_fingerprint,
+        ),
+        (
+            "generated circuit body digest",
+            &manifest.generated_circuit_body_digest,
         ),
         ("audit report digest", &manifest.audit_report_digest),
         (
@@ -11498,6 +11996,14 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(
                 .to_owned(),
         ));
     }
+    let expected_generated_circuit_body_digest =
+        Hash::prehashed(record.evidence.prover_key.generated_circuit_body_digest);
+    if manifest.generated_circuit_body_digest != expected_generated_circuit_body_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit manifest generated circuit body digest mismatch"
+                .to_owned(),
+        ));
+    }
     if manifest.audit_report_digest != payload.audit_report_digest {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit manifest report digest mismatch".to_owned(),
@@ -11584,11 +12090,11 @@ pub fn bfv_full_bootstrap_release_audit_archive_bytes_v1(body: &[u8]) -> Result<
 ///
 /// # Errors
 /// Returns [`BfvError`] when the reviewer id is malformed, `reviewer_private_key`
-/// is not an Ed25519 key, the audit report/archive bytes are empty, all-zero,
-/// header-only, carry a blank, too-short, all-zero, nested-header, or placeholder
-/// body, reuse the same artifact body, or are too large, record construction
-/// fails, or the generated package does not validate against the governed
-/// artifacts.
+/// is not a well-formed Ed25519 key, the audit report/archive bytes are empty,
+/// all-zero, header-only, carry a blank, too-short, all-zero, nested-header, or
+/// placeholder body, reuse the same artifact body, or are too large, record
+/// construction fails, or the generated package does not validate against the
+/// governed artifacts.
 pub fn bfv_full_bootstrap_release_audit_package_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -11664,6 +12170,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
         "BFV full-bootstrap release audit package record digest",
         &package.record_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap release audit package record digest",
+        &package.record_digest,
+    )?;
     let expected_record_digest =
         bfv_full_bootstrap_release_audit_record_digest_v1(&package.record)?;
     if package.record_digest != expected_record_digest {
@@ -11681,6 +12191,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
         ));
     }
     validate_nonzero_material_digest(
+        "BFV full-bootstrap release audit package manifest digest",
+        &package.manifest_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap release audit package manifest digest",
         &package.manifest_digest,
     )?;
@@ -11794,7 +12308,7 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trust
 /// # Errors
 /// Returns [`BfvError`] when artifact/package validation fails, the packaged
 /// signoff was not issued by the trusted reviewer id/key pair, or the package
-/// digest differs from the caller-pinned digest.
+/// digest differs from or is aliased by the caller-pinned digest.
 pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -11812,6 +12326,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_r
         "BFV full-bootstrap release audit caller-pinned package digest",
         &expected_package_digest,
     )?;
+    if expected_package_digest == package.record_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit caller-pinned package digest must be distinct from package record digest"
+                .to_owned(),
+        ));
+    }
+    if expected_package_digest == package.manifest_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit caller-pinned package digest must be distinct from package manifest digest"
+                .to_owned(),
+        ));
+    }
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
         params,
         material,
@@ -12139,6 +12665,11 @@ fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u
         b"todo".as_slice(),
         b"dummy".as_slice(),
         b"fake".as_slice(),
+        b"mock".as_slice(),
+        b"fixture".as_slice(),
+        b"sample".as_slice(),
+        b"template".as_slice(),
+        b"example".as_slice(),
     ]
     .iter()
     .any(|token| {
@@ -12190,6 +12721,8 @@ fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
     let envelope = decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(key)?;
     let native =
         decode_bfv_full_bootstrap_native_proof_key_material_v1(&envelope.native_key_material)?;
+    let generated_circuit_body_digest =
+        bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(&native)?;
     let evidence = BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
         version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1,
@@ -12200,6 +12733,7 @@ fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
         native_payload_circuit_id: native.native_payload_circuit_id.clone(),
         native_circuit_fingerprint: native.native_circuit_fingerprint,
         native_payload_digest: native.native_payload_digest,
+        generated_circuit_body_digest,
     };
     validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         "BFV full-bootstrap release audit proof key",
@@ -12207,6 +12741,41 @@ fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
         &evidence,
     )?;
     Ok(BfvFullBootstrapReleaseAuditDecodedKeyV1 { evidence, native })
+}
+
+fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
+    native: &BfvFullBootstrapNativeProofKeyMaterialV1,
+) -> Result<[u8; Hash::LENGTH], BfvError> {
+    validate_bfv_full_bootstrap_native_proof_key_material_object_v1(native)?;
+    match native.key_role {
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
+            let payload = norito::decode_from_bytes::<
+                BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
+            >(&native.native_payload)
+            .map_err(|err| {
+                BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap native prover generated circuit body payload is invalid: {err}"
+                ))
+            })?;
+            Ok(payload.generated_circuit_body_digest)
+        }
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
+            let payload =
+                norito::decode_from_bytes::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(
+                    &native.native_payload,
+                )
+                .map_err(|err| {
+                    BfvError::InvalidParameters(format!(
+                        "BFV full-bootstrap native verifier generated circuit body payload is invalid: {err}"
+                    ))
+                })?;
+            Ok(payload.generated_circuit_body_digest)
+        }
+        _ => Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap artifact role {:?} is not a proof-key role",
+            native.key_role
+        ))),
+    }
 }
 
 fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
@@ -12287,6 +12856,10 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
         &payload.circuit_id,
         &payload.native_circuit_fingerprint,
     )?;
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap release audit signoff generated circuit body digest",
+        &payload.generated_circuit_body_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
         "signoff",
         &payload.audit_report_digest,
@@ -12319,6 +12892,10 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
         (
             "native circuit fingerprint",
             &payload.native_circuit_fingerprint,
+        ),
+        (
+            "generated circuit body digest",
+            &payload.generated_circuit_body_digest,
         ),
         ("audit report digest", &payload.audit_report_digest),
         (
@@ -12413,6 +12990,17 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
                 .to_owned(),
         ));
     }
+    let expected_generated_circuit_body_digest =
+        Hash::prehashed(evidence.prover_key.generated_circuit_body_digest);
+    if payload.generated_circuit_body_digest != expected_generated_circuit_body_digest
+        || payload.generated_circuit_body_digest
+            != Hash::prehashed(evidence.verifier_key.generated_circuit_body_digest)
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit signoff generated circuit body digest mismatch"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -12482,17 +13070,10 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
             )));
         }
     }
-    for placeholder_body in bfv_full_bootstrap_release_audit_placeholder_body_digest_preimages_v1()
-    {
-        let mut header_wrapped_placeholder =
-            Vec::with_capacity(artifact_header.len() + placeholder_body.len());
-        header_wrapped_placeholder.extend_from_slice(artifact_header);
-        header_wrapped_placeholder.extend_from_slice(&placeholder_body);
-        if *digest == Hash::new(&header_wrapped_placeholder) {
-            return Err(BfvError::InvalidParameters(format!(
-                "{label} must not identify a placeholder audit artifact"
-            )));
-        }
+    if is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(digest, artifact_header) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not identify a placeholder audit artifact"
+        )));
     }
     Ok(())
 }
@@ -12614,17 +13195,56 @@ fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
     )
 }
 
+/// Validate a trusted reviewer id for a BFV full-bootstrap release audit.
+///
+/// # Errors
+/// Returns [`BfvError`] when the reviewer id is empty, non-canonical,
+/// non-printable, too long, or carries placeholder/non-production marker text.
+pub fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(
+    reviewer_id: &str,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)
+}
+
+/// Validate a trusted reviewer public key for a BFV full-bootstrap release audit.
+///
+/// # Errors
+/// Returns [`BfvError`] when the reviewer key is malformed, empty, all-zero, or
+/// not an Ed25519 public key.
+pub fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1(
+    reviewer_public_key: &PublicKey,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
+        "BFV full-bootstrap release audit trusted reviewer public key",
+        reviewer_public_key,
+    )
+}
+
 fn validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
     label: &str,
     reviewer_private_key: &PrivateKey,
 ) -> Result<(), BfvError> {
-    let algorithm = reviewer_private_key.algorithm();
+    let (algorithm, payload) = reviewer_private_key
+        .try_to_bytes()
+        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))?;
     if algorithm != Algorithm::Ed25519 {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must use Ed25519 reviewer private-key algorithm, found {algorithm}"
         )));
     }
-    Ok(())
+    if payload.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must not be empty"
+        )));
+    }
+    if payload.iter().all(|byte| *byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must not be all zero"
+        )));
+    }
+    PrivateKey::from_bytes(algorithm, &payload)
+        .map(|_| ())
+        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))
 }
 
 fn validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
@@ -12724,6 +13344,14 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
                 .to_owned(),
         ));
     }
+    if evidence.prover_key.generated_circuit_body_digest
+        != evidence.verifier_key.generated_circuit_body_digest
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit evidence generated circuit body digest does not match"
+                .to_owned(),
+        ));
+    }
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit parameter digest",
         &evidence.parameter_digest,
@@ -12784,6 +13412,7 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
         "BFV full-bootstrap release audit proof-key pair commitment",
         &evidence.proof_key_pair_commitment,
     )?;
+    validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(evidence)?;
     validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(evidence)?;
     validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(evidence)?;
     validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(evidence)
@@ -12853,7 +13482,25 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(
 fn validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<(), BfvError> {
-    let evidence_digests = [
+    let evidence_digests =
+        bfv_full_bootstrap_release_audit_evidence_distinct_digest_entries(evidence);
+    for (index, (label, digest)) in evidence_digests.iter().enumerate() {
+        if let Some((prior_label, _)) = evidence_digests[..index]
+            .iter()
+            .find(|(_, prior)| *prior == *digest)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit evidence {label} must be distinct from {prior_label}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn bfv_full_bootstrap_release_audit_evidence_distinct_digest_entries(
+    evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
+) -> [(&'static str, [u8; 32]); 23] {
+    [
         ("parameter digest", evidence.parameter_digest.into()),
         (
             "RNS modulus-chain digest",
@@ -12927,6 +13574,10 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(
             evidence.prover_key.native_payload_digest,
         ),
         (
+            "generated circuit body digest",
+            evidence.prover_key.generated_circuit_body_digest,
+        ),
+        (
             "verifier-key digest",
             evidence.verifier_key.key_digest.into(),
         ),
@@ -12938,18 +13589,7 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(
             "verifier-key native payload digest",
             evidence.verifier_key.native_payload_digest,
         ),
-    ];
-    for (index, (label, digest)) in evidence_digests.iter().enumerate() {
-        if let Some((prior_label, _)) = evidence_digests[..index]
-            .iter()
-            .find(|(_, prior)| *prior == *digest)
-        {
-            return Err(BfvError::InvalidParameters(format!(
-                "BFV full-bootstrap release audit evidence {label} must be distinct from {prior_label}"
-            )));
-        }
-    }
-    Ok(())
+    ]
 }
 
 fn validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(
@@ -13204,6 +13844,21 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         &format!("{label} release audit native payload digest"),
         &evidence.native_payload_digest,
     )?;
+    validate_nonzero_sha256_digest(
+        &format!("{label} release audit generated circuit body digest"),
+        &evidence.generated_circuit_body_digest,
+    )?;
+    validate_no_bfv_full_bootstrap_inert_sha256_digest(
+        &format!("{label} release audit generated circuit body digest"),
+        &evidence.generated_circuit_body_digest,
+    )?;
+    let expected_generated_circuit_body =
+        bfv_full_bootstrap_native_generated_circuit_body_v1(&evidence.native_payload_circuit_id)?;
+    if evidence.generated_circuit_body_digest != sha256(&expected_generated_circuit_body) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} release audit generated circuit body digest mismatch"
+        )));
+    }
     let expected_payload_kind = match expected_role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
             BFV_FULL_BOOTSTRAP_NATIVE_PROVER_PAYLOAD_KIND_V1
@@ -14580,8 +15235,9 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1
 ///
 /// # Errors
 /// Returns [`BfvError`] when `row_index` is not a public padding row, the
-/// statement hash is the zero sentinel, or public metadata cannot be encoded
-/// into the native Goldilocks field.
+/// statement hash is the zero sentinel, the slot index exceeds the first-release
+/// slot capacity, or public metadata cannot be encoded into the native
+/// Goldilocks field.
 pub fn bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     row_index: u32,
     statement_hash: Hash,
@@ -14607,6 +15263,11 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     if row_index >= padded_row_count {
         return Err(BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic trace public padding row index {row_index} exceeds padded row count {padded_row_count}"
+        )));
+    }
+    if slot_index >= private_row_count {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public padding slot index {slot_index} exceeds parameter slot capacity {private_row_count}"
         )));
     }
     let row_index_field = bfv_full_bootstrap_goldilocks_field_from_u128_v1(
@@ -14712,6 +15373,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
     ]))
 }
 
+#[cfg(test)]
 fn bfv_full_bootstrap_goldilocks_add_v1(left: u64, right: u64) -> u64 {
     bfv_full_bootstrap_goldilocks_reduce_u128_v1(u128::from(left) + u128::from(right))
 }
@@ -14731,12 +15393,37 @@ fn bfv_full_bootstrap_goldilocks_reduce_u128_v1(value: u128) -> u64 {
         .expect("Goldilocks reduction is strictly smaller than the u64 modulus")
 }
 
+fn bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(bytes: &[u8]) -> u64 {
+    let modulus = u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
+    let mut reduced = 0_u128;
+    for &byte in bytes.iter().rev() {
+        reduced = ((reduced << 8) + u128::from(byte)) % modulus;
+    }
+    u64::try_from(reduced).expect("Goldilocks reduction is strictly smaller than the u64 modulus")
+}
+
 fn bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
     statement_hash: Hash,
     trace_material_digest: Hash,
     row_index: usize,
     column_index: usize,
 ) -> Result<u64, BfvError> {
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap arithmetic AIR composition challenge statement hash",
+        &statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap arithmetic AIR composition challenge statement hash",
+        &statement_hash,
+    )?;
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap arithmetic AIR composition challenge trace material digest",
+        &trace_material_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap arithmetic AIR composition challenge trace material digest",
+        &trace_material_digest,
+    )?;
     let statement_hash_bytes: [u8; Hash::LENGTH] = statement_hash.into();
     let trace_material_digest_bytes: [u8; Hash::LENGTH] = trace_material_digest.into();
     let row_index = u64::try_from(row_index).map_err(|_| {
@@ -14757,9 +15444,7 @@ fn bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
         column_index.to_le_bytes().as_slice(),
     ])
     .into();
-    let mut low = [0_u8; 8];
-    low.copy_from_slice(&challenge[..8]);
-    let reduced = bfv_full_bootstrap_goldilocks_reduce_u128_v1(u128::from(u64::from_le_bytes(low)));
+    let reduced = bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(&challenge);
     Ok(if reduced == 0 { 1 } else { reduced })
 }
 
@@ -14803,8 +15488,9 @@ fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
                     "BFV full-bootstrap arithmetic AIR composition expected row {row_index} width mismatch"
                 )));
             }
-            let mut composition = 0_u64;
-            for (column_index, (&actual, &expected)) in row.iter().zip(expected_row.iter()).enumerate()
+            let mut first_nonzero_composition_value = None;
+            for (column_index, (&actual, &expected)) in
+                row.iter().zip(expected_row.iter()).enumerate()
             {
                 validate_bfv_full_bootstrap_goldilocks_field_element_v1(
                     &format!(
@@ -14812,6 +15498,9 @@ fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
                     ),
                     actual,
                 )?;
+                if first_nonzero_composition_value.is_some() {
+                    continue;
+                }
                 let difference = bfv_full_bootstrap_goldilocks_sub_v1(actual, expected);
                 if difference == 0 {
                     continue;
@@ -14822,12 +15511,10 @@ fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
                     row_index,
                     column_index,
                 )?;
-                composition = bfv_full_bootstrap_goldilocks_add_v1(
-                    composition,
-                    bfv_full_bootstrap_goldilocks_mul_v1(difference, challenge),
-                );
+                first_nonzero_composition_value =
+                    Some(bfv_full_bootstrap_goldilocks_mul_v1(difference, challenge));
             }
-            Ok(composition)
+            Ok(first_nonzero_composition_value.unwrap_or(0))
         })
         .collect()
 }
@@ -15739,7 +16426,7 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
 /// # Errors
 /// Returns [`BfvError`] when the transform, ciphertext, required Galois keys, or
 /// registered RNS profile are invalid.
-pub fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -15784,7 +16471,7 @@ pub fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
 /// # Errors
 /// Returns [`BfvError`] when bounded-noise capacity, transform material,
 /// ciphertext, required Galois keys, or registered RNS profile validation fails.
-pub fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -15837,7 +16524,7 @@ pub fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_ba
 /// exceeds centered residual capacity, required Galois keys are missing or
 /// malformed, or any intermediate/output bound exceeds centered residual
 /// capacity.
-pub fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     transform: &BfvFullBootstrapLinearTransformV1,
@@ -15887,7 +16574,7 @@ pub fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
 /// material is malformed, the input bound exceeds rounded decoding capacity,
 /// required Galois keys are missing or malformed, or any intermediate/output
 /// bound exceeds rounded decoding capacity.
-pub fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     transform: &BfvFullBootstrapLinearTransformV1,
@@ -15954,7 +16641,7 @@ pub fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
 /// # Errors
 /// Returns [`BfvError`] when blind-rotation material, ciphertext, required
 /// Galois keys, or registered RNS profile validation fails.
-pub fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -16009,7 +16696,7 @@ pub fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
 /// # Errors
 /// Returns [`BfvError`] when bounded-noise capacity, blind-rotation material,
 /// ciphertext, required Galois keys, or registered RNS profile validation fails.
-pub fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
@@ -16084,7 +16771,7 @@ pub fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basi
 /// input bound exceeds centered residual capacity, required Galois keys are
 /// missing or malformed, or any intermediate/output bound exceeds centered
 /// residual capacity.
-pub fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     key: &BfvFullBootstrapBlindRotationKeyV1,
@@ -16145,7 +16832,7 @@ pub fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
 /// blind-rotation material is malformed, the input bound exceeds rounded
 /// decoding capacity, required Galois keys are missing or malformed, or any
 /// intermediate/output bound exceeds rounded decoding capacity.
-pub fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
     key: &BfvFullBootstrapBlindRotationKeyV1,
@@ -16291,7 +16978,11 @@ pub fn bootstrap_ciphertext_round(
         round_index,
         "BFV bootstrap refresh",
     )?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts(
         params,
@@ -16321,7 +17012,11 @@ pub fn bootstrap_ciphertext_rounds(
         refresh_rounds,
         "BFV bootstrap refresh",
     )?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     let mut refreshed = ciphertext.clone();
     for round_index in 0..refresh_rounds {
@@ -16363,7 +17058,11 @@ pub fn bootstrap_ciphertext_bounded_noise_round(
         round_index,
         "BFV bounded-noise bootstrap refresh",
     )?;
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts(
         params,
@@ -16392,7 +17091,11 @@ pub fn bootstrap_ciphertext_bounded_noise_rounds(
         refresh_rounds,
         "BFV bounded-noise bootstrap refresh",
     )?;
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     let mut refreshed = ciphertext.clone();
     for round_index in 0..refresh_rounds {
@@ -16444,7 +17147,11 @@ pub fn bootstrap_ciphertext_rns_exact_round(
         round_index,
         "BFV RNS bootstrap refresh",
     )?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV RNS bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts_rns_exact(
         params,
@@ -16514,7 +17221,11 @@ pub fn bootstrap_ciphertext_rns_exact_rounds(
         refresh_rounds,
         "BFV bootstrap refresh",
     )?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_seeded_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV RNS bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     let mut refreshed = ciphertext.clone();
     for round_index in 0..refresh_rounds {
@@ -16592,6 +17303,11 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_exact_round(
         bootstrap_key,
         round_index,
         "BFV bounded-noise RNS bootstrap refresh",
+    )?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise RNS bootstrap key",
     )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts_rns_exact(
@@ -16699,6 +17415,11 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_round(
         round_index,
         "BFV bounded-noise basis-extension RNS bootstrap refresh",
     )?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise basis-extension RNS bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     add_ciphertexts_rns_exact(
         params,
@@ -16779,6 +17500,11 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
         refresh_rounds,
         "BFV bounded-noise bootstrap refresh",
     )?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise RNS bootstrap key",
+    )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     let mut refreshed = ciphertext.clone();
     for round_index in 0..refresh_rounds {
@@ -16846,6 +17572,11 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_rounds(
         bootstrap_key,
         refresh_rounds,
         "BFV bounded-noise basis-extension RNS bootstrap refresh",
+    )?;
+    validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+        params,
+        bootstrap_key.max_refresh_rounds,
+        "BFV bounded-noise basis-extension RNS bootstrap key",
     )?;
     validate_bootstrap_key(params, bootstrap_key)?;
     let mut refreshed = ciphertext.clone();
@@ -17067,7 +17798,7 @@ fn collect_full_bootstrap_linear_transform_galois_powers_v1(
 /// Returns [`BfvError`] when full-bootstrap key/material preflight fails,
 /// artifacts do not match governed commitments, required Galois keys are
 /// missing or malformed, or any executable prefix stage fails.
-pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17157,7 +17888,7 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
 /// full-bootstrap key/material preflight fails, artifacts do not match governed
 /// commitments, required Galois keys are missing or malformed, or any executable
 /// prefix stage fails.
-pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17251,7 +17982,7 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_
 /// artifacts do not match governed commitments, required Galois keys are
 /// missing or malformed, the input bound exceeds centered residual capacity, or
 /// any intermediate/output bound exceeds centered residual capacity.
-pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+pub(crate) fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17333,7 +18064,7 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds
 /// commitments, required Galois keys are missing or malformed, the input bound
 /// exceeds rounded decoding capacity, or any intermediate/output bound exceeds
 /// rounded decoding capacity.
-pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+pub(crate) fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17434,6 +18165,28 @@ fn full_bootstrap_artifacts_required_error() -> BfvError {
     )
 }
 
+fn validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    release_audit_package: &BfvFullBootstrapReleaseAuditPackageV1,
+    expected_release_audit_package_digest: Hash,
+    trusted_reviewer_id: &str,
+    trusted_reviewer_public_key: &PublicKey,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
+    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+        params,
+        material,
+        artifacts,
+        release_audit_package,
+        expected_release_audit_package_digest,
+        trusted_reviewer_id,
+        trusted_reviewer_public_key,
+    )
+}
+
 /// Execute one full BFV bootstrap with concrete governed artifacts.
 ///
 /// This artifact-aware entry point executes the deterministic
@@ -17445,7 +18198,7 @@ fn full_bootstrap_artifacts_required_error() -> BfvError {
 /// Returns [`BfvError`] when full-bootstrap key/material/artifact preflight
 /// fails, required Galois keys are missing or malformed, or any executable
 /// stage fails.
-pub fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+pub(crate) fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17460,6 +18213,46 @@ pub fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
         ciphertext,
     )?;
     Ok(trace.slot_to_coefficient_output)
+}
+
+/// Execute one audited full BFV bootstrap with concrete governed artifacts.
+///
+/// The release audit package must validate against the governed material,
+/// concrete artifact bundle, caller-trusted reviewer id/key, and caller-pinned
+/// package digest before the artifact-aware execution path is reached.
+///
+/// # Errors
+/// Returns [`BfvError`] when release-audit validation fails, full-bootstrap
+/// key/material/artifact preflight fails, required Galois keys are missing or
+/// malformed, or any executable stage fails.
+#[allow(clippy::too_many_arguments)]
+pub fn full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    release_audit_package: &BfvFullBootstrapReleaseAuditPackageV1,
+    expected_release_audit_package_digest: Hash,
+    trusted_reviewer_id: &str,
+    trusted_reviewer_public_key: &PublicKey,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        release_audit_package,
+        expected_release_audit_package_digest,
+        trusted_reviewer_id,
+        trusted_reviewer_public_key,
+    )?;
+    full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        ciphertext,
+    )
 }
 
 /// Execute one full BFV bootstrap over the registered exact RNS profile.
@@ -17490,7 +18283,7 @@ pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
 /// Returns [`BfvError`] when full-bootstrap key/material/artifact preflight or
 /// input residual metadata fails, required Galois keys are missing or malformed,
 /// or any executable bound stage fails.
-pub fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+pub(crate) fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17505,6 +18298,46 @@ pub fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
         input_bound,
     )?;
     Ok(bounds.slot_to_coefficient)
+}
+
+/// Return the exact residual-multiple bound for an audited artifact-aware full bootstrap.
+///
+/// Release-audit validation is applied before the governed artifact-bound trace
+/// bounds are propagated, so callers cannot compute a production-facing bound
+/// for unaudited or stale full-bootstrap artifacts through this API.
+///
+/// # Errors
+/// Returns [`BfvError`] when release-audit validation fails, full-bootstrap
+/// key/material/artifact preflight fails, input residual metadata is invalid,
+/// required Galois keys are missing or malformed, or bound propagation fails.
+#[allow(clippy::too_many_arguments)]
+pub fn bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input_bound: u128,
+    release_audit_package: &BfvFullBootstrapReleaseAuditPackageV1,
+    expected_release_audit_package_digest: Hash,
+    trusted_reviewer_id: &str,
+    trusted_reviewer_public_key: &PublicKey,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        release_audit_package,
+        expected_release_audit_package_digest,
+        trusted_reviewer_id,
+        trusted_reviewer_public_key,
+    )?;
+    bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        input_bound,
+    )
 }
 
 /// Return the exact residual-multiple bound for one full BFV bootstrap.
@@ -17533,7 +18366,7 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
 /// Execute one bounded-noise full BFV bootstrap with concrete governed artifacts.
 ///
 /// This is the rounded BFV counterpart to
-/// [`full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1`]. It
+/// the crate-local exact artifact execution path. It
 /// executes the deterministic bounded-noise prefix through registered target
 /// RNS basis extension, then executes the governed sample switch and
 /// slot-to-coefficient stages.
@@ -17542,7 +18375,7 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow,
 /// full-bootstrap key/material/artifact preflight fails, required Galois keys
 /// are missing or malformed, or any executable stage fails.
-pub fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17558,6 +18391,47 @@ pub fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_bas
         ciphertext,
     )?;
     Ok(trace.slot_to_coefficient_output)
+}
+
+/// Execute one audited bounded-noise full BFV bootstrap with concrete governed artifacts.
+///
+/// The release audit package must validate against the governed material,
+/// concrete artifact bundle, caller-trusted reviewer id/key, and caller-pinned
+/// package digest before the bounded artifact-aware execution path is reached.
+///
+/// # Errors
+/// Returns [`BfvError`] when release-audit validation fails, rounded BFV
+/// capacity is too narrow, full-bootstrap key/material/artifact preflight
+/// fails, required Galois keys are missing or malformed, or any executable
+/// stage fails.
+#[allow(clippy::too_many_arguments)]
+pub fn full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    release_audit_package: &BfvFullBootstrapReleaseAuditPackageV1,
+    expected_release_audit_package_digest: Hash,
+    trusted_reviewer_id: &str,
+    trusted_reviewer_public_key: &PublicKey,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        release_audit_package,
+        expected_release_audit_package_digest,
+        trusted_reviewer_id,
+        trusted_reviewer_public_key,
+    )?;
+    full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        ciphertext,
+    )
 }
 
 /// Execute one bounded-noise full BFV bootstrap over the registered RNS profile.
@@ -17594,7 +18468,7 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
 /// full-bootstrap key/material/artifact preflight or input noise metadata fails,
 /// required Galois keys are missing or malformed, any executable prefix bound
 /// fails, or any final output bound exceeds rounded decoding capacity.
-pub fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
+pub(crate) fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17609,6 +18483,47 @@ pub fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
         input_noise_bound,
     )?;
     Ok(bounds.slot_to_coefficient)
+}
+
+/// Return the bounded-noise bound for an audited artifact-aware full bootstrap.
+///
+/// Release-audit validation is applied before bounded-noise trace bounds are
+/// propagated, so callers cannot compute a production-facing bound for
+/// unaudited or stale full-bootstrap artifacts through this API.
+///
+/// # Errors
+/// Returns [`BfvError`] when release-audit validation fails, rounded BFV
+/// capacity is too narrow, full-bootstrap key/material/artifact preflight or
+/// input noise metadata fails, required Galois keys are missing or malformed,
+/// or bound propagation fails.
+#[allow(clippy::too_many_arguments)]
+pub fn bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input_noise_bound: u128,
+    release_audit_package: &BfvFullBootstrapReleaseAuditPackageV1,
+    expected_release_audit_package_digest: Hash,
+    trusted_reviewer_id: &str,
+    trusted_reviewer_public_key: &PublicKey,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        release_audit_package,
+        expected_release_audit_package_digest,
+        trusted_reviewer_id,
+        trusted_reviewer_public_key,
+    )?;
+    bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        input_noise_bound,
+    )
 }
 
 /// Return the bounded-noise output bound for one full BFV bootstrap.
@@ -19471,6 +20386,34 @@ pub fn validate_bfv_seeded_encryption_residual_capacity(
     Ok(())
 }
 
+fn validate_bfv_seeded_bootstrap_refresh_round_capacity(
+    params: &BfvParameters,
+    refresh_rounds: u16,
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    if refresh_rounds == 0 {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} refresh-round capacity must be greater than zero"
+        )));
+    }
+    let refresh_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
+    let refresh_budget = refresh_bound
+        .checked_mul(u128::from(refresh_rounds))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(format!(
+                "{label} refresh-round residual budget exceeds deterministic limits"
+            ))
+        })?;
+    let capacity = centered_residual_multiple_capacity(params);
+    if refresh_budget > capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} refresh-round residual budget {refresh_budget} exceeds centered residual capacity {capacity}"
+        )));
+    }
+    Ok(())
+}
+
 /// Return the conservative centered noise bound for fresh rounded BFV encryption.
 ///
 /// For public-key residual `e_pk`, ternary encryption mask `u`, fresh error
@@ -19508,6 +20451,34 @@ pub fn validate_bfv_bounded_noise_encryption_capacity(
     if capacity < noise_bound {
         return Err(BfvError::InvalidParameters(format!(
             "rounded BFV decoding capacity {capacity} is below fresh encryption noise bound {noise_bound}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+    params: &BfvParameters,
+    refresh_rounds: u16,
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if refresh_rounds == 0 {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} refresh-round capacity must be greater than zero"
+        )));
+    }
+    let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
+    let refresh_budget = refresh_bound
+        .checked_mul(u128::from(refresh_rounds))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(format!(
+                "{label} refresh-round noise budget exceeds deterministic limits"
+            ))
+        })?;
+    let capacity = rounded_plaintext_decoding_capacity(params)?;
+    if refresh_budget > capacity {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} refresh-round noise budget {refresh_budget} exceeds centered decoding capacity {capacity}"
         )));
     }
     Ok(())
@@ -21225,10 +22196,24 @@ fn validate_refresh_preflight(
     validate_refresh_transcript_metadata(rotation_transcripts, bootstrap_transcript, mode)?;
     match mode {
         BfvRefreshTranscriptMode::Exact => {
-            validate_bfv_seeded_encryption_residual_capacity(params)?
+            validate_bfv_seeded_encryption_residual_capacity(params)?;
+            if let Some(transcript) = bootstrap_transcript {
+                validate_bfv_seeded_bootstrap_refresh_round_capacity(
+                    params,
+                    transcript.max_refresh_rounds,
+                    "BFV bootstrap refresh transcript",
+                )?;
+            }
         }
         BfvRefreshTranscriptMode::BoundedNoise => {
             validate_bfv_bounded_noise_encryption_capacity(params)?;
+            if let Some(transcript) = bootstrap_transcript {
+                validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+                    params,
+                    transcript.max_refresh_rounds,
+                    "BFV bounded-noise bootstrap refresh transcript",
+                )?;
+            }
         }
     }
     Ok(())
@@ -21391,6 +22376,9 @@ fn validate_bootstrap_key(
 
 fn validate_bootstrap_key_shape_metadata(bootstrap_key: &BfvBootstrapKey) -> Result<(), BfvError> {
     validate_bootstrap_key_metadata(&bootstrap_key.key_id, bootstrap_key.max_refresh_rounds)?;
+    if let Some(public_key_digest) = bootstrap_key.public_key_digest.as_ref() {
+        validate_bootstrap_key_public_key_digest_metadata(public_key_digest)?;
+    }
     validate_bootstrap_key_refresh_mode(bootstrap_key)?;
     validate_bootstrap_key_round_refresh_shape(bootstrap_key)
 }
@@ -21536,7 +22524,32 @@ const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"sample",
     b"template",
     b"example",
+    b"mock",
+    b"fixture",
 ];
+const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES: &[&[u8]] = &[
+    b"full-bootstrap material before placeholder: ",
+    b"governed material digest before placeholder: ",
+];
+
+fn is_bfv_full_bootstrap_placeholder_material_digest_v1(digest: &Hash) -> bool {
+    for &preimage in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES {
+        if *digest == Hash::new(preimage) {
+            return true;
+        }
+        for &prefix in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES {
+            if *digest == Hash::new_from_chunks(&[prefix, preimage]) {
+                return true;
+            }
+            for &leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
+                if *digest == Hash::new_from_chunks(&[leading_prefix, prefix, preimage]) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
 
 fn validate_nonzero_material_digest(label: &str, digest: &Hash) -> Result<(), BfvError> {
     if *digest == Hash::prehashed([0_u8; Hash::LENGTH]) {
@@ -21632,10 +22645,7 @@ fn validate_no_full_bootstrap_placeholder_material_digest(
     label: &str,
     digest: &Hash,
 ) -> Result<(), BfvError> {
-    if BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES
-        .iter()
-        .any(|preimage| *digest == Hash::new(preimage))
-    {
+    if is_bfv_full_bootstrap_placeholder_material_digest_v1(digest) {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must not be a placeholder full-bootstrap digest"
         )));
@@ -21659,10 +22669,7 @@ fn validate_no_bfv_full_bootstrap_inert_sha256_digest(
     label: &str,
     digest: &[u8; Hash::LENGTH],
 ) -> Result<(), BfvError> {
-    if bfv_full_bootstrap_native_payload_inert_digest_preimages_v1()
-        .iter()
-        .any(|preimage| *digest == sha256(preimage))
-    {
+    if is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest) {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must not be an inert native payload digest"
         )));
@@ -21766,6 +22773,66 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
     })
 }
 
+fn bfv_full_bootstrap_native_generated_circuit_body_v1(
+    native_payload_circuit_id: &str,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_native_payload_circuit_id(
+        "BFV full-bootstrap native generated circuit body payload circuit id",
+        native_payload_circuit_id,
+    )?;
+    let air_material = bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1();
+    validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
+    let air_body = norito::to_bytes(&air_material).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap native generated circuit body AIR material encoding failed: {err}"
+        ))
+    })?;
+    let body = BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
+        version: BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_VERSION_V1,
+        field_count: BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1,
+        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+        native_payload_circuit_id: native_payload_circuit_id.to_owned(),
+        backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
+        key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
+        proof_system: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1.to_owned(),
+        field: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1.to_owned(),
+        arithmetic_trace_profile_digest:
+            canonical_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(),
+        arithmetic_air_constraint_system_digest:
+            canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
+        hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
+        n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
+        blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
+        fold_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
+        queries: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
+        merkle_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
+        statement_material_version:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
+        statement_material_field_count:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
+        claim_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1,
+        claim_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1,
+        witness_digest_domain: BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN.to_vec(),
+        witness_digest_material_version:
+            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1,
+        witness_digest_material_field_count:
+            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1,
+        witness_trace_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1,
+        witness_trace_bounds_field_count:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1,
+        public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
+        public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
+        supports_exact_residual_multiple: true,
+        supports_bounded_noise: true,
+        arithmetic_air_constraint_system_body: air_body,
+    };
+    norito::to_bytes(&body).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap native generated circuit body encoding failed: {err}"
+        ))
+    })
+}
+
 fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
     native_payload_circuit_id: &str,
 ) -> Result<Hash, BfvError> {
@@ -21789,6 +22856,9 @@ fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         "BFV full-bootstrap native prover-key payload circuit id",
         native_payload_circuit_id,
     )?;
+    let generated_circuit_body =
+        bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
+    let generated_circuit_body_digest = sha256(&generated_circuit_body);
     let payload = BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
         version: BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1,
@@ -21801,6 +22871,8 @@ fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
             canonical_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(),
         arithmetic_air_constraint_system_digest:
             canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
+        generated_circuit_body_digest,
+        generated_circuit_body,
         hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
@@ -22174,6 +23246,52 @@ fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
+    label: &str,
+    native_payload_circuit_id: &str,
+    generated_circuit_body_digest: &[u8; Hash::LENGTH],
+    generated_circuit_body: &[u8],
+) -> Result<(), BfvError> {
+    if generated_circuit_body.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body must not be empty"
+        )));
+    }
+    if generated_circuit_body.iter().all(|byte| *byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body must not be all-zero"
+        )));
+    }
+    if generated_circuit_body.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body length {} exceeds maximum {}",
+            generated_circuit_body.len(),
+            BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
+        )));
+    }
+    validate_nonzero_sha256_digest(
+        &format!("{label} generated circuit body digest"),
+        generated_circuit_body_digest,
+    )?;
+    validate_no_bfv_full_bootstrap_inert_sha256_digest(
+        &format!("{label} generated circuit body digest"),
+        generated_circuit_body_digest,
+    )?;
+    if *generated_circuit_body_digest != sha256(generated_circuit_body) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body digest mismatch"
+        )));
+    }
+    let expected_body =
+        bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
+    if generated_circuit_body != expected_body {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body mismatch"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     native_payload_circuit_id: &str,
     bytes: &[u8],
@@ -22238,10 +23356,21 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         payload.fold_arity,
         payload.queries,
         payload.merkle_arity,
+    )?;
+    validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
+        "BFV full-bootstrap native transparent prover payload",
+        native_payload_circuit_id,
+        &payload.generated_circuit_body_digest,
+        &payload.generated_circuit_body,
     )
 }
 
-fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+/// Validate canonical native STARK/FRI verifier-key payload bytes for BFV full-bootstrap proofs.
+///
+/// # Errors
+/// Returns [`BfvError`] when the payload is not the canonical first-release
+/// native verifier-key layout for `native_payload_circuit_id`.
+pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
     native_payload_circuit_id: &str,
     bytes: &[u8],
 ) -> Result<(), BfvError> {
@@ -22304,6 +23433,12 @@ fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
         payload.fold_arity,
         payload.queries,
         payload.merkle_arity,
+    )?;
+    validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
+        "BFV full-bootstrap native verifier payload",
+        native_payload_circuit_id,
+        &payload.generated_circuit_body_digest,
+        &payload.generated_circuit_body,
     )
 }
 
@@ -22862,18 +23997,11 @@ fn decode_full_bootstrap_artifact_payload(
     bytes: &[u8],
     expected_digest: &Hash,
 ) -> Result<BfvFullBootstrapCircuitArtifactPayloadV1, BfvError> {
-    if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
-    }
-    if bytes.len() > expected_role.max_bytes() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} length {} exceeds maximum {}",
-            bytes.len(),
-            expected_role.max_bytes()
-        )));
-    }
+    validate_full_bootstrap_artifact_envelope_bytes_shape_v1(
+        label,
+        expected_role.max_bytes(),
+        bytes,
+    )?;
     let actual_digest = Hash::new(bytes);
     if actual_digest != *expected_digest {
         return Err(BfvError::InvalidParameters(format!(
@@ -22896,6 +24024,48 @@ fn decode_full_bootstrap_artifact_payload(
     Ok(artifact)
 }
 
+fn validate_full_bootstrap_artifact_envelope_bytes_shape_v1(
+    label: &str,
+    max_bytes: usize,
+    bytes: &[u8],
+) -> Result<(), BfvError> {
+    if bytes.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all-zero"
+        )));
+    }
+    if bytes.len() > max_bytes {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} length {} exceeds maximum {}",
+            bytes.len(),
+            max_bytes
+        )));
+    }
+    Ok(())
+}
+
+fn validate_full_bootstrap_artifact_inner_payload_shape_v1(
+    label: &str,
+    payload: &[u8],
+) -> Result<(), BfvError> {
+    if payload.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must not be empty"
+        )));
+    }
+    if payload.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must not be all-zero"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_full_bootstrap_artifact_payload_profile(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -22903,11 +24073,7 @@ fn validate_full_bootstrap_artifact_payload_profile(
     expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
     artifact: &BfvFullBootstrapCircuitArtifactPayloadV1,
 ) -> Result<(), BfvError> {
-    if artifact.payload.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be empty"
-        )));
-    }
+    validate_full_bootstrap_artifact_inner_payload_shape_v1(label, &artifact.payload)?;
     if artifact.role != expected_role {
         return Err(BfvError::InvalidParameters(format!(
             "{label} role {:?} does not match expected role {:?}",
@@ -25197,6 +26363,164 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sha256_chunks_with_optional_ascii_upper_body_matches_contiguous_hash() {
+        assert_eq!(
+            sha256_chunks_with_optional_ascii_upper_body(
+                &[b"prefix:"],
+                b"native proof payload",
+                false,
+                &[b":suffix"],
+            ),
+            sha256(b"prefix:native proof payload:suffix"),
+            "chunked SHA-256 helper must match the contiguous digest"
+        );
+        assert_eq!(
+            sha256_chunks_with_optional_ascii_upper_body(
+                &[b"prefix:"],
+                b"native proof payload",
+                true,
+                &[b":suffix"],
+            ),
+            sha256(b"prefix:NATIVE PROOF PAYLOAD:suffix"),
+            "chunked SHA-256 helper must uppercase only the body bytes"
+        );
+        assert_eq!(
+            hash_chunks_with_optional_ascii_upper_body(
+                &[b"prefix:"],
+                b"audit body",
+                false,
+                &[b":suffix"],
+            ),
+            Hash::new(b"prefix:audit body:suffix"),
+            "chunked Hash helper must match the contiguous digest"
+        );
+        assert_eq!(
+            hash_chunks_with_optional_ascii_upper_body(
+                &[b"prefix:"],
+                b"audit body",
+                true,
+                &[b":suffix"],
+            ),
+            Hash::new(b"prefix:AUDIT BODY:suffix"),
+            "chunked Hash helper must uppercase only the body bytes"
+        );
+    }
+
+    #[test]
+    fn release_audit_placeholder_artifact_digest_predicate_matches_known_shapes() {
+        let direct_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"placeholder external audit report",
+        ]);
+        assert!(
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &direct_placeholder_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            ),
+            "release-audit predicate must reject direct placeholder report digests"
+        );
+
+        let delayed_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+            b"TODO pending external audit archive",
+        ]);
+        assert!(
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &delayed_placeholder_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            ),
+            "release-audit predicate must reject delayed placeholder archive digests"
+        );
+
+        for sentinel in [b"mock".as_slice(), b"fixture".as_slice()] {
+            let non_production_digest = Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                sentinel,
+            ]);
+            assert!(
+                is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                    &non_production_digest,
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                ),
+                "release-audit predicate must reject mock/fixture audit report digests"
+            );
+        }
+
+        let leading_whitespace_delayed_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b" \n\t",
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+            b"TODO pending external audit archive",
+        ]);
+        assert!(
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &leading_whitespace_delayed_placeholder_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            ),
+            "release-audit predicate must reject leading-whitespace delayed placeholder archive digests"
+        );
+
+        let uppercase_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"PLACEHOLDER EXTERNAL AUDIT REPORT",
+        ]);
+        assert!(
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &uppercase_placeholder_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            ),
+            "release-audit predicate must reject uppercase placeholder report digests"
+        );
+
+        let approved_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"external-review-approved: independent BFV full-bootstrap release audit report v1",
+        ]);
+        assert!(
+            !is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &approved_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            ),
+            "release-audit predicate must not reject approved audit report digests"
+        );
+    }
+
+    #[test]
+    fn native_payload_inert_digest_predicate_matches_leading_whitespace_delayed_placeholder() {
+        let leading_whitespace_delayed_placeholder_digest =
+            sha256_chunks_with_optional_ascii_upper_body(
+                &[
+                    b" \n\t",
+                    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+                ],
+                b"TODO pending BFV full-bootstrap native proof key payload",
+                false,
+                &[],
+            );
+        assert!(
+            is_bfv_full_bootstrap_native_payload_inert_digest_v1(
+                &leading_whitespace_delayed_placeholder_digest,
+            ),
+            "native payload predicate must reject leading-whitespace delayed placeholder digests"
+        );
+
+        for sentinel in [b"mock".as_slice(), b"fixture".as_slice()] {
+            let non_production_digest = sha256(sentinel);
+            assert!(
+                is_bfv_full_bootstrap_native_payload_inert_digest_v1(&non_production_digest),
+                "native payload predicate must reject mock/fixture payload digests"
+            );
+        }
+
+        let approved_digest = sha256(b"native proof material reviewed for release v1");
+        assert!(
+            !is_bfv_full_bootstrap_native_payload_inert_digest_v1(&approved_digest),
+            "native payload predicate must not reject non-placeholder reviewed payload digests"
+        );
+    }
+
     fn bounded_noise_packed_params() -> BfvParameters {
         BfvParameters {
             polynomial_degree: 8,
@@ -25602,6 +26926,83 @@ mod tests {
             decoded_prover.native_circuit_fingerprint,
             decoded_verifier.native_circuit_fingerprint
         );
+        let decoded_prover_payload: BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 =
+            norito::decode_from_bytes(&decoded_prover.native_payload)
+                .expect("decode native prover payload");
+        let decoded_verifier_payload: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_from_bytes(&decoded_verifier.native_payload)
+                .expect("decode native verifier payload");
+        assert!(
+            !decoded_verifier_payload.generated_circuit_body.is_empty(),
+            "native verifier payload must carry generated circuit body bytes"
+        );
+        assert_eq!(
+            decoded_verifier_payload.generated_circuit_body_digest,
+            sha256(&decoded_verifier_payload.generated_circuit_body),
+            "native verifier payload generated circuit body digest must be raw SHA-256"
+        );
+        assert_eq!(
+            decoded_prover_payload.generated_circuit_body,
+            decoded_verifier_payload.generated_circuit_body,
+            "native prover and verifier payloads must bind the same generated circuit body"
+        );
+        assert_eq!(
+            decoded_prover_payload.generated_circuit_body_digest,
+            decoded_verifier_payload.generated_circuit_body_digest,
+            "native prover and verifier payloads must bind the same generated circuit body digest"
+        );
+        let expected_generated_circuit_body =
+            bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)
+                .expect("canonical generated circuit body");
+        assert_eq!(
+            decoded_verifier_payload.generated_circuit_body, expected_generated_circuit_body,
+            "native verifier payload must carry the canonical generated circuit body"
+        );
+        let mut empty_body_payload = decoded_verifier_payload.clone();
+        empty_body_payload.generated_circuit_body.clear();
+        empty_body_payload.generated_circuit_body_digest =
+            sha256(&empty_body_payload.generated_circuit_body);
+        let empty_body_payload =
+            norito::to_bytes(&empty_body_payload).expect("encode empty generated body payload");
+        assert_error_contains(
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                circuit_id,
+                &empty_body_payload,
+            ),
+            "generated circuit body must not be empty",
+            "native verifier material must reject missing generated circuit bodies",
+        );
+        let mut all_zero_body_payload = decoded_verifier_payload.clone();
+        all_zero_body_payload.generated_circuit_body =
+            vec![0_u8; expected_generated_circuit_body.len()];
+        all_zero_body_payload.generated_circuit_body_digest =
+            sha256(&all_zero_body_payload.generated_circuit_body);
+        let all_zero_body_payload = norito::to_bytes(&all_zero_body_payload)
+            .expect("encode all-zero generated body payload");
+        assert_error_contains(
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                circuit_id,
+                &all_zero_body_payload,
+            ),
+            "generated circuit body must not be all-zero",
+            "native verifier material must reject all-zero generated circuit bodies",
+        );
+        let mut drifted_body_payload = decoded_verifier_payload.clone();
+        drifted_body_payload
+            .generated_circuit_body
+            .extend_from_slice(b"drifted-generated-circuit-body");
+        drifted_body_payload.generated_circuit_body_digest =
+            sha256(&drifted_body_payload.generated_circuit_body);
+        let drifted_body_payload =
+            norito::to_bytes(&drifted_body_payload).expect("encode drifted generated body payload");
+        assert_error_contains(
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                circuit_id,
+                &drifted_body_payload,
+            ),
+            "generated circuit body mismatch",
+            "native verifier material must reject digest-correct generated circuit body drift",
+        );
 
         let mut prover_with_verifier_payload = decoded_prover.clone();
         prover_with_verifier_payload.native_payload = verifier_payload.clone();
@@ -25745,6 +27146,22 @@ mod tests {
             decode_bfv_full_bootstrap_native_proof_key_material_v1(&generic_placeholder_material),
             "inert native payload digest",
             "native material must reject generic proof-key placeholder payloads",
+        );
+
+        let mut delayed_placeholder_material = decoded_prover.clone();
+        delayed_placeholder_material.native_payload = [
+            BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+            b"placeholder BFV full-bootstrap native proof key payload",
+        ]
+        .concat();
+        delayed_placeholder_material.native_payload_digest =
+            sha256(&delayed_placeholder_material.native_payload);
+        let delayed_placeholder_material = norito::to_bytes(&delayed_placeholder_material)
+            .expect("encode delayed placeholder native material");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&delayed_placeholder_material),
+            "inert native payload digest",
+            "native material must reject delayed generic proof-key placeholder payloads",
         );
 
         let mut drifted_material = decoded_verifier;
@@ -28349,6 +29766,19 @@ mod tests {
             err.to_string().contains("public-key digest"),
             "unexpected error: {err}"
         );
+        let mut placeholder_public_key_digest = bootstrap_key.clone();
+        placeholder_public_key_digest.public_key_digest =
+            Some(Hash::new(b"replace before production"));
+        assert_error_contains(
+            bootstrap_ciphertext_bounded_noise_round(
+                &params,
+                &placeholder_public_key_digest,
+                &ciphertext,
+                0,
+            ),
+            "placeholder",
+            "direct bounded-noise bootstrap refresh must reject placeholder public-key digest metadata",
+        );
         let err = validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
             &params,
             &public_key,
@@ -28890,6 +30320,181 @@ mod tests {
         assert_seeded_capacity_error(
             bundle.validate_zero_refreshes(&insufficient, &malformed_secret_key),
             "exact bundle refresh diagnostics must reject too-narrow profiles before secret-key shapes",
+        );
+    }
+
+    #[test]
+    fn bootstrap_refresh_keys_reject_overbudget_round_capacity() {
+        let exact_one_round_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 50,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        exact_one_round_params
+            .validate()
+            .expect("exact one-round profile is structurally valid");
+        assert_eq!(
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&exact_one_round_params)
+                .expect("exact refresh bound"),
+            5
+        );
+        validate_bfv_seeded_bootstrap_refresh_round_capacity(
+            &exact_one_round_params,
+            1,
+            "exact one-round bootstrap key",
+        )
+        .expect("one exact refresh round fits the centered residual capacity");
+        assert_error_contains(
+            validate_bfv_seeded_bootstrap_refresh_round_capacity(
+                &exact_one_round_params,
+                2,
+                "exact two-round bootstrap key",
+            ),
+            "refresh-round residual budget",
+            "exact refresh capacity must reject overbudget advertised rounds",
+        );
+        let (_exact_secret_key, exact_public_key, _relinearization_key) = keygen_from_seed(
+            &exact_one_round_params,
+            b"bfv-exact-one-round-capacity-keygen",
+        )
+        .expect("exact one-round keygen");
+        let exact_one_round_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &exact_one_round_params,
+            &exact_public_key,
+            "exact-one-round-refresh-key",
+            1,
+            b"bfv-exact-one-round-refresh-key",
+        )
+        .expect("exact one-round bootstrap key");
+        assert_error_contains(
+            bootstrap_key_with_max_refresh_rounds_from_seed(
+                &exact_one_round_params,
+                &exact_public_key,
+                "exact-two-round-refresh-key",
+                2,
+                b"bfv-exact-two-round-refresh-key",
+            ),
+            "refresh-round residual budget",
+            "exact bootstrap key construction must reject overbudget round capacity before deriving refresh masks",
+        );
+        let exact_ciphertext = encrypt_from_seed(
+            &exact_one_round_params,
+            &exact_public_key,
+            &[1],
+            b"bfv-exact-one-round-refresh-input",
+        )
+        .expect("exact input ciphertext");
+        let mut exact_overbudget_key = exact_one_round_key.clone();
+        exact_overbudget_key.max_refresh_rounds = 2;
+        exact_overbudget_key
+            .round_refreshes
+            .push(exact_one_round_key.zero_refresh.clone());
+        assert_error_contains(
+            validate_bootstrap_key_zero_refresh_transcript(
+                &exact_one_round_params,
+                &exact_public_key,
+                &exact_overbudget_key,
+                b"bfv-exact-one-round-refresh-key",
+            ),
+            "refresh-round residual budget",
+            "exact transcript validation must reject overbudget advertised round capacity before refresh-entry drift",
+        );
+        assert_error_contains(
+            bootstrap_ciphertext_round(
+                &exact_one_round_params,
+                &exact_overbudget_key,
+                &exact_ciphertext,
+                0,
+            ),
+            "refresh-round residual budget",
+            "exact refresh execution must reject overbudget advertised round capacity before using key material",
+        );
+
+        let bounded_one_round_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 60,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        bounded_one_round_params
+            .validate()
+            .expect("bounded one-round profile is structurally valid");
+        assert_eq!(
+            bfv_fresh_bounded_noise_ciphertext_bound(&bounded_one_round_params)
+                .expect("bounded refresh bound"),
+            5
+        );
+        validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+            &bounded_one_round_params,
+            1,
+            "bounded one-round bootstrap key",
+        )
+        .expect("one bounded refresh round fits the rounded decoding capacity");
+        assert_error_contains(
+            validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
+                &bounded_one_round_params,
+                2,
+                "bounded two-round bootstrap key",
+            ),
+            "refresh-round noise budget",
+            "bounded refresh capacity must reject overbudget advertised rounds",
+        );
+        let (_bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
+            &bounded_one_round_params,
+            b"bfv-bounded-one-round-capacity-keygen",
+        )
+        .expect("bounded one-round keygen");
+        let bounded_one_round_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &bounded_one_round_params,
+            &bounded_public_key,
+            "bounded-one-round-refresh-key",
+            1,
+            b"bfv-bounded-one-round-refresh-key",
+        )
+        .expect("bounded one-round bootstrap key");
+        assert_error_contains(
+            bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+                &bounded_one_round_params,
+                &bounded_public_key,
+                "bounded-two-round-refresh-key",
+                2,
+                b"bfv-bounded-two-round-refresh-key",
+            ),
+            "refresh-round noise budget",
+            "bounded bootstrap key construction must reject overbudget round capacity before deriving refresh masks",
+        );
+        let bounded_ciphertext = encrypt_bounded_noise_from_seed(
+            &bounded_one_round_params,
+            &bounded_public_key,
+            &[1],
+            b"bfv-bounded-one-round-refresh-input",
+        )
+        .expect("bounded input ciphertext");
+        let mut bounded_overbudget_key = bounded_one_round_key.clone();
+        bounded_overbudget_key.max_refresh_rounds = 2;
+        bounded_overbudget_key
+            .round_refreshes
+            .push(bounded_one_round_key.zero_refresh.clone());
+        assert_error_contains(
+            validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
+                &bounded_one_round_params,
+                &bounded_public_key,
+                &bounded_overbudget_key,
+                b"bfv-bounded-one-round-refresh-key",
+            ),
+            "refresh-round noise budget",
+            "bounded transcript validation must reject overbudget advertised round capacity before refresh-entry drift",
+        );
+        assert_error_contains(
+            bootstrap_ciphertext_bounded_noise_round(
+                &bounded_one_round_params,
+                &bounded_overbudget_key,
+                &bounded_ciphertext,
+                0,
+            ),
+            "refresh-round noise budget",
+            "bounded refresh execution must reject overbudget advertised round capacity before using key material",
         );
     }
 
@@ -30043,6 +31648,15 @@ mod tests {
             "all-zero refresh ciphertext",
             "exact bootstrap proof statements must reject inert all-zero round refresh material",
         );
+        assert_error_contains(
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &all_zero_round_refresh,
+            ),
+            "all-zero refresh ciphertext",
+            "bounded bootstrap proof statements must reject inert all-zero round refresh material",
+        );
 
         let mut tampered_refresh = bootstrap_key.clone();
         tampered_refresh.round_refreshes[1].c0[0] = add_mod_u64(
@@ -30059,6 +31673,17 @@ mod tests {
         assert_ne!(
             digest, tampered_digest,
             "proof statement digest must bind every refresh ciphertext"
+        );
+        let bounded_tampered_digest =
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &tampered_refresh,
+            )
+            .expect("tampered but shape-valid bounded bootstrap statement digest");
+        assert_ne!(
+            bounded_digest, bounded_tampered_digest,
+            "bounded proof statement digest must bind every refresh ciphertext"
         );
         let three_round_key = bootstrap_key_with_max_refresh_rounds_from_seed(
             &material.params,
@@ -30085,6 +31710,24 @@ mod tests {
         assert_ne!(
             three_round_digest, reordered_digest,
             "proof statement digest must bind refresh round order"
+        );
+        let bounded_three_round_digest =
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &three_round_key,
+            )
+            .expect("three-round bounded bootstrap statement digest");
+        let bounded_reordered_digest =
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &reordered_rounds,
+            )
+            .expect("reordered but shape-valid bounded bootstrap statement digest");
+        assert_ne!(
+            bounded_three_round_digest, bounded_reordered_digest,
+            "bounded proof statement digest must bind refresh round order"
         );
     }
 
@@ -30136,6 +31779,16 @@ mod tests {
                 )
                 .expect("repeat transcript-bound proof statement")
                 .expect("bootstrap key is present")
+        );
+        assert_error_contains(
+            bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            ),
+            "deterministic encrypted-zero transcript",
+            "bounded transcript-bound proof statements must reject exact refresh masks",
         );
 
         let evaluation_key_digest = bundle.digest(&material.params).expect("bundle digest");
@@ -30189,6 +31842,55 @@ mod tests {
             digest, raw_digest,
             "policy proof statements must bind transcript inventory, not only bootstrap key material"
         );
+        let three_round_bootstrap_seed = b"bfv-bootstrap-transcript-proof-statement-three-rounds";
+        let three_round_bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-transcript-proof-key-three-rounds",
+            3,
+            three_round_bootstrap_seed,
+        )
+        .expect("three-round bootstrap key");
+        let three_round_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-transcript-proof-key-three-rounds",
+            max_refresh_rounds: 3,
+            seed: three_round_bootstrap_seed,
+        });
+        let three_round_bundle = BfvEvaluationKeyBundle {
+            bootstrap_key: Some(three_round_bootstrap_key),
+            ..bundle.clone()
+        };
+        let three_round_digest = three_round_bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                three_round_bootstrap_transcript,
+            )
+            .expect("three-round transcript-bound proof statement")
+            .expect("bootstrap key is present");
+        assert_ne!(
+            digest, three_round_digest,
+            "exact transcript proof statements must bind bootstrap round count and key material"
+        );
+        let mut reordered_round_bundle = three_round_bundle;
+        reordered_round_bundle
+            .bootstrap_key
+            .as_mut()
+            .expect("bootstrap key is present")
+            .round_refreshes
+            .swap(1, 2);
+        assert_error_contains(
+            reordered_round_bundle
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                    &material.params,
+                    &material.public_key,
+                    &rotation_transcripts,
+                    three_round_bootstrap_transcript,
+                ),
+            "round_refreshes[1]",
+            "exact transcript proof statements must reject reordered refresh rounds before digesting",
+        );
 
         let wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
             key_id: "bootstrap-transcript-proof-key",
@@ -30209,7 +31911,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let mut drifted_bundle = bundle;
+        let mut drifted_bundle = bundle.clone();
         drifted_bundle.galois_keys.clear();
         let drifted_digest = drifted_bundle
             .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
@@ -30400,6 +32102,29 @@ mod tests {
             "full-bootstrap material must reject not-production-ready material digest sentinels",
         );
 
+        let mut mock_proof_key_pair_commitment = material.clone();
+        mock_proof_key_pair_commitment.proof_key_pair_commitment = Hash::new(b"mock");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(
+                &params,
+                &mock_proof_key_pair_commitment,
+            ),
+            "placeholder",
+            "full-bootstrap material must reject mock proof-key pair commitments",
+        );
+
+        let mut fixture_verifier_key_material_commitment = material.clone();
+        fixture_verifier_key_material_commitment.verifier_key_material_commitment =
+            Hash::new(b"fixture");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(
+                &params,
+                &fixture_verifier_key_material_commitment,
+            ),
+            "placeholder",
+            "full-bootstrap material must reject fixture verifier-key material commitments",
+        );
+
         let mut generic_placeholder_prover_key_digest = material.clone();
         generic_placeholder_prover_key_digest.prover_key_digest =
             Hash::new(b"placeholder BFV full-bootstrap native proof key payload");
@@ -30410,6 +32135,39 @@ mod tests {
             ),
             "placeholder",
             "full-bootstrap material must reject generic native proof-key placeholder digest sentinels",
+        );
+
+        let mut delayed_placeholder_verifier_key_digest = material.clone();
+        delayed_placeholder_verifier_key_digest.verifier_key_digest = Hash::new(
+            [
+                BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+                b"placeholder BFV full-bootstrap native proof key payload",
+            ]
+            .concat(),
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(
+                &params,
+                &delayed_placeholder_verifier_key_digest,
+            ),
+            "placeholder",
+            "full-bootstrap material must reject delayed native proof-key placeholder digest sentinels",
+        );
+
+        let mut whitespace_delayed_placeholder_verifier_key_digest = material.clone();
+        whitespace_delayed_placeholder_verifier_key_digest.verifier_key_material_commitment =
+            Hash::new_from_chunks(&[
+                b" \n\t",
+                BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+                b"placeholder BFV full-bootstrap native proof key payload",
+            ]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(
+                &params,
+                &whitespace_delayed_placeholder_verifier_key_digest,
+            ),
+            "placeholder",
+            "full-bootstrap material must reject leading-whitespace delayed placeholder digest sentinels",
         );
 
         let mut replace_before_production_verifier_key_commitment = material.clone();
@@ -30710,6 +32468,20 @@ mod tests {
             "placeholder audit artifact",
             "archive helper must reject underscore replace-before-production bodies",
         );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_report_bytes_v1(
+                b"external review mock audit report body with fixture evidence v1",
+            ),
+            "placeholder audit artifact",
+            "report helper must reject mock/fixture audit report bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                b"external review evidence archive carries fixture audit output v1",
+            ),
+            "placeholder audit artifact",
+            "archive helper must reject fixture audit archive bodies",
+        );
         let mut delayed_placeholder_report_body =
             vec![b'x'; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 32];
         delayed_placeholder_report_body.extend_from_slice(b" PLACEHOLDER external audit report");
@@ -30853,7 +32625,7 @@ mod tests {
     }
 
     #[test]
-    fn full_bootstrap_release_audit_external_digests_reject_sample_template_example_bodies() {
+    fn full_bootstrap_release_audit_external_digests_reject_non_production_body_sentinels() {
         for (label, header, min_body_bytes, sentinel) in [
             (
                 "BFV full-bootstrap release audit report digest",
@@ -30873,6 +32645,18 @@ mod tests {
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
                 b"example".as_slice(),
             ),
+            (
+                "BFV full-bootstrap release audit evidence archive digest",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
+                b"mock".as_slice(),
+            ),
+            (
+                "BFV full-bootstrap release audit report digest",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                b"fixture".as_slice(),
+            ),
         ] {
             let digest = Hash::new_from_chunks(&[header, sentinel]);
             assert_error_contains(
@@ -30883,23 +32667,23 @@ mod tests {
                     min_body_bytes,
                 ),
                 "placeholder audit artifact",
-                "release audit signed digest validation must reject sample/template/example audit bodies",
+                "release audit signed digest validation must reject non-production audit body sentinels",
             );
         }
         let delayed_nested_digest = Hash::new_from_chunks(&[
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
-            b"audited BFV release report body prefix before nested artifact header: ",
+            b"any other prefix",
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
         ]);
-        assert_error_contains(
+        assert!(
             validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
                 "BFV full-bootstrap release audit report digest",
                 &delayed_nested_digest,
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
-            ),
-            "delayed nested-header",
-            "release audit signed digest validation must reject delayed nested audit headers",
+            )
+            .is_ok(),
+            "release audit signed digest validation cannot reject arbitrary delayed nested headers without the audit artifact bytes",
         );
     }
 
@@ -31092,6 +32876,36 @@ mod tests {
             "placeholder audit artifact",
             "artifact digest must reject delayed placeholder text anywhere in the body",
         );
+        for sentinel in [
+            b"sample".as_slice(),
+            b"template".as_slice(),
+            b"example".as_slice(),
+        ] {
+            let mut delayed_sentinel_body = vec![
+                b'x';
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES
+                    + 32
+            ];
+            delayed_sentinel_body.extend_from_slice(b" delayed ");
+            delayed_sentinel_body.extend_from_slice(sentinel);
+            delayed_sentinel_body.extend_from_slice(b" release audit text");
+            let delayed_sentinel_artifact = [
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                delayed_sentinel_body.as_slice(),
+            ]
+            .concat();
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_artifact_digest_v1(
+                    label,
+                    &delayed_sentinel_artifact,
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                    delayed_sentinel_artifact.len(),
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                ),
+                "placeholder audit artifact",
+                "artifact digest must reject delayed sample/template/example text anywhere in the body",
+            );
+        }
     }
 
     #[test]
@@ -31110,6 +32924,14 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_evidence_v1(&reused_artifact_digest_evidence),
             "must be distinct",
             "release audit evidence must reject reused top-level artifact digests",
+        );
+        let mut aggregate_digest_alias_evidence = evidence.clone();
+        aggregate_digest_alias_evidence.evaluator_artifact_set_digest =
+            aggregate_digest_alias_evidence.artifact_bundle_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(&aggregate_digest_alias_evidence),
+            "evaluator artifact set digest must be distinct from artifact bundle digest",
+            "release audit evidence must reject aggregate digest aliasing before recomputation",
         );
         let mut stale_evaluator_set_digest_evidence = evidence.clone();
         stale_evaluator_set_digest_evidence.evaluator_artifact_set_digest =
@@ -31164,6 +32986,48 @@ mod tests {
             "placeholder",
             "release audit evidence must reject not-for-production proof-key digest sentinels",
         );
+        let delayed_material_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+            b"pending BFV full-bootstrap proof-key pair commitment",
+        ]);
+        let mut delayed_placeholder_artifact_bundle_evidence = evidence.clone();
+        delayed_placeholder_artifact_bundle_evidence.artifact_bundle_digest =
+            delayed_material_placeholder_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &delayed_placeholder_artifact_bundle_evidence,
+            ),
+            "placeholder",
+            "release audit evidence must reject delayed placeholder artifact-bundle digests",
+        );
+        let mut stale_parameter_digest_evidence = evidence.clone();
+        stale_parameter_digest_evidence.parameter_digest =
+            Hash::new(b"profile-drift-release-audit-parameter-digest-v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(&stale_parameter_digest_evidence),
+            "parameter digest does not match registered parameters",
+            "release audit evidence must reject registered BFV parameter digest drift",
+        );
+        let mut stale_schema_artifact_digest_evidence = evidence.clone();
+        stale_schema_artifact_digest_evidence.proof_public_input_schema_digest =
+            Hash::new(b"profile-drift-release-audit-schema-artifact-digest-v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_schema_artifact_digest_evidence,
+            ),
+            "proof public-input schema artifact digest",
+            "release audit evidence must reject proof-schema artifact digest drift",
+        );
+        let mut stale_air_artifact_digest_evidence = evidence.clone();
+        stale_air_artifact_digest_evidence.arithmetic_air_constraint_system_artifact_digest =
+            Hash::new(b"profile-drift-release-audit-air-artifact-digest-v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_air_artifact_digest_evidence,
+            ),
+            "arithmetic AIR artifact digest",
+            "release audit evidence must reject arithmetic AIR artifact digest drift",
+        );
         assert_eq!(
             evidence.version,
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_VERSION_V1
@@ -31189,6 +33053,14 @@ mod tests {
             Hash::new(&artifacts.proof_public_input_schema)
         );
         assert_eq!(
+            evidence.proof_public_input_schema_digest,
+            canonical_bfv_full_bootstrap_proof_public_input_schema_artifact_digest_v1(
+                &params,
+                material.max_bootstrap_depth,
+            )
+            .expect("canonical proof public-input schema artifact digest")
+        );
+        assert_eq!(
             evidence.arithmetic_trace_profile_digest,
             bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()
                 .expect("canonical arithmetic trace profile digest")
@@ -31197,6 +33069,14 @@ mod tests {
             evidence.arithmetic_air_constraint_system_digest,
             bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()
                 .expect("canonical arithmetic AIR digest")
+        );
+        assert_eq!(
+            evidence.arithmetic_air_constraint_system_artifact_digest,
+            canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_digest_v1(
+                &params,
+                material.max_bootstrap_depth,
+            )
+            .expect("canonical arithmetic AIR artifact digest")
         );
         assert_eq!(
             evidence.prover_key.key_role,
@@ -31225,6 +33105,56 @@ mod tests {
         assert_eq!(
             evidence.prover_key.native_circuit_fingerprint,
             evidence.verifier_key.native_circuit_fingerprint
+        );
+        assert_eq!(
+            evidence.prover_key.generated_circuit_body_digest,
+            evidence.verifier_key.generated_circuit_body_digest,
+            "release audit evidence must bind the same generated circuit body for prover and verifier keys"
+        );
+        assert_eq!(
+            evidence.prover_key.generated_circuit_body_digest,
+            sha256(
+                bfv_full_bootstrap_native_generated_circuit_body_v1(
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+                )
+                .expect("canonical generated circuit body")
+            ),
+            "release audit evidence must bind the canonical generated circuit body digest"
+        );
+        let mut stale_generated_body_digest_evidence = evidence.clone();
+        stale_generated_body_digest_evidence
+            .verifier_key
+            .generated_circuit_body_digest =
+            Hash::new(b"stale-release-audit-generated-circuit-body-digest").into();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_generated_body_digest_evidence,
+            ),
+            "generated circuit body digest",
+            "release audit evidence must reject prover/verifier generated circuit body drift",
+        );
+        let mut matched_stale_generated_body_digest_evidence = evidence.clone();
+        let matched_stale_generated_body_digest =
+            sha256(b"stale-release-audit-generated-circuit-body-digest");
+        matched_stale_generated_body_digest_evidence
+            .prover_key
+            .generated_circuit_body_digest = matched_stale_generated_body_digest;
+        matched_stale_generated_body_digest_evidence
+            .verifier_key
+            .generated_circuit_body_digest = matched_stale_generated_body_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &matched_stale_generated_body_digest_evidence,
+            ),
+            "generated circuit body digest mismatch",
+            "release audit evidence must reject matched stale generated circuit body digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_evidence_digest_v1(
+                &matched_stale_generated_body_digest_evidence,
+            ),
+            "generated circuit body digest mismatch",
+            "release audit evidence digesting must reject matched stale generated circuit body digests",
         );
         assert_ne!(
             evidence.prover_key.native_payload_digest, evidence.verifier_key.native_payload_digest,
@@ -31321,6 +33251,33 @@ mod tests {
             "Ed25519",
             "release audit signing must reject non-Ed25519 reviewer private keys before producing signatures",
         );
+        let all_zero_reviewer_private_key_parse_err =
+            crate::PrivateKey::from_bytes(crate::Algorithm::Ed25519, &[0_u8; 32])
+                .expect_err("public Ed25519 private-key parser must reject all-zero seed material");
+        assert!(
+            all_zero_reviewer_private_key_parse_err
+                .to_string()
+                .contains("all zero"),
+            "unexpected all-zero reviewer private-key parse error: {all_zero_reviewer_private_key_parse_err}"
+        );
+        let all_zero_reviewer_private_key = {
+            let zero_seed = [0_u8; 32];
+            let signing_key = crate::signature::ed25519::PrivateKey::from_bytes(&zero_seed);
+            crate::PrivateKey(Box::new(crate::secrecy::Secret::new(
+                crate::PrivateKeyInner::Ed25519(signing_key),
+            )))
+        };
+        assert_error_contains(
+            sign_bfv_full_bootstrap_release_audit_signoff_v1(
+                &evidence,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_private_key,
+            ),
+            "all zero",
+            "release audit signing must reject all-zero reviewer private-key payloads before public-key derivation",
+        );
         let signoff = sign_bfv_full_bootstrap_release_audit_signoff_v1(
             &evidence,
             audit_report_digest,
@@ -31333,6 +33290,47 @@ mod tests {
             .expect("signed release audit signoff validates");
         validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(&signoff, &evidence)
             .expect("signed release audit signoff matches evidence");
+        assert_eq!(
+            signoff.payload.generated_circuit_body_digest,
+            Hash::prehashed(evidence.prover_key.generated_circuit_body_digest),
+            "release audit signoff payload must bind the generated circuit body digest"
+        );
+        assert_eq!(
+            signoff.payload.generated_circuit_body_digest,
+            Hash::prehashed(evidence.verifier_key.generated_circuit_body_digest),
+            "release audit signoff payload generated-body digest must match verifier-key evidence"
+        );
+        let mut stale_generated_body_signoff_payload = signoff.payload.clone();
+        stale_generated_body_signoff_payload.generated_circuit_body_digest =
+            Hash::new(b"stale-release-audit-signoff-generated-circuit-body-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
+                &stale_generated_body_signoff_payload,
+                &evidence,
+            ),
+            "generated circuit body digest mismatch",
+            "release audit signoff payloads must reject generated-body digest drift against evidence",
+        );
+        let stale_generated_body_signature = SignatureOf::try_new(
+            reviewer_key_pair.private_key(),
+            &stale_generated_body_signoff_payload,
+        )
+        .expect("fixture reviewer signs stale generated-body signoff payload");
+        let stale_generated_body_signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
+            payload: stale_generated_body_signoff_payload,
+            signature: stale_generated_body_signature,
+            ..signoff.clone()
+        };
+        validate_bfv_full_bootstrap_release_audit_signoff_v1(&stale_generated_body_signoff)
+            .expect("standalone signoff validation accepts a well-signed stale generated-body payload before evidence binding");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(
+                &stale_generated_body_signoff,
+                &evidence,
+            ),
+            "generated circuit body digest mismatch",
+            "release audit signoff/evidence binding must reject well-signed generated-body digest drift",
+        );
         validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
             &params, &material, &artifacts, &signoff,
         )
@@ -31349,8 +33347,16 @@ mod tests {
             "all zero",
             "release audit trusted reviewer inputs must reject inert all-zero public keys",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1(
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "public trusted reviewer key preflight must reject inert all-zero public keys",
+        );
         let mut all_zero_reviewer_signoff = signoff.clone();
-        all_zero_reviewer_signoff.payload.reviewer_public_key = all_zero_reviewer_public_key;
+        all_zero_reviewer_signoff.payload.reviewer_public_key =
+            all_zero_reviewer_public_key.clone();
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_v1(&all_zero_reviewer_signoff),
             "all zero",
@@ -31366,6 +33372,13 @@ mod tests {
             "payload must not be empty",
             "release audit trusted reviewer inputs must reject empty public-key payloads",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1(
+                &empty_reviewer_public_key,
+            ),
+            "payload must not be empty",
+            "public trusted reviewer key preflight must reject empty public-key payloads",
+        );
         for placeholder_reviewer_id in [
             "draft-audit-wg-2026",
             "sora-fake-auditor-2026",
@@ -31375,6 +33388,8 @@ mod tests {
             "sample-audit-reviewer",
             "template-audit-reviewer",
             "example-audit-reviewer",
+            "mock-audit-reviewer",
+            "fixture-audit-reviewer",
         ] {
             let context = format!(
                 "release audit trusted reviewer inputs must reject placeholder reviewer id `{placeholder_reviewer_id}`"
@@ -31383,6 +33398,16 @@ mod tests {
                 validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
                     placeholder_reviewer_id,
                     reviewer_key_pair.public_key(),
+                ),
+                "placeholder",
+                &context,
+            );
+            let context = format!(
+                "public trusted reviewer id preflight must reject placeholder reviewer id `{placeholder_reviewer_id}`"
+            );
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(
+                    placeholder_reviewer_id,
                 ),
                 "placeholder",
                 &context,
@@ -31420,7 +33445,16 @@ mod tests {
             "placeholder",
             "release audit signoff payloads must reject placeholder proof-key pair commitments before signature checks",
         );
-        let signoff_placeholder_digest_setters: [SignoffDigestSetter; 8] = [
+        let mut zero_generated_body_signoff = signoff.clone();
+        zero_generated_body_signoff
+            .payload
+            .generated_circuit_body_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(&zero_generated_body_signoff),
+            "zero hash",
+            "release audit signoff payloads must reject zero generated circuit body digests",
+        );
+        let signoff_placeholder_digest_setters: [SignoffDigestSetter; 9] = [
             ("release evidence digest", |signoff, digest| {
                 signoff.payload.release_audit_evidence_digest = digest;
             }),
@@ -31438,6 +33472,9 @@ mod tests {
             }),
             ("verifier-key digest", |signoff, digest| {
                 signoff.payload.verifier_key_digest = digest;
+            }),
+            ("generated circuit body digest", |signoff, digest| {
+                signoff.payload.generated_circuit_body_digest = digest;
             }),
             ("audit report digest", |signoff, digest| {
                 signoff.payload.audit_report_digest = digest;
@@ -31458,6 +33495,19 @@ mod tests {
                     &context,
                 );
             }
+            let mut delayed_placeholder_signoff = signoff.clone();
+            set_digest(
+                &mut delayed_placeholder_signoff,
+                delayed_material_placeholder_digest,
+            );
+            let context = format!(
+                "release audit signoffs must reject delayed placeholder {label} commitments"
+            );
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_signoff_v1(&delayed_placeholder_signoff),
+                "placeholder",
+                &context,
+            );
         }
         let signoff_bytes = norito::to_bytes(&signoff).expect("encode audit signoff");
         let decoded_signoff =
@@ -31483,6 +33533,15 @@ mod tests {
         assert_eq!(record.evidence, evidence);
         validate_bfv_full_bootstrap_release_audit_record_v1(&record)
             .expect("release audit record validates");
+        let stale_generated_body_record = BfvFullBootstrapReleaseAuditRecordV1 {
+            signoff: stale_generated_body_signoff,
+            ..record.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_v1(&stale_generated_body_record),
+            "generated circuit body digest mismatch",
+            "release audit records must reject well-signed generated-body digest drift against packaged evidence",
+        );
         validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1(
             &params, &material, &artifacts, &record,
         )
@@ -31528,6 +33587,19 @@ mod tests {
             ),
             "private-key algorithm",
             "release audit record construction must reject non-Ed25519 reviewer private keys before evidence derivation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_v1(
+                &params,
+                &stale_material_for_record_builder_preflight,
+                &artifacts,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_private_key,
+            ),
+            "all zero",
+            "release audit record construction must reject all-zero reviewer private-key payloads before evidence derivation",
         );
         let record_bytes = norito::to_bytes(&record).expect("encode audit record");
         let decoded_record =
@@ -31602,10 +33674,33 @@ mod tests {
             "private-key algorithm",
             "release audit package construction must reject non-Ed25519 reviewer private keys before audit byte validation or evidence derivation",
         );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_v1(
+                &params,
+                &stale_material_for_record_builder_preflight,
+                &artifacts,
+                b"",
+                &audit_evidence_archive_bytes,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_private_key,
+            ),
+            "all zero",
+            "release audit package construction must reject all-zero reviewer private-key payloads before audit byte validation or evidence derivation",
+        );
         assert_eq!(package.record, record);
         let manifest = bfv_full_bootstrap_release_audit_manifest_v1(&record)
             .expect("build release audit manifest");
         assert_eq!(package.manifest, manifest);
+        assert_eq!(
+            manifest.generated_circuit_body_digest,
+            Hash::prehashed(record.evidence.prover_key.generated_circuit_body_digest),
+            "release audit manifest must bind the generated circuit body digest"
+        );
+        assert_eq!(
+            manifest.generated_circuit_body_digest,
+            Hash::prehashed(record.evidence.verifier_key.generated_circuit_body_digest),
+            "release audit manifest generated-body digest must match verifier-key evidence"
+        );
         validate_bfv_full_bootstrap_release_audit_manifest_v1(&manifest)
             .expect("release audit manifest validates");
         validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(&manifest, &record)
@@ -31667,7 +33762,7 @@ mod tests {
             "placeholder",
             "release audit manifests must reject placeholder proof-key digest commitments",
         );
-        let manifest_placeholder_digest_setters: [ManifestDigestSetter; 9] = [
+        let manifest_placeholder_digest_setters: [ManifestDigestSetter; 10] = [
             ("record digest", |manifest, digest| {
                 manifest.record_digest = digest;
             }),
@@ -31688,6 +33783,9 @@ mod tests {
             }),
             ("verifier-key digest", |manifest, digest| {
                 manifest.verifier_key_digest = digest;
+            }),
+            ("generated circuit body digest", |manifest, digest| {
+                manifest.generated_circuit_body_digest = digest;
             }),
             ("audit report digest", |manifest, digest| {
                 manifest.audit_report_digest = digest;
@@ -31716,6 +33814,29 @@ mod tests {
                     &context,
                 );
             }
+            let mut delayed_placeholder_manifest = manifest.clone();
+            set_digest(
+                &mut delayed_placeholder_manifest,
+                delayed_material_placeholder_digest,
+            );
+            let context = format!(
+                "release audit manifests must reject delayed placeholder {label} commitments"
+            );
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_manifest_v1(
+                    &delayed_placeholder_manifest,
+                ),
+                "placeholder",
+                &context,
+            );
+            let context = format!(
+                "release audit manifest digesting must reject delayed placeholder {label} commitments"
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_manifest_digest_v1(&delayed_placeholder_manifest),
+                "placeholder",
+                &context,
+            );
         }
         let manifest_digest = bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)
             .expect("release audit manifest digest");
@@ -31767,6 +33888,76 @@ mod tests {
             package_digest, manifest_digest,
             "release audit package digest must be domain-separated from manifest digest"
         );
+        for placeholder_preimage in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES {
+            let placeholder_digest = Hash::new(placeholder_preimage);
+            let mut placeholder_record_digest_package = package.clone();
+            placeholder_record_digest_package.record_digest = placeholder_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_package_v1(
+                    &placeholder_record_digest_package,
+                ),
+                "placeholder",
+                "release audit packages must reject placeholder record digests before recomputing canonical record digests",
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_package_digest_v1(
+                    &placeholder_record_digest_package,
+                ),
+                "placeholder",
+                "release audit package digesting must reject placeholder record digests before canonical package encoding",
+            );
+
+            let mut placeholder_manifest_digest_package = package.clone();
+            placeholder_manifest_digest_package.manifest_digest = placeholder_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_package_v1(
+                    &placeholder_manifest_digest_package,
+                ),
+                "placeholder",
+                "release audit packages must reject placeholder manifest digests before recomputing canonical manifest digests",
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_package_digest_v1(
+                    &placeholder_manifest_digest_package,
+                ),
+                "placeholder",
+                "release audit package digesting must reject placeholder manifest digests before canonical package encoding",
+            );
+        }
+        let mut delayed_placeholder_record_digest_package = package.clone();
+        delayed_placeholder_record_digest_package.record_digest =
+            delayed_material_placeholder_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &delayed_placeholder_record_digest_package,
+            ),
+            "placeholder",
+            "release audit packages must reject delayed placeholder record digests before recomputing canonical record digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &delayed_placeholder_record_digest_package,
+            ),
+            "placeholder",
+            "release audit package digesting must reject delayed placeholder record digests before canonical package encoding",
+        );
+        let mut delayed_placeholder_manifest_digest_package = package.clone();
+        delayed_placeholder_manifest_digest_package.manifest_digest =
+            delayed_material_placeholder_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &delayed_placeholder_manifest_digest_package,
+            ),
+            "placeholder",
+            "release audit packages must reject delayed placeholder manifest digests before recomputing canonical manifest digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &delayed_placeholder_manifest_digest_package,
+            ),
+            "placeholder",
+            "release audit package digesting must reject delayed placeholder manifest digests before canonical package encoding",
+        );
         validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
             &signoff,
             "sora-zk-audit-wg-2026",
@@ -31802,6 +33993,15 @@ mod tests {
             "canonical",
             "trusted reviewer id preflight must reject malformed caller trust inputs before signoff validation",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
+                &stale_signoff_for_trusted_reviewer_preflight,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted reviewer public-key preflight must reject all-zero caller trust inputs before signoff validation",
+        );
         let mut stale_record_for_trusted_reviewer_preflight = record.clone();
         stale_record_for_trusted_reviewer_preflight.version += 1;
         assert_error_contains(
@@ -31812,6 +34012,15 @@ mod tests {
             ),
             "canonical",
             "trusted reviewer id preflight must reject malformed caller trust inputs before record validation",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_trusted_reviewer_v1(
+                &stale_record_for_trusted_reviewer_preflight,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted reviewer public-key preflight must reject all-zero caller trust inputs before record validation",
         );
         let mut stale_manifest_for_trusted_reviewer_preflight = manifest.clone();
         stale_manifest_for_trusted_reviewer_preflight.field_count += 1;
@@ -31824,6 +34033,15 @@ mod tests {
             "canonical",
             "trusted reviewer id preflight must reject malformed caller trust inputs before manifest validation",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1(
+                &stale_manifest_for_trusted_reviewer_preflight,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted reviewer public-key preflight must reject all-zero caller trust inputs before manifest validation",
+        );
         let mut stale_package_for_direct_trusted_reviewer_preflight = package.clone();
         stale_package_for_direct_trusted_reviewer_preflight.record_digest =
             Hash::new(b"stale-release-audit-package-record-digest");
@@ -31835,6 +34053,15 @@ mod tests {
             ),
             "canonical",
             "trusted reviewer id preflight must reject malformed caller trust inputs before package validation",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_trusted_reviewer_v1(
+                &stale_package_for_direct_trusted_reviewer_preflight,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted reviewer public-key preflight must reject all-zero caller trust inputs before package validation",
         );
         validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
             &params,
@@ -31860,6 +34087,18 @@ mod tests {
             "canonical",
             "trusted reviewer id preflight must reject malformed caller trust inputs before package validation",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
+                &params,
+                &material,
+                &artifacts,
+                &stale_package_for_trusted_reviewer_preflight,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted reviewer public-key preflight must reject all-zero caller trust inputs before package/artifact validation",
+        );
         validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
             &params,
             &material,
@@ -31870,6 +34109,19 @@ mod tests {
             reviewer_key_pair.public_key(),
         )
         .expect("package matches governed artifacts, trusted reviewer, and pinned digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &stale_package_for_trusted_reviewer_preflight,
+                package_digest,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted reviewer public-key preflight must reject all-zero caller trust inputs before pinned-digest package/artifact validation",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
                 &params,
@@ -31904,6 +34156,19 @@ mod tests {
                 &material,
                 &artifacts,
                 &package,
+                delayed_material_placeholder_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "placeholder",
+            "release audit packages must reject delayed placeholder caller-pinned package digests before package comparison",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &package,
                 Hash::new(b"stale-release-audit-package-digest"),
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
@@ -31921,8 +34186,24 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "package digest mismatch",
+            "distinct from package record digest",
             "release audit packages must reject caller-pinned record digests as package digest aliases",
+        );
+        let mut stale_package_with_record_digest_alias = package.clone();
+        stale_package_with_record_digest_alias.manifest_digest =
+            Hash::new(b"stale-release-audit-package-manifest-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &stale_package_with_record_digest_alias,
+                record_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "distinct from package record digest",
+            "caller-pinned record-digest aliases must fail before stale package validation can mask the trust-anchor diagnostic",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
@@ -31934,8 +34215,24 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "package digest mismatch",
+            "distinct from package manifest digest",
             "release audit packages must reject caller-pinned manifest digests as package digest aliases",
+        );
+        let mut stale_package_with_manifest_digest_alias = package.clone();
+        stale_package_with_manifest_digest_alias.record_digest =
+            Hash::new(b"stale-release-audit-package-record-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &stale_package_with_manifest_digest_alias,
+                manifest_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "distinct from package manifest digest",
+            "caller-pinned manifest-digest aliases must fail before stale package validation can mask the trust-anchor diagnostic",
         );
         let alternate_reviewer_key_pair =
             crate::KeyPair::try_from_seed(vec![0xA8; 32], crate::Algorithm::Ed25519)
@@ -32148,6 +34445,16 @@ mod tests {
             "zero hash",
             "release audit manifests must reject zero record digests",
         );
+        let mut zero_manifest_generated_body_digest = manifest.clone();
+        zero_manifest_generated_body_digest.generated_circuit_body_digest =
+            Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(
+                &zero_manifest_generated_body_digest,
+            ),
+            "zero hash",
+            "release audit manifests must reject zero generated circuit body digests",
+        );
         let mut stale_manifest_digest_package = package.clone();
         stale_manifest_digest_package.manifest_digest =
             Hash::new(b"stale-release-audit-manifest-digest");
@@ -32295,6 +34602,23 @@ mod tests {
             "manifest verifier-key digest mismatch",
             "release audit packages must reject manifest/verifier-key digest drift",
         );
+        let mut stale_manifest_generated_body_package = package.clone();
+        stale_manifest_generated_body_package
+            .manifest
+            .generated_circuit_body_digest =
+            Hash::new(b"stale-release-audit-manifest-generated-circuit-body-digest");
+        stale_manifest_generated_body_package.manifest_digest =
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(
+                &stale_manifest_generated_body_package.manifest,
+            )
+            .expect("digest stale-generated-body manifest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &stale_manifest_generated_body_package,
+            ),
+            "manifest generated circuit body digest mismatch",
+            "release audit packages must reject manifest/generated-circuit-body digest drift",
+        );
         let mut stale_manifest_native_fingerprint = manifest.clone();
         stale_manifest_native_fingerprint.native_circuit_fingerprint =
             Hash::new(b"stale-release-audit-manifest-native-circuit-fingerprint");
@@ -32382,6 +34706,10 @@ mod tests {
             (
                 "native circuit fingerprint",
                 manifest.native_circuit_fingerprint,
+            ),
+            (
+                "generated circuit body digest",
+                manifest.generated_circuit_body_digest,
             ),
         ];
         for (label, alias_digest) in manifest_signed_commitment_aliases {
@@ -32955,6 +35283,38 @@ mod tests {
             "placeholder audit artifact",
             "release audit signoffs must reject known whitespace-padded placeholder audit report digests",
         );
+        let delayed_placeholder_audit_report_digest = Hash::new(
+            [
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+                b"placeholder external audit report",
+            ]
+            .concat(),
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_v1(
+                &params,
+                &material,
+                &artifacts,
+                delayed_placeholder_audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "placeholder audit artifact",
+            "release audit records must reject known delayed placeholder audit report digests",
+        );
+        let mut delayed_placeholder_report_signoff = signoff.clone();
+        delayed_placeholder_report_signoff
+            .payload
+            .audit_report_digest = delayed_placeholder_audit_report_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(
+                &delayed_placeholder_report_signoff,
+            ),
+            "placeholder audit artifact",
+            "release audit signoffs must reject known delayed placeholder audit report digests",
+        );
         let binary_placeholder_audit_report_digest = Hash::new(
             [
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
@@ -33258,6 +35618,37 @@ mod tests {
             ),
             "placeholder audit artifact",
             "release audit manifests must reject known whitespace-padded placeholder evidence archive digests",
+        );
+        let delayed_placeholder_audit_archive_digest = Hash::new(
+            [
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES[1],
+                b"TODO pending external audit archive",
+            ]
+            .concat(),
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_v1(
+                &params,
+                &material,
+                &artifacts,
+                audit_report_digest,
+                delayed_placeholder_audit_archive_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "placeholder audit artifact",
+            "release audit records must reject known delayed placeholder evidence archive digests",
+        );
+        let mut delayed_placeholder_archive_manifest = manifest.clone();
+        delayed_placeholder_archive_manifest.audit_evidence_archive_digest =
+            delayed_placeholder_audit_archive_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(
+                &delayed_placeholder_archive_manifest,
+            ),
+            "placeholder audit artifact",
+            "release audit manifests must reject known delayed placeholder evidence archive digests",
         );
         let binary_placeholder_audit_archive_digest = Hash::new(
             [
@@ -34669,15 +37060,43 @@ mod tests {
             "release audit evidence validation must reject generic proof-key native-payload placeholder digests",
         );
 
-        let mut sample_payload_digest_evidence = evidence.clone();
-        sample_payload_digest_evidence
-            .prover_key
-            .native_payload_digest = sha256(b"sample");
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_evidence_v1(&sample_payload_digest_evidence),
-            "inert native payload digest",
-            "release audit evidence validation must reject sample native-payload digest sentinels",
-        );
+        for sentinel in [
+            b"sample".as_slice(),
+            b"template".as_slice(),
+            b"example".as_slice(),
+            b"mock".as_slice(),
+            b"fixture".as_slice(),
+        ] {
+            let mut sentinel_payload_digest_evidence = evidence.clone();
+            sentinel_payload_digest_evidence
+                .prover_key
+                .native_payload_digest = sha256(sentinel);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                    &sentinel_payload_digest_evidence,
+                ),
+                "inert native payload digest",
+                "release audit evidence validation must reject non-production native-payload digest sentinels",
+            );
+
+            let mut whitespace_prefixed_sentinel_payload = vec![
+                b' ';
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES
+                    + 1
+            ];
+            whitespace_prefixed_sentinel_payload.extend_from_slice(sentinel);
+            let mut whitespace_prefixed_sentinel_payload_digest_evidence = evidence.clone();
+            whitespace_prefixed_sentinel_payload_digest_evidence
+                .verifier_key
+                .native_payload_digest = sha256(&whitespace_prefixed_sentinel_payload);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                    &whitespace_prefixed_sentinel_payload_digest_evidence,
+                ),
+                "inert native payload digest",
+                "release audit evidence validation must reject whitespace-prefixed non-production native-payload digest sentinels",
+            );
+        }
 
         let mut draft_payload_digest_evidence = evidence.clone();
         draft_payload_digest_evidence
@@ -34784,6 +37203,28 @@ mod tests {
             "release audit evidence digesting must reject delayed placeholder native-payload digest sentinels",
         );
 
+        let leading_whitespace_delayed_placeholder_native_payload_digest =
+            sha256_chunks_with_optional_ascii_upper_body(
+                &[
+                    b" \n\t",
+                    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+                ],
+                b"TODO pending BFV full-bootstrap native proof key payload",
+                false,
+                &[],
+            );
+        let mut leading_whitespace_delayed_placeholder_payload_digest_evidence = evidence.clone();
+        leading_whitespace_delayed_placeholder_payload_digest_evidence
+            .prover_key
+            .native_payload_digest = leading_whitespace_delayed_placeholder_native_payload_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &leading_whitespace_delayed_placeholder_payload_digest_evidence,
+            ),
+            "inert native payload digest",
+            "release audit evidence validation must reject leading-whitespace delayed placeholder native-payload digest sentinels",
+        );
+
         let mut binary_decorated_placeholder_native_payload = Vec::from([0xff]);
         binary_decorated_placeholder_native_payload
             .extend_from_slice(b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE VERIFIER PAYLOAD");
@@ -34846,8 +37287,24 @@ mod tests {
         );
         assert_eq!(
             digest.to_string(),
-            "9ec95abab43275e3a52c296a7d5532861c21db087415a04083fb7dc0433d67eb",
+            "a445e4eb37bdbe99807f28b859ebaddf0fa5076412856328ef6e20bc4e76e951",
             "canonical full-bootstrap artifact bundle digest drifted"
+        );
+        let mut stale_schema_material = material.clone();
+        stale_schema_material.proof_public_input_schema_digest =
+            Hash::new(b"profile-drift-material-schema-artifact-digest-v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(&params, &stale_schema_material),
+            "proof public-input schema artifact digest",
+            "circuit material validation must reject proof-schema artifact digest drift",
+        );
+        let mut stale_air_artifact_material = material.clone();
+        stale_air_artifact_material.arithmetic_air_constraint_system_artifact_digest =
+            Hash::new(b"profile-drift-material-air-artifact-digest-v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(&params, &stale_air_artifact_material),
+            "arithmetic AIR artifact digest",
+            "circuit material validation must reject arithmetic AIR artifact digest drift",
         );
         let mut placeholder_bundle_digest_material =
             BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
@@ -35057,8 +37514,8 @@ mod tests {
                 &stale_air_material_record,
                 &stale_air_artifacts,
             ),
-            "field count",
-            "artifact bundles must reject stale arithmetic AIR contract material",
+            "arithmetic AIR artifact digest",
+            "artifact bundles must reject stale arithmetic AIR contract material before payload decoding",
         );
 
         let assert_valid_artifact_drift_changes_digest = |label: &str,
@@ -35438,6 +37895,46 @@ mod tests {
             "full-bootstrap artifact bundles must reject opaque sample-extraction payloads",
         );
 
+        let mut all_zero_outer_artifact = artifacts.clone();
+        all_zero_outer_artifact.coefficient_to_slot_key = vec![0_u8; 16];
+        let mut all_zero_outer_material = material.clone();
+        all_zero_outer_material.coefficient_to_slot_key_digest =
+            Hash::new(&all_zero_outer_artifact.coefficient_to_slot_key);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                &params,
+                &all_zero_outer_material,
+                &all_zero_outer_artifact,
+            ),
+            "must not be all-zero",
+            "full-bootstrap artifacts must reject all-zero outer envelopes before Norito decoding",
+        );
+
+        let all_zero_payload = BfvFullBootstrapCircuitArtifactPayloadV1 {
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            parameter_digest: material.parameter_digest,
+            rns_modulus_chain_digest: material.rns_modulus_chain_digest,
+            key_switch_decomposition_chain_digest: material.key_switch_decomposition_chain_digest,
+            max_bootstrap_depth: material.max_bootstrap_depth,
+            role: BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+            payload: vec![0_u8; 16],
+        };
+        let mut all_zero_payload_artifact = artifacts.clone();
+        all_zero_payload_artifact.coefficient_to_slot_key =
+            norito::to_bytes(&all_zero_payload).expect("encode all-zero payload artifact");
+        let mut all_zero_payload_material = material.clone();
+        all_zero_payload_material.coefficient_to_slot_key_digest =
+            Hash::new(&all_zero_payload_artifact.coefficient_to_slot_key);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                &params,
+                &all_zero_payload_material,
+                &all_zero_payload_artifact,
+            ),
+            "payload must not be all-zero",
+            "full-bootstrap artifacts must reject all-zero payload envelopes before typed decoding",
+        );
+
         let empty_payload = BfvFullBootstrapCircuitArtifactPayloadV1 {
             circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
             parameter_digest: material.parameter_digest,
@@ -35459,8 +37956,8 @@ mod tests {
                 &empty_payload_material,
                 &empty_payload_artifact,
             ),
-            "payload must not be empty",
-            "full-bootstrap artifacts must reject empty payload envelopes",
+            "proof public-input schema artifact digest",
+            "full-bootstrap artifacts must reject empty payload envelopes before schema decoding",
         );
     }
 
@@ -36111,6 +38608,8 @@ mod tests {
                 b"template".as_slice(),
             ),
             ("example proof-key pair commitment", b"example".as_slice()),
+            ("mock proof-key material commitment", b"mock".as_slice()),
+            ("fixture verifier-key material commitment", b"fixture".as_slice()),
             (
                 "transient proof-key pair commitment",
                 b"transient BFV full-bootstrap proof-key pair commitment before finalization v1"
@@ -36125,7 +38624,7 @@ mod tests {
             assert_error_contains(
                 validate_no_full_bootstrap_placeholder_material_digest(field, &Hash::new(sentinel)),
                 "placeholder",
-                "proof-key profile validation must reject sample/template/example placeholder digests",
+                "proof-key profile validation must reject non-production placeholder digests",
             );
         }
 
@@ -36519,6 +39018,42 @@ mod tests {
             "artifact-derived proof-key commitments must reject depth drift",
         );
 
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &[0_u8; 16],
+            ),
+            "must not be all-zero",
+            "artifact-derived proof-key commitments must reject all-zero outer envelopes before Norito decoding",
+        );
+        let all_zero_inner_payload = BfvFullBootstrapCircuitArtifactPayloadV1 {
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            parameter_digest: registered_bfv_parameter_digest(&params)
+                .expect("registered parameter digest"),
+            rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(&params)
+                .expect("registered RNS digest"),
+            key_switch_decomposition_chain_digest:
+                registered_bfv_key_switch_decomposition_chain_digest(&params)
+                    .expect("registered decomposition digest"),
+            max_bootstrap_depth: 1,
+            role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            payload: vec![0_u8; 16],
+        };
+        let all_zero_inner_artifact = norito::to_bytes(&all_zero_inner_payload)
+            .expect("encode all-zero proof-key inner payload artifact");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &all_zero_inner_artifact,
+            ),
+            "payload must not be all-zero",
+            "artifact-derived proof-key commitments must reject all-zero inner payloads before proof-key decoding",
+        );
+
         let wrong_parameter_key = BfvFullBootstrapProofKeyV1 {
             parameter_digest: Hash::new(b"wrong-full-bootstrap-proof-key-parameter-profile"),
             ..prover_key.clone()
@@ -36821,6 +39356,12 @@ mod tests {
             "AIR contract material must pin the composition challenge domain"
         );
         expect_air_material_rejection!(
+            composition_challenge_digest_bytes:
+                material.composition_challenge_digest_bytes.saturating_sub(1),
+            "composition challenge digest byte length",
+            "AIR contract material must pin full-digest composition challenge reduction"
+        );
+        expect_air_material_rejection!(
             enforces_goldilocks_field_canonicality: false,
             "Goldilocks field canonicality",
             "AIR contract material must require canonical field elements"
@@ -37105,6 +39646,11 @@ mod tests {
             schema.composition_challenge_domain.as_slice(),
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN,
             "proof schema must advertise the AIR composition challenge domain"
+        );
+        assert_eq!(
+            schema.composition_challenge_digest_bytes,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1,
+            "proof schema must advertise full-digest AIR composition challenge reduction"
         );
         assert!(
             schema.binds_composition_challenges_to_statement_hash,
@@ -37496,6 +40042,18 @@ mod tests {
             ),
             "composition challenge domain",
             "proof public-input schemas must pin the AIR composition challenge domain",
+        );
+        let mut wrong_composition_challenge_digest_bytes = schema.clone();
+        wrong_composition_challenge_digest_bytes.composition_challenge_digest_bytes =
+            wrong_composition_challenge_digest_bytes
+                .composition_challenge_digest_bytes
+                .saturating_sub(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_composition_challenge_digest_bytes,
+            ),
+            "composition challenge digest byte length",
+            "proof public-input schemas must pin full-digest AIR composition challenge reduction",
         );
         let mut wrong_proof_input_version = schema.clone();
         wrong_proof_input_version.proof_input_material_version = wrong_proof_input_version
@@ -39603,6 +42161,281 @@ mod tests {
         )
         .expect("artifact-aware exact full-bootstrap bound");
         assert_eq!(final_bound, prefix_bounds.slot_to_coefficient);
+        let reviewer_key_pair =
+            crate::KeyPair::try_from_seed(vec![0xB7; 32], crate::Algorithm::Ed25519)
+                .expect("fixture seed derives release reviewer keypair");
+        let stale_generated_body_release_audit_package_from =
+            |package: &BfvFullBootstrapReleaseAuditPackageV1,
+             stale_generated_body_digest_label: &[u8]|
+             -> BfvFullBootstrapReleaseAuditPackageV1 {
+                let mut stale_payload = package.record.signoff.payload.clone();
+                stale_payload.generated_circuit_body_digest =
+                    Hash::new(stale_generated_body_digest_label);
+                let signature =
+                    SignatureOf::try_new(reviewer_key_pair.private_key(), &stale_payload).expect(
+                        "fixture reviewer signs stale generated-body release audit payload",
+                    );
+                let stale_signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
+                    payload: stale_payload,
+                    signature,
+                    ..package.record.signoff.clone()
+                };
+                BfvFullBootstrapReleaseAuditPackageV1 {
+                    record: BfvFullBootstrapReleaseAuditRecordV1 {
+                        signoff: stale_signoff,
+                        ..package.record.clone()
+                    },
+                    ..package.clone()
+                }
+            };
+        let audit_report_bytes = bfv_full_bootstrap_release_audit_report_bytes_v1(
+            b"external-review-approved: audited BFV full-bootstrap execution release report for governed artifacts v1; reviewer signoff and native proof-key evidence verified",
+        )
+        .expect("build release audit report bytes");
+        let audit_evidence_archive_bytes = bfv_full_bootstrap_release_audit_archive_bytes_v1(
+            b"external-review-archive: audited BFV full-bootstrap execution release archive with governed artifact digests and transcript inventory v1",
+        )
+        .expect("build release audit archive bytes");
+        let release_audit_package = bfv_full_bootstrap_release_audit_package_v1(
+            &params,
+            &material,
+            &artifacts,
+            &audit_report_bytes,
+            &audit_evidence_archive_bytes,
+            "sora-zk-audit-wg-2026",
+            reviewer_key_pair.private_key(),
+        )
+        .expect("build exact release audit package");
+        let release_audit_package_digest =
+            bfv_full_bootstrap_release_audit_package_digest_v1(&release_audit_package)
+                .expect("digest exact release audit package");
+        let mut malformed_release_audited_key = bootstrap_key.clone();
+        malformed_release_audited_key
+            .zero_refresh
+            .c0
+            .pop()
+            .expect("fixture zero refresh has a nonempty c0");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &malformed_release_audited_key,
+                &artifacts,
+                &galois_keys,
+                &ciphertext,
+                &release_audit_package,
+                Hash::new(b"stale audit package digest behind malformed key"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "ciphertext c0 length",
+            "release-audited exact execution must reject malformed bootstrap-key entries before package digest checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &malformed_release_audited_key,
+                &artifacts,
+                &galois_keys,
+                u128::MAX,
+                &release_audit_package,
+                Hash::new(b"stale audit package digest behind malformed key bound"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "ciphertext c0 length",
+            "release-audited exact bounds must reject malformed bootstrap-key entries before package digest or bound checks",
+        );
+        let release_audited_output =
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &ciphertext,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect("release-audited exact full-bootstrap output");
+        assert_eq!(release_audited_output, final_output);
+        let release_audited_bound =
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                input_bound,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect("release-audited exact full-bootstrap bound");
+        assert_eq!(release_audited_bound, final_bound);
+        let mut stale_release_audited_artifacts = artifacts.clone();
+        stale_release_audited_artifacts.accumulator =
+            b"stale-release-audited-exact-execution-accumulator".to_vec();
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &stale_release_audited_artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "digest does not match",
+            "release-audited exact execution must reject artifact replay before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &stale_release_audited_artifacts,
+                &galois_keys,
+                u128::MAX,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "digest does not match",
+            "release-audited exact bounds must reject artifact replay before malformed input bounds",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &ciphertext,
+                &release_audit_package,
+                Hash::new(b"stale release audit execution package digest"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "release-audited exact execution must reject stale caller-pinned package digests",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+                &release_audit_package,
+                Hash::new(b"stale audited exact package digest before galois preflight"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "release-audited exact execution must reject stale audit packages before missing Galois keys",
+        );
+        let stale_generated_body_release_audit_package =
+            stale_generated_body_release_audit_package_from(
+                &release_audit_package,
+                b"stale exact runtime generated circuit body digest",
+            );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+                &stale_generated_body_release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "generated circuit body digest mismatch",
+            "release-audited exact execution must reject well-signed stale generated-body packages before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                u128::MAX,
+                &stale_generated_body_release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "generated circuit body digest mismatch",
+            "release-audited exact bounds must reject well-signed stale generated-body packages before malformed input bounds",
+        );
+        let mut malformed_ciphertext = ciphertext.clone();
+        malformed_ciphertext
+            .c0
+            .pop()
+            .expect("fixture ciphertext has a nonempty c0");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_ciphertext,
+                &release_audit_package,
+                Hash::new(b"stale audited exact package digest before ciphertext preflight"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "release-audited exact execution must reject stale audit packages before malformed ciphertexts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                input_bound,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026-alt",
+                reviewer_key_pair.public_key(),
+            ),
+            "reviewer id",
+            "release-audited exact bounds must reject unexpected trusted reviewer ids",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                input_bound,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026-alt",
+                reviewer_key_pair.public_key(),
+            ),
+            "reviewer id",
+            "release-audited exact bounds must reject trusted-reviewer drift before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                u128::MAX,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026-alt",
+                reviewer_key_pair.public_key(),
+            ),
+            "reviewer id",
+            "release-audited exact bounds must reject trusted-reviewer drift before malformed input bounds",
+        );
         let missing_power = blind_rotation.steps[0].automorphism_power;
         assert_error_contains(
             apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
@@ -39702,7 +42535,7 @@ mod tests {
             )
             .expect("bounded bootstrap refresh key");
         bounded_bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
-        bounded_bootstrap_key.full_bootstrap_material = Some(bounded_material);
+        bounded_bootstrap_key.full_bootstrap_material = Some(bounded_material.clone());
         let bounded_ciphertext = encrypt_bounded_noise_from_seed(
             &params,
             &bounded_public_key,
@@ -39874,6 +42707,246 @@ mod tests {
         assert_eq!(
             bounded_final_bound,
             bounded_prefix_bounds.slot_to_coefficient
+        );
+        let bounded_release_audit_package = bfv_full_bootstrap_release_audit_package_v1(
+            &params,
+            &bounded_material,
+            &bounded_artifacts,
+            &audit_report_bytes,
+            &audit_evidence_archive_bytes,
+            "sora-zk-audit-wg-2026",
+            reviewer_key_pair.private_key(),
+        )
+        .expect("build bounded release audit package");
+        let bounded_release_audit_package_digest =
+            bfv_full_bootstrap_release_audit_package_digest_v1(&bounded_release_audit_package)
+                .expect("digest bounded release audit package");
+        let mut malformed_bounded_release_audited_key = bounded_bootstrap_key.clone();
+        malformed_bounded_release_audited_key
+            .zero_refresh
+            .c0
+            .pop()
+            .expect("fixture bounded zero refresh has a nonempty c0");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &malformed_bounded_release_audited_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                Hash::new(b"stale bounded audit package digest behind malformed key"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "ciphertext c0 length",
+            "release-audited bounded execution must reject malformed bootstrap-key entries before package digest checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &malformed_bounded_release_audited_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &bounded_release_audit_package,
+                Hash::new(b"stale bounded audit package digest behind malformed key bound"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "ciphertext c0 length",
+            "release-audited bounded bounds must reject malformed bootstrap-key entries before package digest or bound checks",
+        );
+        let bounded_release_audited_output =
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect("release-audited bounded full-bootstrap output");
+        assert_eq!(bounded_release_audited_output, bounded_final_output);
+        let bounded_release_audited_bound =
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                input_noise_bound,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect("release-audited bounded full-bootstrap bound");
+        assert_eq!(bounded_release_audited_bound, bounded_final_bound);
+        let mut stale_bounded_release_audited_artifacts = bounded_artifacts.clone();
+        stale_bounded_release_audited_artifacts.accumulator =
+            b"stale-release-audited-bounded-execution-accumulator".to_vec();
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &stale_bounded_release_audited_artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "digest does not match",
+            "release-audited bounded execution must reject artifact replay before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &stale_bounded_release_audited_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "digest does not match",
+            "release-audited bounded bounds must reject artifact replay before malformed input bounds",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                Hash::new(b"stale bounded release audit execution package digest"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "release-audited bounded execution must reject stale caller-pinned package digests",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                Hash::new(b"stale audited bounded package digest before galois preflight"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "release-audited bounded execution must reject stale audit packages before missing Galois keys",
+        );
+        let stale_generated_body_bounded_release_audit_package =
+            stale_generated_body_release_audit_package_from(
+                &bounded_release_audit_package,
+                b"stale bounded runtime generated circuit body digest",
+            );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+                &stale_generated_body_bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "generated circuit body digest mismatch",
+            "release-audited bounded execution must reject well-signed stale generated-body packages before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &stale_generated_body_bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "generated circuit body digest mismatch",
+            "release-audited bounded bounds must reject well-signed stale generated-body packages before malformed input bounds",
+        );
+        let mut malformed_bounded_ciphertext = bounded_ciphertext.clone();
+        malformed_bounded_ciphertext
+            .c0
+            .pop()
+            .expect("fixture bounded ciphertext has a nonempty c0");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                &malformed_bounded_ciphertext,
+                &bounded_release_audit_package,
+                Hash::new(b"stale audited bounded package digest before ciphertext preflight"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "release-audited bounded execution must reject stale audit packages before malformed ciphertexts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                input_noise_bound,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026-alt",
+                reviewer_key_pair.public_key(),
+            ),
+            "reviewer id",
+            "release-audited bounded bounds must reject unexpected trusted reviewer ids",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys[1..],
+                input_noise_bound,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026-alt",
+                reviewer_key_pair.public_key(),
+            ),
+            "reviewer id",
+            "release-audited bounded bounds must reject trusted-reviewer drift before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026-alt",
+                reviewer_key_pair.public_key(),
+            ),
+            "reviewer id",
+            "release-audited bounded bounds must reject trusted-reviewer drift before malformed input bounds",
         );
         assert_error_contains(
             apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -40598,6 +43671,35 @@ mod tests {
             "placeholder",
             "execution proof statements must reject pending witness digest placeholders",
         );
+        let delayed_execution_witness_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+            b"pending BFV full-bootstrap execution witness digest",
+        ]);
+        let delayed_pending_witness_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            execution_witness_digest: delayed_execution_witness_placeholder_digest,
+            ..claim.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &delayed_pending_witness_claim,
+            ),
+            "placeholder",
+            "execution proof statements must reject delayed pending witness digest placeholders",
+        );
+        let mut delayed_placeholder_galois_digest_material = witness_material.clone();
+        delayed_placeholder_galois_digest_material.galois_key_set_digest =
+            delayed_execution_witness_placeholder_digest;
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(
+                &delayed_placeholder_galois_digest_material,
+            ),
+            "placeholder",
+            "public witness material hashing must reject delayed placeholder Galois key-set digests",
+        );
         assert_eq!(
             bfv_full_bootstrap_execution_proof_statement_digest_from_witness_material_v1(
                 &public_key,
@@ -41086,6 +44188,33 @@ mod tests {
             "placeholder",
             "public padding row construction must reject placeholder statement hashes",
         );
+        let delayed_placeholder_statement_hash = Hash::new_from_chunks(&[
+            b" \n\t",
+            BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+            b"pending BFV full-bootstrap execution witness digest",
+        ]);
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                first_padding_index_u32,
+                delayed_placeholder_statement_hash,
+                witness_material.slot_index,
+                witness_material.bound_mode,
+            ),
+            "placeholder",
+            "public padding row construction must reject leading-whitespace delayed placeholder statement hashes",
+        );
+        let oversized_padding_slot =
+            u32::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1);
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                first_padding_index_u32,
+                trace_material.proof_input_material.statement_hash,
+                oversized_padding_slot,
+                witness_material.bound_mode,
+            ),
+            "slot index",
+            "public padding row construction must reject out-of-range slot headers",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
                 first_padding_index_u32,
@@ -41097,6 +44226,30 @@ mod tests {
             ),
             "zero hash",
             "public padding opening validation must reject zero statement hashes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                first_padding_index_u32,
+                first_padding_row,
+                &trace_material.rows[first_padding_index + 1],
+                delayed_placeholder_statement_hash,
+                witness_material.slot_index,
+                witness_material.bound_mode,
+            ),
+            "placeholder",
+            "public padding opening validation must reject leading-whitespace delayed placeholder statement hashes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                first_padding_index_u32,
+                first_padding_row,
+                &trace_material.rows[first_padding_index + 1],
+                trace_material.proof_input_material.statement_hash,
+                oversized_padding_slot,
+                witness_material.bound_mode,
+            ),
+            "slot index",
+            "public padding opening validation must reject out-of-range slot headers",
         );
 
         let mut stale_padding_slot = first_padding_row.clone();
@@ -41308,6 +44461,20 @@ mod tests {
         );
         let drifted_difference =
             bfv_full_bootstrap_goldilocks_sub_v1(drifted_rows[0][9], trace_material.rows[0][9]);
+        let mut low_digest_only = [0_u8; Hash::LENGTH];
+        low_digest_only[0] = 7;
+        let mut high_limb_digest = low_digest_only;
+        high_limb_digest[Hash::LENGTH - 1] = 1;
+        assert_eq!(
+            bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(&low_digest_only),
+            7,
+            "single-byte Goldilocks reduction must preserve low digest limbs"
+        );
+        assert_ne!(
+            bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(&low_digest_only),
+            bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(&high_limb_digest),
+            "Goldilocks challenge reduction must bind high digest limbs"
+        );
         let drifted_challenge = bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
             trace_material.proof_input_material.statement_hash,
             trace_material_digest,
@@ -41315,10 +44482,139 @@ mod tests {
             9,
         )
         .expect("derive trace-bound AIR composition challenge");
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                trace_material_digest,
+                0,
+                9,
+            ),
+            "zero hash",
+            "AIR composition challenges must reject zero statement hashes at derivation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                Hash::new(b"pending BFV full-bootstrap execution witness digest"),
+                trace_material_digest,
+                0,
+                9,
+            ),
+            "placeholder",
+            "AIR composition challenges must reject placeholder statement hashes at derivation",
+        );
+        let leading_delayed_placeholder_digest = Hash::new_from_chunks(&[
+            b" \n\t",
+            BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+            b"pending BFV full-bootstrap execution witness digest",
+        ]);
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                leading_delayed_placeholder_digest,
+                trace_material_digest,
+                0,
+                9,
+            ),
+            "placeholder",
+            "AIR composition challenges must reject leading-whitespace delayed placeholder statement hashes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                trace_material.proof_input_material.statement_hash,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                0,
+                9,
+            ),
+            "zero hash",
+            "AIR composition challenges must reject zero trace material digests at derivation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                trace_material.proof_input_material.statement_hash,
+                Hash::new(b"pending BFV full-bootstrap execution witness digest"),
+                0,
+                9,
+            ),
+            "placeholder",
+            "AIR composition challenges must reject placeholder trace material digests at derivation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                trace_material.proof_input_material.statement_hash,
+                leading_delayed_placeholder_digest,
+                0,
+                9,
+            ),
+            "placeholder",
+            "AIR composition challenges must reject leading-whitespace delayed placeholder trace material digests",
+        );
         assert_eq!(
             drifted_composition_values[0],
             bfv_full_bootstrap_goldilocks_mul_v1(drifted_difference, drifted_challenge),
             "single-column arithmetic trace drift must use the trace-material-bound AIR challenge"
+        );
+        let second_drifted_challenge = bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+            trace_material.proof_input_material.statement_hash,
+            trace_material_digest,
+            0,
+            10,
+        )
+        .expect("derive second trace-bound AIR composition challenge");
+        let inverse_second_drifted_challenge = mod_inv_prime_u64(
+            second_drifted_challenge,
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1,
+        )
+        .expect("nonzero Goldilocks challenge is invertible");
+        let canceling_second_difference = bfv_full_bootstrap_goldilocks_sub_v1(
+            0,
+            bfv_full_bootstrap_goldilocks_mul_v1(
+                drifted_challenge,
+                inverse_second_drifted_challenge,
+            ),
+        );
+        assert_eq!(
+            bfv_full_bootstrap_goldilocks_add_v1(
+                drifted_challenge,
+                bfv_full_bootstrap_goldilocks_mul_v1(
+                    canceling_second_difference,
+                    second_drifted_challenge,
+                ),
+            ),
+            0,
+            "constructed second drift must cancel the previous linear residual"
+        );
+        let mut canceling_drift_rows = trace_material.rows.clone();
+        canceling_drift_rows[0][9] =
+            bfv_full_bootstrap_goldilocks_add_v1(canceling_drift_rows[0][9], 1);
+        canceling_drift_rows[0][10] = bfv_full_bootstrap_goldilocks_add_v1(
+            canceling_drift_rows[0][10],
+            canceling_second_difference,
+        );
+        let canceling_drift_composition_values =
+            bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
+                &trace_material,
+                &canceling_drift_rows,
+            )
+            .expect("evaluate coordinated-drift arithmetic AIR composition values");
+        assert_ne!(
+            canceling_drift_composition_values[0], 0,
+            "coordinated arithmetic trace drift must not cancel to a zero composition value"
+        );
+        assert_eq!(
+            canceling_drift_composition_values[0], drifted_challenge,
+            "coordinated arithmetic trace drift must fail on the first nonzero residual"
+        );
+        let mut noncanonical_after_first_drift_rows = trace_material.rows.clone();
+        noncanonical_after_first_drift_rows[0][9] =
+            bfv_full_bootstrap_goldilocks_add_v1(noncanonical_after_first_drift_rows[0][9], 1);
+        noncanonical_after_first_drift_rows[0][10] =
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
+                &trace_material,
+                &noncanonical_after_first_drift_rows,
+            ),
+            "Goldilocks",
+            "AIR composition evaluation must not let an early residual mask later noncanonical row coordinates",
         );
         validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
             &prover_input_material.arithmetic_air_evaluation_material,
@@ -43981,6 +47277,56 @@ mod tests {
             bounded_statement, drifted_inventory_statement,
             "bounded proof statements must bind the full evaluation-key bundle digest"
         );
+        let three_round_bootstrap_seed = b"bfv-bounded-bundle-bootstrap-three-rounds";
+        let three_round_bootstrap_key =
+            bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+                &params,
+                &public_key,
+                "bounded-bootstrap-refresh-key-three-rounds",
+                3,
+                three_round_bootstrap_seed,
+            )
+            .expect("three-round bounded-noise bootstrap key");
+        let three_round_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bounded-bootstrap-refresh-key-three-rounds",
+            max_refresh_rounds: 3,
+            seed: three_round_bootstrap_seed,
+        });
+        let three_round_bundle = BfvEvaluationKeyBundle {
+            bootstrap_key: Some(three_round_bootstrap_key),
+            ..bundle.clone()
+        };
+        let three_round_statement = three_round_bundle
+            .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                three_round_bootstrap_transcript,
+            )
+            .expect("three-round bounded bundle statement")
+            .expect("bundle carries a bootstrap key");
+        assert_ne!(
+            bounded_statement, three_round_statement,
+            "bounded transcript proof statements must bind bootstrap round count and key material"
+        );
+        let mut reordered_round_bundle = three_round_bundle;
+        reordered_round_bundle
+            .bootstrap_key
+            .as_mut()
+            .expect("bundle carries a bootstrap key")
+            .round_refreshes
+            .swap(1, 2);
+        assert_error_contains(
+            reordered_round_bundle
+                .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                    &params,
+                    &public_key,
+                    &rotation_transcripts,
+                    three_round_bootstrap_transcript,
+                ),
+            "round_refreshes[1]",
+            "bounded transcript proof statements must reject reordered refresh rounds before digesting",
+        );
 
         let err = bundle
             .validate_refresh_transcripts(
@@ -45286,6 +48632,15 @@ mod tests {
         assert_ne!(refreshed, ciphertext);
         let plaintext = decrypt(&params, &secret_key, &refreshed).expect("decrypt");
         assert_eq!(plaintext[0], 77);
+
+        let mut placeholder_public_key_digest = bootstrap_key.clone();
+        placeholder_public_key_digest.public_key_digest =
+            Some(Hash::new(b"replace before production"));
+        assert_error_contains(
+            bootstrap_ciphertext(&params, &placeholder_public_key_digest, &ciphertext),
+            "placeholder",
+            "direct bootstrap refresh must reject placeholder public-key digest metadata",
+        );
     }
 
     #[test]
@@ -46227,6 +49582,42 @@ mod tests {
         bundle
             .refresh_transcript_digest(&params, &public_key, &[], None)
             .expect("full-bootstrap material uses the material statement instead of a bootstrap zero-refresh transcript");
+        bundle
+            .bounded_noise_refresh_transcript_digest(&params, &public_key, &[], None)
+            .expect("bounded full-bootstrap material uses the material statement instead of a bootstrap zero-refresh transcript");
+        assert_error_contains(
+            bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &[],
+                None,
+            ),
+            "full-bootstrap material proof statements",
+            "full-bootstrap material must not produce exact zero-refresh transcript statements",
+        );
+        assert_error_contains(
+            bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &[],
+                None,
+            ),
+            "full-bootstrap material proof statements",
+            "full-bootstrap material must not produce bounded zero-refresh transcript statements",
+        );
+        let (_, other_public_key, _) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-material-other-public-key")
+                .expect("other public keygen");
+        assert_error_contains(
+            bundle.refresh_transcript_digest(&params, &other_public_key, &[], None),
+            "public-key digest",
+            "full-bootstrap transcript inventory must reject public keys that do not match bootstrap key metadata",
+        );
+        assert_error_contains(
+            bundle.bounded_noise_refresh_transcript_digest(&params, &other_public_key, &[], None),
+            "public-key digest",
+            "bounded full-bootstrap transcript inventory must reject public keys that do not match bootstrap key metadata",
+        );
         assert_error_contains(
             bundle.refresh_transcript_digest(
                 &params,
@@ -46240,6 +49631,41 @@ mod tests {
             ),
             "must not carry deterministic zero-refresh transcript seeds",
             "full-bootstrap material must reject encrypted-zero bootstrap transcript seeds",
+        );
+        let full_bootstrap_zero_refresh_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "full-bootstrap-material-key",
+            max_refresh_rounds: 1,
+            seed: b"bfv-full-bootstrap-material-refresh",
+        });
+        assert_error_contains(
+            bundle.bounded_noise_refresh_transcript_digest(
+                &params,
+                &public_key,
+                &[],
+                full_bootstrap_zero_refresh_transcript,
+            ),
+            "must not carry deterministic zero-refresh transcript seeds",
+            "bounded full-bootstrap material must reject encrypted-zero bootstrap transcript seeds",
+        );
+        assert_error_contains(
+            bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &[],
+                full_bootstrap_zero_refresh_transcript,
+            ),
+            "must not carry deterministic zero-refresh transcript seeds",
+            "full-bootstrap material must reject exact zero-refresh transcript statements",
+        );
+        assert_error_contains(
+            bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &[],
+                full_bootstrap_zero_refresh_transcript,
+            ),
+            "must not carry deterministic zero-refresh transcript seeds",
+            "full-bootstrap material must reject bounded zero-refresh transcript statements",
         );
         let mut drifted_bundle = bundle.clone();
         drifted_bundle
@@ -46281,6 +49707,101 @@ mod tests {
         .expect("encrypt input");
         validate_bfv_full_bootstrap_execution_preflight_v1(&params, &bootstrap_key, &ciphertext)
             .expect("valid full-bootstrap material must pass execution preflight");
+        let mut missing_public_key_digest_key = bootstrap_key.clone();
+        missing_public_key_digest_key.public_key_digest = None;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_preflight_v1(
+                &params,
+                &missing_public_key_digest_key,
+                &ciphertext,
+            ),
+            "requires public-key digest",
+            "full-bootstrap execution preflight must reject missing public-key digest metadata",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_registered_rns_exact_v1(
+                &params,
+                &missing_public_key_digest_key,
+                &ciphertext,
+            ),
+            "requires public-key digest",
+            "direct full-bootstrap execution must reject missing public-key digest metadata before artifact fallback",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_output_residual_multiple_bound_v1(
+                &params,
+                &missing_public_key_digest_key,
+                1,
+            ),
+            "requires public-key digest",
+            "direct full-bootstrap residual-bound entry must reject missing public-key digest metadata before artifact fallback",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &missing_public_key_digest_key,
+                &ciphertext,
+            ),
+            "requires public-key digest",
+            "bounded direct full-bootstrap execution must reject missing public-key digest metadata before artifact fallback",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_bounded_noise_output_bound_v1(
+                &params,
+                &missing_public_key_digest_key,
+                1,
+            ),
+            "requires public-key digest",
+            "bounded direct full-bootstrap bound entry must reject missing public-key digest metadata before artifact fallback",
+        );
+        let mut placeholder_public_key_digest_key = bootstrap_key.clone();
+        placeholder_public_key_digest_key.public_key_digest =
+            Some(Hash::new(b"replace before production"));
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_preflight_v1(
+                &params,
+                &placeholder_public_key_digest_key,
+                &ciphertext,
+            ),
+            "placeholder",
+            "full-bootstrap execution preflight must reject placeholder public-key digest metadata",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_registered_rns_exact_v1(
+                &params,
+                &placeholder_public_key_digest_key,
+                &ciphertext,
+            ),
+            "placeholder",
+            "direct full-bootstrap execution must reject placeholder public-key digest metadata before artifact fallback",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_output_residual_multiple_bound_v1(
+                &params,
+                &placeholder_public_key_digest_key,
+                1,
+            ),
+            "placeholder",
+            "direct full-bootstrap residual-bound entry must reject placeholder public-key digest metadata before artifact fallback",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &placeholder_public_key_digest_key,
+                &ciphertext,
+            ),
+            "placeholder",
+            "bounded direct full-bootstrap execution must reject placeholder public-key digest metadata before artifact fallback",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_bounded_noise_output_bound_v1(
+                &params,
+                &placeholder_public_key_digest_key,
+                1,
+            ),
+            "placeholder",
+            "bounded direct full-bootstrap bound entry must reject placeholder public-key digest metadata before artifact fallback",
+        );
         assert_error_contains(
             full_bootstrap_ciphertext_registered_rns_exact_v1(&params, &bootstrap_key, &ciphertext),
             "requires governed full-bootstrap circuit artifacts",
@@ -48915,6 +52436,18 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        let err = multiply_plaintext_polynomial_rns_exact(
+            &rns_params,
+            &product_too_narrow_chain,
+            &ciphertext,
+            &[1, 0],
+        )
+        .expect_err("plaintext-polynomial mask must preflight the full exact RNS chain");
+        assert!(
+            err.to_string().contains("negacyclic product bound"),
+            "unexpected error: {err}"
+        );
+
         let err = apply_galois_automorphism_ciphertext_rns_exact(
             &rns_params,
             &product_too_narrow_chain,
@@ -51391,6 +54924,18 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        let err = multiply_plaintext_polynomial_bounded_noise_rns_exact(
+            &multiply_params,
+            &addition_only_chain,
+            &malformed_ciphertext,
+            &[1],
+        )
+        .expect_err("bounded RNS plaintext-polynomial mask must preflight product coverage");
+        assert!(
+            err.to_string().contains("negacyclic product bound"),
+            "unexpected error: {err}"
+        );
+
         let err = add_ciphertexts_bounded_noise_rns_exact(
             &params,
             &addition_too_narrow_chain,
@@ -51410,6 +54955,18 @@ mod tests {
             &malformed_ciphertext,
         )
         .expect_err("bounded RNS subtract must preflight the exact addition chain");
+        assert!(
+            err.to_string().contains("ciphertext modulus"),
+            "unexpected error: {err}"
+        );
+
+        let err = bootstrap_ciphertext_bounded_noise_rns_exact(
+            &params,
+            &addition_too_narrow_chain,
+            &malformed_bootstrap_key,
+            &malformed_ciphertext,
+        )
+        .expect_err("bounded RNS round-zero bootstrap must preflight the exact addition chain");
         assert!(
             err.to_string().contains("ciphertext modulus"),
             "unexpected error: {err}"
@@ -51436,6 +54993,21 @@ mod tests {
             2,
         )
         .expect_err("bounded RNS multi-round bootstrap must preflight the exact addition chain");
+        assert!(
+            err.to_string().contains("ciphertext modulus"),
+            "unexpected error: {err}"
+        );
+
+        let err = bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact(
+            &params,
+            &addition_too_narrow_chain,
+            &addition_too_narrow_chain,
+            &malformed_bootstrap_key,
+            &malformed_ciphertext,
+        )
+        .expect_err(
+            "bounded basis-extension RNS round-zero bootstrap must preflight the evaluator chain",
+        );
         assert!(
             err.to_string().contains("ciphertext modulus"),
             "unexpected error: {err}"
@@ -51762,6 +55334,8 @@ mod tests {
         let extended = source_chain
             .basis_extend_polynomial(&params, &source_rns, &target_chain)
             .expect("basis-extend source polynomial");
+        validate_rns_polynomial(&params, &target_chain, &extended)
+            .expect("exact basis-extension output validates against the target chain");
         assert_eq!(extended.residues_by_limb.len(), target_chain.moduli.len());
         let reconstructed = target_chain
             .reconstruct_polynomial(&params, &extended)
@@ -51828,6 +55402,8 @@ mod tests {
         let extended = source_chain
             .basis_extend_polynomial_target_limbs(&params, &source_rns, &target_chain)
             .expect("target-limb basis extension accepts a narrow target");
+        validate_rns_polynomial(&params, &target_chain, &extended)
+            .expect("target-limb basis-extension output validates against the target chain");
         for (target_limb, &modulus) in extended.residues_by_limb.iter().zip(&target_chain.moduli) {
             let expected = source_coefficients
                 .iter()
@@ -51882,6 +55458,10 @@ mod tests {
             })
             .collect::<Result<Vec<_>, BfvError>>()
             .expect("basis-extend key-switch digits");
+        for digit in &target_digits {
+            validate_rns_polynomial(&params, &target_chain, digit)
+                .expect("basis-extended key-switch digit validates against the target chain");
+        }
         let target_digits_from_target_limbs = source_digits
             .iter()
             .map(|digit| {

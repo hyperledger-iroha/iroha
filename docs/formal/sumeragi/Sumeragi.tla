@@ -11949,6 +11949,31 @@ RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed ==
 RbcDeliveredFinalityPostGstPostStateIsTerminal ==
   [] [RbcDeliveredFinalityPostGstPostStateIsTerminalStep]_vars
 
+RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope ==
+  /\ RbcDeliveredFinalityOnlyComesFromCommitVote
+  /\ RbcDeliveredFinalityAlwaysCompletesCommittedDelivery
+  /\ RbcDeliveredFinalityAlwaysCommitsCurrentView
+  /\ RbcDeliveredFinalityOnlyLeavesGstElapsedGate
+  /\ RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses
+  /\ RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange
+  /\ RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange
+  /\ RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing
+  /\ RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery
+  /\ RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack
+  /\ RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack
+  /\ RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry
+  /\ RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange
+  /\ RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts
+  /\ RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses
+  /\ RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence
+  /\ RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence
+  /\ RbcDeliveredFinalityAlwaysHasExactProtocolFrame
+  /\ RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame
+  /\ RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants
+  /\ RbcDeliveredFinalityAlwaysSplitsPostStateGate
+  /\ RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed
+  /\ RbcDeliveredFinalityPostGstPostStateIsTerminal
+
 RbcDeliveredNeverEnablesRbcProgress ==
   [] RbcDeliveredDisablesRbcProgress
 
@@ -12175,6 +12200,28 @@ DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==
   /\ DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState
   /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier
 
+RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope ==
+  /\ RbcDeliveryNeverLost
+  /\ RbcDeliveredEvidenceNeverRegresses
+  /\ RbcDeliveredWithoutFinalityNeverCarriesCommitCertificate
+  /\ RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope
+  /\ RbcDeliveredNeverEnablesRbcProgress
+  /\ RbcDeliveredWithoutFinalityAlwaysWaitsForCommitEvidence
+  /\ RbcDeliveredPendingHonestCommitVoteAlwaysKeepsWaitState
+  /\ RbcDeliveredPendingByzantineCommitVoteAlwaysKeepsWaitState
+  /\ RbcDeliveredPendingHonestCommitVoteAlwaysCompletesFinality
+  /\ RbcDeliveredPendingByzantineCommitVoteAlwaysCompletesFinality
+  /\ RbcDeliveredPendingPrepareVoteAlwaysKeepsWaitState
+  /\ RbcDeliveredPendingPrepareVoteAlwaysStartsCommitVoteWaitState
+  /\ RbcDeliveredPendingTimeoutAlwaysStartsNewViewWaitState
+  /\ RbcDeliveredPendingNewViewVoteAlwaysKeepsWaitState
+  /\ RbcDeliveredPendingNewViewVoteAlwaysStartsProposalWaitState
+  /\ RbcDeliveredPendingHonestProposeAlwaysStartsPrepareWaitState
+  /\ RbcDeliveredPendingGstElapsedAlwaysKeepsWaitState
+  /\ RbcDeliveredPendingNextAlwaysCoveredByHandoffs
+  /\ RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope
+  /\ DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope
+
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars
 
@@ -12357,6 +12404,28 @@ RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope ==
   /\ RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCompleteWaitState
   /\ RbcDeliveryEntryCommitEvidenceBranchAlwaysHandsOffToDeliveredPendingWaitState
   /\ RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation
+
+RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope ==
+  /\ RbcDeliveryEntryOnlyByDeliver
+  /\ RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch
+  /\ RbcDeliveryEntryFinalityAlwaysCompletesCommittedDelivery
+  /\ RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState
+  /\ RbcDeliveryEntryAlwaysCompletesFinalityOrWaitState
+  /\ RbcDeliveryEntryAlwaysMatchesCommitArtifactOutcome
+  /\ RbcDeliveryEntryAlwaysMatchesPostGateSurfaceOutcome
+  /\ RbcDeliveryEntryAlwaysMatchesConsensusFrameOutcome
+  /\ RbcDeliveryEntryFinalityAlwaysMatchesCertifiedSourceStack
+  /\ RbcDeliveryEntryFinalityAlwaysInstallsCommittedPostStateInvariants
+  /\ RbcDeliveryEntryFinalityAlwaysSplitsPostStateGate
+  /\ RbcDeliveryEntryFinalityPreGstPostStateOnlyLeavesGstElapsed
+  /\ RbcDeliveryEntryFinalityPostGstPostStateIsTerminal
+  /\ RbcDeliveryEntryPendingAlwaysMatchesNonFinalWaitSurface
+  /\ RbcDeliveryEntryPendingAlwaysSplitsPostStateTimerGate
+  /\ RbcDeliveryEntryPendingPreGstPostStateAlwaysKeepsWaitTimers
+  /\ RbcDeliveryEntryPendingPostGstPostStateAlwaysTracksProgressTimeout
+  /\ RbcDeliveryEntryPendingAlwaysInstallsDeliveredWaitPredicate
+  /\ RbcDeliveryEntryPendingAlwaysOpensDeliveredPendingContinuationSurface
+  /\ RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope
 
 RbcProgressEvidenceNeverDiverges ==
   [] RbcProgressEvidenceMatchesState
@@ -12648,5 +12717,12 @@ RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope ==
   /\ LiveHeaderDigestEvidenceNeverBypassRbcHandoff
   /\ LiveChunkEvidenceNeverBypassRbcHandoff
   /\ LiveReadyVotesNeverBypassRbcHandoff
+
+RbcLifecycleAlwaysMatchesEndToEndEnvelope ==
+  /\ RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope
+  /\ RbcCorruptionRepairAlwaysMatchesFaultEnvelope
+  /\ RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope
+  /\ RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope
+  /\ RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope
 
 ====

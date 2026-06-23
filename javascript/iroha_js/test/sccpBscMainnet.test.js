@@ -3,16 +3,21 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   BscMainnetSccp,
+  BscMainnetGroth16Bn254ProofAdapter,
   BscTestnetSccp,
+  BscTestnetGroth16Bn254ProofAdapter,
   BscTestnetSccpProver,
+  EvmGroth16Bn254ProofAdapter,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_EVM_CHAIN_ID,
   SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_DOMAIN_BSC,
@@ -41,16 +46,20 @@ import {
   canonicalSccpPayloadEnvelopeBytes,
   evmSccpSourceEventTopic,
   parseBscMainnetNativeEvmProverBundleManifest,
+  parseBscMainnetNativeEvmProverParityReport,
   parseBscMainnetNativeEvmProverParityFixture,
   parseBscMainnetNativeEvmProverSelfTestFixture,
   parseBscTestnetNativeEvmProverBundleManifest,
+  parseBscTestnetNativeEvmProverParityReport,
   parseBscTestnetNativeEvmProverParityFixture,
   parseBscTestnetNativeEvmProverSelfTestFixture,
   runBscTestnetNativeProverSelfTest,
   validateBscMainnetNativeEvmProverBundle,
+  validateBscMainnetNativeEvmProverParityReport,
   validateBscMainnetNativeEvmProverParityFixture,
   validateBscMainnetNativeEvmProverSelfTestFixture,
   validateBscTestnetNativeEvmProverBundle,
+  validateBscTestnetNativeEvmProverParityReport,
   validateBscTestnetNativeEvmProverParityFixture,
   validateBscTestnetNativeEvmProverSelfTestFixture,
   verifyBscMainnetNativeEvmProverArtifacts,
@@ -263,7 +272,7 @@ const sampleBscTestnetNativeEvmProverBundle = (
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
@@ -285,9 +294,7 @@ const sampleBscTestnetNativeEvmProverBundle = (
       reproducible_build_attestation: fixtureHash(
         "bsc testnet reproducible build attestation",
       ),
-      cross_sdk_fixture_parity: fixtureHash(
-        "bsc testnet cross-SDK fixture parity",
-      ),
+      cross_sdk_parity: fixtureHash("bsc testnet cross-SDK parity"),
       native_prover_self_test: fixtureHash(
         "bsc testnet native prover self-test",
       ),
@@ -315,7 +322,7 @@ const sampleBscTestnetNativeEvmProverParityFixture = (
     torii_submit_payload_hash: hex32("d4"),
   };
   return {
-    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -416,7 +423,7 @@ const sampleBscTestnetNativeEvmProverBundleWithFixtureBytes = (
     ...overrides,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: parityFixtureHash,
+      cross_sdk_parity: parityFixtureHash,
       native_prover_self_test: selfTestFixtureHash,
     },
   });
@@ -550,7 +557,7 @@ const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: parityFixtureBytes,
+      crossSdkParityBytes: parityFixtureBytes,
       nativeProverSelfTestBytes: selfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -610,7 +617,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
     verifier_key_artifact_hash: verifierKeyArtifactHash,
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
@@ -635,7 +642,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
   const parityFixtureBytes = Buffer.from(
     JSON.stringify(
       sampleBscTestnetNativeEvmProverParityFixture(draftBundle, {
-        schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+        schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
         chain: "bsc-mainnet",
       }),
     ),
@@ -658,7 +665,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
       ...bundleBase,
       audit_hashes: {
         ...draftBundle.audit_hashes,
-        cross_sdk_fixture_parity: parityFixtureHash,
+        cross_sdk_parity: parityFixtureHash,
         native_prover_self_test: selfTestFixtureHash,
       },
     },
@@ -669,7 +676,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: parityFixtureBytes,
+      crossSdkParityBytes: parityFixtureBytes,
       nativeProverSelfTestBytes: selfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -708,6 +715,8 @@ const BN254_G2_GENERATOR_WORDS = [
   abiWord(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
   abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
 ];
+const BN254_BASE_FIELD_MODULUS_DEC =
+  "21888242871839275222246405745257275088696311157297823662689037894645226208583";
 
 const groth16ProofBytes = (publicInputs = samplePublicInputs) => {
   const out = new Uint8Array(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
@@ -727,6 +736,19 @@ const groth16ProofBytes = (publicInputs = samplePublicInputs) => {
 };
 
 const GROTH16_PROOF_BYTES = groth16ProofBytes();
+
+const hexWordAt = (bytes, index) =>
+  `0x${Buffer.from(bytes.slice(index * 32, (index + 1) * 32)).toString("hex")}`;
+
+const structuredGroth16ProofFromBytes = (bytes) => ({
+  pi_a: [hexWordAt(bytes, 4), hexWordAt(bytes, 5), "1"],
+  pi_b: [
+    [hexWordAt(bytes, 6), hexWordAt(bytes, 7)],
+    [hexWordAt(bytes, 8), hexWordAt(bytes, 9)],
+    ["1", "0"],
+  ],
+  pi_c: [hexWordAt(bytes, 10), hexWordAt(bytes, 11), "1"],
+});
 
 test("BscMainnetSccp validates EIP-1193 execution providers as BSC mainnet", async () => {
   const provider = {
@@ -1253,6 +1275,227 @@ test("BscTestnetSccp keeps outbound proof and calldata on BSC testnet", async ()
   );
 });
 
+test("BSC Groth16 adapters pack structured backend proof results", async () => {
+  const input = sampleBscTestnetOutboundInput();
+  const request = buildBscTestnetSccpDestinationProofRequest(input);
+  const expectedProofBytes = groth16ProofBytes(request.publicInputs);
+  const adapter = new BscTestnetGroth16Bn254ProofAdapter({
+    proofBEncoding: "solidity",
+    async prove(proofRequest, options) {
+      assert.equal(proofRequest.requestHash, request.requestHash);
+      assert.equal(options.strict, true);
+      return {
+        proof: structuredGroth16ProofFromBytes(expectedProofBytes),
+        publicSignals: proofRequest.publicSignalWords.map((word) =>
+          BigInt(word).toString(),
+        ),
+        requestHash: proofRequest.requestHash,
+      };
+    },
+  });
+
+  const proofResult = await adapter.prove(input, { strict: true });
+  assert.equal(proofResult.requestHash, request.requestHash);
+  assert.deepEqual([...proofResult.proofBytes], [...expectedProofBytes]);
+  assert.deepEqual(proofResult.publicSignalWords, request.publicSignalWords);
+  assert.equal(
+    buildBscTestnetSccpDestinationSubmission({ proofResult }).targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+
+  assert.equal(
+    await new EvmGroth16Bn254ProofAdapter({
+      proofBEncoding: "solidity",
+      async prove() {
+        return expectedProofBytes;
+      },
+    })
+      .prove(input)
+      .then((result) => result.envelopeHash),
+    proofResult.envelopeHash,
+  );
+
+  assert.equal(
+    (
+      await new BscMainnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove(proofRequest) {
+          return {
+            proof: structuredGroth16ProofFromBytes(
+              groth16ProofBytes(proofRequest.publicInputs),
+            ),
+            publicSignalWords: proofRequest.publicSignalWords,
+          };
+        },
+      }).prove(sampleOutboundInput())
+    ).publicInputs.targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+});
+
+test("BSC Groth16 adapters reject unbound backend proof results", async () => {
+  const input = sampleBscTestnetOutboundInput();
+  const request = buildBscTestnetSccpDestinationProofRequest(input);
+  const expectedProofBytes = groth16ProofBytes(request.publicInputs);
+
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove(proofRequest) {
+          return {
+            proof: structuredGroth16ProofFromBytes(expectedProofBytes),
+            publicSignals: [
+              hex32("12"),
+              ...proofRequest.publicSignalWords.slice(1),
+            ],
+          };
+        },
+      }).prove(input),
+    /proofResult\.publicSignals must match request public signal words/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return {
+            proof: structuredGroth16ProofFromBytes(expectedProofBytes),
+            requestHash: hex32("99"),
+          };
+        },
+      }).prove(input),
+    /requestHash must match request/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return {
+            proof: {
+              ...structuredGroth16ProofFromBytes(expectedProofBytes),
+              pi_a: ["0", "0", "1"],
+            },
+          };
+        },
+      }).prove(input),
+    /proofBytes\.a must not be zero|proofBytes must/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return {
+            proofBytes: expectedProofBytes,
+            proof: structuredGroth16ProofFromBytes(expectedProofBytes),
+          };
+        },
+      }).prove(input),
+    /must not supply both proofBytes and structured proof/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          const proof = structuredGroth16ProofFromBytes(expectedProofBytes);
+          return {
+            proof: {
+              ...proof,
+              a: proof.pi_a,
+            },
+          };
+        },
+      }).prove(input),
+    /proofResult\.proof\.pi_a must not use multiple aliases/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return {
+            proof: {
+              ...structuredGroth16ProofFromBytes(expectedProofBytes),
+              pi_a: [BN254_BASE_FIELD_MODULUS_DEC, "2", "1"],
+            },
+          };
+        },
+      }).prove(input),
+    /proofResult\.proof\.pi_a\.x must be a BN254 base field element/u,
+  );
+
+  let resultGetterReads = 0;
+  const accessorBackedResult = {};
+  Object.defineProperty(accessorBackedResult, "proof", {
+    enumerable: true,
+    get() {
+      resultGetterReads += 1;
+      return structuredGroth16ProofFromBytes(expectedProofBytes);
+    },
+  });
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return accessorBackedResult;
+        },
+      }).prove(input),
+    /proofResult\.proof must be an own data property/u,
+  );
+  assert.equal(resultGetterReads, 0);
+
+  let nestedGetterReads = 0;
+  const accessorBackedProof = structuredGroth16ProofFromBytes(expectedProofBytes);
+  Object.defineProperty(accessorBackedProof, "pi_a", {
+    enumerable: true,
+    get() {
+      nestedGetterReads += 1;
+      return [hexWordAt(expectedProofBytes, 4), hexWordAt(expectedProofBytes, 5)];
+    },
+  });
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return { proof: accessorBackedProof };
+        },
+      }).prove(input),
+    /proofResult\.proof\.pi_a must be an own data property/u,
+  );
+  assert.equal(nestedGetterReads, 0);
+
+  let signalGetterReads = 0;
+  const accessorBackedSignals = { proofBytes: expectedProofBytes };
+  Object.defineProperty(accessorBackedSignals, "publicSignals", {
+    enumerable: true,
+    get() {
+      signalGetterReads += 1;
+      return request.publicSignalWords;
+    },
+  });
+  await assert.rejects(
+    () =>
+      new BscTestnetGroth16Bn254ProofAdapter({
+        proofBEncoding: "solidity",
+        async prove() {
+          return accessorBackedSignals;
+        },
+      }).prove(input),
+    /proofResult\.publicSignals must be an own data property/u,
+  );
+  assert.equal(signalGetterReads, 0);
+});
+
 test("BscTestnetSccp validates native prover bundles and binds artifact hashes", async () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
   const descriptor = validateBscTestnetNativeEvmProverBundle(fixture.bundle, {
@@ -1277,6 +1520,42 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
   assert.notEqual(
     descriptor.verifierKeyArtifactHash,
     descriptor.verifierKeyHash,
+  );
+  assert.equal(
+    descriptor.crossSdkParityArtifact,
+    fixture.bundle.cross_sdk_parity_artifact,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      descriptor,
+      "crossSdkFixtureParityArtifact",
+    ),
+    false,
+  );
+  const legacyArtifactBundle = { ...fixture.bundle };
+  legacyArtifactBundle.cross_sdk_fixture_parity_artifact =
+    legacyArtifactBundle.cross_sdk_parity_artifact;
+  delete legacyArtifactBundle.cross_sdk_parity_artifact;
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(legacyArtifactBundle, {
+        destinationBinding: fixture.destinationBinding,
+      }),
+    /legacy crossSdkFixtureParityArtifact\/cross_sdk_fixture_parity_artifact is not valid for BSC production native EVM prover artifacts/u,
+  );
+  const legacyAuditBundle = {
+    ...fixture.bundle,
+    audit_hashes: { ...fixture.bundle.audit_hashes },
+  };
+  legacyAuditBundle.audit_hashes.cross_sdk_fixture_parity =
+    legacyAuditBundle.audit_hashes.cross_sdk_parity;
+  delete legacyAuditBundle.audit_hashes.cross_sdk_parity;
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(legacyAuditBundle, {
+        destinationBinding: fixture.destinationBinding,
+      }),
+    /legacy cross_sdk_fixture_parity is not valid for BSC production native EVM prover artifacts/u,
   );
 
   const {
@@ -1319,7 +1598,58 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
   );
   assert.equal(
     parityDescriptor.schema,
-    SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
+  );
+  const legacyParityBytes = sampleBscTestnetNativeEvmProverParityFixtureBytes(
+    fixture.bundle,
+    { schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 },
+  );
+  assert.throws(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: {
+            ...fixture.bundle,
+            audit_hashes: {
+              ...fixture.bundle.audit_hashes,
+              cross_sdk_parity: sha256Hex(legacyParityBytes),
+            },
+          },
+          proofArtifactBytes: fixture.proofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkParityBytes: legacyParityBytes,
+          nativeProverSelfTestBytes: fixture.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /legacy fixture schema .* is not valid for verified production native EVM prover artifacts/u,
+  );
+  assert.throws(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: fixture.bundle,
+          proofArtifactBytes: fixture.proofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkFixtureParityBytes: fixture.parityFixtureBytes,
+          nativeProverSelfTestBytes: fixture.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /legacy crossSdkFixtureParityBytes is not valid for BSC production native EVM prover artifacts/u,
+  );
+  assert.deepEqual(
+    parseBscTestnetNativeEvmProverParityReport(
+      JSON.stringify(parityFixture),
+      fixture.bundle,
+    ),
+    parityDescriptor,
   );
 
   const selfTestFixture = sampleBscTestnetNativeEvmProverSelfTestFixture(
@@ -1348,7 +1678,7 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     [descriptor.proofArtifact, fixture.proofArtifactBytes],
     [descriptor.provingKey, fixture.provingKeyBytes],
     [descriptor.verifierKey, fixture.verifierKeyBytes],
-    [descriptor.crossSdkFixtureParityArtifact, fixture.parityFixtureBytes],
+    [descriptor.crossSdkParityArtifact, fixture.parityFixtureBytes],
     [descriptor.nativeProverSelfTestArtifact, fixture.selfTestFixtureBytes],
     [javascriptArtifact.implementationArtifact, fixture.implementationBytes],
   ]);
@@ -1368,6 +1698,20 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     fixture.implementationHash,
   );
   assert.equal(verifiedFromBundle.nativeProverBundle.chain, "bsc-testnet");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      verifiedFromBundle,
+      "crossSdkFixtureParityHash",
+    ),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      verifiedFromBundle,
+      "crossSdkFixtureParity",
+    ),
+    false,
+  );
   await assert.rejects(
     () =>
       verifyBscTestnetNativeEvmProverArtifactsFromBundle(
@@ -1587,14 +1931,14 @@ test("BscTestnetSccp rejects native prover report hash role collisions", () => {
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: fixture.parityFixtureBytes,
+          crossSdkParityBytes: fixture.parityFixtureBytes,
           nativeProverSelfTestBytes: crossCollisionSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkFixtureParity\.sourceProofHash/u,
+    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkParity\.sourceProofHash/u,
   );
 });
 
@@ -1790,12 +2134,12 @@ test("BscTestnetSccp rejects native prover bundle JSON support artifacts with ge
       validateBscTestnetNativeEvmProverBundle(
         {
           ...fixture.bundle,
-          cross_sdk_fixture_parity_artifact:
+          cross_sdk_parity_artifact:
             "artifacts/bsc-testnet/cross-sdk-fixture-parity.fixture",
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /crossSdkFixtureParityArtifact must reference a \.json artifact/u,
+    /crossSdkParityArtifact must reference a \.json artifact/u,
   );
 
   assert.throws(
@@ -1844,12 +2188,12 @@ test("BscTestnetSccp rejects native prover bundles that label executable artifac
       validateBscTestnetNativeEvmProverBundle(
         {
           ...fixture.bundle,
-          cross_sdk_fixture_parity_artifact:
+          cross_sdk_parity_artifact:
             "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /crossSdkFixtureParityArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    /crossSdkParityArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
   );
 
   assert.throws(
@@ -1912,7 +2256,7 @@ test("BscTestnetSccp rejects tiny native prover material even when hashes are se
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -1925,7 +2269,7 @@ test("BscTestnetSccp rejects tiny native prover material even when hashes are se
           proofArtifactBytes: tinyProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -1959,7 +2303,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proof artifacts", 
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -1972,7 +2316,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proof artifacts", 
           proofArtifactBytes: badProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2006,7 +2350,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2019,7 +2363,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
           proofArtifactBytes: badProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2053,7 +2397,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2066,7 +2410,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-
           proofArtifactBytes: badProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2100,7 +2444,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proving keys", () 
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2113,7 +2457,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proving keys", () 
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: badProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2147,7 +2491,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with unsupporte
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2160,7 +2504,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with unsupporte
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: badProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2194,7 +2538,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-ord
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2207,7 +2551,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-ord
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: badProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2245,7 +2589,7 @@ test("BscMainnetSccp validates native prover bundle manifests with mainnet liter
   assert.equal(descriptor.chain, "bsc-mainnet");
 
   const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(bundle, {
-    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     chain: "bsc-mainnet",
   });
   assert.deepEqual(
@@ -2254,6 +2598,17 @@ test("BscMainnetSccp validates native prover bundle manifests with mainnet liter
       bundle,
     ),
     validateBscMainnetNativeEvmProverParityFixture(parityFixture, bundle),
+  );
+  const parityReport = {
+    ...parityFixture,
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
+  };
+  assert.deepEqual(
+    parseBscMainnetNativeEvmProverParityReport(
+      JSON.stringify(parityReport),
+      bundle,
+    ),
+    validateBscMainnetNativeEvmProverParityReport(parityReport, bundle),
   );
 
   const selfTestFixture = sampleBscTestnetNativeEvmProverSelfTestFixture(

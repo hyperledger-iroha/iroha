@@ -504,8 +504,18 @@ public final class SourceSccpProofsTests {
         : "Solana audited deployment record hash must match Rust";
     assert sampleSolanaFullLightClientGateHash(
             "0x" + repeat("bb", 32), "0x" + repeat("cc", 32), "0x" + repeat("dd", 32))
-        .equals("0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9")
+        .equals("0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02")
         : "Solana full light-client gate hash must match Rust";
+    assert !sampleSolanaFullLightClientGateHash(
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32),
+            "0x" + repeat("dd", 32),
+            sourceStateVerifierHash(SourceSccpProofs.DOMAIN_SOL),
+            "0x" + repeat("ab", 32))
+        .equals(
+            sampleSolanaFullLightClientGateHash(
+                "0x" + repeat("bb", 32), "0x" + repeat("cc", 32), "0x" + repeat("dd", 32)))
+        : "Solana full light-client gate hash must bind the deployment receipt hash";
 
     boolean zeroGateThrew = false;
     try {
@@ -601,8 +611,17 @@ public final class SourceSccpProofsTests {
         : "TON audited deployment record hash must match Rust";
     assert sampleTonFullLightClientGateHash(
             "0x" + repeat("bb", 32), "0x" + repeat("cc", 32), "0x" + repeat("dd", 32))
-        .equals("0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596")
+        .equals("0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48")
         : "TON full light-client gate hash must match Rust";
+    assert !sampleTonFullLightClientGateHash(
+            "0x" + repeat("bb", 32),
+            "0x" + repeat("cc", 32),
+            "0x" + repeat("dd", 32),
+            "0x" + repeat("ab", 32))
+        .equals(
+            sampleTonFullLightClientGateHash(
+                "0x" + repeat("bb", 32), "0x" + repeat("cc", 32), "0x" + repeat("dd", 32)))
+        : "TON full light-client gate hash must bind the deployment receipt hash";
 
     boolean zeroTonGateThrew = false;
     try {
@@ -964,13 +983,27 @@ public final class SourceSccpProofsTests {
       final String fullAccountsdbLatticeHash,
       final String bankForkChoiceHash,
       final String sourceStateVerifierHash) {
+    return sampleSolanaFullLightClientGateHash(
+        towerReplayHash,
+        fullAccountsdbLatticeHash,
+        bankForkChoiceHash,
+        sourceStateVerifierHash,
+        "0x" + repeat("aa", 32));
+  }
+
+  private static String sampleSolanaFullLightClientGateHash(
+      final String towerReplayHash,
+      final String fullAccountsdbLatticeHash,
+      final String bankForkChoiceHash,
+      final String sourceStateVerifierHash,
+      final String deploymentReceiptHash) {
     return SourceSccpProofs.solanaFullLightClientGateHash(
         SourceSccpProofs.DOMAIN_SOL,
         "0x" + repeat("44", 32),
         "0x" + repeat("55", 32),
         "0x" + repeat("66", 32),
         "0x" + repeat("88", 32),
-        "0x" + repeat("aa", 32),
+        deploymentReceiptHash,
         towerReplayHash,
         fullAccountsdbLatticeHash,
         bankForkChoiceHash,
@@ -988,13 +1021,25 @@ public final class SourceSccpProofsTests {
       final String masterchainConfigHash,
       final String validatorSetTransitionHash,
       final String shardAccountsDictionaryHash) {
+    return sampleTonFullLightClientGateHash(
+        masterchainConfigHash,
+        validatorSetTransitionHash,
+        shardAccountsDictionaryHash,
+        "0x" + repeat("aa", 32));
+  }
+
+  private static String sampleTonFullLightClientGateHash(
+      final String masterchainConfigHash,
+      final String validatorSetTransitionHash,
+      final String shardAccountsDictionaryHash,
+      final String deploymentReceiptHash) {
     return SourceSccpProofs.tonFullLightClientGateHash(
         SourceSccpProofs.DOMAIN_TON,
         "0x" + repeat("44", 32),
         "0x" + repeat("55", 32),
         "0x" + repeat("66", 32),
         "0x" + repeat("88", 32),
-        "0x" + repeat("aa", 32),
+        deploymentReceiptHash,
         masterchainConfigHash,
         validatorSetTransitionHash,
         shardAccountsDictionaryHash,

@@ -881,6 +881,87 @@ mod tests {
         )
     }
 
+    fn state_with_committed_height(height: u64) -> Arc<State> {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut hashes = state.block_hashes.block();
+            for idx in 0..height {
+                let mut bytes = [0u8; Hash::LENGTH];
+                bytes[..8].copy_from_slice(&idx.saturating_add(1).to_be_bytes());
+                hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed(bytes),
+                ));
+            }
+            hashes.commit_for_tests();
+        }
+        Arc::new(state)
+    }
+
+    fn test_handle_with_state(
+        state: Arc<State>,
+    ) -> (
+        SumeragiHandle,
+        mpsc::Receiver<InboundBlockMessage>,
+        mpsc::Receiver<InboundBlockMessage>,
+        mpsc::Receiver<InboundBlockMessage>,
+        mpsc::Receiver<InboundBlockMessage>,
+    ) {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        )
+        .with_state(state);
+
+        (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx)
+    }
+
+    fn assert_no_inbound_messages(
+        block_payload_rx: &mpsc::Receiver<InboundBlockMessage>,
+        block_rx: &mpsc::Receiver<InboundBlockMessage>,
+        rbc_chunk_rx: &mpsc::Receiver<InboundBlockMessage>,
+        vote_rx: &mpsc::Receiver<InboundBlockMessage>,
+    ) {
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
     #[test]
     fn trusted_roster_without_pops_keeps_bls_peers() {
         let kp0 = checked_bls_keypair();
@@ -3416,7 +3497,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_block_body_response_via_block_ingress_queue() {
+    fn incoming_block_message_routes_block_body_response_via_payload_ingress_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -3460,15 +3541,11 @@ mod tests {
 
         let received = block_payload_rx
             .try_recv()
-            .expect_err("BlockBodyResponse should bypass payload ingress");
-        assert!(matches!(received, mpsc::TryRecvError::Empty));
-        let received = block_rx
-            .try_recv()
-            .expect("BlockBodyResponse should be enqueued to the block ingress channel");
+            .expect("BlockBodyResponse should be enqueued to the payload ingress channel");
         let (queue_kind, _latency_ms) = received
             .queue_latency_ms()
             .expect("BlockBodyResponse should record enqueue metadata");
-        assert_eq!(queue_kind, status::WorkerQueueKind::Blocks);
+        assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3477,10 +3554,217 @@ mod tests {
             }
         ));
         assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_drops_committed_block_created_before_enqueue() {
+        let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
+            test_handle_with_state(state_with_committed_height(2));
+        let block = test_signed_block(2, 0);
+
+        assert!(!handle.incoming_block_message(BlockMessage::BlockCreated(
+            message::BlockCreated {
+                block,
+                frontier: None,
+            }
+        )));
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
+    }
+
+    #[test]
+    fn incoming_block_message_drops_committed_block_body_response_before_enqueue() {
+        let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
+            test_handle_with_state(state_with_committed_height(2));
+        let block = test_signed_block(2, 0);
+        let block_hash = block.hash();
+
+        assert!(
+            !handle.incoming_block_message(BlockMessage::BlockBodyResponse(
+                message::BlockBodyResponse {
+                    block_hash,
+                    height: 2,
+                    view: 0,
+                    body: message::BlockBodyData::BlockCreated(message::BlockCreated {
+                        block,
+                        frontier: None,
+                    }),
+                },
+            ))
+        );
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
+    }
+
+    #[test]
+    fn incoming_block_message_drops_committed_consensus_payloads_before_enqueue() {
+        let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
+            test_handle_with_state(state_with_committed_height(4));
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+        let height = 4;
+        let view = 1;
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(height).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            view,
+        );
+        let leader_key = checked_keypair();
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature = BlockSignature::new(
+            0,
+            checked_block_signature(&leader_private, block_header.hash()),
+        );
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height,
+                view,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: height.saturating_sub(1),
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        let vote = Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1u8; iroha_crypto::Hash::LENGTH]),
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::prehashed(
+                [0x24; 32],
+            )),
+            validator_set_hash_version: 1,
+            validator_set: Vec::new(),
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0111],
+                bls_aggregate_signature: vec![0xAA; 48],
+            },
+        };
+        let messages = vec![
+            BlockMessage::ProposalHint(message::ProposalHint {
+                block_hash,
+                height,
+                view,
+                highest_qc: proposal.header.highest_qc,
+            }),
+            BlockMessage::Proposal(proposal),
+            BlockMessage::QcVote(vote),
+            BlockMessage::RbcInitRequest(crate::sumeragi::consensus::RbcInitRequest {
+                block_hash,
+                height,
+                view,
+            }),
+            BlockMessage::RbcChunkRequest(crate::sumeragi::consensus::RbcChunkRequest {
+                block_hash,
+                height,
+                view,
+                missing_indices: vec![0],
+            }),
+            BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
+                block_hash,
+                height,
+                view,
+                epoch: 0,
+                roster: vec![checked_peer()],
+                roster_hash: Hash::prehashed([0x14; 32]),
+                total_chunks: 1,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                chunk_size_bytes: 0,
+                payload_size_bytes: 0,
+                data_shards: 0,
+                parity_shards: 0,
+                chunk_digests: vec![[5u8; 32]],
+                payload_hash: Hash::prehashed([4u8; 32]),
+                chunk_root: Hash::prehashed([5u8; 32]),
+                block_header,
+                leader_signature,
+            }),
+            BlockMessage::RbcChunk(crate::sumeragi::consensus::RbcChunk {
+                block_hash,
+                height,
+                view,
+                epoch: 0,
+                idx: 0,
+                bytes: vec![1, 2, 3],
+            }),
+            BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
+                block_hash,
+                height,
+                view,
+                epoch: 0,
+                roster_hash: Hash::prehashed([0x11; 32]),
+                chunk_root: Hash::prehashed([3u8; 32]),
+                sender: 1,
+                signature: Vec::new(),
+            }),
+            BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
+                block_hash,
+                height,
+                view,
+                epoch: 0,
+                roster_hash: Hash::prehashed([0x21; 32]),
+                chunk_root: Hash::prehashed([5u8; 32]),
+                sender: 2,
+                signature: Vec::new(),
+                ready_signatures: Vec::new(),
+            }),
+        ];
+
+        for message in messages {
+            assert!(!handle.incoming_block_message(message));
+        }
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
+
+        assert!(handle.incoming_block_message(BlockMessage::Qc(qc)));
+        let received = block_payload_rx
+            .try_recv()
+            .expect("committed-height QC should still reach validation");
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::Qc(_),
+                ..
+            }
+        ));
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
     }
 
     #[test]
@@ -3912,6 +4196,17 @@ mod tests {
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_drops_committed_block_sync_update_before_enqueue() {
+        let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
+            test_handle_with_state(state_with_committed_height(2));
+        let block = test_signed_block(2, 0);
+        let update = message::BlockSyncUpdate::from(&block);
+
+        assert!(!handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update)));
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
     }
 
     #[test]
@@ -5826,6 +6121,47 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct DropBeforeDispatchActor {
+        events: Vec<&'static str>,
+        drops: usize,
+    }
+
+    impl WorkerActor for DropBeforeDispatchActor {
+        fn should_drop_block_message_before_dispatch(&mut self, msg: &InboundBlockMessage) -> bool {
+            if matches!(msg.message, BlockMessage::Proposal(_)) {
+                self.drops = self.drops.saturating_add(1);
+                return true;
+            }
+            false
+        }
+
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            self.events.push(match msg.message {
+                BlockMessage::Proposal(_) => "payload",
+                BlockMessage::ConsensusParams(_) => "block",
+                _ => "other",
+            });
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
     struct RefreshingActor {
         refresh_count: Arc<AtomicUsize>,
     }
@@ -5881,6 +6217,45 @@ mod tests {
         fn poll_commit_results(&mut self) -> bool {
             self.poll_calls = self.poll_calls.saturating_add(1);
             true
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Default)]
+    struct OrderedCommitPollingActor {
+        events: Vec<&'static str>,
+    }
+
+    impl WorkerActor for OrderedCommitPollingActor {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            if matches!(msg.message, BlockMessage::Proposal(_)) {
+                self.events.push("payload");
+            }
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn poll_commit_results(&mut self) -> bool {
+            self.events.push("commit");
+            true
+        }
+
+        fn should_tick(&self) -> bool {
+            false
         }
 
         fn tick(&mut self) -> bool {
@@ -6514,6 +6889,146 @@ mod tests {
         fn tick(&mut self) -> bool {
             false
         }
+    }
+
+    #[test]
+    fn drain_queue_batch_drops_block_message_before_parallel_dispatch() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (tx, rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        tx.send(inbound(BlockMessage::ConsensusParams(
+            message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )))
+        .expect("send consensus params");
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        let mut actor = DropBeforeDispatchActor::default();
+        let mut handler =
+            |actor: &mut DropBeforeDispatchActor, msg| dispatch_block_message(actor, msg);
+
+        let drained = drain_queue_batch(
+            &mut actor,
+            &rx,
+            inbound(BlockMessage::Proposal(proposal)),
+            16,
+            status::WorkerQueueKind::BlockPayload,
+            "block_message",
+            &mut handler,
+        );
+
+        assert_eq!(drained, 2);
+        assert_eq!(actor.drops, 1);
+        assert_eq!(actor.events, ["block"]);
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn run_worker_iteration_drops_block_message_before_dispatch() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = DropBeforeDispatchActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.drops, 1);
+        assert!(actor.events.is_empty());
+        assert!(stats.progress);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert!(block_payload_rx.try_recv().is_err());
     }
 
     #[test]
@@ -8231,7 +8746,92 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.poll_calls, 1);
+        assert_eq!(actor.poll_calls, 2);
+        assert!(stats.progress);
+    }
+
+    #[test]
+    fn run_worker_iteration_polls_commit_results_before_payload_drain() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = OrderedCommitPollingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events.first(), Some(&"commit"));
+        assert!(actor.events.contains(&"payload"));
+        assert_eq!(stats.block_payloads_handled, 1);
         assert!(stats.progress);
     }
 
@@ -8289,7 +8889,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.poll_calls, 1);
+        assert_eq!(actor.poll_calls, 2);
         assert!(stats.progress);
     }
 
@@ -8347,7 +8947,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.poll_calls, 1);
+        assert_eq!(actor.poll_calls, 2);
         assert!(stats.progress);
     }
 
@@ -11947,6 +12547,7 @@ pub struct SumeragiHandle {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    state: Option<Arc<State>>,
 }
 
 impl SumeragiHandle {
@@ -11983,6 +12584,7 @@ impl SumeragiHandle {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            state: None,
         }
     }
 
@@ -11991,10 +12593,90 @@ impl SumeragiHandle {
         self
     }
 
+    fn with_state(mut self, state: Arc<State>) -> Self {
+        self.state = Some(state);
+        self
+    }
+
     fn wake(&self) {
         if let Some(wake) = self.wake.as_ref() {
             let _ = wake.try_send(());
         }
+    }
+
+    fn committed_height_hint(&self) -> Option<u64> {
+        self.state
+            .as_ref()
+            .map(|state| u64::try_from(state.committed_height()).unwrap_or(u64::MAX))
+    }
+
+    fn committed_or_older(&self, height: u64) -> bool {
+        self.committed_height_hint()
+            .is_some_and(|committed| height <= committed)
+    }
+
+    fn committed_height_fields(msg: &BlockMessage) -> Option<(&'static str, u64, u64)> {
+        match msg {
+            BlockMessage::BlockCreated(created) => {
+                let header = created.block.header();
+                Some((
+                    "BlockCreated",
+                    header.height().get(),
+                    header.view_change_index(),
+                ))
+            }
+            BlockMessage::BlockSyncUpdate(update) => {
+                let header = update.block.header();
+                Some((
+                    "BlockSyncUpdate",
+                    header.height().get(),
+                    header.view_change_index(),
+                ))
+            }
+            BlockMessage::BlockBodyResponse(response) => {
+                Some(("BlockBodyResponse", response.height, response.view))
+            }
+            BlockMessage::ProposalHint(hint) => Some(("ProposalHint", hint.height, hint.view)),
+            BlockMessage::Proposal(proposal) => {
+                Some(("Proposal", proposal.header.height, proposal.header.view))
+            }
+            BlockMessage::QcVote(vote) => Some(("QcVote", vote.height, vote.view)),
+            BlockMessage::Qc(qc) => Some(("Qc", qc.height, qc.view)),
+            BlockMessage::RbcInitRequest(request) => {
+                Some(("RbcInitRequest", request.height, request.view))
+            }
+            BlockMessage::RbcChunkRequest(request) => {
+                Some(("RbcChunkRequest", request.height, request.view))
+            }
+            BlockMessage::RbcInit(init) => Some(("RbcInit", init.height, init.view)),
+            BlockMessage::RbcChunk(chunk) => Some(("RbcChunk", chunk.height, chunk.view)),
+            BlockMessage::RbcChunkCompact(chunk) => {
+                Some(("RbcChunk", u64::from(chunk.height), u64::from(chunk.view)))
+            }
+            BlockMessage::RbcReady(ready) => Some(("RbcReady", ready.height, ready.view)),
+            BlockMessage::RbcDeliver(deliver) => Some(("RbcDeliver", deliver.height, deliver.view)),
+            _ => None,
+        }
+    }
+
+    fn drop_if_committed_or_older(&self, msg: &BlockMessage) -> bool {
+        if matches!(msg, BlockMessage::Qc(_)) {
+            return false;
+        }
+        let Some((kind, height, view)) = Self::committed_height_fields(msg) else {
+            return false;
+        };
+        if !self.committed_or_older(height) {
+            return false;
+        }
+        iroha_logger::debug!(
+            kind,
+            height,
+            view,
+            committed = self.committed_height_hint(),
+            "dropping stale block message for committed height"
+        );
+        true
     }
 
     fn frontier_block_sync_hint(&self) -> Arc<FrontierBlockSyncHint> {
@@ -12352,6 +13034,9 @@ impl SumeragiHandle {
             sender,
             ..
         } = inbound;
+        if self.drop_if_committed_or_older(&msg) {
+            return false;
+        }
         match msg {
             BlockMessage::QcVote(vote) => {
                 let duplicate = !self.dedup_vote((
@@ -12509,6 +13194,16 @@ impl SumeragiHandle {
                 let height = header.height().get();
                 let view = header.view_change_index();
                 let block_hash = created.block.hash();
+                if self.committed_or_older(height) {
+                    iroha_logger::debug!(
+                        height,
+                        committed = self.committed_height_hint(),
+                        view,
+                        block = %block_hash,
+                        "dropping stale BlockCreated for committed height"
+                    );
+                    return false;
+                }
                 let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::BlockCreated {
                     height,
                     view,
@@ -12534,6 +13229,16 @@ impl SumeragiHandle {
                 )
             }
             BlockMessage::BlockBodyResponse(response) => {
+                if self.committed_or_older(response.height) {
+                    iroha_logger::debug!(
+                        height = response.height,
+                        committed = self.committed_height_hint(),
+                        view = response.view,
+                        block = %response.block_hash,
+                        "dropping stale BlockBodyResponse for committed height"
+                    );
+                    return false;
+                }
                 let duplicate =
                     !self.dedup_block_payload(BlockPayloadDedupKey::BlockBodyResponse {
                         height: response.height,
@@ -12550,13 +13255,13 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                // Exact body repair responses unblock the contiguous frontier. Keep them off the
-                // ordinary payload lane so they can bypass a backlog of historical body traffic.
+                // Exact body repair responses unblock the contiguous frontier. Keep them on the
+                // protected body lane so they do not sit behind generic block-repair traffic.
                 enqueue_with_mode(
-                    &self.block,
+                    &self.block_payload,
                     InboundBlockMessage::new(BlockMessage::BlockBodyResponse(response), sender),
                     "BlockBodyResponse",
-                    status::WorkerQueueKind::Blocks,
+                    status::WorkerQueueKind::BlockPayload,
                     mode,
                 )
             }
@@ -12602,6 +13307,16 @@ impl SumeragiHandle {
                     );
                     return false;
                 };
+                if self.committed_or_older(height) {
+                    iroha_logger::debug!(
+                        height,
+                        committed = self.committed_height_hint(),
+                        view,
+                        block = %block_hash,
+                        "dropping stale BlockSyncUpdate for committed height"
+                    );
+                    return false;
+                }
                 let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {
                     iroha_logger::debug!(
@@ -13639,7 +14354,8 @@ impl SumeragiStartArgs {
             Arc::clone(&vote_dedup),
             Arc::clone(&block_payload_dedup),
         )
-        .with_wake(wake_tx.clone());
+        .with_wake(wake_tx.clone())
+        .with_state(Arc::clone(&state));
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
         frontier_block_sync_hint.set_initialized(false);
 
@@ -13974,6 +14690,9 @@ fn apply_adaptive_drain_caps(
 
 trait WorkerActor {
     fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()>;
+    fn should_drop_block_message_before_dispatch(&mut self, _msg: &InboundBlockMessage) -> bool {
+        false
+    }
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
     fn on_lane_relay(&mut self, message: LaneRelayMessage) -> Result<()>;
     fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()>;
@@ -14015,6 +14734,10 @@ trait WorkerActor {
 impl WorkerActor for crate::sumeragi::main_loop::Actor {
     fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
         crate::sumeragi::main_loop::Actor::on_block_message(self, msg)
+    }
+
+    fn should_drop_block_message_before_dispatch(&mut self, msg: &InboundBlockMessage) -> bool {
+        crate::sumeragi::main_loop::Actor::should_drop_worker_block_message(self, msg)
     }
 
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()> {
@@ -14339,6 +15062,13 @@ fn poll_worker_results<A: WorkerActor>(actor: &mut A) -> bool {
     progress |= actor.poll_rbc_persist_results();
     actor.sync_external_hints();
     progress
+}
+
+fn dispatch_block_message<A: WorkerActor>(actor: &mut A, msg: InboundBlockMessage) -> Result<()> {
+    if actor.should_drop_block_message_before_dispatch(&msg) {
+        return Ok(());
+    }
+    actor.on_block_message(msg)
 }
 
 const PRIORITY_TIER_COUNT: usize = 7;
@@ -14847,22 +15577,26 @@ fn drain_mailbox<A: WorkerActor>(
                     PriorityTier::Votes | PriorityTier::BlockPayload | PriorityTier::Blocks
                 )
                 .then(Instant::now);
-                if let BlockMessage::QcVote(vote) = &msg.message {
-                    stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
-                    stats.last_precommit_vote =
-                        Some((vote.height, vote.view, vote.epoch, vote.block_hash));
-                    iroha_logger::debug!(
-                        height = vote.height,
-                        view = vote.view,
-                        epoch = vote.epoch,
-                        signer = vote.signer,
-                        block_hash = %vote.block_hash,
-                        tier = ?tier,
-                        "received precommit vote"
-                    );
-                }
-                if let Err(err) = actor.on_block_message(msg) {
-                    iroha_logger::error!(?err, "Sumeragi block-message handler failed");
+                let dropped_before_dispatch = actor.should_drop_block_message_before_dispatch(&msg);
+                if !dropped_before_dispatch {
+                    if let BlockMessage::QcVote(vote) = &msg.message {
+                        stats.precommit_votes_handled =
+                            stats.precommit_votes_handled.saturating_add(1);
+                        stats.last_precommit_vote =
+                            Some((vote.height, vote.view, vote.epoch, vote.block_hash));
+                        iroha_logger::debug!(
+                            height = vote.height,
+                            view = vote.view,
+                            epoch = vote.epoch,
+                            signer = vote.signer,
+                            block_hash = %vote.block_hash,
+                            tier = ?tier,
+                            "received precommit vote"
+                        );
+                    }
+                    if let Err(err) = actor.on_block_message(msg) {
+                        iroha_logger::error!(?err, "Sumeragi block-message handler failed");
+                    }
                 }
                 if let Some(start) = drain_start {
                     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -15002,6 +15736,9 @@ fn run_worker_iteration<A: WorkerActor>(
 
     let iter_start = Instant::now();
     let mut cfg = *cfg;
+    if poll_worker_results(actor) {
+        stats.progress = true;
+    }
     let queue_depths = status::worker_queue_depth_snapshot();
     apply_adaptive_drain_caps(&mut cfg, queue_depths);
     if queue_depths.block_rx > 0 {
@@ -15056,19 +15793,7 @@ fn run_worker_iteration<A: WorkerActor>(
         );
     }
 
-    if actor.poll_commit_results() {
-        stats.progress = true;
-    }
-    if actor.poll_validation_results() {
-        stats.progress = true;
-    }
-    if actor.poll_qc_verify_results() {
-        stats.progress = true;
-    }
-    if actor.poll_vote_verify_results() {
-        stats.progress = true;
-    }
-    if actor.poll_rbc_persist_results() {
+    if poll_worker_results(actor) {
         stats.progress = true;
     }
 
@@ -15657,7 +16382,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
                 }
                 _ => {}
             }
-            actor.on_block_message(msg)
+            dispatch_block_message(actor, msg)
         },
     ));
     joins.push(spawn_queue_worker(
@@ -15671,7 +16396,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         PriorityTier::RbcChunks.stage(),
         PriorityTier::RbcChunks.queue_kind(),
         "block_message",
-        move |actor, msg| actor.on_block_message(msg),
+        move |actor, msg| dispatch_block_message(actor, msg),
     ));
     joins.push(spawn_queue_worker(
         "sumeragi-blocks",
@@ -15684,7 +16409,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         PriorityTier::Blocks.stage(),
         PriorityTier::Blocks.queue_kind(),
         "block_message",
-        move |actor, msg| actor.on_block_message(msg),
+        move |actor, msg| dispatch_block_message(actor, msg),
     ));
     joins.push(spawn_queue_worker(
         "sumeragi-payloads",
@@ -15697,7 +16422,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         PriorityTier::BlockPayload.stage(),
         PriorityTier::BlockPayload.queue_kind(),
         "block_message",
-        move |actor, msg| actor.on_block_message(msg),
+        move |actor, msg| dispatch_block_message(actor, msg),
     ));
     joins.push(spawn_queue_worker(
         "sumeragi-consensus",

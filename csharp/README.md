@@ -121,7 +121,19 @@ the C# SDK treats the result as opaque verifier material.
 bundle metadata reject missing lineage material, partial-without-change,
 over-amount, and full-with-change redeem requests before P/Invoke dispatch; the
 metadata-bound `Redeem(...)` overloads apply those checks before calling the
-native bridge.
+native bridge. Amount metadata must be canonical positive unsigned decimal u128
+text: no padding, sign characters, decimal points, zero, or overflow values.
+`DecodeBundleSummary(...)` parses a recursive spend bundle archive in managed
+code and returns defensive-copy summary metadata for hop count, proof circuit,
+asset, chain id, roots, and the current note. It rejects non-compact or
+wrong-type Norito bundles, unknown previous proof circuit ids, non-`halo2/ipa`
+proof backends, empty proof bytes, empty proof public inputs, zero proof
+public-input hashes, mismatched proof public-input hashes, invalid accumulator
+domains, malformed fixed-size accumulator asset/root fields, and `hop_count`
+values outside `1..64` before wallet code trusts the bundle. Current-note
+summaries also reject all-zero note commitments, all-zero spend nullifiers,
+note/nullifier aliasing, zero amounts, and malformed fixed-array note commitment
+or spend nullifier encodings.
 Native Kagemusha bridge outputs are rejected if they are empty, null, or larger
 than 64 MiB before the wrapper copies them into managed memory.
 The append-boundary digest uses the public

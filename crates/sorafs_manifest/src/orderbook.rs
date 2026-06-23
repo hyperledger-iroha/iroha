@@ -661,6 +661,12 @@ impl ByteRangeV1 {
                 end: self.end,
             })
     }
+
+    /// Return true when the range covers no bytes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.end <= self.start
+    }
 }
 
 /// Streaming settlement channel state.

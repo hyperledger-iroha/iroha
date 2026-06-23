@@ -371,6 +371,19 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
 
     private static func isDeveloperOnlyBackendLabel(_ raw: String) -> Bool {
         let label = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let compact = compactAscii(label)
+        if [
+            "notforproduction",
+            "notproduction",
+            "notproductionready",
+            "notready",
+            "replacebeforeproduction",
+            "replacebeforemainnet",
+            "draftonly",
+        ].contains(where: { compact.contains($0) }) {
+            return true
+        }
+
         var letterRun = ""
         for token in lowercaseAsciiSegments(label) {
             if isDeveloperOnlyBackendRun(token) {
@@ -398,12 +411,18 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
             || value.contains("mock")
             || value.contains("fixture")
             || value.contains("dev")
+            || value.contains("todo")
+            || value.contains("draft")
+            || value.contains("pending")
+            || value.contains("replace")
             || value == "test"
             || value == "dummy"
             || value == "fake"
             || value == "stub"
             || value == "sample"
             || value == "placeholder"
+            || value == "todo"
+            || value == "draft"
     }
 
     private static func isStarkFriProductionBackendLabel(_ backend: String) -> Bool {

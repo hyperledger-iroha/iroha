@@ -1,8 +1,11 @@
 using System;
 using System.Buffers.Binary;
+using System.Globalization;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Privacy;
 
 namespace Hyperledger.Iroha.Offline;
@@ -171,6 +174,66 @@ public sealed class KagemushaRecursiveSpendLineageKeyArtifacts
     public byte[] LineageProvingKeyArchive() => lineageProvingKeyArchive.ToArray();
 }
 
+public sealed class KagemushaRecursiveSpendableNoteSummary
+{
+    private readonly byte[] noteCommitment;
+    private readonly byte[] spendNullifier;
+
+    internal KagemushaRecursiveSpendableNoteSummary(
+        ReadOnlySpan<byte> noteCommitment,
+        ReadOnlySpan<byte> spendNullifier,
+        string amount)
+    {
+        this.noteCommitment = noteCommitment.ToArray();
+        this.spendNullifier = spendNullifier.ToArray();
+        Amount = amount;
+    }
+
+    public byte[] NoteCommitment => noteCommitment.ToArray();
+
+    public byte[] SpendNullifier => spendNullifier.ToArray();
+
+    public string Amount { get; }
+}
+
+public sealed class KagemushaRecursiveSpendBundleSummary
+{
+    private readonly byte[] initialRoot;
+    private readonly byte[] finalRoot;
+
+    internal KagemushaRecursiveSpendBundleSummary(
+        uint hopCount,
+        string proofCircuitId,
+        string asset,
+        string chainId,
+        ReadOnlySpan<byte> initialRoot,
+        ReadOnlySpan<byte> finalRoot,
+        KagemushaRecursiveSpendableNoteSummary currentNote)
+    {
+        HopCount = hopCount;
+        ProofCircuitId = proofCircuitId;
+        Asset = asset;
+        ChainId = chainId;
+        this.initialRoot = initialRoot.ToArray();
+        this.finalRoot = finalRoot.ToArray();
+        CurrentNote = currentNote;
+    }
+
+    public uint HopCount { get; }
+
+    public string ProofCircuitId { get; }
+
+    public string Asset { get; }
+
+    public string ChainId { get; }
+
+    public byte[] InitialRoot => initialRoot.ToArray();
+
+    public byte[] FinalRoot => finalRoot.ToArray();
+
+    public KagemushaRecursiveSpendableNoteSummary CurrentNote { get; }
+}
+
 public enum KagemushaOfflineSpendMode
 {
     RecursiveSpendV1 = 0,
@@ -204,6 +267,12 @@ public static class KagemushaRecursiveSpendNative
     public const string RecursiveSpendLineageOneHopProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-onehop-v1";
     public const string RecursiveSpendLineageAppendProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-append-v1";
     public const string RecursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1";
+    public const string RecursiveSpendBundleWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
+    public const string RecursiveAggregationProofPublicInputsWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
+    public const string RecursiveSpendAccumulatorDomain =
+        "iroha:kagemusha:v1:recursive-spend-accumulator";
 
     public const uint RequiredNativeBridgeAbiVersion = 6;
     public const uint RecursiveCompactRequiredNativeBridgeAbiVersion = 7;
@@ -215,6 +284,7 @@ public static class KagemushaRecursiveSpendNative
     public const int RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128;
     public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;
     private const string MaxU128Decimal = "340282366920938463463374607431768211455";
+    private static readonly BigInteger MaxU128 = (BigInteger.One << 128) - BigInteger.One;
     internal const int RecursiveCompactUnavailableBridgeErrorCode = -312;
     public const string RecursiveSpendTransitionProfileDomain =
         "iroha:kagemusha:v1:recursive-spend-transition-profile";
@@ -253,6 +323,14 @@ public static class KagemushaRecursiveSpendNative
         string CircuitFamily,
         byte[] VerifierKeyCommitment,
         byte[] ProvingKey);
+
+    private readonly record struct BundleAccumulatorSummary(
+        string ChainId,
+        string Asset,
+        byte[] InitialRoot,
+        byte[] FinalRoot,
+        uint HopCount,
+        KagemushaRecursiveSpendableNoteSummary CurrentNote);
 
     public static bool IsAvailable()
     {
@@ -1140,6 +1218,561 @@ public static class KagemushaRecursiveSpendNative
     {
         return previousProofCircuitId == RecursiveAggregationProofCircuitIdV1
             || IsLineageProofCircuitId(previousProofCircuitId);
+    }
+
+    public static KagemushaRecursiveSpendBundleSummary DecodeBundleSummary(byte[] bundleArchive)
+    {
+        var (payload, flags) = KagemushaNoritoArchivePayload(
+            bundleArchive,
+            RecursiveSpendBundleWireName,
+            "bundle",
+            nameof(bundleArchive));
+        if (flags != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException("bundle must use compact Norito layout", nameof(bundleArchive));
+        }
+
+        var offset = 0;
+        var accumulatorPayload = ReadBundleField(payload, ref offset, flags, "bundle.accumulator");
+        var proofPayload = ReadBundleField(payload, ref offset, flags, "bundle.proof");
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("bundle", "bundle has trailing bytes");
+        }
+
+        var accumulator = ReadBundleAccumulatorSummary(accumulatorPayload, flags);
+        var proofCircuitId = ReadBundleRecursiveProofCircuitId(proofPayload, flags);
+        if (!IsSupportedPreviousProofCircuitId(proofCircuitId))
+        {
+            throw BundleDecodeError(
+                "bundle.proof_circuit_id",
+                $"bundle.proof_circuit_id unsupported recursive proof circuit id: {proofCircuitId}");
+        }
+
+        return new KagemushaRecursiveSpendBundleSummary(
+            accumulator.HopCount,
+            proofCircuitId,
+            accumulator.Asset,
+            accumulator.ChainId,
+            accumulator.InitialRoot,
+            accumulator.FinalRoot,
+            accumulator.CurrentNote);
+    }
+
+    private static (byte[] Payload, byte Flags) KagemushaNoritoArchivePayload(
+        byte[] archive,
+        string schema,
+        string field,
+        string parameterName)
+    {
+        var copy = KagemushaArchiveBytes.Copy(archive, parameterName);
+        var expectedSchemaHash = NoritoCodec.SchemaHash(schema);
+        if (!copy.AsSpan(6, 16).SequenceEqual(expectedSchemaHash))
+        {
+            throw new ArgumentException($"{field} must use {schema}", parameterName);
+        }
+
+        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(copy.AsSpan(23, 8));
+        if (payloadLength == 0
+            || payloadLength > int.MaxValue
+            || payloadLength > (ulong)(copy.Length - NoritoHeader.EncodedLength))
+        {
+            throw new ArgumentException($"{field} payload length is invalid", parameterName);
+        }
+
+        var minimumLength = NoritoHeader.EncodedLength + (int)payloadLength;
+        if (copy.Length < minimumLength)
+        {
+            throw new ArgumentException($"{field} payload is truncated", parameterName);
+        }
+
+        var paddingLength = copy.Length - minimumLength;
+        var payloadOffset = NoritoHeader.EncodedLength + paddingLength;
+        return (copy.AsSpan(payloadOffset, (int)payloadLength).ToArray(), copy[39]);
+    }
+
+    private static BundleAccumulatorSummary ReadBundleAccumulatorSummary(byte[] payload, byte flags)
+    {
+        var offset = 0;
+        var domain = DecodeBundleString(
+            ReadBundleField(payload, ref offset, flags, "accumulator.domain"),
+            flags,
+            "bundle.accumulator.domain");
+        if (domain != RecursiveSpendAccumulatorDomain)
+        {
+            throw BundleDecodeError(
+                "bundle.accumulator.domain",
+                $"bundle.accumulator.domain expected {RecursiveSpendAccumulatorDomain}");
+        }
+
+        var chainId = ReadBundleChainIdPayload(
+            ReadBundleField(payload, ref offset, flags, "accumulator.chainId"),
+            flags);
+        var assetBytes = ReadBundleFixedBytesFlexible(
+            ReadBundleField(payload, ref offset, flags, "accumulator.asset"),
+            flags,
+            16,
+            "asset");
+        var asset = "hex:" + Convert.ToHexString(assetBytes).ToLowerInvariant();
+        var initialRoot = ReadBundleFixedBytesFlexible(
+            ReadBundleField(payload, ref offset, flags, "accumulator.initialRoot"),
+            flags,
+            32,
+            "initialRoot");
+        var finalRoot = ReadBundleFixedBytesFlexible(
+            ReadBundleField(payload, ref offset, flags, "accumulator.finalRoot"),
+            flags,
+            32,
+            "finalRoot");
+        offset = SkipBundleFields(payload, offset, flags, 1, "accumulator");
+        var hopCount = ReadBundleU32Payload(
+            ReadBundleField(payload, ref offset, flags, "accumulator.hopCount"),
+            "bundle.accumulator.hop_count");
+        if (hopCount < 1 || hopCount > RecursiveSpendLineageWitnesslessMaxHopsV1)
+        {
+            throw BundleDecodeError(
+                "bundle.accumulator.hop_count",
+                $"bundle.accumulator.hop_count must be in 1..{RecursiveSpendLineageWitnesslessMaxHopsV1}");
+        }
+
+        offset = SkipBundleFields(payload, offset, flags, 15, "accumulator");
+        var currentNote = ReadBundleSpendableNotePayload(
+            ReadBundleField(payload, ref offset, flags, "accumulator.currentNote"),
+            flags);
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("bundle", "accumulator has trailing bytes");
+        }
+
+        return new BundleAccumulatorSummary(
+            chainId,
+            asset,
+            initialRoot,
+            finalRoot,
+            hopCount,
+            currentNote);
+    }
+
+    private static string ReadBundleChainIdPayload(byte[] payload, byte flags)
+    {
+        try
+        {
+            return DecodeBundleString(payload, flags, "chainId");
+        }
+        catch (ArgumentException)
+        {
+            var offset = 0;
+            var field = ReadBundleField(payload, ref offset, flags, "chainId");
+            if (offset != payload.Length)
+            {
+                throw BundleDecodeError("bundle", "chainId has trailing bytes");
+            }
+            return DecodeBundleString(field, flags, "chainId");
+        }
+    }
+
+    private static string ReadBundleRecursiveProofCircuitId(byte[] payload, byte flags)
+    {
+        var offset = 0;
+        var verifierPayload = ReadBundleField(
+            payload,
+            ref offset,
+            flags,
+            "recursiveProof.verifierKeyId");
+        var publicInputsPayload = ReadBundleField(
+            payload,
+            ref offset,
+            flags,
+            "recursiveProof.publicInputs");
+        if (publicInputsPayload.Length == 0)
+        {
+            throw BundleDecodeError("bundle.proof_public_inputs", "bundle.proof_public_inputs empty");
+        }
+        var publicInputsHash = ReadBundleFixedBytesFlexible(
+            ReadBundleField(payload, ref offset, flags, "recursiveProof.publicInputsHash"),
+            flags,
+            32,
+            "proof.publicInputsHash");
+        if (IsZeroBytes(publicInputsHash))
+        {
+            throw BundleDecodeError(
+                "bundle.proof_public_inputs_hash",
+                "bundle.proof_public_inputs_hash empty");
+        }
+        var publicInputsArchive = NoritoCodec.Encode(
+            RecursiveAggregationProofPublicInputsWireName,
+            publicInputsPayload,
+            KagemushaNoritoCompactLenFlag);
+        if (!publicInputsHash.AsSpan().SequenceEqual(IrohaHash.Hash(publicInputsArchive)))
+        {
+            throw BundleDecodeError(
+                "bundle.proof_public_inputs_hash",
+                "bundle.proof_public_inputs_hash mismatch");
+        }
+        var proofBackend = ReadBundleProofBoxBackend(
+            ReadBundleField(payload, ref offset, flags, "recursiveProof.proof"),
+            flags);
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("bundle", "recursiveProof has trailing bytes");
+        }
+        if (proofBackend != RecursiveAggregationProofBackend)
+        {
+            throw BundleDecodeError(
+                "bundle.proof_backend",
+                $"bundle.proof_backend unsupported recursive proof backend: {proofBackend}");
+        }
+
+        var verifierOffset = 0;
+        var backend = DecodeBundleString(
+            ReadBundleField(verifierPayload, ref verifierOffset, flags, "verifierKeyId.backend"),
+            flags,
+            "verifierKeyId.backend");
+        var name = DecodeBundleString(
+            ReadBundleField(verifierPayload, ref verifierOffset, flags, "verifierKeyId.name"),
+            flags,
+            "verifierKeyId.name");
+        if (verifierOffset != verifierPayload.Length)
+        {
+            throw BundleDecodeError("bundle", "verifierKeyId has trailing bytes");
+        }
+
+        RequireBundlePortableId(backend, "verifierKeyId.backend");
+        if (backend != RecursiveAggregationProofBackend)
+        {
+            throw BundleDecodeError(
+                "bundle.proof_backend",
+                $"bundle.proof_backend unsupported recursive proof backend: {backend}");
+        }
+        if (proofBackend != backend)
+        {
+            throw BundleDecodeError(
+                "bundle.proof_backend",
+                $"bundle.proof_backend recursive proof backend mismatch: {proofBackend}");
+        }
+        RequireBundlePortableId(name, "verifierKeyId");
+        return name;
+    }
+
+    private static bool IsZeroBytes(byte[] bytes)
+    {
+        foreach (var value in bytes)
+        {
+            if (value != 0)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static string ReadBundleProofBoxBackend(byte[] payload, byte flags)
+    {
+        var offset = 0;
+        var backend = DecodeBundleString(
+            ReadBundleField(payload, ref offset, flags, "proof.backend"),
+            flags,
+            "proof.backend");
+        var proofBytes = DecodeBundleByteVec(
+            ReadBundleField(payload, ref offset, flags, "proof.bytes"),
+            "proof.bytes");
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("bundle", "proof has trailing bytes");
+        }
+        RequireBundlePortableId(backend, "proof.backend");
+        if (proofBytes.Length == 0)
+        {
+            throw BundleDecodeError("bundle.proof_bytes", "bundle.proof_bytes empty");
+        }
+        return backend;
+    }
+
+    private static KagemushaRecursiveSpendableNoteSummary ReadBundleSpendableNotePayload(
+        byte[] payload,
+        byte flags)
+    {
+        var offset = 0;
+        var noteCommitment = ReadBundleFixedBytesFlexible(
+            ReadBundleField(payload, ref offset, flags, "currentNote.noteCommitment"),
+            flags,
+            32,
+            "noteCommitment");
+        var spendNullifier = ReadBundleFixedBytesFlexible(
+            ReadBundleField(payload, ref offset, flags, "currentNote.spendNullifier"),
+            flags,
+            32,
+            "spendNullifier");
+        var amount = DecodeBundleNumericAmount(
+            ReadBundleField(payload, ref offset, flags, "currentNote.amount"),
+            flags,
+            "bundle.current_note.amount");
+        if (offset != payload.Length)
+        {
+            throw BundleDecodeError("bundle", "currentNote has trailing bytes");
+        }
+        if (IsZeroBytes(noteCommitment))
+        {
+            throw BundleDecodeError(
+                "bundle.current_note.note_commitment",
+                "bundle.current_note.note_commitment must not be all-zero");
+        }
+        if (IsZeroBytes(spendNullifier))
+        {
+            throw BundleDecodeError(
+                "bundle.current_note.spend_nullifier",
+                "bundle.current_note.spend_nullifier must not be all-zero");
+        }
+        if (noteCommitment.AsSpan().SequenceEqual(spendNullifier))
+        {
+            throw BundleDecodeError(
+                "bundle.current_note",
+                "bundle.current_note note commitment and spend nullifier must differ");
+        }
+        return new KagemushaRecursiveSpendableNoteSummary(noteCommitment, spendNullifier, amount);
+    }
+
+    private static byte[] ReadBundleFixedBytesFlexible(
+        byte[] payload,
+        byte flags,
+        int expectedSize,
+        string field)
+    {
+        if (payload.Length == expectedSize)
+        {
+            return payload.ToArray();
+        }
+
+        try
+        {
+            return ReadBundleConstVecPayload(payload, flags, 0, expectedSize, field);
+        }
+        catch (ArgumentException)
+        {
+            if (payload.Length < 8)
+            {
+                throw BundleDecodeError(field);
+            }
+            var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+            if (count != (ulong)expectedSize)
+            {
+                throw BundleDecodeError(field);
+            }
+            return ReadBundleConstVecPayload(payload, flags, 8, expectedSize, field);
+        }
+    }
+
+    private static byte[] ReadBundleConstVecPayload(
+        byte[] payload,
+        byte flags,
+        int start,
+        int expectedSize,
+        string field)
+    {
+        var offset = start;
+        var output = new byte[expectedSize];
+        var index = 0;
+        while (offset < payload.Length)
+        {
+            var fieldPayload = ReadBundleField(payload, ref offset, flags, field);
+            if (fieldPayload.Length != 1 || index >= expectedSize)
+            {
+                throw BundleDecodeError(field);
+            }
+            output[index++] = fieldPayload[0];
+        }
+        if (index != expectedSize)
+        {
+            throw BundleDecodeError(field);
+        }
+        return output;
+    }
+
+    private static string DecodeBundleNumericAmount(byte[] payload, byte flags, string field)
+    {
+        var offset = 0;
+        var mantissaPayload = ReadBundleField(payload, ref offset, flags, "amount.mantissa");
+        var scalePayload = ReadBundleField(payload, ref offset, flags, "amount.scale");
+        if (offset != payload.Length || mantissaPayload.Length < 4)
+        {
+            throw BundleDecodeError(field);
+        }
+
+        var mantissaLength = BinaryPrimitives.ReadUInt32LittleEndian(mantissaPayload.AsSpan(0, 4));
+        if (mantissaLength > int.MaxValue
+            || 4 + (int)mantissaLength != mantissaPayload.Length)
+        {
+            throw BundleDecodeError(field);
+        }
+        if (scalePayload.Length != 4
+            || BinaryPrimitives.ReadUInt32LittleEndian(scalePayload) != 0)
+        {
+            throw BundleDecodeError(field, $"{field} numeric scale must be zero");
+        }
+
+        var integer = new BigInteger(
+            mantissaPayload.AsSpan(4, (int)mantissaLength),
+            isUnsigned: false,
+            isBigEndian: false);
+        if (integer <= BigInteger.Zero || integer > MaxU128)
+        {
+            throw BundleDecodeError(field, $"{field} must fit in u128");
+        }
+        return integer.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static byte[] DecodeBundleByteVec(byte[] payload, string field)
+    {
+        if (payload.Length < 8)
+        {
+            throw BundleDecodeError(field);
+        }
+        var length = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+        if (length > int.MaxValue || length != (ulong)(payload.Length - 8))
+        {
+            throw BundleDecodeError(field);
+        }
+        return payload.AsSpan(8, (int)length).ToArray();
+    }
+
+    private static uint ReadBundleU32Payload(byte[] payload, string field)
+    {
+        if (payload.Length != 4)
+        {
+            throw BundleDecodeError(field);
+        }
+        return BinaryPrimitives.ReadUInt32LittleEndian(payload);
+    }
+
+    private static string DecodeBundleString(byte[] payload, byte flags, string field)
+    {
+        try
+        {
+            var offset = 0;
+            var length = ReadBundleLength(payload, ref offset, flags, field);
+            if (length != payload.Length - offset)
+            {
+                throw BundleDecodeError(field);
+            }
+            return StrictUtf8.GetString(payload, offset, length);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw BundleDecodeError(field);
+        }
+    }
+
+    private static int SkipBundleFields(
+        byte[] payload,
+        int offset,
+        byte flags,
+        int count,
+        string field)
+    {
+        var cursor = offset;
+        for (var index = 0; index < count; index++)
+        {
+            _ = ReadBundleField(payload, ref cursor, flags, field);
+        }
+        return cursor;
+    }
+
+    private static byte[] ReadBundleField(byte[] buffer, ref int offset, byte flags, string field)
+    {
+        var length = ReadBundleLength(buffer, ref offset, flags, field);
+        if (length > buffer.Length - offset)
+        {
+            throw BundleDecodeError(field);
+        }
+        var result = buffer.AsSpan(offset, length).ToArray();
+        offset += length;
+        return result;
+    }
+
+    private static int ReadBundleLength(byte[] buffer, ref int offset, byte flags, string field)
+    {
+        if ((flags & KagemushaNoritoCompactLenFlag) == 0)
+        {
+            if (offset + 8 > buffer.Length)
+            {
+                throw BundleDecodeError(field);
+            }
+            var fixedLength = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
+            if (fixedLength > int.MaxValue)
+            {
+                throw BundleDecodeError(field);
+            }
+            offset += 8;
+            return (int)fixedLength;
+        }
+
+        ulong value = 0;
+        var shift = 0;
+        var startOffset = offset;
+        for (var index = 0; index < 10; index++)
+        {
+            if (offset >= buffer.Length)
+            {
+                throw BundleDecodeError(field);
+            }
+            var current = buffer[offset++];
+            var currentValue = current & 0x7f;
+            if (shift >= 63 && currentValue > 1)
+            {
+                throw BundleDecodeError(field);
+            }
+            value |= (ulong)currentValue << shift;
+            if ((current & 0x80) == 0)
+            {
+                var encodedLength = offset - startOffset;
+                if (encodedLength > 1 && value < (1UL << (7 * (encodedLength - 1))))
+                {
+                    throw BundleDecodeError(field);
+                }
+                if (value > int.MaxValue)
+                {
+                    throw BundleDecodeError(field);
+                }
+                return (int)value;
+            }
+            shift += 7;
+        }
+        throw BundleDecodeError(field);
+    }
+
+    private static void RequireBundlePortableId(string value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Trim() != value)
+        {
+            throw BundleDecodeError(field, $"{field} must be a non-empty unpadded string");
+        }
+        if (value.Length > 256)
+        {
+            throw BundleDecodeError(field, $"{field} must use portable registry syntax");
+        }
+        foreach (var ch in value)
+        {
+            if (ch >= 'A' && ch <= 'Z'
+                || ch >= 'a' && ch <= 'z'
+                || ch >= '0' && ch <= '9'
+                || ch == '.'
+                || ch == '_'
+                || ch == '-'
+                || ch == '/'
+                || ch == ':'
+                || ch == '@'
+                || ch == '+'
+                || ch == '=')
+            {
+                continue;
+            }
+            throw BundleDecodeError(field, $"{field} must use portable registry syntax");
+        }
+    }
+
+    private static ArgumentException BundleDecodeError(string field, string? message = null)
+    {
+        return new ArgumentException(message ?? field, "bundleArchive");
     }
 
     public static bool RequiresPreviousLineageVerifierRecordForAppend(string? previousProofCircuitId)

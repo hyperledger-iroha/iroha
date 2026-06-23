@@ -78,9 +78,17 @@ fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
         .sign(key_pair)
 }
 
-fn deterministic_key_pair(label: &str) -> KeyPair {
+fn deterministic_key_pair_with_algorithm(label: &str, algorithm: Algorithm) -> KeyPair {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-    KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("derive Torii benchmark key")
+    KeyPair::try_from_seed(seed, algorithm).expect("derive Torii benchmark key")
+}
+
+fn deterministic_key_pair(label: &str) -> KeyPair {
+    deterministic_key_pair_with_algorithm(label, Algorithm::Ed25519)
+}
+
+fn deterministic_bls_key_pair(label: &str) -> KeyPair {
+    deterministic_key_pair_with_algorithm(label, Algorithm::BlsNormal)
 }
 
 fn query_load_domain_id() -> DomainId {
@@ -224,7 +232,7 @@ fn commit_contract_activity_transactions(state: &Arc<State>, profile: QueryLoadP
     let transactions = (0..profile.committed_transactions)
         .map(|index| contract_activity_accepted_transaction(&chain_id, index))
         .collect();
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let leader = deterministic_bls_key_pair("contract-activity-leader");
     let unverified = BlockBuilder::new(transactions)
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1062,7 +1070,7 @@ async fn run_signed_socket_profile(
 }
 
 fn bench_signed_query_verify(c: &mut Criterion) {
-    let key_pair = KeyPair::random();
+    let key_pair = deterministic_key_pair("signed-query-verify");
     c.bench_function("torii_signed_query_verify_find_parameters", |b| {
         b.iter_batched(
             || signed_find_parameters(&key_pair),
@@ -1078,7 +1086,7 @@ fn bench_signed_query_verify(c: &mut Criterion) {
 
 fn bench_query_find_parameters(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let key_pair = KeyPair::random();
+    let key_pair = deterministic_key_pair("query-find-parameters");
     let query_store = LiveQueryStore::start_test();
     let query_state = Arc::new(State::new_for_testing(
         World::new(),
@@ -1119,7 +1127,7 @@ fn bench_transaction_admission(c: &mut Criterion) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
-    let tx_key_pair = KeyPair::random();
+    let tx_key_pair = deterministic_key_pair("transaction-admission");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
     let counter = AtomicUsize::new(0);
@@ -1160,7 +1168,7 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
-    let tx_key_pair = KeyPair::random();
+    let tx_key_pair = deterministic_key_pair("transaction-handle-enqueue");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
     let counter = AtomicUsize::new(0);
@@ -1214,7 +1222,7 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
-    let tx_key_pair = KeyPair::random();
+    let tx_key_pair = deterministic_key_pair("transaction-enqueue-sustained-pressure");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
     let counter = AtomicUsize::new(0);

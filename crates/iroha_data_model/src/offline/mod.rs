@@ -8218,6 +8218,13 @@ fn validate_kagemusha_recursive_lineage_open_envelope_metadata(
     record_bundle: &KagemushaVerifiedFoldRecordBundle,
     envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
 ) -> Result<(), KagemushaFoldError> {
+    let step_count = record_bundle.bundle.steps.len();
+    if envelopes.len() != step_count {
+        return Err(KagemushaFoldError::HopCountMismatch {
+            expected: step_count,
+            actual: u32::try_from(envelopes.len()).unwrap_or(u32::MAX),
+        });
+    }
     for (hop_index, (step, envelope)) in record_bundle
         .bundle
         .steps
@@ -18101,6 +18108,47 @@ mod offline_note_tests {
                 actual: 2
             })
         ));
+
+        let lineage_helper_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&lineage_witness.pallas_open_envelopes_archive)
+                .expect("decode helper-level lineage Pallas envelope archive");
+        let helper_missing_err = validate_kagemusha_recursive_lineage_open_envelope_metadata(
+            &lineage_witness.record_bundle,
+            &[],
+        )
+        .expect_err("helper-level missing lineage Pallas envelope must reject before zip");
+        assert!(
+            matches!(
+                helper_missing_err,
+                KagemushaFoldError::HopCountMismatch {
+                    expected: 1,
+                    actual: 0
+                }
+            ),
+            "unexpected helper-level missing envelope error: {helper_missing_err:?}"
+        );
+        let mut helper_extra_envelopes = lineage_helper_envelopes.clone();
+        helper_extra_envelopes.push(
+            lineage_helper_envelopes
+                .first()
+                .expect("lineage helper fixture has one envelope")
+                .clone(),
+        );
+        let helper_extra_err = validate_kagemusha_recursive_lineage_open_envelope_metadata(
+            &lineage_witness.record_bundle,
+            &helper_extra_envelopes,
+        )
+        .expect_err("helper-level extra lineage Pallas envelope must reject before zip");
+        assert!(
+            matches!(
+                helper_extra_err,
+                KagemushaFoldError::HopCountMismatch {
+                    expected: 1,
+                    actual: 2
+                }
+            ),
+            "unexpected helper-level extra envelope error: {helper_extra_err:?}"
+        );
 
         let mut note_count_mismatch = valid.clone();
         let mut bad_witness = lineage_witness.clone();

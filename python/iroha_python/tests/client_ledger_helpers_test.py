@@ -201,7 +201,21 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
         "stark/fri/d-e-v-f-i-x-t-u-r-e",
         "stark/fri/test",
         "stark/fri/t-e-s-t",
+        "stark/fri/todo",
+        "stark/fri/t-o-d-o",
+        "stark/fri/draft-only",
+        "stark/fri/d-r-a-f-t",
+        "stark/fri/pending-audit",
+        "stark/fri/replace-before-mainnet",
+        "stark/fri/not-production-ready",
         "halo2/ipa:dev-fixture",
+        "halo2/ipa:todo-proof",
+        "halo2/ipa:t-o-d-o-proof",
+        "halo2/ipa:draft-proof",
+        "halo2/ipa:d-r-a-f-t-proof",
+        "halo2/ipa:pending-audit",
+        "halo2/ipa:replace-before-production",
+        "halo2/ipa:not-for-production",
         "halo2/ipa:dummy",
         "halo2/ipa:f-a-k-e",
         "halo2/ipa:stub",
@@ -633,6 +647,13 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "stark/fri/d-e-v",
         "stark/fri/test",
         "stark/fri/t-e-s-t",
+        "stark/fri/todo",
+        "stark/fri/t-o-d-o",
+        "stark/fri/draft-only",
+        "stark/fri/d-r-a-f-t",
+        "stark/fri/pending-audit",
+        "stark/fri/replace-before-mainnet",
+        "stark/fri/not-production-ready",
         "stark/fri/placeholder",
         " stark/fri/sha256-goldilocks",
         "stark/fri/sha256-goldilocks ",
@@ -642,6 +663,13 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "halo2/ipa:dev-fixture",
         "halo2/ipa:dev",
         "halo2/ipa:d-e-v",
+        "halo2/ipa:todo-proof",
+        "halo2/ipa:t-o-d-o-proof",
+        "halo2/ipa:draft-proof",
+        "halo2/ipa:d-r-a-f-t-proof",
+        "halo2/ipa:pending-audit",
+        "halo2/ipa:replace-before-production",
+        "halo2/ipa:not-for-production",
         "halo2/ipa:dummy",
         "halo2/ipa:f-a-k-e",
         "halo2/ipa:stub",
@@ -983,6 +1011,13 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "stark/fri/d-e-v",
         "stark/fri/test",
         "stark/fri/t-e-s-t",
+        "stark/fri/todo",
+        "stark/fri/t-o-d-o",
+        "stark/fri/draft-only",
+        "stark/fri/d-r-a-f-t",
+        "stark/fri/pending-audit",
+        "stark/fri/replace-before-mainnet",
+        "stark/fri/not-production-ready",
         "stark/fri/placeholder",
         " stark/fri/sha256-goldilocks",
         "stark/fri/sha256-goldilocks ",
@@ -992,6 +1027,13 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "halo2/ipa:dev-fixture",
         "halo2/ipa:dev",
         "halo2/ipa:d-e-v",
+        "halo2/ipa:todo-proof",
+        "halo2/ipa:t-o-d-o-proof",
+        "halo2/ipa:draft-proof",
+        "halo2/ipa:d-r-a-f-t-proof",
+        "halo2/ipa:pending-audit",
+        "halo2/ipa:replace-before-production",
+        "halo2/ipa:not-for-production",
         "halo2/ipa:dummy",
         "halo2/ipa:f-a-k-e",
         "halo2/ipa:stub",
@@ -1073,6 +1115,13 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "stark/fri/d-e-v",
         "stark/fri/test",
         "stark/fri/t-e-s-t",
+        "stark/fri/todo",
+        "stark/fri/t-o-d-o",
+        "stark/fri/draft-only",
+        "stark/fri/d-r-a-f-t",
+        "stark/fri/pending-audit",
+        "stark/fri/replace-before-mainnet",
+        "stark/fri/not-production-ready",
         "stark/fri/placeholder",
         " stark/fri/sha256-goldilocks",
         "stark/fri/sha256-goldilocks ",
@@ -1082,6 +1131,13 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "halo2/ipa:dev-fixture",
         "halo2/ipa:dev",
         "halo2/ipa:d-e-v",
+        "halo2/ipa:todo-proof",
+        "halo2/ipa:t-o-d-o-proof",
+        "halo2/ipa:draft-proof",
+        "halo2/ipa:d-r-a-f-t-proof",
+        "halo2/ipa:pending-audit",
+        "halo2/ipa:replace-before-production",
+        "halo2/ipa:not-for-production",
         "halo2/ipa:dummy",
         "halo2/ipa:f-a-k-e",
         "halo2/ipa:stub",
@@ -1398,6 +1454,53 @@ def test_call_contract_and_wait_posts_typed_request() -> None:
     assert result["terminal_kind"] == "Committed"
     call_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert call_payload["payload"] == {"amount": 7}
+
+
+def test_call_contract_and_wait_uses_embedded_pipeline_status_without_polling() -> None:
+    tx_hash = "e" * 64
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "ok": True,
+                    "submitted": True,
+                    "dataspace": "is",
+                    "code_hash_hex": "b" * 64,
+                    "abi_hash_hex": "c" * 64,
+                    "creation_time_ms": 1,
+                    "contract_alias": "contract::is",
+                    "tx_hash_hex": tx_hash,
+                    "pipeline_status": {
+                        "hash": tx_hash,
+                        "status": {"kind": "Committed", "block_height": 42},
+                        "summary": None,
+                        "diagnostics": [],
+                        "scope": "global",
+                        "resolved_from": "endpoint",
+                    },
+                    "entrypoint": "main",
+                },
+            ),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    result = client.call_contract_and_wait(
+        authority="authority@is",
+        private_key="priv",
+        contract_alias="contract::is",
+        entrypoint="main",
+        payload={"amount": 7},
+        gas_limit=5000,
+        wait=True,
+        timeout_ms=1000,
+        interval=0,
+    )
+
+    assert result["terminal_kind"] == "Committed"
+    assert result["r#final"]["hash"] == tx_hash
+    assert [call["path"] for call in session.calls] == ["/v1/contracts/call"]
 
 
 def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:

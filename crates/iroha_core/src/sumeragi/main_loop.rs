@@ -252,6 +252,14 @@ const TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR: Duration = Duration::from_millis(5
 const RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
 /// Keep full DELIVER rebroadcasts much slower than READY/chunk repair traffic.
 const RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 8;
+/// Waiting for commit QC after local delivery is a finality-recovery path; full
+/// DELIVER repair should not keep competing with commit votes at the normal cadence.
+const RBC_DELIVER_COMMIT_QC_RECOVERY_COOLDOWN_MULTIPLIER: u32 = 4;
+/// Certificate-only repair should be faster than a full view timeout but slower
+/// than local payload/body rescue, otherwise slow commits trigger fetch storms.
+const COMMIT_QC_ONLY_RETRY_QUORUM_DIVISOR: u32 = 8;
+const COMMIT_QC_ONLY_RETRY_FLOOR: Duration = Duration::from_secs(2);
+const COMMIT_QC_ONLY_RETRY_CEILING: Duration = Duration::from_secs(10);
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
 /// Bound native AMX vote sessions retained while proposer collection is in progress.
@@ -2647,6 +2655,42 @@ fn validate_qc_against_votes(
     let canonical_roster =
         roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let resolved_stake_snapshot = match consensus_mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
+        }
+    };
+    validate_qc_against_votes_with_resolved_stake(
+        vote_log,
+        qc,
+        &canonical_topology,
+        pops,
+        chain_id,
+        consensus_mode,
+        resolved_stake_snapshot.as_ref(),
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_qc_against_votes_with_resolved_stake(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    canonical_topology: &super::network_topology::Topology,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    resolved_stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+) -> Result<QcValidationOutcome, QcValidationError> {
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(canonical_topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology =
         topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
     let roster_len = canonical_topology.as_ref().len();
@@ -2678,14 +2722,8 @@ fn validate_qc_against_votes(
             }
         }
         ConsensusMode::Npos => {
-            let resolved_snapshot = resolve_stake_snapshot_for_roster(
-                stake_snapshot,
-                world,
-                canonical_topology.as_ref(),
-            );
-            let snapshot = resolved_snapshot
-                .as_ref()
-                .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
+            let snapshot =
+                resolved_stake_snapshot.ok_or(QcValidationError::StakeSnapshotUnavailable)?;
             let signer_peers =
                 signer_peers_for_topology(&parsed_signers.voting, &canonical_topology)?;
             match stake_quorum_reached_for_snapshot(
@@ -2763,6 +2801,169 @@ fn validate_qc_against_votes(
         signers: parsed_signers.voting.into_iter().collect(),
         missing_votes: missing,
         present_signers: parsed_signers.present.len(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_qc_against_locally_aggregated_votes(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    canonical_topology: &super::network_topology::Topology,
+    consensus_mode: ConsensusMode,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+) -> Result<QcValidationOutcome, QcValidationError> {
+    if aggregate_ok != Some(true) {
+        return Err(QcValidationError::AggregateMismatch);
+    }
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(canonical_topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let signature_topology =
+        topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
+    let roster_len = canonical_topology.as_ref().len();
+    let required = signature_topology.min_votes_for_commit();
+    let is_new_view_qc = qc.phase == crate::sumeragi::consensus::Phase::NewView;
+    if !is_new_view_qc && qc.highest_qc.is_some() {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    let qc_highest = if is_new_view_qc {
+        Some(validate_new_view_qc_highest(qc)?)
+    } else {
+        None
+    };
+    if qc.mode_tag != mode_tag {
+        return Err(QcValidationError::ModeTagMismatch);
+    }
+    if !qc_validator_set_matches_topology(qc, &canonical_topology) {
+        return Err(QcValidationError::ValidatorSetMismatch);
+    }
+    let parsed_signers = qc_signer_indices(qc, roster_len, roster_len)?;
+    match consensus_mode {
+        ConsensusMode::Permissioned if parsed_signers.voting.len() < required => {
+            return Err(QcValidationError::InsufficientSigners {
+                collected: parsed_signers.voting.len(),
+                required,
+            });
+        }
+        ConsensusMode::Npos if parsed_signers.voting.is_empty() => {
+            return Err(QcValidationError::StakeQuorumMissing);
+        }
+        _ => {}
+    }
+
+    let canonical_pairs = parsed_signers
+        .voting
+        .iter()
+        .map(|signer| {
+            let view_signer =
+                view_index_for_canonical_signer(*signer, &signature_topology, &canonical_topology)
+                    .ok_or_else(|| QcValidationError::SignerOutOfBounds {
+                        signer: usize::try_from(*signer).unwrap_or(usize::MAX),
+                        topology_len: roster_len,
+                    })?;
+            Ok((*signer, view_signer))
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let canonical_result = canonical_pairs.and_then(|pairs| {
+        validate_local_qc_vote_pairs(
+            vote_log,
+            qc,
+            qc_highest,
+            &pairs,
+            parsed_signers.voting.clone(),
+            parsed_signers.present.len(),
+        )
+    });
+    if canonical_result.is_ok() {
+        return canonical_result;
+    }
+
+    let view_signers = parsed_signers.voting.clone();
+    let canonical_signers = normalize_signer_indices_to_canonical(
+        &view_signers,
+        &signature_topology,
+        &canonical_topology,
+    );
+    if canonical_signers.len() == view_signers.len() {
+        let direct_pairs = view_signers
+            .iter()
+            .map(|signer| (*signer, *signer))
+            .collect::<Vec<_>>();
+        if let Ok(outcome) = validate_local_qc_vote_pairs(
+            vote_log,
+            qc,
+            qc_highest,
+            &direct_pairs,
+            canonical_signers,
+            parsed_signers.present.len(),
+        ) {
+            return Ok(outcome);
+        }
+    }
+
+    canonical_result
+}
+
+fn validate_local_qc_vote_pairs(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    qc_highest: Option<crate::sumeragi::consensus::QcHeaderRef>,
+    signer_pairs: &[(ValidatorIndex, ValidatorIndex)],
+    return_signers: BTreeSet<ValidatorIndex>,
+    present_signers: usize,
+) -> Result<QcValidationOutcome, QcValidationError> {
+    let mut missing = 0usize;
+    for (reported_signer, vote_signer) in signer_pairs {
+        let key = (
+            qc.phase,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            *vote_signer,
+            qc.chain_order_hash,
+            qc.rechain_seq,
+        );
+        let Some(vote) = vote_log.get(&key) else {
+            missing = missing.saturating_add(1);
+            continue;
+        };
+        if vote.block_hash != qc.subject_block_hash {
+            return Err(QcValidationError::SubjectMismatch {
+                signer: *reported_signer,
+            });
+        }
+        if vote.phase != qc.phase {
+            return Err(QcValidationError::PhaseMismatch);
+        }
+        if vote.height != qc.height || vote.view != qc.view || vote.epoch != qc.epoch {
+            return Err(QcValidationError::ViewMismatch {
+                expected: qc.view,
+                actual: vote.view,
+            });
+        }
+        if vote.parent_state_root != qc.parent_state_root
+            || vote.post_state_root != qc.post_state_root
+        {
+            return Err(QcValidationError::RootsMismatch {
+                signer: *reported_signer,
+            });
+        }
+        if let Some(qc_highest) = qc_highest {
+            if vote.highest_qc != Some(qc_highest) {
+                return Err(QcValidationError::HighestQcMismatch);
+            }
+        }
+    }
+    if missing > 0 {
+        return Err(QcValidationError::MissingVotes { missing });
+    }
+
+    Ok(QcValidationOutcome {
+        signers: return_signers.into_iter().collect(),
+        missing_votes: 0,
+        present_signers,
     })
 }
 
@@ -22200,6 +22401,39 @@ impl Actor {
         true
     }
 
+    pub(super) fn should_drop_worker_block_message(
+        &mut self,
+        msg: &super::InboundBlockMessage,
+    ) -> bool {
+        if matches!(msg.message, BlockMessage::Qc(_)) {
+            return false;
+        }
+        let Some((kind, height, view)) =
+            super::SumeragiHandle::committed_height_fields(&msg.message)
+        else {
+            return false;
+        };
+        let committed_height = self.committed_height_snapshot();
+        if height > committed_height {
+            return false;
+        }
+        debug!(
+            kind,
+            height,
+            view,
+            committed_height,
+            "dropping stale queued block message before worker dispatch"
+        );
+        if let Some(status_kind) = Self::block_message_status_kind(&msg.message) {
+            self.record_consensus_message_handling(
+                status_kind,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleHeight,
+            );
+        }
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
         let queue_latency = msg.queue_latency_ms();
@@ -27025,12 +27259,19 @@ impl Actor {
             || (ready_quorum_required != 0 && ready_count >= ready_quorum_required);
         let local_authoritative_payload =
             self.rbc_session_has_local_authoritative_payload_for_progress(key, session);
+        let authoritative_active_ready_gap = authoritative_ready_repair
+            && local_authoritative_payload
+            && ready_quorum_required != 0
+            && ready_count < ready_quorum_required
+            && self.rbc_rebroadcast_active(key);
         let local_payload_rescue_needed = local_authoritative_payload
             && (rbc_session_has_invalid_chunk_shape(session)
                 || (session.total_chunks() != 0
                     && session.received_chunks() < session.total_chunks()));
-        let allow_targeted_payload_rescue =
-            !authoritative_ready_repair || quorum_or_delivery_repair || local_payload_rescue_needed;
+        let allow_targeted_payload_rescue = !authoritative_ready_repair
+            || quorum_or_delivery_repair
+            || local_payload_rescue_needed
+            || authoritative_active_ready_gap;
 
         let mut sent = false;
 
@@ -27254,6 +27495,32 @@ impl Actor {
             .ready_rebroadcast_last_sent
             .insert(key, now);
         true
+    }
+
+    fn rescue_delivered_rbc_ready_only(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        missing_ready_peers: &[PeerId],
+        ready_count: usize,
+        required: usize,
+        now: Instant,
+    ) -> bool {
+        if missing_ready_peers.is_empty() {
+            return false;
+        }
+        let payload_cooldown = self.targeted_payload_rescue_cooldown();
+        let base_ready_cooldown = self.rebroadcast_cooldown();
+        let ready_cooldown = if required != 0
+            && ready_count < required
+            && self.missing_commit_qc_request_pending_for_round(key.0, key.1, key.2)
+        {
+            base_ready_cooldown.max(payload_cooldown)
+        } else {
+            base_ready_cooldown
+        };
+        self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
+            && self.send_targeted_rbc_ready_set_to_peers(key, session, missing_ready_peers, now)
     }
 
     fn rebroadcast_rbc_payload_for_missing_init(
@@ -27945,19 +28212,74 @@ impl Actor {
             if session.progress_stage() == RbcProgressStage::Delivered
                 && rbc_session_has_complete_delivery(&session)
             {
+                let delivered_pending_extends_tip = self
+                    .pending
+                    .pending_blocks
+                    .get(&key.0)
+                    .is_some_and(|pending| {
+                        !pending.aborted
+                            && pending.height == key.1
+                            && pending.view == key.2
+                            && !pending.commit_qc_observed()
+                            && pending_extends_tip(
+                                pending.height,
+                                pending.block.header().prev_block_hash(),
+                                tip_height,
+                                tip_hash,
+                            )
+                    });
+                if delivered_pending_extends_tip {
+                    self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
+                    self.request_commit_pipeline_for_pending(
+                        key.0,
+                        super::status::RoundEventCauseTrace::RbcDelivered,
+                        None,
+                    );
+                    progress = true;
+                }
+                let delivered_ready_quorum_met = ready_count >= required;
+                let delivered_pending_waiting_for_commit_qc = self
+                    .pending
+                    .pending_blocks
+                    .get(&key.0)
+                    .is_some_and(|pending| {
+                        !pending.aborted
+                            && pending.height == key.1
+                            && pending.view == key.2
+                            && !pending.commit_qc_observed()
+                    });
+                let deliver_rebroadcast_cooldown = if delivered_pending_waiting_for_commit_qc
+                    || self.missing_commit_qc_request_pending_for_round(key.0, key.1, key.2)
+                {
+                    self.rbc_deliver_commit_qc_recovery_cooldown()
+                } else {
+                    deliver_cooldown
+                };
                 if hot_repair_allowed
-                    && self.rescue_rbc_missing_ready_peers(
-                        key,
-                        &session,
-                        missing_ready_peers.as_slice(),
-                        ready_count,
-                        now,
-                    )
+                    && if delivered_ready_quorum_met {
+                        self.rescue_rbc_missing_ready_peers(
+                            key,
+                            &session,
+                            missing_ready_peers.as_slice(),
+                            ready_count,
+                            now,
+                        )
+                    } else {
+                        self.rescue_delivered_rbc_ready_only(
+                            key,
+                            &session,
+                            missing_ready_peers.as_slice(),
+                            ready_count,
+                            required,
+                            now,
+                        )
+                    }
                 {
                     progress = true;
                 }
                 if hot_repair_allowed
-                    && self.rbc_deliver_rebroadcast_due(&key, now, deliver_cooldown)
+                    && delivered_ready_quorum_met
+                    && self.rbc_deliver_rebroadcast_due(&key, now, deliver_rebroadcast_cooldown)
                     && let Some(deliver) = self.build_rbc_deliver(key, &session)
                 {
                     let ready_senders: Vec<_> = session
@@ -28775,6 +29097,14 @@ impl Actor {
         self.effective_timing.get().rbc_deliver_rebroadcast_cooldown
     }
 
+    fn rbc_deliver_commit_qc_recovery_cooldown(&self) -> Duration {
+        let base = self.rbc_deliver_rebroadcast_cooldown();
+        self.commit_quorum_timeout().max(saturating_mul_duration(
+            base,
+            RBC_DELIVER_COMMIT_QC_RECOVERY_COOLDOWN_MULTIPLIER,
+        ))
+    }
+
     fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
         let deferred_qc_ttl = self
             .config
@@ -28883,6 +29213,16 @@ impl Actor {
     fn recovery_missing_qc_reacquire_window(&self) -> Duration {
         self.deterministic_recovery_profile()
             .missing_qc_reacquire_window
+    }
+
+    fn local_payload_commit_qc_recovery_retry_window(&self) -> Duration {
+        let quorum_slice = self.commit_quorum_timeout() / COMMIT_QC_ONLY_RETRY_QUORUM_DIVISOR;
+        let quorum_floor = quorum_slice
+            .max(COMMIT_QC_ONLY_RETRY_FLOOR)
+            .min(COMMIT_QC_ONLY_RETRY_CEILING);
+        self.recovery_missing_qc_reacquire_window()
+            .max(self.targeted_payload_rescue_cooldown())
+            .max(quorum_floor)
     }
 
     fn lock_lag_range_pull_cooldown_floor(&self) -> Duration {
@@ -35631,6 +35971,12 @@ impl Actor {
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
         let committed_height = self.committed_height_snapshot();
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let local_leader_can_make_frontier_progress = height == committed_height.saturating_add(1)
+            && self.queue.active_len() > 0
+            && self.pending_block_count_for_height(height) == 0
+            && !self.slot_has_round_liveness(height, current_view)
+            && self.local_is_round_leader(height, current_view);
         if !self.missing_qc_height_has_unresolved_dependency_at_height(height) {
             let _ = self.clear_non_actionable_missing_dependencies_for_height(
                 height,
@@ -35638,6 +35984,16 @@ impl Actor {
                 now,
             );
             self.clear_missing_block_recovery_for_height(height, now);
+            return false;
+        }
+        if local_leader_can_make_frontier_progress {
+            self.clear_missing_block_recovery_for_height_preserving_frontier_state(height, now);
+            debug!(
+                height,
+                view = current_view,
+                queue_len = self.queue.active_len(),
+                "allowing local leader proposal despite same-height missing dependency"
+            );
             return false;
         }
         self.missing_block_height_recovery

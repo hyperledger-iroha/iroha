@@ -1219,9 +1219,10 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 with record-bundle, Pallas open-envelope, and recursive compact key-artifact
 archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
 recursive compact verifier-key archives; gate them with `isNativeAvailable()`
-and `isVerifierNativeAvailable()`. The recursive-spend compact projection
-verifier is exposed separately as
-`verifyRecursiveSpendCompactPaymentTokenProjection(...)` and
+and `isVerifierNativeAvailable()`. The recursive-spend compact projection is
+exposed separately as `recursiveSpendCompactPaymentTokenFromBundle(...)`; gate
+it with `isProjectionNativeAvailable()`. The recursive-spend compact projection
+verifier is exposed as `verifyRecursiveSpendCompactPaymentTokenProjection(...)` and
 `verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)`; gate it with
 `isProjectionVerifierNativeAvailable()`. It accepts raw Norito compact-token
 and verifier-record archives, rejects empty, malformed, oversized, or

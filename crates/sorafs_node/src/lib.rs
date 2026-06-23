@@ -13,6 +13,7 @@ pub mod deal;
 pub mod gateway;
 mod governance;
 pub mod metering;
+mod moderation;
 mod orderbook;
 pub mod por;
 pub mod potr;
@@ -25,6 +26,12 @@ pub mod telemetry;
 pub use deal::{
     ClientSnapshot, DealEngine, DealEngineError, DealSettlementOutcome, DealSnapshot,
     ProviderSnapshot, UsageOutcome,
+};
+pub use moderation::{
+    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotCommitOutcome,
+    ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
+    ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
+    ModerationVoteCounts, local_moderation_panel_roster_hash,
 };
 pub use orderbook::{
     OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
@@ -138,10 +145,16 @@ enum GcEvictionPolicy {
     RetentionEpoch,
     LruExpired,
 }
+
+const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
+const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
+const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
+
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     env, fs,
     io::Read,
+    path::{Component, Path},
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -157,6 +170,10 @@ use iroha_data_model::{
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
         deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
+        moderation::{
+            SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1,
+            SoraFsModerationVoteChoice,
+        },
     },
 };
 use iroha_telemetry::metrics::{
@@ -164,15 +181,19 @@ use iroha_telemetry::metrics::{
     global_sorafs_reconciliation_otel,
 };
 use norito::codec::Encode;
+use norito::json::Value as JsonValue;
 pub use repair::{
     RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot,
     RepairWatchdogReport, RepairWorkerReport,
 };
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
-    ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
-    ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotV1,
-    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementReceiptV1,
+    AppealFinanceReconciliationSummaryV1, ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
+    OrderTierV1, ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotV1,
+    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+    SettlementChannelStatusV1, SettlementReceiptV1, SoraFsAppealFinanceAccountFlowV1,
+    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
     SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::DealSettlementV1,
@@ -192,6 +213,7 @@ use tokio::sync::broadcast;
 use crate::{
     governance::FilesystemGovernancePublisher,
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
+    moderation::ModerationBallotRuntime,
     orderbook::OrderbookRuntime,
     potr::PotrTracker,
     scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
@@ -253,6 +275,7 @@ fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
 const REPAIR_EVENT_CHANNEL_CAPACITY: usize = 128;
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
 const ORDERBOOK_EVENT_CHANNEL_CAPACITY: usize = 128;
+const MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY: usize = 128;
 const ORDERBOOK_METRIC_CLUSTER_LOCAL: &str = "local";
 
 fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
@@ -307,6 +330,443 @@ fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[Stored
     divergence_count
 }
 
+fn empty_appeal_finance_reconciliation_summary()
+-> Result<AppealFinanceReconciliationSummaryV1, ReconciliationError> {
+    let snapshot = reconciliation::AppealFinanceRollupReconciliationSnapshot {
+        version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
+        rollups: Vec::new(),
+    };
+    Ok(AppealFinanceReconciliationSummaryV1 {
+        rollup_snapshot_hash: reconciliation::hash_snapshot(&snapshot)?,
+        rollup_count: 0,
+        source_report_count: 0,
+        case_count: 0,
+        total_treasury_xor: "0".to_string(),
+        total_rewards_forfeited_treasury_xor: "0".to_string(),
+    })
+}
+
+fn appeal_finance_rollup_reconciliation_entry(
+    governance_dir: &Path,
+    index_entry: &JsonValue,
+) -> Result<reconciliation::AppealFinanceRollupReconciliationEntry, ReconciliationError> {
+    let json_path = required_json_string(index_entry, "json_path")?;
+    let sidecar_path = governance_index_relative_path(governance_dir, &json_path)?;
+    let sidecar_bytes = fs::read(&sidecar_path).map_err(|err| {
+        ReconciliationError::AppealFinance(format!(
+            "failed to read appeal finance rollup sidecar `{}`: {err}",
+            sidecar_path.display()
+        ))
+    })?;
+    let sidecar = norito::json::from_slice::<JsonValue>(&sidecar_bytes).map_err(|err| {
+        ReconciliationError::AppealFinance(format!(
+            "failed to decode appeal finance rollup sidecar `{}`: {err}",
+            sidecar_path.display()
+        ))
+    })?;
+    let metadata = sidecar.get("metadata").ok_or_else(|| {
+        ReconciliationError::AppealFinance(format!(
+            "appeal finance rollup sidecar `{}` is missing metadata",
+            sidecar_path.display()
+        ))
+    })?;
+    let total_rewards_forfeited_treasury_xor = metadata
+        .get("total_rewards_forfeited_treasury_xor")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("0")
+        .to_string();
+
+    Ok(reconciliation::AppealFinanceRollupReconciliationEntry {
+        cycle: required_json_string(metadata, "cycle")?,
+        encoded_blake3: required_json_string(index_entry, "encoded_blake3")?,
+        report_count: required_json_u64(metadata, "report_count")?,
+        case_count: required_json_u64(metadata, "case_count")?,
+        total_treasury_xor: required_json_string(metadata, "total_treasury_xor")?,
+        total_rewards_forfeited_treasury_xor,
+        published_at_unix: required_json_u64(index_entry, "published_at_unix")?,
+    })
+}
+
+fn governance_index_relative_path(
+    governance_dir: &Path,
+    raw_path: &str,
+) -> Result<std::path::PathBuf, ReconciliationError> {
+    let relative = Path::new(raw_path);
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(ReconciliationError::AppealFinance(format!(
+            "governance publish index path `{raw_path}` must be relative to the governance root"
+        )));
+    }
+    Ok(governance_dir.join(relative))
+}
+
+fn required_json_string(
+    value: &JsonValue,
+    field: &'static str,
+) -> Result<String, ReconciliationError> {
+    value
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ReconciliationError::AppealFinance(format!("appeal finance rollup missing `{field}`"))
+        })
+}
+
+fn required_json_u64(value: &JsonValue, field: &'static str) -> Result<u64, ReconciliationError> {
+    value.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
+        ReconciliationError::AppealFinance(format!("appeal finance rollup missing `{field}`"))
+    })
+}
+
+fn add_appeal_finance_decimal_strings(
+    left: &str,
+    right: &str,
+) -> Result<String, ReconciliationError> {
+    let (left_int, left_frac) = parse_appeal_finance_decimal(left)?;
+    let (right_int, right_frac) = parse_appeal_finance_decimal(right)?;
+    let scale = left_frac.len().max(right_frac.len());
+    let mut left_digits = left_int;
+    left_digits.push_str(&right_pad_fraction(&left_frac, scale));
+    let mut right_digits = right_int;
+    right_digits.push_str(&right_pad_fraction(&right_frac, scale));
+
+    let mut carry = 0_u8;
+    let mut out = Vec::new();
+    let left_bytes = left_digits.as_bytes();
+    let right_bytes = right_digits.as_bytes();
+    let width = left_bytes.len().max(right_bytes.len());
+    for offset in 0..width {
+        let sum =
+            digit_from_right(left_bytes, offset) + digit_from_right(right_bytes, offset) + carry;
+        out.push((sum % 10) + b'0');
+        carry = sum / 10;
+    }
+    if carry > 0 {
+        out.push(carry + b'0');
+    }
+    out.reverse();
+    let mut raw = String::from_utf8(out)
+        .map_err(|err| ReconciliationError::AppealFinance(format!("decimal sum utf8: {err}")))?;
+    if scale == 0 {
+        return Ok(trim_decimal_integer(&raw));
+    }
+    if raw.len() <= scale {
+        raw = format!("{}{}", "0".repeat(scale + 1 - raw.len()), raw);
+    }
+    let point = raw.len() - scale;
+    let int = trim_decimal_integer(&raw[..point]);
+    let frac = raw[point..].trim_end_matches('0');
+    if frac.is_empty() {
+        Ok(int)
+    } else {
+        Ok(format!("{int}.{frac}"))
+    }
+}
+
+fn parse_appeal_finance_decimal(raw: &str) -> Result<(String, String), ReconciliationError> {
+    if raw.is_empty() || raw.starts_with(['+', '-']) {
+        return Err(ReconciliationError::AppealFinance(format!(
+            "invalid appeal finance decimal `{raw}`"
+        )));
+    }
+    let mut parts = raw.split('.');
+    let int = parts.next().unwrap_or_default();
+    let frac = parts.next();
+    if parts.next().is_some() {
+        return Err(ReconciliationError::AppealFinance(format!(
+            "invalid appeal finance decimal `{raw}`"
+        )));
+    }
+    if int.is_empty() || !int.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ReconciliationError::AppealFinance(format!(
+            "invalid appeal finance decimal `{raw}`"
+        )));
+    }
+    let frac = frac.unwrap_or_default();
+    if !frac.is_empty() && !frac.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ReconciliationError::AppealFinance(format!(
+            "invalid appeal finance decimal `{raw}`"
+        )));
+    }
+    Ok((trim_decimal_integer(int), frac.to_string()))
+}
+
+fn right_pad_fraction(frac: &str, scale: usize) -> String {
+    let mut padded = frac.to_string();
+    padded.extend(std::iter::repeat_n('0', scale.saturating_sub(frac.len())));
+    padded
+}
+
+fn digit_from_right(bytes: &[u8], offset: usize) -> u8 {
+    bytes
+        .len()
+        .checked_sub(offset + 1)
+        .and_then(|idx| bytes.get(idx))
+        .map_or(0, |byte| byte.saturating_sub(b'0'))
+}
+
+fn trim_decimal_integer(raw: &str) -> String {
+    let trimmed = raw.trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn moderation_appeal_finance_report(
+    record: &ModerationBallotRecord,
+    tally: &ModerationBallotTally,
+) -> Result<Option<SoraFsAppealFinanceReportV1>, String> {
+    let Some(deposit) = &record.announcement.appeal_deposit else {
+        return Ok(None);
+    };
+    let outcome = moderation_tally_finance_outcome(tally);
+    let scale = appeal_finance_report_scale(&deposit.deposit_xor)?;
+    let unit = appeal_finance_scale_unit(scale)?;
+    let deposit_scaled = parse_appeal_finance_scaled(&deposit.deposit_xor, scale)?;
+    let (refund_scaled, treasury_deposit_scaled, held_scaled) =
+        appeal_finance_deposit_flows(deposit_scaled, outcome)?;
+    let panel_size = u32::try_from(record.announcement.juror_ids.len())
+        .map_err(|_| "moderation panel size exceeds report limits".to_string())?;
+    if panel_size == 0 {
+        return Err("moderation panel size must be non-zero".to_string());
+    }
+
+    let attending = record
+        .reveals
+        .iter()
+        .map(|reveal| reveal.juror_id.clone())
+        .collect::<BTreeSet<_>>();
+    if attending.is_empty() {
+        return Err("moderation tally has no attending jurors".to_string());
+    }
+    let no_show_juror_ids = record
+        .announcement
+        .juror_ids
+        .iter()
+        .filter(|juror_id| !attending.contains(*juror_id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let stipend_scaled = 25_u128
+        .checked_mul(unit)
+        .ok_or_else(|| "panel stipend overflow".to_string())?;
+    let bonus_scaled = 10_u128
+        .checked_mul(unit)
+        .ok_or_else(|| "panel bonus overflow".to_string())?;
+    let panel_size_scaled = u128::from(panel_size);
+    let panel_reward_total_scaled = stipend_scaled
+        .checked_mul(panel_size_scaled)
+        .and_then(|value| value.checked_add(bonus_scaled))
+        .ok_or_else(|| "panel reward total overflow".to_string())?;
+    let attending_count = attending.len() as u128;
+    let bonus_share_scaled = bonus_scaled / attending_count;
+    let payout_total_scaled = stipend_scaled
+        .checked_add(bonus_share_scaled)
+        .ok_or_else(|| "juror payout total overflow".to_string())?;
+    let rewards_paid_total_scaled = payout_total_scaled
+        .checked_mul(attending_count)
+        .ok_or_else(|| "paid reward total overflow".to_string())?;
+    let rewards_forfeited_scaled =
+        panel_reward_total_scaled.saturating_sub(rewards_paid_total_scaled);
+    let treasury_total_scaled = treasury_deposit_scaled
+        .checked_add(rewards_forfeited_scaled)
+        .ok_or_else(|| "treasury total overflow".to_string())?;
+
+    let report_id = moderation_appeal_finance_report_id(record, tally, deposit, outcome);
+    let juror_payouts = attending
+        .into_iter()
+        .map(|juror_id| SoraFsAppealFinanceJurorPayoutV1 {
+            juror_id,
+            stipend_xor: format_appeal_finance_scaled(stipend_scaled, scale),
+            bonus_xor: format_appeal_finance_scaled(bonus_share_scaled, scale),
+            total_xor: format_appeal_finance_scaled(payout_total_scaled, scale),
+        })
+        .collect::<Vec<_>>();
+
+    let report = SoraFsAppealFinanceReportV1 {
+        version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        report_id,
+        case_id: tally.case_id.clone(),
+        round_id: Some(tally.round_id.clone()),
+        generated_at_unix_ms: tally.tallied_at_unix_ms,
+        appeal_finance_config_version: record
+            .announcement
+            .context
+            .appeal_finance_config_version
+            .clone(),
+        evidence_bundle_digest: Some(record.announcement.context.evidence_bundle_digest),
+        outcome,
+        deposit_xor: format_appeal_finance_scaled(deposit_scaled, scale),
+        refund: SoraFsAppealFinanceAccountFlowV1 {
+            account_id: deposit.payer_account.clone(),
+            amount_xor: format_appeal_finance_scaled(refund_scaled, scale),
+        },
+        treasury: SoraFsAppealFinanceAccountFlowV1 {
+            account_id: deposit.destination_account.clone(),
+            amount_xor: format_appeal_finance_scaled(treasury_total_scaled, scale),
+        },
+        held: SoraFsAppealFinanceAccountFlowV1 {
+            account_id: deposit.custody_account.clone(),
+            amount_xor: format_appeal_finance_scaled(held_scaled, scale),
+        },
+        panel_size,
+        panel_reward_total_xor: format_appeal_finance_scaled(panel_reward_total_scaled, scale),
+        rewards_paid_total_xor: format_appeal_finance_scaled(rewards_paid_total_scaled, scale),
+        rewards_forfeited_treasury_xor: format_appeal_finance_scaled(
+            rewards_forfeited_scaled,
+            scale,
+        ),
+        juror_payouts,
+        no_show_juror_ids,
+    };
+    report
+        .validate()
+        .map_err(|err| format!("moderation-derived appeal finance report is invalid: {err}"))?;
+    Ok(Some(report))
+}
+
+fn moderation_tally_finance_outcome(tally: &ModerationBallotTally) -> SoraFsAppealFinanceOutcomeV1 {
+    match tally.winning_choice {
+        Some(SoraFsModerationVoteChoice::Uphold) => SoraFsAppealFinanceOutcomeV1::Uphold,
+        Some(SoraFsModerationVoteChoice::Overturn) => SoraFsAppealFinanceOutcomeV1::Overturn,
+        Some(SoraFsModerationVoteChoice::Modify) => SoraFsAppealFinanceOutcomeV1::Modify,
+        Some(SoraFsModerationVoteChoice::Escalate) | None => {
+            SoraFsAppealFinanceOutcomeV1::Escalated
+        }
+    }
+}
+
+fn appeal_finance_deposit_flows(
+    deposit_scaled: u128,
+    outcome: SoraFsAppealFinanceOutcomeV1,
+) -> Result<(u128, u128, u128), String> {
+    let (refund_numerator, treasury_numerator, denominator) = match outcome {
+        SoraFsAppealFinanceOutcomeV1::Overturn | SoraFsAppealFinanceOutcomeV1::Modify => {
+            (1_u128, 0_u128, 1_u128)
+        }
+        SoraFsAppealFinanceOutcomeV1::Uphold
+        | SoraFsAppealFinanceOutcomeV1::WithdrawnAfterPanel => (0, 1, 1),
+        SoraFsAppealFinanceOutcomeV1::WithdrawnBeforePanel => (9, 0, 10),
+        SoraFsAppealFinanceOutcomeV1::Frivolous => (1, 1, 2),
+        SoraFsAppealFinanceOutcomeV1::Escalated => (0, 0, 1),
+    };
+    let refund = deposit_scaled
+        .checked_mul(refund_numerator)
+        .and_then(|value| value.checked_div(denominator))
+        .ok_or_else(|| "refund calculation overflow".to_string())?;
+    let treasury = deposit_scaled
+        .checked_mul(treasury_numerator)
+        .and_then(|value| value.checked_div(denominator))
+        .ok_or_else(|| "treasury calculation overflow".to_string())?;
+    let held = deposit_scaled
+        .saturating_sub(refund)
+        .saturating_sub(treasury);
+    Ok((refund, treasury, held))
+}
+
+fn moderation_appeal_finance_report_id(
+    record: &ModerationBallotRecord,
+    tally: &ModerationBallotTally,
+    deposit: &ModerationAppealDeposit,
+    outcome: SoraFsAppealFinanceOutcomeV1,
+) -> [u8; 16] {
+    let mut material = String::new();
+    material.push_str("sorafs.appeal_finance.moderation_tally_report.v1\n");
+    material.push_str("case_id=");
+    material.push_str(&tally.case_id);
+    material.push('\n');
+    material.push_str("round_id=");
+    material.push_str(&tally.round_id);
+    material.push('\n');
+    material.push_str("escrow_id_hex=");
+    material.push_str(&deposit.escrow_id_hex);
+    material.push('\n');
+    material.push_str("outcome=");
+    material.push_str(outcome.as_str());
+    material.push('\n');
+    material.push_str("tallied_at_unix_ms=");
+    material.push_str(&tally.tallied_at_unix_ms.to_string());
+    material.push('\n');
+    material.push_str("counts=");
+    material.push_str(&format!(
+        "{}/{}/{}/{}",
+        tally.counts.uphold, tally.counts.overturn, tally.counts.modify, tally.counts.escalate
+    ));
+    material.push('\n');
+    material.push_str("jurors=");
+    for juror_id in &record.announcement.juror_ids {
+        material.push_str(juror_id);
+        material.push('\n');
+    }
+    let digest = blake3::hash(material.as_bytes());
+    let mut report_id = [0_u8; 16];
+    report_id.copy_from_slice(&digest.as_bytes()[..16]);
+    report_id
+}
+
+fn appeal_finance_report_scale(value: &str) -> Result<usize, String> {
+    let (_, fractional) = parse_appeal_finance_decimal(value).map_err(|err| err.to_string())?;
+    Ok(fractional.len().max(12))
+}
+
+fn appeal_finance_scale_unit(scale: usize) -> Result<u128, String> {
+    if scale > 18 {
+        return Err(format!(
+            "appeal finance decimal scale `{scale}` exceeds the supported report scale"
+        ));
+    }
+    let mut unit = 1_u128;
+    for _ in 0..scale {
+        unit = unit
+            .checked_mul(10)
+            .ok_or_else(|| "appeal finance scale overflow".to_string())?;
+    }
+    Ok(unit)
+}
+
+fn parse_appeal_finance_scaled(value: &str, scale: usize) -> Result<u128, String> {
+    let (integral, fractional) =
+        parse_appeal_finance_decimal(value).map_err(|err| err.to_string())?;
+    if fractional.len() > scale {
+        return Err(format!(
+            "appeal finance decimal `{value}` has more fractional digits than scale `{scale}`"
+        ));
+    }
+    let mut digits = integral;
+    digits.push_str(&right_pad_fraction(&fractional, scale));
+    digits
+        .parse::<u128>()
+        .map_err(|err| format!("appeal finance decimal `{value}` exceeds report limits: {err}"))
+}
+
+fn format_appeal_finance_scaled(value: u128, scale: usize) -> String {
+    if scale == 0 {
+        return value.to_string();
+    }
+    let mut raw = value.to_string();
+    if raw.len() <= scale {
+        raw = format!("{}{}", "0".repeat(scale + 1 - raw.len()), raw);
+    }
+    let split = raw.len() - scale;
+    let integral = trim_decimal_integer(&raw[..split]);
+    let fractional = raw[split..].trim_end_matches('0');
+    if fractional.is_empty() {
+        integral
+    } else {
+        format!("{integral}.{fractional}")
+    }
+}
+
 /// Interface for emitting settlement artefacts to the governance DAG.
 pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist the supplied settlement NORITO payload to the governance pipeline.
@@ -344,6 +804,24 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     fn publish_reputation_snapshot(
         &self,
         snapshot: &ReputationSnapshotV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a moderation ballot lifecycle event to the governance pipeline.
+    fn publish_moderation_ballot_event(
+        &self,
+        event: &SoraFsModerationBallotGovernanceEventV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist an appeal finance report to the governance pipeline.
+    fn publish_appeal_finance_report(
+        &self,
+        report: &SoraFsAppealFinanceReportV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a weekly appeal finance rollup to the governance pipeline.
+    fn publish_appeal_finance_weekly_rollup(
+        &self,
+        rollup: &SoraFsAppealFinanceWeeklyRollupV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
 }
@@ -443,6 +921,9 @@ pub struct NodeHandle {
     orderbook: Arc<RwLock<OrderbookRuntime>>,
     orderbook_events: Arc<RwLock<Vec<OrderbookEvent>>>,
     orderbook_event_sender: broadcast::Sender<OrderbookEvent>,
+    moderation: Arc<RwLock<ModerationBallotRuntime>>,
+    moderation_events: Arc<RwLock<Vec<ModerationBallotEvent>>>,
+    moderation_event_sender: broadcast::Sender<ModerationBallotEvent>,
 }
 
 type PorHistoryKey = ([u8; 32], [u8; 32]);
@@ -479,6 +960,9 @@ pub enum ReconciliationError {
     /// Failed to encode reconciliation snapshot data.
     #[error(transparent)]
     Norito(#[from] norito::Error),
+    /// Local appeal-finance Governance DAG data could not be reconciled.
+    #[error("appeal finance reconciliation failed: {0}")]
+    AppealFinance(String),
     /// Reconciliation report failed validation.
     #[error(transparent)]
     Validation(#[from] ReconciliationValidationError),
@@ -544,6 +1028,8 @@ impl NodeHandle {
         let (repair_event_sender, _) = broadcast::channel(REPAIR_EVENT_CHANNEL_CAPACITY);
         let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
         let (orderbook_event_sender, _) = broadcast::channel(ORDERBOOK_EVENT_CHANNEL_CAPACITY);
+        let (moderation_event_sender, _) =
+            broadcast::channel(MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY);
 
         let repair = RepairManager::new_with_config_and_policy(
             repair_config.clone(),
@@ -574,6 +1060,9 @@ impl NodeHandle {
             orderbook: Arc::new(RwLock::new(OrderbookRuntime::default())),
             orderbook_events: Arc::new(RwLock::new(Vec::new())),
             orderbook_event_sender,
+            moderation: Arc::new(RwLock::new(ModerationBallotRuntime::default())),
+            moderation_events: Arc::new(RwLock::new(Vec::new())),
+            moderation_event_sender,
         };
 
         if node.storage.is_some() {
@@ -723,6 +1212,14 @@ impl NodeHandle {
         }
     }
 
+    /// Return whether this node currently has a governance publisher configured.
+    #[must_use]
+    pub fn has_governance_publisher(&self) -> bool {
+        self.governance_publisher
+            .read()
+            .is_ok_and(|guard| guard.is_some())
+    }
+
     fn governance_publisher(&self) -> Option<Arc<dyn GovernancePublisher>> {
         self.governance_publisher
             .read()
@@ -768,6 +1265,40 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("reputation snapshot cache poisoned"))?;
         *guard = Some(snapshot);
+        Ok(())
+    }
+
+    /// Publish a typed SoraFS appeal finance report to the governance pipeline.
+    pub fn publish_appeal_finance_report(
+        &self,
+        report: SoraFsAppealFinanceReportV1,
+    ) -> Result<(), GovernancePublishError> {
+        report.validate().map_err(|err| {
+            GovernancePublishError::other(format!("invalid appeal finance report: {err}"))
+        })?;
+        let encoded = norito::to_bytes(&report).map_err(|err| {
+            GovernancePublishError::other(format!("encode appeal finance report: {err}"))
+        })?;
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_appeal_finance_report(&report, &encoded)?;
+        }
+        Ok(())
+    }
+
+    /// Publish a typed SoraFS weekly appeal finance rollup to the governance pipeline.
+    pub fn publish_appeal_finance_weekly_rollup(
+        &self,
+        rollup: SoraFsAppealFinanceWeeklyRollupV1,
+    ) -> Result<(), GovernancePublishError> {
+        rollup.validate().map_err(|err| {
+            GovernancePublishError::other(format!("invalid appeal finance weekly rollup: {err}"))
+        })?;
+        let encoded = norito::to_bytes(&rollup).map_err(|err| {
+            GovernancePublishError::other(format!("encode appeal finance weekly rollup: {err}"))
+        })?;
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_appeal_finance_weekly_rollup(&rollup, &encoded)?;
+        }
         Ok(())
     }
 
@@ -898,6 +1429,172 @@ impl NodeHandle {
     #[must_use]
     pub fn subscribe_orderbook_events(&self) -> broadcast::Receiver<OrderbookEvent> {
         self.orderbook_event_sender.subscribe()
+    }
+
+    /// Return local moderation ballot events after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn moderation_ballot_events_since(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> Vec<ModerationBallotEvent> {
+        let limit = limit.max(1);
+        let since = since_sequence.unwrap_or(0);
+        self.moderation_events.read().map_or_else(
+            |_| Vec::new(),
+            |guard| {
+                guard
+                    .iter()
+                    .filter(|event| event.sequence > since)
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+
+    /// Return the latest local moderation ballot event sequence accepted by this node.
+    #[must_use]
+    pub fn latest_moderation_ballot_event_sequence(&self) -> Option<u64> {
+        self.moderation_events
+            .read()
+            .ok()
+            .and_then(|guard| guard.last().map(|event| event.sequence))
+    }
+
+    /// Subscribe to live local moderation ballot events.
+    #[must_use]
+    pub fn subscribe_moderation_ballot_events(&self) -> broadcast::Receiver<ModerationBallotEvent> {
+        self.moderation_event_sender.subscribe()
+    }
+
+    /// Announce a local SoraFS moderation ballot.
+    ///
+    /// This in-memory lifecycle store validates the ballot context, ordered
+    /// roster hash, quorum, and commit/challenge/reveal windows. It does not
+    /// publish an on-chain record or Governance DAG event yet.
+    pub fn announce_moderation_ballot(
+        &self,
+        announcement: ModerationBallotAnnouncement,
+    ) -> Result<ModerationBallotRecord, ModerationBallotRuntimeError> {
+        let case_id = announcement.context.case_id.clone();
+        let round_id = announcement.round_id.clone();
+        let generated_at_unix_ms = announcement.announced_at_unix_ms;
+        let record = {
+            self.moderation
+                .write()
+                .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
+                .announce_ballot(announcement)?
+        };
+        self.publish_moderation_ballot_event(
+            ModerationBallotEventKind::BallotAnnounced,
+            generated_at_unix_ms,
+            case_id,
+            round_id,
+            None,
+            None,
+        );
+        Ok(record)
+    }
+
+    /// Accept a local SoraFS moderation ballot commitment from an eligible juror.
+    pub fn submit_moderation_ballot_commit(
+        &self,
+        commit: SoraFsModerationBallotCommitV1,
+        now_unix_ms: u64,
+    ) -> Result<ModerationBallotCommitOutcome, ModerationBallotRuntimeError> {
+        let case_id = commit.context.case_id.clone();
+        let round_id = commit.round_id.clone();
+        let juror_id = commit.juror_id.clone();
+        let outcome = {
+            self.moderation
+                .write()
+                .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
+                .submit_commit(commit, now_unix_ms)?
+        };
+        self.publish_moderation_ballot_event(
+            ModerationBallotEventKind::CommitAccepted,
+            now_unix_ms,
+            case_id,
+            round_id,
+            Some(juror_id),
+            None,
+        );
+        Ok(outcome)
+    }
+
+    /// Accept a local SoraFS moderation ballot reveal after the challenge buffer.
+    pub fn submit_moderation_ballot_reveal(
+        &self,
+        reveal: SoraFsModerationBallotRevealV1,
+        now_unix_ms: u64,
+    ) -> Result<ModerationBallotRevealOutcome, ModerationBallotRuntimeError> {
+        let case_id = reveal.context.case_id.clone();
+        let round_id = reveal.round_id.clone();
+        let juror_id = reveal.juror_id.clone();
+        let outcome = {
+            self.moderation
+                .write()
+                .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
+                .submit_reveal(reveal, now_unix_ms)?
+        };
+        self.publish_moderation_ballot_event(
+            ModerationBallotEventKind::RevealAccepted,
+            now_unix_ms,
+            case_id,
+            round_id,
+            Some(juror_id),
+            None,
+        );
+        Ok(outcome)
+    }
+
+    /// Finalize a local SoraFS moderation ballot tally.
+    pub fn tally_moderation_ballot(
+        &self,
+        case_id: &str,
+        round_id: &str,
+        now_unix_ms: u64,
+    ) -> Result<ModerationBallotTally, ModerationBallotRuntimeError> {
+        let tally = {
+            self.moderation
+                .write()
+                .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
+                .tally_ballot(case_id, round_id, now_unix_ms)?
+        };
+        self.publish_moderation_ballot_event(
+            ModerationBallotEventKind::BallotTallied,
+            now_unix_ms,
+            case_id.to_owned(),
+            round_id.to_owned(),
+            None,
+            Some(tally.clone()),
+        );
+        if let Some(record) = self.moderation_ballot(case_id, round_id) {
+            self.publish_moderation_appeal_finance_report(&record, &tally);
+        }
+        Ok(tally)
+    }
+
+    /// Return one local SoraFS moderation ballot record.
+    #[must_use]
+    pub fn moderation_ballot(
+        &self,
+        case_id: &str,
+        round_id: &str,
+    ) -> Option<ModerationBallotRecord> {
+        self.moderation
+            .read()
+            .ok()
+            .and_then(|moderation| moderation.ballot(case_id, round_id))
+    }
+
+    /// Return all local SoraFS moderation ballot records.
+    #[must_use]
+    pub fn moderation_ballots(&self) -> Vec<ModerationBallotRecord> {
+        self.moderation
+            .read()
+            .map_or_else(|_| Vec::new(), |moderation| moderation.ballots())
     }
 
     /// Accept an order into the local SoraFS orderbook mirror and run matching.
@@ -1122,6 +1819,9 @@ impl NodeHandle {
             .set_sorafs_orderbook_contract_mirror_divergence(ORDERBOOK_METRIC_CLUSTER_LOCAL, false);
     }
 
+    // Orderbook events intentionally carry the accepted object ids and derived
+    // snapshot counters in one append point so replay and live streams agree.
+    #[allow(clippy::too_many_arguments)]
     fn publish_orderbook_event(
         &self,
         kind: OrderbookEventKind,
@@ -1159,6 +1859,101 @@ impl NodeHandle {
         };
         events.push(event.clone());
         let _ = self.orderbook_event_sender.send(event);
+    }
+
+    fn publish_moderation_ballot_event(
+        &self,
+        kind: ModerationBallotEventKind,
+        generated_at_unix_ms: u64,
+        case_id: String,
+        round_id: String,
+        juror_id: Option<String>,
+        tally: Option<ModerationBallotTally>,
+    ) {
+        let record = self.moderation_ballot(&case_id, &round_id);
+        let committed_count = record
+            .as_ref()
+            .map_or(0, |record| record.commits.len() as u64);
+        let revealed_count = record
+            .as_ref()
+            .map_or(0, |record| record.reveals.len() as u64);
+        let Ok(mut events) = self.moderation_events.write() else {
+            return;
+        };
+        let sequence = events
+            .last()
+            .map_or(1, |event| event.sequence.saturating_add(1));
+        let event = ModerationBallotEvent {
+            sequence,
+            kind,
+            generated_at_unix_ms,
+            case_id,
+            round_id,
+            juror_id,
+            committed_count,
+            revealed_count,
+            tally,
+        };
+        events.push(event.clone());
+        let _ = self.moderation_event_sender.send(event.clone());
+        self.publish_moderation_ballot_governance_event(&event);
+    }
+
+    fn publish_moderation_ballot_governance_event(&self, event: &ModerationBallotEvent) {
+        let Some(publisher) = self.governance_publisher() else {
+            return;
+        };
+        let governance_event = event.to_governance_event_v1();
+        let encoded = match norito::to_bytes(&governance_event) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                iroha_logger::error!(
+                    %err,
+                    case_id = %event.case_id,
+                    round_id = %event.round_id,
+                    sequence = event.sequence,
+                    "failed to encode SoraFS moderation ballot governance event"
+                );
+                return;
+            }
+        };
+        if let Err(err) = publisher.publish_moderation_ballot_event(&governance_event, &encoded) {
+            iroha_logger::error!(
+                %err,
+                case_id = %event.case_id,
+                round_id = %event.round_id,
+                sequence = event.sequence,
+                "failed to publish SoraFS moderation ballot event to governance DAG"
+            );
+        }
+    }
+
+    fn publish_moderation_appeal_finance_report(
+        &self,
+        record: &ModerationBallotRecord,
+        tally: &ModerationBallotTally,
+    ) {
+        let report = match moderation_appeal_finance_report(record, tally) {
+            Ok(Some(report)) => report,
+            Ok(None) => return,
+            Err(err) => {
+                iroha_logger::error!(
+                    %err,
+                    case_id = %tally.case_id,
+                    round_id = %tally.round_id,
+                    "failed to derive SoraFS appeal finance report from moderation tally"
+                );
+                return;
+            }
+        };
+        if let Err(err) = self.publish_appeal_finance_report(report) {
+            iroha_logger::error!(
+                %err,
+                case_id = %tally.case_id,
+                round_id = %tally.round_id,
+                "failed to publish SoraFS moderation tally appeal finance report"
+            );
+        }
     }
 
     /// Finalise a deal settlement for the supplied epoch.
@@ -2376,6 +3171,7 @@ impl NodeHandle {
         let gc_snapshot_hash = reconciliation::hash_snapshot(&gc_snapshot)?;
 
         let divergence_count = reconciliation_divergence_count(storage, &manifests);
+        let appeal_finance = self.appeal_finance_reconciliation_summary()?;
 
         let report = SorafsReconciliationReportV1 {
             version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
@@ -2389,9 +3185,94 @@ impl NodeHandle {
             gc_evictions_total,
             gc_freed_bytes_total,
             divergence_count,
+            appeal_finance,
         };
         report.validate()?;
         Ok(report)
+    }
+
+    fn appeal_finance_reconciliation_summary(
+        &self,
+    ) -> Result<Option<AppealFinanceReconciliationSummaryV1>, ReconciliationError> {
+        let Some(governance_dir) = self.config.governance_dir() else {
+            return Ok(None);
+        };
+        let index_path = governance_dir.join(GOVERNANCE_PUBLISH_INDEX_FILE);
+        let index = match fs::read(&index_path) {
+            Ok(bytes) => norito::json::from_slice::<JsonValue>(&bytes).map_err(|err| {
+                ReconciliationError::AppealFinance(format!(
+                    "failed to decode governance publish index `{}`: {err}",
+                    index_path.display()
+                ))
+            })?,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return empty_appeal_finance_reconciliation_summary().map(Some);
+            }
+            Err(err) => {
+                return Err(ReconciliationError::AppealFinance(format!(
+                    "failed to read governance publish index `{}`: {err}",
+                    index_path.display()
+                )));
+            }
+        };
+        if index.get("schema").and_then(JsonValue::as_str) != Some(GOVERNANCE_PUBLISH_INDEX_SCHEMA)
+        {
+            return Err(ReconciliationError::AppealFinance(
+                "governance publish index uses an unsupported schema".to_string(),
+            ));
+        }
+
+        let mut entries = Vec::new();
+        let Some(index_entries) = index.get("entries").and_then(JsonValue::as_array) else {
+            return Err(ReconciliationError::AppealFinance(
+                "governance publish index is missing `entries` array".to_string(),
+            ));
+        };
+        for entry in index_entries {
+            if entry.get("payload_kind").and_then(JsonValue::as_str)
+                != Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
+            {
+                continue;
+            }
+            entries.push(appeal_finance_rollup_reconciliation_entry(
+                governance_dir,
+                entry,
+            )?);
+        }
+        entries.sort_by(|left, right| {
+            left.cycle
+                .cmp(&right.cycle)
+                .then(left.encoded_blake3.cmp(&right.encoded_blake3))
+        });
+
+        let snapshot = reconciliation::AppealFinanceRollupReconciliationSnapshot {
+            version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
+            rollups: entries.clone(),
+        };
+        let rollup_snapshot_hash = reconciliation::hash_snapshot(&snapshot)?;
+        let mut total_treasury_xor = "0".to_string();
+        let mut total_rewards_forfeited_treasury_xor = "0".to_string();
+        let mut source_report_count = 0_u64;
+        let mut case_count = 0_u64;
+        for entry in &entries {
+            source_report_count = source_report_count.saturating_add(entry.report_count);
+            case_count = case_count.saturating_add(entry.case_count);
+            total_treasury_xor =
+                add_appeal_finance_decimal_strings(&total_treasury_xor, &entry.total_treasury_xor)?;
+            total_rewards_forfeited_treasury_xor = add_appeal_finance_decimal_strings(
+                &total_rewards_forfeited_treasury_xor,
+                &entry.total_rewards_forfeited_treasury_xor,
+            )?;
+        }
+
+        Ok(Some(AppealFinanceReconciliationSummaryV1 {
+            rollup_snapshot_hash,
+            rollup_count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
+            source_report_count,
+            case_count,
+            total_treasury_xor,
+            total_rewards_forfeited_treasury_xor,
+        }))
     }
 
     /// Whether the storage worker is currently enabled.
@@ -3112,12 +3993,20 @@ mod tests {
                 BYTES_PER_GIB, ClientId, DealProposal, DealStatus, DealTerms, DealUsageReport,
                 GIB_HOURS_PER_MONTH, MicropaymentTicket, TicketId,
             },
+            moderation::{
+                SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+                SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotCommitV1,
+                SoraFsModerationBallotContextV1, SoraFsModerationBallotError,
+                SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
+            },
             pin_registry::StorageClass,
         },
     };
     use iroha_telemetry::metrics::global_or_default;
     use norito::{codec::Decode, to_bytes};
     use sorafs_car::CarBuildPlan;
+    use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
         BYTES_PER_GIB as ORDERBOOK_BYTES_PER_GIB, ByteRangeV1, DagCodecId, ManifestBuilder,
         ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1,
@@ -3125,8 +4014,12 @@ mod tests {
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
-        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1,
-        SorafsReconciliationReportV1, build_reputation_snapshot,
+        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+        SettlementChannelV1, SettlementReceiptV1, SoraFsAppealFinanceAccountFlowV1,
+        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
+        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1,
+        SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
+        SoraFsModerationVoteChoiceV1, SorafsReconciliationReportV1, build_reputation_snapshot,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
@@ -3191,6 +4084,64 @@ mod tests {
             None,
         )
         .expect("reputation snapshot fixture")
+    }
+
+    fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
+        SoraFsAppealFinanceReportV1 {
+            version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+            report_id: [0x42; 16],
+            case_id: "case-42".to_string(),
+            round_id: Some("round-1".to_string()),
+            generated_at_unix_ms: 1_800_000_031_000,
+            appeal_finance_config_version: "baseline-v1".to_string(),
+            evidence_bundle_digest: Some([0xA7; 32]),
+            outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
+            deposit_xor: "420".to_string(),
+            refund: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "refund-account".to_string(),
+                amount_xor: "420".to_string(),
+            },
+            treasury: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "treasury-account".to_string(),
+                amount_xor: "50".to_string(),
+            },
+            held: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "escrow-account".to_string(),
+                amount_xor: "0".to_string(),
+            },
+            panel_size: 3,
+            panel_reward_total_xor: "85".to_string(),
+            rewards_paid_total_xor: "60".to_string(),
+            rewards_forfeited_treasury_xor: "25".to_string(),
+            juror_payouts: vec![
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-a".to_string(),
+                    stipend_xor: "25".to_string(),
+                    bonus_xor: "5".to_string(),
+                    total_xor: "30".to_string(),
+                },
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-b".to_string(),
+                    stipend_xor: "25".to_string(),
+                    bonus_xor: "5".to_string(),
+                    total_xor: "30".to_string(),
+                },
+            ],
+            no_show_juror_ids: vec!["juror-c".to_string()],
+        }
+    }
+
+    fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
+        let report = appeal_finance_report_fixture();
+        SoraFsAppealFinanceWeeklyRollupV1::from_reports(
+            PorReportIsoWeek {
+                year: 2026,
+                week: 26,
+            },
+            1_800_000_100_000,
+            &[report],
+        )
+        .expect("appeal finance weekly rollup fixture")
     }
 
     fn approval_for_default_policy(escalated_at_unix: u64) -> RepairEscalationApprovalV1 {
@@ -3398,6 +4349,94 @@ mod tests {
             },
             id.saturating_add(0x60),
         )
+    }
+
+    fn moderation_jurors() -> Vec<String> {
+        ["juror-a", "juror-b", "juror-c"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn moderation_context(
+        case_id: &str,
+        juror_ids: &[String],
+        quorum: u16,
+    ) -> SoraFsModerationBallotContextV1 {
+        SoraFsModerationBallotContextV1 {
+            version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            case_id: case_id.to_owned(),
+            evidence_bundle_digest: [0xAB; 32],
+            appeal_finance_config_version: "appeal-finance-v1".to_owned(),
+            panel_roster_hash: local_moderation_panel_roster_hash(juror_ids, quorum),
+            policy_reference: "policy://sorafs/moderation/v1".to_owned(),
+            evidence_uri: Some("dag://evidence/case".to_owned()),
+        }
+    }
+
+    fn moderation_announcement(
+        case_id: &str,
+        juror_ids: Vec<String>,
+        quorum: u16,
+    ) -> ModerationBallotAnnouncement {
+        ModerationBallotAnnouncement {
+            context: moderation_context(case_id, &juror_ids, quorum),
+            appeal_deposit_escrow_id_hex: None,
+            appeal_deposit: None,
+            round_id: "round-1".to_owned(),
+            juror_ids,
+            quorum,
+            announced_at_unix_ms: 1_800_000_000_000,
+            commit_deadline_unix_ms: 1_800_000_010_000,
+            challenge_deadline_unix_ms: 1_800_000_020_000,
+            reveal_deadline_unix_ms: 1_800_000_030_000,
+        }
+    }
+
+    fn moderation_appeal_deposit() -> ModerationAppealDeposit {
+        ModerationAppealDeposit {
+            escrow_id_hex: "42".repeat(32),
+            payer_account: "appeal-payer".to_owned(),
+            destination_account: "appeal-treasury".to_owned(),
+            release_authority_account: Some("appeal-authority".to_owned()),
+            asset_definition_id: "xor#wonderland".to_owned(),
+            custody_account: "asset-lock-custody".to_owned(),
+            deposit_xor: "420".to_owned(),
+            expires_at_ms: Some(1_800_100_000_000),
+            idempotency_key: "case-appeal-round-1".to_owned(),
+        }
+    }
+
+    fn moderation_reveal(
+        context: &SoraFsModerationBallotContextV1,
+        juror_id: &str,
+        choice: SoraFsModerationVoteChoice,
+        nonce_seed: u8,
+        revealed_at_unix_ms: u64,
+    ) -> SoraFsModerationBallotRevealV1 {
+        SoraFsModerationBallotRevealV1 {
+            version: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
+            context: context.clone(),
+            round_id: "round-1".to_owned(),
+            juror_id: juror_id.to_owned(),
+            choice,
+            nonce: vec![nonce_seed; 16],
+            revealed_at_unix_ms,
+        }
+    }
+
+    fn moderation_commit_from_reveal(
+        reveal: &SoraFsModerationBallotRevealV1,
+        committed_at_unix_ms: u64,
+    ) -> SoraFsModerationBallotCommitV1 {
+        SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms,
+        }
     }
 
     #[test]
@@ -3669,6 +4708,344 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_moderation_ballot_lifecycle_tallies_and_records_events() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut receiver = handle.subscribe_moderation_ballot_events();
+        let jurors = moderation_jurors();
+        let announcement = moderation_announcement("case-42", jurors.clone(), 2);
+        let context = announcement.context.clone();
+
+        let announced = handle
+            .announce_moderation_ballot(announcement)
+            .expect("announce moderation ballot");
+        assert_eq!(announced.announcement.juror_ids, jurors);
+        let event = receiver.try_recv().expect("announced event");
+        assert_eq!(event.sequence, 1);
+        assert_eq!(event.kind, ModerationBallotEventKind::BallotAnnounced);
+        assert_eq!(event.committed_count, 0);
+
+        let reveal_a = moderation_reveal(
+            &context,
+            "juror-a",
+            SoraFsModerationVoteChoice::Uphold,
+            0xA1,
+            1_800_000_021_000,
+        );
+        let reveal_b = moderation_reveal(
+            &context,
+            "juror-b",
+            SoraFsModerationVoteChoice::Uphold,
+            0xB2,
+            1_800_000_021_500,
+        );
+        let commit_a = moderation_commit_from_reveal(&reveal_a, 1_800_000_005_000);
+        let commit_b = moderation_commit_from_reveal(&reveal_b, 1_800_000_006_000);
+
+        let commit_outcome = handle
+            .submit_moderation_ballot_commit(commit_a, 1_800_000_005_000)
+            .expect("accept first commit");
+        assert_eq!(commit_outcome.committed_count, 1);
+        let commit_outcome = handle
+            .submit_moderation_ballot_commit(commit_b, 1_800_000_006_000)
+            .expect("accept second commit");
+        assert_eq!(commit_outcome.committed_count, 2);
+
+        let reveal_outcome = handle
+            .submit_moderation_ballot_reveal(reveal_a, 1_800_000_021_000)
+            .expect("accept first reveal");
+        assert_eq!(reveal_outcome.revealed_count, 1);
+        let reveal_outcome = handle
+            .submit_moderation_ballot_reveal(reveal_b, 1_800_000_021_500)
+            .expect("accept second reveal");
+        assert_eq!(reveal_outcome.revealed_count, 2);
+
+        let tally = handle
+            .tally_moderation_ballot("case-42", "round-1", 1_800_000_030_000)
+            .expect("tally ballot");
+        assert_eq!(tally.votes_total, 2);
+        assert_eq!(tally.counts.uphold, 2);
+        assert_eq!(
+            tally.winning_choice,
+            Some(SoraFsModerationVoteChoice::Uphold)
+        );
+        assert!(!tally.contested);
+
+        let record = handle
+            .moderation_ballot("case-42", "round-1")
+            .expect("ballot record");
+        assert_eq!(record.commits.len(), 2);
+        assert_eq!(record.reveals.len(), 2);
+        assert_eq!(record.tally, Some(tally.clone()));
+        assert_eq!(handle.latest_moderation_ballot_event_sequence(), Some(6));
+
+        let replay = handle.moderation_ballot_events_since(Some(4), 10);
+        assert_eq!(replay.len(), 2);
+        assert_eq!(replay[0].kind, ModerationBallotEventKind::RevealAccepted);
+        assert_eq!(replay[1].kind, ModerationBallotEventKind::BallotTallied);
+        assert_eq!(replay[1].tally, Some(tally));
+    }
+
+    #[test]
+    fn node_handle_moderation_ballot_publishes_governance_events() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let jurors = moderation_jurors();
+        let announcement = moderation_announcement("case-47", jurors, 2);
+        let context = announcement.context.clone();
+        handle
+            .announce_moderation_ballot(announcement)
+            .expect("announce moderation ballot");
+
+        let payloads = publisher.take();
+        assert_eq!(payloads.len(), 1);
+        let announced =
+            norito::decode_from_bytes::<SoraFsModerationBallotGovernanceEventV1>(&payloads[0])
+                .expect("decode announced governance event");
+        assert_eq!(
+            announced.kind,
+            SoraFsModerationBallotGovernanceEventKindV1::BallotAnnounced
+        );
+        assert_eq!(announced.sequence, 1);
+        assert_eq!(announced.case_id, "case-47");
+        assert!(announced.tally.is_none());
+
+        let reveal_a = moderation_reveal(
+            &context,
+            "juror-a",
+            SoraFsModerationVoteChoice::Overturn,
+            0xA4,
+            1_800_000_021_000,
+        );
+        let reveal_b = moderation_reveal(
+            &context,
+            "juror-b",
+            SoraFsModerationVoteChoice::Overturn,
+            0xB4,
+            1_800_000_021_500,
+        );
+        let commit_a = moderation_commit_from_reveal(&reveal_a, 1_800_000_005_000);
+        let commit_b = moderation_commit_from_reveal(&reveal_b, 1_800_000_006_000);
+        handle
+            .submit_moderation_ballot_commit(commit_a, 1_800_000_005_000)
+            .expect("accept first commit");
+        handle
+            .submit_moderation_ballot_commit(commit_b, 1_800_000_006_000)
+            .expect("accept second commit");
+        handle
+            .submit_moderation_ballot_reveal(reveal_a, 1_800_000_021_000)
+            .expect("accept first reveal");
+        handle
+            .submit_moderation_ballot_reveal(reveal_b, 1_800_000_021_500)
+            .expect("accept second reveal");
+        handle
+            .tally_moderation_ballot("case-47", "round-1", 1_800_000_030_000)
+            .expect("tally ballot");
+
+        let payloads = publisher.take();
+        assert_eq!(payloads.len(), 5);
+        let events = payloads
+            .iter()
+            .map(|payload| {
+                norito::decode_from_bytes::<SoraFsModerationBallotGovernanceEventV1>(payload)
+                    .expect("decode moderation governance event")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events[0].kind,
+            SoraFsModerationBallotGovernanceEventKindV1::CommitAccepted
+        );
+        assert_eq!(events[0].juror_id.as_deref(), Some("juror-a"));
+        assert_eq!(
+            events[4].kind,
+            SoraFsModerationBallotGovernanceEventKindV1::BallotTallied
+        );
+        assert_eq!(events[4].sequence, 6);
+        let tally = events[4].tally.as_ref().expect("tally payload");
+        assert_eq!(tally.votes_total, 2);
+        assert_eq!(
+            tally.winning_choice,
+            Some(SoraFsModerationVoteChoiceV1::Overturn)
+        );
+        events[4].validate().expect("governance event validates");
+    }
+
+    #[test]
+    fn node_handle_moderation_tally_publishes_appeal_finance_report_for_confirmed_deposit() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let jurors = moderation_jurors();
+        let mut announcement = moderation_announcement("case-48", jurors, 2);
+        let deposit = moderation_appeal_deposit();
+        announcement.appeal_deposit_escrow_id_hex = Some(deposit.escrow_id_hex.clone());
+        announcement.appeal_deposit = Some(deposit);
+        let context = announcement.context.clone();
+        handle
+            .announce_moderation_ballot(announcement)
+            .expect("announce moderation ballot");
+        let _ = publisher.take();
+
+        let reveal_a = moderation_reveal(
+            &context,
+            "juror-a",
+            SoraFsModerationVoteChoice::Overturn,
+            0xA5,
+            1_800_000_021_000,
+        );
+        let reveal_b = moderation_reveal(
+            &context,
+            "juror-b",
+            SoraFsModerationVoteChoice::Overturn,
+            0xB5,
+            1_800_000_021_500,
+        );
+        handle
+            .submit_moderation_ballot_commit(
+                moderation_commit_from_reveal(&reveal_a, 1_800_000_005_000),
+                1_800_000_005_000,
+            )
+            .expect("accept first commit");
+        handle
+            .submit_moderation_ballot_commit(
+                moderation_commit_from_reveal(&reveal_b, 1_800_000_006_000),
+                1_800_000_006_000,
+            )
+            .expect("accept second commit");
+        handle
+            .submit_moderation_ballot_reveal(reveal_a, 1_800_000_021_000)
+            .expect("accept first reveal");
+        handle
+            .submit_moderation_ballot_reveal(reveal_b, 1_800_000_021_500)
+            .expect("accept second reveal");
+        handle
+            .tally_moderation_ballot("case-48", "round-1", 1_800_000_030_000)
+            .expect("tally ballot");
+
+        let payloads = publisher.take();
+        assert_eq!(payloads.len(), 6);
+        let tally_event =
+            norito::decode_from_bytes::<SoraFsModerationBallotGovernanceEventV1>(&payloads[4])
+                .expect("decode tally event");
+        assert_eq!(
+            tally_event.kind,
+            SoraFsModerationBallotGovernanceEventKindV1::BallotTallied
+        );
+        let report = norito::decode_from_bytes::<SoraFsAppealFinanceReportV1>(&payloads[5])
+            .expect("decode appeal finance report");
+        report.validate().expect("report validates");
+        assert_ne!(report.report_id, [0_u8; 16]);
+        assert_eq!(report.case_id, "case-48");
+        assert_eq!(report.round_id.as_deref(), Some("round-1"));
+        assert_eq!(report.outcome, SoraFsAppealFinanceOutcomeV1::Overturn);
+        assert_eq!(report.deposit_xor, "420");
+        assert_eq!(report.refund.account_id, "appeal-payer");
+        assert_eq!(report.refund.amount_xor, "420");
+        assert_eq!(report.treasury.account_id, "appeal-treasury");
+        assert_eq!(report.treasury.amount_xor, "25");
+        assert_eq!(report.held.account_id, "asset-lock-custody");
+        assert_eq!(report.held.amount_xor, "0");
+        assert_eq!(report.panel_reward_total_xor, "85");
+        assert_eq!(report.rewards_paid_total_xor, "60");
+        assert_eq!(report.rewards_forfeited_treasury_xor, "25");
+        assert_eq!(report.juror_payouts.len(), 2);
+        assert_eq!(report.no_show_juror_ids, vec!["juror-c".to_owned()]);
+    }
+
+    #[test]
+    fn node_handle_moderation_ballot_rejects_duplicates_and_mismatched_reveals() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let jurors = moderation_jurors();
+        let announcement = moderation_announcement("case-43", jurors, 1);
+        let context = announcement.context.clone();
+        handle
+            .announce_moderation_ballot(announcement)
+            .expect("announce moderation ballot");
+
+        let reveal = moderation_reveal(
+            &context,
+            "juror-a",
+            SoraFsModerationVoteChoice::Modify,
+            0xA3,
+            1_800_000_021_000,
+        );
+        let commit = moderation_commit_from_reveal(&reveal, 1_800_000_005_000);
+        handle
+            .submit_moderation_ballot_commit(commit.clone(), 1_800_000_005_000)
+            .expect("accept commit");
+
+        assert!(matches!(
+            handle.submit_moderation_ballot_commit(commit, 1_800_000_006_000),
+            Err(ModerationBallotRuntimeError::DuplicateCommit { .. })
+        ));
+        assert!(matches!(
+            handle.submit_moderation_ballot_reveal(reveal.clone(), 1_800_000_020_000),
+            Err(ModerationBallotRuntimeError::RevealWindowNotOpen { .. })
+        ));
+
+        let mismatched = moderation_reveal(
+            &context,
+            "juror-a",
+            SoraFsModerationVoteChoice::Escalate,
+            0xA3,
+            1_800_000_021_000,
+        );
+        assert!(matches!(
+            handle.submit_moderation_ballot_reveal(mismatched, 1_800_000_021_000),
+            Err(ModerationBallotRuntimeError::Validation(
+                SoraFsModerationBallotError::CommitmentMismatch
+            ))
+        ));
+
+        handle
+            .submit_moderation_ballot_reveal(reveal.clone(), 1_800_000_021_000)
+            .expect("accept reveal");
+        assert!(matches!(
+            handle.submit_moderation_ballot_reveal(reveal, 1_800_000_021_500),
+            Err(ModerationBallotRuntimeError::DuplicateReveal { .. })
+        ));
+    }
+
+    #[test]
+    fn node_handle_moderation_ballot_validates_roster_hash_and_quorum() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let jurors = moderation_jurors();
+
+        let mut bad_hash = moderation_announcement("case-44", jurors.clone(), 2);
+        bad_hash.context.panel_roster_hash = [0xFF; 32];
+        assert!(matches!(
+            handle.announce_moderation_ballot(bad_hash),
+            Err(ModerationBallotRuntimeError::RosterHashMismatch)
+        ));
+
+        let bad_quorum = moderation_announcement("case-45", jurors.clone(), 0);
+        assert!(matches!(
+            handle.announce_moderation_ballot(bad_quorum),
+            Err(ModerationBallotRuntimeError::InvalidQuorum { .. })
+        ));
+
+        let duplicate_jurors = vec![
+            "juror-a".to_owned(),
+            "juror-b".to_owned(),
+            "juror-a".to_owned(),
+        ];
+        let duplicate = moderation_announcement("case-46", duplicate_jurors, 2);
+        assert!(matches!(
+            handle.announce_moderation_ballot(duplicate),
+            Err(ModerationBallotRuntimeError::DuplicateJuror { .. })
+        ));
+    }
+
+    #[test]
     fn node_handle_registers_and_settles_deal() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -3888,6 +5265,57 @@ mod tests {
         assert_eq!(live_event.sequence, 1);
         assert_eq!(live_event.snapshot_id, snapshot.snapshot_id);
         assert!(handle.reputation_events_since(Some(1), 10).is_empty());
+    }
+
+    #[test]
+    fn publish_appeal_finance_report_writes_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let report = appeal_finance_report_fixture();
+        let expected = to_bytes(&report).expect("encode appeal finance report");
+
+        handle
+            .publish_appeal_finance_report(report.clone())
+            .expect("publish appeal finance report");
+
+        let published = publisher.take();
+        assert_eq!(published, vec![expected]);
+    }
+
+    #[test]
+    fn governance_publisher_presence_tracks_set_and_clear() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        assert!(!handle.has_governance_publisher());
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher;
+        handle.set_governance_publisher(trait_publisher);
+        assert!(handle.has_governance_publisher());
+
+        handle.clear_governance_publisher();
+        assert!(!handle.has_governance_publisher());
+    }
+
+    #[test]
+    fn publish_appeal_finance_weekly_rollup_writes_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let rollup = appeal_finance_weekly_rollup_fixture();
+        let expected = to_bytes(&rollup).expect("encode appeal finance weekly rollup");
+
+        handle
+            .publish_appeal_finance_weekly_rollup(rollup)
+            .expect("publish appeal finance weekly rollup");
+
+        let published = publisher.take();
+        assert_eq!(published, vec![expected]);
     }
 
     #[test]
@@ -5091,6 +6519,7 @@ mod tests {
         assert_eq!(reconciliation.gc_evictions_total, 0);
         assert_eq!(reconciliation.gc_freed_bytes_total, 0);
         assert_eq!(reconciliation.divergence_count, 0);
+        assert!(reconciliation.appeal_finance.is_none());
 
         let payloads = publisher.take();
         let decoded = payloads
@@ -5116,6 +6545,47 @@ mod tests {
             reconciliation_again.gc_snapshot_hash,
             reconciliation.gc_snapshot_hash
         );
+    }
+
+    #[test]
+    fn node_handle_reconciliation_includes_appeal_finance_rollups() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(temp_dir.path().join("governance")))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        assert!(handle.has_governance_publisher());
+
+        let rollup = appeal_finance_weekly_rollup_fixture();
+        handle
+            .publish_appeal_finance_weekly_rollup(rollup.clone())
+            .expect("publish appeal finance weekly rollup");
+
+        let reconciliation = handle
+            .run_reconciliation_once(1_700_000_300)
+            .expect("reconciliation report");
+        let appeal_finance = reconciliation
+            .appeal_finance
+            .as_ref()
+            .expect("appeal finance reconciliation summary");
+        assert_eq!(appeal_finance.rollup_count, 1);
+        assert_ne!(appeal_finance.rollup_snapshot_hash, [0u8; 32]);
+        assert_eq!(appeal_finance.source_report_count, rollup.report_count);
+        assert_eq!(appeal_finance.case_count, rollup.case_count);
+        assert_eq!(appeal_finance.total_treasury_xor, rollup.total_treasury_xor);
+        assert_eq!(
+            appeal_finance.total_rewards_forfeited_treasury_xor,
+            rollup.total_rewards_forfeited_treasury_xor
+        );
+    }
+
+    #[test]
+    fn appeal_finance_decimal_addition_normalizes_scale() {
+        let sum = add_appeal_finance_decimal_strings("420", "80.2500").expect("decimal sum");
+
+        assert_eq!(sum, "500.25");
     }
 
     #[test]
@@ -6153,6 +7623,36 @@ mod tests {
             guard.push(encoded.to_vec());
             Ok(())
         }
+
+        fn publish_moderation_ballot_event(
+            &self,
+            _event: &SoraFsModerationBallotGovernanceEventV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_appeal_finance_report(
+            &self,
+            _report: &SoraFsAppealFinanceReportV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_appeal_finance_weekly_rollup(
+            &self,
+            _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
     }
 
     #[derive(Debug, Default)]
@@ -6221,6 +7721,36 @@ mod tests {
         fn publish_reputation_snapshot(
             &self,
             _snapshot: &ReputationSnapshotV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_moderation_ballot_event(
+            &self,
+            _event: &SoraFsModerationBallotGovernanceEventV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_appeal_finance_report(
+            &self,
+            _report: &SoraFsAppealFinanceReportV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_appeal_finance_weekly_rollup(
+            &self,
+            _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

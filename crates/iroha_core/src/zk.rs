@@ -3790,9 +3790,28 @@ fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
     .any(|token| compact.contains(token))
 }
 
-const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
-const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] =
-    &["test", "dummy", "fake", "stub", "sample", "placeholder"];
+const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &[
+    "debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace",
+];
+const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] = &[
+    "test",
+    "dummy",
+    "fake",
+    "stub",
+    "sample",
+    "placeholder",
+    "todo",
+    "draft",
+];
+const DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS: &[&str] = &[
+    "notforproduction",
+    "notproduction",
+    "notproductionready",
+    "notready",
+    "replacebeforeproduction",
+    "replacebeforemainnet",
+    "draftonly",
+];
 const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
@@ -3860,6 +3879,14 @@ fn is_developer_only_compact_backend_run(run: &str) -> bool {
 #[must_use]
 pub fn is_developer_only_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
+    let compact = compact_ascii_lowercase_label(&backend);
+    if DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
+    {
+        return true;
+    }
+
     let mut letter_run = String::new();
     for token in backend
         .split(|ch: char| !ch.is_ascii_alphanumeric())
@@ -7626,9 +7653,12 @@ fn kagemusha_fold_step_public_inputs_digest_impl(
             return Err("Kagemusha Halo2/IPA proof envelope has the wrong backend tag".to_owned());
         }
         ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
-        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
-            "Kagemusha Halo2/IPA proof public input statement cannot be extracted".to_owned()
-        })?
+        let instance_columns = extract_pasta_instance_columns_bytes(&envelope.proof_bytes)
+            .ok_or_else(|| {
+                "Kagemusha Halo2/IPA proof public input statement cannot be extracted".to_owned()
+            })?;
+        ensure_kagemusha_confidential_v2_public_instance_shape(&instance_columns)?;
+        instance_columns
     } else if iroha_data_model::offline::is_supported_kagemusha_proof_backend(&proof.backend) {
         if envelope.backend != iroha_data_model::zk::BackendTag::Stark {
             return Err("Kagemusha STARK/FRI proof envelope has the wrong backend tag".to_owned());
@@ -7677,6 +7707,30 @@ fn ensure_kagemusha_confidential_v2_envelope_metadata(
     }
     if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
         return Err("Kagemusha fold Halo2/IPA proof schema mismatch".to_owned());
+    }
+    Ok(())
+}
+
+const KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS: usize = 9;
+
+fn ensure_kagemusha_confidential_v2_public_instance_shape(
+    instance_columns: &[Vec<[u8; 32]>],
+) -> Result<(), String> {
+    if instance_columns.len() != KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS {
+        return Err(format!(
+            "Kagemusha fold Halo2/IPA confidential-transfer-v2 proof must expose exactly {} single-row public instance columns; found {} columns",
+            KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS,
+            instance_columns.len()
+        ));
+    }
+    for (column_index, column) in instance_columns.iter().enumerate() {
+        if column.len() != 1 {
+            return Err(format!(
+                "Kagemusha fold Halo2/IPA confidential-transfer-v2 proof must expose exactly {} single-row public instance columns; column {column_index} has {} rows",
+                KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS,
+                column.len()
+            ));
+        }
     }
     Ok(())
 }
@@ -7748,6 +7802,11 @@ fn validate_kagemusha_fold_metadata(steps: &[KagemushaFoldProofStep<'_>]) -> Res
         if step.root_before != expected_root {
             return Err(format!(
                 "Kagemusha fold hop {hop_index} does not continue from the previous root"
+            ));
+        }
+        if step.root_before == step.root_after {
+            return Err(format!(
+                "Kagemusha fold hop {hop_index} must change the Merkle root"
             ));
         }
 
@@ -10514,6 +10573,13 @@ fn validate_kagemusha_recursive_compact_record_envelope_preflight(
         })
         .collect::<Vec<_>>();
     validate_kagemusha_fold_metadata(&steps)?;
+    let step_count = steps.len();
+    if envelopes.len() != step_count {
+        return Err(format!(
+            "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch: expected {step_count}, found {}",
+            envelopes.len()
+        ));
+    }
     validate_kagemusha_hop_verifier_record_set(&steps, &records)?;
     for (hop_index, (step, envelope)) in steps.iter().zip(envelopes.iter()).enumerate() {
         let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, &records)?;
@@ -21817,10 +21883,24 @@ mod debug_backend_tests {
             "stark/fri/d-e-v",
             "stark/fri/test",
             "stark/fri/t-e-s-t",
+            "stark/fri/todo",
+            "stark/fri/t-o-d-o",
+            "stark/fri/draft-only",
+            "stark/fri/d-r-a-f-t",
+            "stark/fri/pending-audit",
+            "stark/fri/replace-before-mainnet",
+            "stark/fri/not-production-ready",
             "stark/fri/placeholder",
             "miden-stark:dev-fixture",
             "halo2/ipa:dev-fixture",
             "halo2/ipa:dev",
+            "halo2/ipa:todo-proof",
+            "halo2/ipa:t-o-d-o-proof",
+            "halo2/ipa:draft-proof",
+            "halo2/ipa:d-r-a-f-t-proof",
+            "halo2/ipa:pending-audit",
+            "halo2/ipa:replace-before-production",
+            "halo2/ipa:not-for-production",
             "halo2/ipa:dummy",
             "halo2/ipa:f-a-k-e",
             "halo2/ipa:stub",
@@ -22456,14 +22536,15 @@ mod stark_backend_tag_tests {
 mod stark_prover_tests {
     use super::{
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
-        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, normalize_stark_fri_circuit_id_for_backend,
-        prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
-        stark_binding_air_terms, stark_open_verify_air_public_digest_current,
-        stark_open_verify_domain_tag_current, verify_backend_with_timing,
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1,
+        normalize_stark_fri_circuit_id_for_backend, prove_stark_fri_ivm_execution_envelope,
+        prove_stark_fri_open_verify_envelope, stark_binding_air_terms,
+        stark_open_verify_air_public_digest_current, stark_open_verify_domain_tag_current,
+        verify_backend_with_timing,
     };
     use crate::zk_stark::{
-        STARK_HASH_SHA256_V1, StarkCompositionValueV1, StarkFriParamsV1, StarkFriVerifyingKeyV1,
-        StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+        STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkCompositionValueV1, StarkFriParamsV1,
+        StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
         ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
     };
     use iroha_crypto::Hash;
@@ -22970,73 +23051,91 @@ mod stark_prover_tests {
 
     #[test]
     fn prove_stark_open_verify_envelope_rejects_bfv_full_bootstrap_circuit_aliases() {
-        let backend = iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1;
         let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
-        let prefixed_alias = format!("{backend}:{canonical}");
-        let slash_alias = format!("{backend}/{canonical}");
-        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
-            let vk_box = VerifyingKeyBox::new(
-                backend.to_owned(),
-                norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
-            );
-            let err = prove_stark_fri_open_verify_envelope(
-                backend,
-                &circuit_id,
-                &vk_box,
-                b"bfv:generic-schema:v1",
-                vec![vec![[0x55; 32]]],
-            )
-            .expect_err("generic STARK prover must not target BFV full-bootstrap aliases");
-            assert!(
-                err.contains("BFV full-bootstrap"),
-                "unexpected BFV alias rejection for {circuit_id}: {err}"
-            );
+        for backend in [
+            ZK_BACKEND_STARK_FRI_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            let prefixed_alias = format!("{backend}:{canonical}");
+            let slash_alias = format!("{backend}/{canonical}");
+            for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+                let vk_payload = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                    blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    merkle_arity: 2,
+                    hash_fn: if backend.contains("/poseidon2-") {
+                        STARK_HASH_POSEIDON2_V1
+                    } else {
+                        STARK_HASH_SHA256_V1
+                    },
+                };
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
+                );
+                let err = prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"bfv:generic-schema:v1",
+                    vec![vec![[0x55; 32]]],
+                )
+                .expect_err("generic STARK prover must not target BFV full-bootstrap aliases");
+                assert!(
+                    err.contains("BFV full-bootstrap"),
+                    "unexpected BFV alias rejection for {backend} / {circuit_id}: {err}"
+                );
+            }
         }
     }
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_bfv_full_bootstrap_alias_generic_binding_air() {
-        let backend = iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1;
         let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
-        let prefixed_alias = format!("{backend}:{canonical}");
-        let slash_alias = format!("{backend}/{canonical}");
-        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
-            let vk_box = VerifyingKeyBox::new(
-                backend.to_owned(),
-                norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
-            );
-            let proof = weak_stark_open_verify_proof(
-                backend,
-                &circuit_id,
-                &vk_box,
-                b"bfv:forged-generic-schema:v1".to_vec(),
-                vec![vec![[0x66; 32]]],
-            );
-            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
-            assert!(
-                !report.ok,
-                "BFV full-bootstrap alias {circuit_id} must not verify as generic binding AIR"
-            );
+        for backend in [
+            ZK_BACKEND_STARK_FRI_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            let prefixed_alias = format!("{backend}:{canonical}");
+            let slash_alias = format!("{backend}/{canonical}");
+            for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+                let vk_payload = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                    blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    merkle_arity: 2,
+                    hash_fn: if backend.contains("/poseidon2-") {
+                        STARK_HASH_POSEIDON2_V1
+                    } else {
+                        STARK_HASH_SHA256_V1
+                    },
+                };
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
+                );
+                let proof = weak_stark_open_verify_proof(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"bfv:forged-generic-schema:v1".to_vec(),
+                    vec![vec![[0x66; 32]]],
+                );
+                let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+                assert!(
+                    !report.ok,
+                    "BFV full-bootstrap alias {backend} / {circuit_id} must not verify as generic binding AIR"
+                );
+            }
         }
     }
 
@@ -23170,7 +23269,7 @@ mod stark_prover_tests {
     #[test]
     fn verify_stark_open_verify_envelope_rejects_noncanonical_outer_shape() {
         let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
-        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 7] = [
             ("backend tag", |outer| {
                 outer.backend = BackendTag::Halo2IpaPasta
             }),
@@ -23178,6 +23277,9 @@ mod stark_prover_tests {
             ("zero verifier-key hash", |outer| outer.vk_hash = [0u8; 32]),
             ("empty public inputs", |outer| outer.public_inputs.clear()),
             ("empty proof bytes", |outer| outer.proof_bytes.clear()),
+            ("all-zero proof bytes", |outer| {
+                outer.proof_bytes = vec![0u8; 16]
+            }),
             ("auxiliary bytes", |outer| {
                 outer.aux = b"side-channel".to_vec()
             }),
@@ -42679,8 +42781,15 @@ mod kagemusha_folded_real_prover_tests {
             VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID);
         attach_recursive_aggregation_envelope(&mut compact_bundle, &compact_vk_box);
         let compact_record = recursive_compact_record(&compact_vk_box);
-        let semantic_compact_token =
+        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
+        let mut semantic_compact_token =
             recursive_compact_token_shape(&folded_public_inputs, &compact_bundle.recursive_proof);
+        attach_recursive_compact_one_hop_zk1_instance_envelope(
+            &mut semantic_compact_token,
+            &compact_vk_box,
+            &compact_bundle.recursive_proof.public_inputs,
+            dummy_compact_proof.as_slice(),
+        );
 
         let err = preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id(
             &semantic_compact_token,
@@ -42731,7 +42840,6 @@ mod kagemusha_folded_real_prover_tests {
             short_compact_proof.len() < KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
             "test short proof must exercise the ABI-7 compact proof-size floor"
         );
-        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
         let compact_recursive_proof =
             iroha_data_model::offline::KagemushaRecursiveAggregationProof {
                 verifier_key_id: VerifyingKeyId::new(
@@ -43395,6 +43503,84 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             err.contains("Kagemusha recursive compact proof requires at least one hop"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_compact_record_preflight_rejects_pallas_count_mismatch_before_zip() {
+        let (chain_id, asset, first_hop, second_hop, record) =
+            sample_confidential_v2_two_hop_lineage();
+        let mut missing_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: vec![first_hop.as_bundle_step(), second_hop.as_bundle_step()],
+            },
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: first_hop.attachment.vk_ref.clone(),
+                record,
+            }],
+        };
+        let pallas_archive = pallas_open_envelope_archive_for_record_bundle(
+            &missing_record_bundle,
+            "kagemusha-recursive-compact-helper-count-missing",
+        );
+        let mut missing_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_archive).expect("decode helper-count Pallas archive");
+        missing_envelopes.pop();
+        missing_record_bundle.bundle.steps[1].attachment.proof.bytes = vec![0xA7];
+
+        let err = validate_kagemusha_recursive_compact_record_envelope_preflight(
+            &missing_record_bundle,
+            &missing_envelopes,
+            Some(7),
+        )
+        .expect_err("missing helper-level Pallas envelope must reject before zip preflight");
+        assert!(
+            err.contains(
+                "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch: expected 2, found 1"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope")
+                && !err.contains("Kagemusha fold hop proof verification failed"),
+            "helper-level Pallas count mismatch should reject before hop proof decode or verification: {err}"
+        );
+
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut extra_record_bundle = one_hop_record_bundle(chain_id, asset, &hop, &record);
+        let pallas_archive = one_hop_pallas_open_envelope_archive(
+            &extra_record_bundle,
+            "kagemusha-recursive-compact-helper-count-extra",
+        );
+        let mut extra_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_archive)
+                .expect("decode helper-count one-hop Pallas archive");
+        extra_envelopes.push(
+            extra_envelopes
+                .first()
+                .expect("one-hop helper-count archive contains one envelope")
+                .clone(),
+        );
+        extra_record_bundle.bundle.steps[0].attachment.proof.bytes = vec![0xA7];
+
+        let err = validate_kagemusha_recursive_compact_record_envelope_preflight(
+            &extra_record_bundle,
+            &extra_envelopes,
+            Some(7),
+        )
+        .expect_err("extra helper-level Pallas envelope must reject before zip preflight");
+        assert!(
+            err.contains(
+                "Kagemusha recursive compact record-backed Pallas preflight envelope count mismatch: expected 1, found 2"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope")
+                && !err.contains("Kagemusha fold hop proof verification failed"),
+            "helper-level extra Pallas count mismatch should reject before hop proof decode or verification: {err}"
         );
     }
 
@@ -46317,9 +46503,21 @@ mod kagemusha_folded_real_prover_tests {
     fn sample_verified_hop(root_before: [u8; 32], root_after: [u8; 32], seed: u8) -> OwnedFoldHop {
         let mut hop = sample_generic_verified_hop(root_before, root_after, seed);
         mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
+            use halo2_proofs::halo2curves::pasta::Fp;
+
             envelope.circuit_id = confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned();
             envelope.public_inputs =
                 confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+            let instance_columns = (0..KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS)
+                .map(|column_index| {
+                    vec![Fp::from(
+                        u64::from(seed)
+                            + u64::try_from(column_index).expect("column index fits u64")
+                            + 1,
+                    )]
+                })
+                .collect::<Vec<_>>();
+            rewrite_zk1_open_verify_envelope_instances(envelope, instance_columns);
         });
         hop
     }
@@ -47590,6 +47788,90 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_public_input_bindings_before_proof_verify() {
+        let assert_binding_rejects =
+            |label: &str, expected: &str, mutate: fn(&mut KagemushaVerifiedFoldBundle)| {
+                let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+                let mut bundle = KagemushaVerifiedFoldBundle {
+                    chain_id,
+                    asset,
+                    steps: vec![hop.as_bundle_step()],
+                };
+                mutate(&mut bundle);
+
+                let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle).expect_err(
+                    "direct public-input binding mismatch must reject before proof verification",
+                );
+                assert!(err.contains(expected), "{label}: unexpected error: {err}");
+                assert!(
+                    !err.contains("Kagemusha fold hop proof verification failed"),
+                    "{label}: direct public-input binding error should come before proof verification: {err}"
+                );
+
+                let id = hop.attachment.vk_ref.clone();
+                let records = [KagemushaHopVerifierRecord {
+                    id: &id,
+                    record: &record,
+                }];
+                let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+                    &bundle, &records,
+                )
+                .expect_err(
+                    "record-backed public-input binding mismatch must reject before proof verification",
+                );
+                assert!(err.contains(expected), "{label}: unexpected error: {err}");
+                assert!(
+                    !err.contains("Kagemusha fold hop proof verification failed"),
+                    "{label}: record-backed public-input binding error should come before proof verification: {err}"
+                );
+            };
+
+        assert_binding_rejects(
+            "wrong chain id",
+            "Kagemusha fold confidential-v2 chain tag mismatch",
+            |bundle| {
+                bundle.chain_id = "kagemusha-fold-wrong-chain"
+                    .parse()
+                    .expect("wrong chain id");
+            },
+        );
+        assert_binding_rejects(
+            "wrong asset definition",
+            "Kagemusha fold confidential-v2 asset tag mismatch",
+            |bundle| {
+                bundle.asset = AssetDefinitionId::new(
+                    DomainId::try_new("offline", "wrong").expect("wrong domain id"),
+                    "kgm-wrong".parse().expect("wrong asset name"),
+                );
+            },
+        );
+        assert_binding_rejects(
+            "metadata root_before splice",
+            "Kagemusha fold confidential-v2 root mismatch",
+            |bundle| {
+                bundle.steps[0].root_before =
+                    fixed_bytes(b"kagemusha-public-input-wrong-root-before");
+            },
+        );
+        assert_binding_rejects(
+            "metadata nullifier splice",
+            "Kagemusha fold confidential-v2 nullifier mismatch",
+            |bundle| {
+                bundle.steps[0].input_nullifiers[0] =
+                    fixed_bytes(b"kagemusha-public-input-wrong-nullifier");
+            },
+        );
+        assert_binding_rejects(
+            "metadata output commitment splice",
+            "Kagemusha fold confidential-v2 output commitment mismatch",
+            |bundle| {
+                bundle.steps[0].output_commitments[0] =
+                    fixed_bytes(b"kagemusha-public-input-wrong-output");
+            },
+        );
+    }
+
+    #[test]
     fn kagemusha_verified_folded_public_inputs_from_bundle_rejects_oversized_hop_proof() {
         let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
         let mut bundle = KagemushaVerifiedFoldBundle {
@@ -47758,6 +48040,49 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             !err.contains("OpenVerifyEnvelope"),
             "record-backed root-continuity error should come before proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_unchanged_root_before_proof_decode() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut step = hop.as_bundle_step();
+        step.root_after = step.root_before;
+        step.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![step],
+        };
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("unchanged root transition must reject before proof decode");
+        assert!(
+            err.contains("must change the Merkle root"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "unchanged-root error should come before proof decoding: {err}"
+        );
+
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err(
+                    "record-backed unchanged root transition must reject before proof decode",
+                );
+        assert!(
+            err.contains("must change the Merkle root"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "record-backed unchanged-root error should come before proof decoding: {err}"
         );
     }
 
@@ -50056,6 +50381,53 @@ mod kagemusha_folded_real_prover_tests {
         let err = kagemusha_fold_step_public_inputs_digest(&empty_instance_column)
             .expect_err("empty Kagemusha proof instance column must reject");
         assert!(err.contains("instance column"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_proof_statement_digest_rejects_noncanonical_halo2_public_instance_shape() {
+        use halo2_proofs::halo2curves::pasta::Fp;
+
+        let (_, _, mut extra_column, _) = sample_confidential_v2_verified_hop();
+        mutate_open_verify_envelope(&mut extra_column.attachment.proof, |envelope| {
+            let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                .expect("confidential-transfer-v2 ZK1 public instances");
+            assert_eq!(
+                columns.len(),
+                KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS
+            );
+            columns.push(vec![Fp::from(10_u64)]);
+            rewrite_zk1_open_verify_envelope_instances(envelope, columns);
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&extra_column.attachment.proof)
+            .expect_err("extra public instance column must reject before proof verification");
+        assert!(
+            err.contains("exactly 9 single-row public instance columns")
+                && err.contains("found 10 columns"),
+            "unexpected error: {err}"
+        );
+
+        let (_, _, mut extra_row, _) = sample_confidential_v2_verified_hop();
+        mutate_open_verify_envelope(&mut extra_row.attachment.proof, |envelope| {
+            let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                .expect("confidential-transfer-v2 ZK1 public instances");
+            assert_eq!(
+                columns.len(),
+                KAGEMUSHA_CONFIDENTIAL_TRANSFER_V2_PUBLIC_INSTANCE_COLUMNS
+            );
+            for (column_index, column) in columns.iter_mut().enumerate() {
+                column.push(Fp::from(
+                    11_u64 + u64::try_from(column_index).expect("column index fits u64"),
+                ));
+            }
+            rewrite_zk1_open_verify_envelope_instances(envelope, columns);
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&extra_row.attachment.proof)
+            .expect_err("multi-row public instance column must reject before proof verification");
+        assert!(
+            err.contains("exactly 9 single-row public instance columns")
+                && err.contains("column 0 has 2 rows"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -73783,9 +74155,31 @@ mod preverified_key_tests {
                 PreverifyResult::MalformedProof,
             ),
             (
+                "invalid_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id = "halo2/ipa:::preverify-test".to_owned();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "oversized_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id = "a"
+                        .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
                 "empty_public_inputs",
                 mutate_preverify_envelope(proof.clone(), |envelope| {
                     envelope.public_inputs.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "all_zero_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = vec![0; 4];
                 }),
                 PreverifyResult::MalformedProof,
             ),
@@ -73804,6 +74198,13 @@ mod preverified_key_tests {
                 "empty_proof_bytes",
                 mutate_preverify_envelope(proof.clone(), |envelope| {
                     envelope.proof_bytes.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "all_zero_proof_bytes",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.proof_bytes = vec![0; 16];
                 }),
                 PreverifyResult::MalformedProof,
             ),

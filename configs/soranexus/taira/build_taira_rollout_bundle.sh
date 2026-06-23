@@ -7,15 +7,18 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/dist/taira-rollout}"
 PROFILE="${PROFILE:-release}"
 ALLOW_DIRTY=0
 SKIP_BUILD=0
+SKIP_ROUTER_REGRESSION=0
 
 usage() {
   cat <<'EOF'
 Usage: build_taira_rollout_bundle.sh [--output-dir PATH] [--profile debug|release]
                                      [--allow-dirty] [--skip-build]
+                                     [--skip-router-regression]
 
 Build a deterministic public-Taira rollout bundle from the current `../iroha`
 checkout. By default the script refuses to package a dirty worktree so the
-result can be tied to one exact git revision.
+result can be tied to one exact git revision. It also runs the focused
+`iroha_core` SoraSwap deploy-route router regression before packaging.
 
 The bundle contains:
   - `irohad` and `iroha` from `target/<profile>/`
@@ -55,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-build)
       SKIP_BUILD=1
+      shift
+      ;;
+    --skip-router-regression)
+      SKIP_ROUTER_REGRESSION=1
       shift
       ;;
     -h|--help)
@@ -97,6 +104,13 @@ if [[ -n "$git_status" && $ALLOW_DIRTY -ne 1 ]]; then
   printf '%s\n' "$git_status" >&2
   echo "rerun with --allow-dirty only for local debugging" >&2
   exit 1
+fi
+
+if [[ $SKIP_ROUTER_REGRESSION -ne 1 ]]; then
+  (
+    cd "$REPO_ROOT"
+    cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
+  )
 fi
 
 timestamp="$(env TZ=UTC date '+%Y%m%dT%H%M%SZ')"
@@ -159,6 +173,7 @@ GENERATED_AT="$timestamp" \
 PROFILE_NAME="$PROFILE" \
 BUNDLE_NAME="$bundle_name" \
 REPO_ROOT="$REPO_ROOT" \
+SKIP_ROUTER_REGRESSION="$SKIP_ROUTER_REGRESSION" \
 python3 - <<'PY' >"$manifest_path"
 import json
 import os
@@ -181,6 +196,13 @@ payload = {
         "bin/sorafs_manifest_stub",
         "bin/sorafs_tx_stdin_builder",
     ],
+    "prebundle_checks": [
+        {
+            "name": "soraswap_smart_contract_deploy_router_regression",
+            "command": "cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib",
+            "skipped": os.environ["SKIP_ROUTER_REGRESSION"] == "1",
+        },
+    ],
     "included_paths": [
         "configs/soranexus/taira/",
         "scripts/render_taira_validator_bundle.py",
@@ -194,7 +216,7 @@ payload = {
         "configs/soranexus/taira/install_taira_edge_nginx_conf.sh and local-roster [[soracloud_alias_routes]] entries for dedicated runtime aliases such as solswap-indexer.sora",
         "restart the validator with the shipped taira-irohad.service or equivalent",
         "run configs/soranexus/taira/check_sorafs_rollout.sh after the node is back",
-        "run configs/soranexus/taira/verify_soraswap_rollout.sh after the node is back",
+        "run configs/soranexus/taira/verify_soraswap_rollout.sh with its default router regression enabled after the node is back",
     ],
 }
 print(json.dumps(payload, indent=2, sort_keys=True))

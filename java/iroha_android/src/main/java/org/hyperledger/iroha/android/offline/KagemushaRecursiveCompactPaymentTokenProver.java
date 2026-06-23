@@ -15,9 +15,10 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
       "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
   private static final String RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT =
       "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
-  private static final boolean NATIVE_VERIFIER_AVAILABLE = loadVerifierLibrary();
-  private static final boolean NATIVE_PROJECTION_VERIFIER_AVAILABLE = loadProjectionVerifierLibrary();
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
+  private static final boolean NATIVE_VERIFIER_AVAILABLE = loadVerifierLibrary();
+  private static final boolean NATIVE_PROJECTION_AVAILABLE = loadProjectionLibrary();
+  private static final boolean NATIVE_PROJECTION_VERIFIER_AVAILABLE = loadProjectionVerifierLibrary();
 
   private KagemushaRecursiveCompactPaymentTokenProver() {}
 
@@ -27,6 +28,10 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
 
   public static boolean isVerifierNativeAvailable() {
     return NATIVE_VERIFIER_AVAILABLE;
+  }
+
+  public static boolean isProjectionNativeAvailable() {
+    return NATIVE_PROJECTION_AVAILABLE;
   }
 
   public static boolean isProjectionVerifierNativeAvailable() {
@@ -70,7 +75,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
   public static byte[] recursiveSpendCompactPaymentTokenFromBundle(
       final byte[] bundleArchive) {
     final byte[] bundle = ownedNativeInput(bundleArchive, "bundleArchive");
-    requireNative();
+    requireProjectionNative();
     final byte[] tokenArchive = nativeRecursiveSpendCompactPaymentTokenFromBundle(bundle);
     return KagemushaCompactPaymentTokenProver.requireNativeOutput(
         tokenArchive, "nativeRecursiveSpendCompactPaymentTokenFromBundle");
@@ -209,6 +214,14 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
     }
   }
 
+  private static void requireProjectionNative() {
+    if (!NATIVE_PROJECTION_AVAILABLE) {
+      throw new IllegalStateException(
+          LIBRARY_NAME
+              + " ABI 7 recursive compact-token projection is not available in this runtime");
+    }
+  }
+
   private static void requireProjectionVerifierNative() {
     if (!NATIVE_PROJECTION_VERIFIER_AVAILABLE) {
       throw new IllegalStateException(
@@ -230,10 +243,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
           final boolean verifierRejects =
               KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
                   () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0], new byte[0]));
-          final boolean projectionRejects =
-              KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
-                  () -> nativeRecursiveSpendCompactPaymentTokenFromBundle(new byte[0]));
-          return proverRejects && verifierRejects && projectionRejects;
+          return proverRejects && verifierRejects;
         },
         REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
@@ -245,6 +255,16 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
         () ->
             KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
                 () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0], new byte[0])),
+        REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+  }
+
+  private static boolean loadProjectionLibrary() {
+    return KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> System.loadLibrary(LIBRARY_NAME),
+        KagemushaRecursiveCompactPaymentTokenProver::nativeBridgeAbiVersion,
+        () ->
+            KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
+                () -> nativeRecursiveSpendCompactPaymentTokenFromBundle(new byte[0])),
         REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 

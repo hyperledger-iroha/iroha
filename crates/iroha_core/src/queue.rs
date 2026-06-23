@@ -419,9 +419,13 @@ impl QueuePressureSnapshot {
     }
 
     /// Convert the richer pressure snapshot into the coarse backpressure state.
+    ///
+    /// Coarse backpressure gates admission and consensus pacing. Keep it tied to
+    /// capacity saturation; age pressure stays available through the richer
+    /// snapshot for status reporting and diagnostics.
     #[must_use]
     pub const fn into_backpressure(self) -> BackpressureState {
-        if self.is_saturated() {
+        if self.saturated_by_count {
             BackpressureState::Saturated {
                 queued: self.queued_tx_count,
                 capacity: self.capacity,
@@ -446,7 +450,7 @@ pub enum BackpressureState {
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
-    /// Queue exceeded a capacity or latency budget; callers should defer submissions.
+    /// Queue reached capacity; callers should defer submissions.
     Saturated {
         /// Number of transactions still waiting in the queue when saturation triggered.
         queued: usize,
@@ -4698,7 +4702,7 @@ impl Queue {
                 tel,
                 snapshot.queued_tx_count as u64,
                 self.capacity.get() as u64,
-                state.is_saturated(),
+                snapshot.saturated_by_count,
             );
         }
         #[cfg(not(feature = "telemetry"))]
@@ -11051,7 +11055,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn backpressure_state_saturates_on_oldest_queue_age() {
+    async fn backpressure_state_ignores_oldest_queue_age_without_capacity_pressure() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
@@ -11068,7 +11072,7 @@ pub mod tests {
         let snapshot = queue.pressure_snapshot();
         assert!(!snapshot.saturated_by_count);
         assert!(snapshot.saturated_by_age);
-        assert!(queue.current_backpressure().is_saturated());
+        assert!(!queue.current_backpressure().is_saturated());
     }
 
     #[tokio::test]
@@ -11088,7 +11092,7 @@ pub mod tests {
 
         assert_eq!(snapshot.oldest_queued_tx_age_ms, 6);
         assert!(snapshot.saturated_by_age);
-        assert!(queue.current_backpressure().is_saturated());
+        assert!(!queue.current_backpressure().is_saturated());
     }
 
     #[tokio::test]

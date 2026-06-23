@@ -484,6 +484,49 @@ def _live_record(module, *, program_id, programdata_address, program_bytes):
     }
 
 
+def test_solana_live_cli_omits_unknown_summary_fields(monkeypatch, capsys):
+    module = load_live_module()
+    program_id = _default_program_id(module)
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=SOLANA_VERIFIER_PROGRAM_BYTES,
+    )
+    live.update(
+        {
+            "rpc_url": "https://solana.example.invalid/secret-token-provider",
+            "operator_note": "safe note",
+            "secret-token-summary": "secret-token-value",
+            7: "secret-token-int-key",
+        }
+    )
+    monkeypatch.setattr(module, "collect_live_evidence", lambda *args, **kwargs: live)
+
+    exit_code = module.main(
+        [
+            "--rpc-url",
+            "https://solana.example.invalid/secret-token-provider",
+            "--verifier-program-id",
+            program_id,
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["verifier_program_id"] == program_id
+    assert payload["programdata_address"] == programdata_address
+    assert "rpc_url" not in payload
+    assert "operator_note" not in payload
+    assert "secret-token-summary" not in payload
+    assert "7" not in payload
+    assert "safe note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_live_solana_evidence_collects_immutable_program_hash_and_toml():
     module = load_live_module()
     program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))

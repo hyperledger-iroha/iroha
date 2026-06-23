@@ -16,6 +16,11 @@ public let sccpBscMainnetChainId: UInt64 = 56
 /// BNB Smart Chain mainnet EVM chain id encoded as a 32-byte ABI word.
 public let sccpBscMainnetNetworkId =
     "0x0000000000000000000000000000000000000000000000000000000000000038"
+/// BNB Smart Chain testnet EVM chain id.
+public let sccpBscTestnetChainId: UInt64 = 97
+/// BNB Smart Chain testnet EVM chain id encoded as a 32-byte ABI word.
+public let sccpBscTestnetNetworkId =
+    "0x0000000000000000000000000000000000000000000000000000000000000061"
 
 /// SCCP domain id for TRON.
 public let sccpDomainTron: UInt32 = 5
@@ -524,6 +529,46 @@ public func sccpBscMainnetDestinationBindingHash(
     ).hash
 }
 
+/// Governed BSC testnet destination binding for UI-side SCCP proof generation.
+public func sccpBscTestnetDestinationBinding(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpBscTestnetNetworkId
+) throws -> EvmSccpDestinationBinding {
+    let binding = try sccpEvmDestinationBinding(
+        sourceDomain: sccpDomainSora,
+        targetDomain: sccpDomainBsc,
+        networkId: networkId,
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash
+    )
+    guard binding.networkId == sccpBscTestnetNetworkId else {
+        throw SccpSourceProofHashError.invalidSourceMaterial("networkId")
+    }
+    return binding
+}
+
+/// Canonical governed BSC testnet destination binding hash.
+public func sccpBscTestnetDestinationBindingHash(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpBscTestnetNetworkId
+) throws -> String {
+    try sccpBscTestnetDestinationBinding(
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash,
+        networkId: networkId
+    ).hash
+}
+
 /// Governed TRON destination binding for UI-side SCCP proof generation.
 public func sccpTronDestinationBinding(
     sourceDomain: UInt32 = sccpDomainSora,
@@ -998,6 +1043,8 @@ public func sccpSolanaFullLightClientGateHash(
     sourceProofAppendDataVector(Data(sccpSolanaMainnetGenesisHash.utf8), to: &out)
     try out.append(sourceProofBytesFromHex32(materialHash, field: "sourceVerifierMaterialHash"))
     try out.append(sourceProofBytesFromHex32(deploymentHash, field: "sourceAdapterDeploymentHash"))
+    out.append(adapterVerifierVkHashData)
+    out.append(deploymentReceiptHashData)
     for (verifierId, _, verifierHash) in verifierHashes {
         sourceProofAppendDataVector(Data(verifierId.utf8), to: &out)
         out.append(verifierHash)
@@ -1141,6 +1188,8 @@ public func sccpTonFullLightClientGateHash(
     out.append(material.sourceStateVerifierHash)
     try out.append(sourceProofBytesFromHex32(materialHash, field: "sourceVerifierMaterialHash"))
     try out.append(sourceProofBytesFromHex32(deploymentHash, field: "sourceAdapterDeploymentHash"))
+    out.append(auditExistingAdapterVerifierVkHash)
+    out.append(auditExistingDeploymentReceiptHash)
     for (verifierId, _, verifierHash) in verifierHashes {
         sourceProofAppendDataVector(Data(verifierId.utf8), to: &out)
         out.append(verifierHash)

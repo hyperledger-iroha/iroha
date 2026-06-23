@@ -7652,8 +7652,6 @@ impl<'state> StateBlock<'state> {
             self.world.axt_policies.insert(dsid, policy);
         }
 
-        let retention_slots = self.nexus.axt.replay_retention_slots.get();
-        self.prune_axt_replay_ledger(current_slot, retention_slots);
         for handle in &envelope.handles {
             let retain_until_slot = retain_until_slot_for_handle(handle, &self.nexus, current_slot);
             let key = AxtHandleReplayKey::from_handle(&handle.handle);
@@ -18631,7 +18629,7 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        if let Err(err) = journal.persist() {
+        if let Err(err) = journal.persist_buffered() {
             warn!(
                 ?err,
                 path = %path.display(),
@@ -18645,6 +18643,19 @@ impl State {
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
         }
+    }
+
+    fn upsert_commit_roster_journal_memory(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) {
+        self.commit_roster_journal.write().upsert(
+            commit_qc.clone(),
+            checkpoint.clone(),
+            stake_snapshot,
+        );
     }
 
     /// Fetch a commit-roster snapshot for `height`/`block_hash` from the persisted journal.
@@ -18668,7 +18679,41 @@ impl State {
             );
             return None;
         }
-        let snapshot = self.commit_roster_journal.read().get(height, block_hash)?;
+        let snapshot = self
+            .commit_roster_journal
+            .read()
+            .get(height, block_hash)
+            .or_else(|| {
+                let sidecar = self.kura.read_roster_metadata(height)?;
+                if sidecar.height != height || sidecar.block_hash != block_hash {
+                    return None;
+                }
+                let commit_qc = sidecar.commit_qc?;
+                let validator_checkpoint = sidecar.validator_checkpoint?;
+                if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                    || commit_qc.height != height
+                    || commit_qc.subject_block_hash != block_hash
+                    || validator_checkpoint.height != height
+                    || validator_checkpoint.block_hash != block_hash
+                    || validator_checkpoint.view != commit_qc.view
+                    || validator_checkpoint.validator_set != commit_qc.validator_set
+                    || validator_checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
+                    || validator_checkpoint.bls_aggregate_signature
+                        != commit_qc.aggregate.bls_aggregate_signature
+                {
+                    return None;
+                }
+                Some(CommitRosterSnapshot {
+                    commit_qc,
+                    validator_checkpoint,
+                    stake_snapshot: sidecar.stake_snapshot,
+                })
+            })?;
+        self.upsert_commit_roster_journal_memory(
+            &snapshot.commit_qc,
+            &snapshot.validator_checkpoint,
+            snapshot.stake_snapshot.clone(),
+        );
         status::record_commit_qc(snapshot.commit_qc.clone());
         status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
         Some(snapshot)
@@ -18732,6 +18777,7 @@ impl State {
         update_world: bool,
         update_status: bool,
         write_sidecar: bool,
+        persist_journal: bool,
     ) -> bool {
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
@@ -18862,7 +18908,11 @@ impl State {
             status::record_validator_checkpoint(checkpoint.clone());
         }
         let sidecar_snapshot = stake_snapshot.clone();
-        self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
+        if persist_journal {
+            self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
+        } else {
+            self.upsert_commit_roster_journal_memory(commit_qc, checkpoint, stake_snapshot);
+        }
         if write_sidecar {
             self.write_commit_roster_sidecar(commit_qc, checkpoint, sidecar_snapshot);
         }
@@ -18911,16 +18961,55 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
+        self.record_commit_roster_internal(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            true,
+            true,
+            true,
+            true,
+        )
     }
 
+    /// Record commit-roster metadata as a consensus recovery hint.
+    ///
+    /// This keeps status caches and the buffered journal fresh for block-sync validation without
+    /// taking the WSV commit-QC write path or writing committed-height sidecars before the block is
+    /// durably committed.
+    pub(crate) fn record_commit_roster_hint(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            false,
+            true,
+            false,
+            false,
+        )
+    }
+
+    /// Record commit-roster artifacts for a durably committed block, including sidecar.
     pub(crate) fn record_commit_roster_with_sidecar(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
+        self.record_commit_roster_internal(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            true,
+            true,
+            true,
+            false,
+        )
     }
 
     fn restore_commit_roster_history(&self) {
@@ -27057,6 +27146,21 @@ fn p95_u64(values: &[u64]) -> Option<u64> {
     sorted.get(index).copied()
 }
 
+fn autoscale_window_stats(
+    samples: &[AutoscaleSample],
+    target_block_ms: u64,
+) -> (Option<u64>, Option<u64>) {
+    let latency_values: Vec<u64> = samples.iter().map(|sample| sample.latency_ms).collect();
+    let utilization_values: Vec<u64> = samples
+        .iter()
+        .map(|sample| sample.utilization_permille)
+        .collect();
+    let latency_ratio_p95_permille = p95_u64(&latency_values)
+        .map(|latency| latency.saturating_mul(1_000) / target_block_ms.max(1));
+    let utilization_p95_permille = p95_u64(&utilization_values);
+    (latency_ratio_p95_permille, utilization_p95_permille)
+}
+
 impl_state_ro! { StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>, StateQueryView<'_> }
 
 /// Separate trait for either [`State`] or [`StateBlock`].
@@ -27510,10 +27614,6 @@ impl<'state> StateBlock<'state> {
         let axt_current_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
         let implicit_account_creations_in_block_so_far = self.implicit_account_creations_in_block;
-        self.prune_axt_replay_ledger(
-            axt_current_slot,
-            self.nexus.axt.replay_retention_slots.get(),
-        );
         let mut world = self.world.trasaction(
             #[cfg(feature = "telemetry")]
             Some(self.telemetry),
@@ -27950,8 +28050,6 @@ impl<'state> StateBlock<'state> {
         }
         let current_slot =
             current_axt_slot_from_block(&block.as_ref().header(), self.nexus.axt.slot_length_ms);
-        let retention_slots = self.nexus.axt.replay_retention_slots.get();
-        self.prune_axt_replay_ledger(current_slot, retention_slots);
         if let Some(envelopes) = block.as_ref().axt_envelopes() {
             if !envelopes.is_empty() {
                 iroha_logger::trace!(
@@ -28150,6 +28248,7 @@ impl<'state> StateBlock<'state> {
                             false,
                             false,
                             write_commit_roster_sidecar,
+                            false,
                         )
                     } else {
                         self.state_ref.record_commit_roster_internal(
@@ -28159,6 +28258,7 @@ impl<'state> StateBlock<'state> {
                             false,
                             true,
                             write_commit_roster_sidecar,
+                            false,
                         )
                     };
                     if recorded {
@@ -28227,16 +28327,17 @@ impl<'state> StateBlock<'state> {
             _ => return,
         };
 
-        let scale_out_samples = self.collect_autoscale_samples(
-            block,
-            usize::from(autoscale.scale_out_window_blocks.get()),
-            active_lanes,
-        );
-        let scale_in_samples = self.collect_autoscale_samples(
-            block,
-            usize::from(autoscale.scale_in_window_blocks.get()),
-            active_lanes,
-        );
+        let can_scale_out = active_lanes < u64::from(autoscale.max_lanes.get());
+        let retire_lane = if active_lanes > u64::from(autoscale.min_lanes.get()) {
+            self.select_autoscale_lane_for_retire()
+        } else {
+            None
+        };
+        let can_scale_in = retire_lane.is_some();
+
+        if !can_scale_out && !can_scale_in {
+            return;
+        }
 
         let target_block_ms = autoscale.target_block_ms.get();
         let latency_out_permille = autoscale_ratio_permille(autoscale.scale_out_latency_ratio);
@@ -28245,54 +28346,46 @@ impl<'state> StateBlock<'state> {
         let utilization_in_permille =
             autoscale_ratio_permille(autoscale.scale_in_utilization_ratio);
 
-        let out_latency_values: Vec<u64> = scale_out_samples
-            .iter()
-            .map(|sample| sample.latency_ms)
-            .collect();
-        let out_util_values: Vec<u64> = scale_out_samples
-            .iter()
-            .map(|sample| sample.utilization_permille)
-            .collect();
-        let in_latency_values: Vec<u64> = scale_in_samples
-            .iter()
-            .map(|sample| sample.latency_ms)
-            .collect();
-        let in_util_values: Vec<u64> = scale_in_samples
-            .iter()
-            .map(|sample| sample.utilization_permille)
-            .collect();
+        let (scale_out_triggered, out_latency_ratio_permille, out_utilization_p95_permille) =
+            if can_scale_out {
+                let window_blocks = usize::from(autoscale.scale_out_window_blocks.get());
+                let samples = self.collect_autoscale_samples(block, window_blocks, active_lanes);
+                let (latency_ratio_p95_permille, utilization_p95_permille) =
+                    autoscale_window_stats(&samples, target_block_ms);
+                let latency_ratio = latency_ratio_p95_permille.unwrap_or_default();
+                (
+                    samples.len() >= window_blocks
+                        && latency_ratio >= latency_out_permille
+                        && utilization_p95_permille.unwrap_or_default() >= utilization_out_permille,
+                    latency_ratio,
+                    utilization_p95_permille,
+                )
+            } else {
+                (false, 0, None)
+            };
 
-        let out_latency_p95_ms = p95_u64(&out_latency_values);
-        let out_utilization_p95_permille = p95_u64(&out_util_values);
-        let in_latency_p95_ms = p95_u64(&in_latency_values);
-        let in_utilization_p95_permille = p95_u64(&in_util_values);
-
-        let out_latency_ratio_permille = out_latency_p95_ms
-            .map(|latency| latency.saturating_mul(1_000) / target_block_ms)
-            .unwrap_or(0);
-        let in_latency_ratio_permille = in_latency_p95_ms
-            .map(|latency| latency.saturating_mul(1_000) / target_block_ms)
-            .unwrap_or(0);
-        let in_latency_ratio_p95_permille =
-            in_latency_p95_ms.map(|latency| latency.saturating_mul(1_000) / target_block_ms);
-
-        let can_scale_out = active_lanes < u64::from(autoscale.max_lanes.get());
-        let can_scale_in = active_lanes > u64::from(autoscale.min_lanes.get());
-
-        let scale_out_triggered = can_scale_out
-            && scale_out_samples.len() >= usize::from(autoscale.scale_out_window_blocks.get())
-            && out_latency_ratio_permille >= latency_out_permille
-            && out_utilization_p95_permille.unwrap_or_default() >= utilization_out_permille;
-
-        let scale_in_triggered = autoscale_scale_in_triggered(
-            can_scale_in,
-            scale_in_samples.len(),
-            usize::from(autoscale.scale_in_window_blocks.get()),
-            in_latency_ratio_p95_permille,
-            autoscale_ratio_permille(autoscale.scale_in_latency_ratio),
-            in_utilization_p95_permille,
-            utilization_in_permille,
-        );
+        let (scale_in_triggered, in_latency_ratio_permille, in_utilization_p95_permille) =
+            if can_scale_in {
+                let window_blocks = usize::from(autoscale.scale_in_window_blocks.get());
+                let samples = self.collect_autoscale_samples(block, window_blocks, active_lanes);
+                let (latency_ratio_p95_permille, utilization_p95_permille) =
+                    autoscale_window_stats(&samples, target_block_ms);
+                (
+                    autoscale_scale_in_triggered(
+                        true,
+                        samples.len(),
+                        window_blocks,
+                        latency_ratio_p95_permille,
+                        autoscale_ratio_permille(autoscale.scale_in_latency_ratio),
+                        utilization_p95_permille,
+                        utilization_in_permille,
+                    ),
+                    latency_ratio_p95_permille.unwrap_or_default(),
+                    utilization_p95_permille,
+                )
+            } else {
+                (false, 0, None)
+            };
 
         if scale_out_triggered {
             let Some(next_lane_id) =
@@ -28344,7 +28437,7 @@ impl<'state> StateBlock<'state> {
         }
 
         if scale_in_triggered {
-            let Some(retire_lane_id) = self.select_autoscale_lane_for_retire() else {
+            let Some(retire_lane_id) = retire_lane else {
                 return;
             };
             let plan = iroha_data_model::nexus::LaneLifecyclePlan {
@@ -28582,6 +28675,11 @@ impl<'state> StateBlock<'state> {
     }
 
     fn apply_replayed_axt_envelopes(&mut self, envelopes: &[AxtEnvelopeRecord], current_slot: u64) {
+        if envelopes.is_empty() {
+            return;
+        }
+        let retention_slots = self.nexus.axt.replay_retention_slots.get();
+        self.prune_axt_replay_ledger(current_slot, retention_slots);
         for envelope in envelopes {
             self.apply_axt_envelope(envelope, current_slot);
         }
@@ -32416,10 +32514,10 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_legacy_route_sensitive_block_reconstructs_canonical_state() {
+    fn replay_legacy_route_sensitive_blocks_reconstruct_canonical_state_despite_checkpoint_drift() {
         use std::borrow::Cow;
 
-        use iroha_crypto::Algorithm;
+        use iroha_crypto::{Algorithm, Hash};
         use iroha_primitives::{json::Json, numeric::Numeric};
 
         let chain_id = ChainId::from("iroha:test:legacy-route-replay");
@@ -32535,6 +32633,65 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(legacy_block.clone()))
             .expect("store legacy block");
 
+        let audit_alias = AccountAlias::new(
+            "auditor".parse::<Name>().expect("audit alias"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace_id,
+        );
+        let block3_instructions = vec![
+            InstructionBox::from(Mint::asset_numeric(Numeric::from(5_u32), asset_id.clone())),
+            InstructionBox::from(SetAccountAliasBinding::bind(
+                user_id.clone(),
+                audit_alias,
+                Some(10_002),
+            )),
+            InstructionBox::from(SetKeyValue::account(
+                user_id.clone(),
+                "status".parse::<Name>().expect("account metadata key"),
+                Json::new("settled"),
+            )),
+            InstructionBox::from(SetKeyValue::domain(
+                domain_id.clone(),
+                "window".parse::<Name>().expect("domain metadata key"),
+                Json::new(2_u32),
+            )),
+        ];
+        let block3_tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions::<InstructionBox>(block3_instructions)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let block3_accepted =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
+        let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
+            .chain(0, Some(&legacy_block))
+            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
+                &legacy_block,
+                topology.as_ref(),
+            )))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut legacy_block3: SignedBlock = block3.into();
+        strip_execution_context_and_resign_for_test(&mut legacy_block3, leader.private_key(), 0);
+        assert!(
+            legacy_block3.execution_context().is_none(),
+            "fixture must exercise multi-block legacy missing-context replay"
+        );
+        let legacy_block3 = commit_replay_validated_block(
+            &original_state,
+            &topology,
+            legacy_block3,
+            &chain_id,
+            &genesis_id,
+        );
+        assert!(legacy_block3.has_results());
+        kura.store_block(Arc::new(legacy_block3.clone()))
+            .expect("store second legacy block");
+        kura.store_wsv_checkpoint(
+            3,
+            legacy_block3.hash(),
+            Hash::new(b"adversarial route-sensitive replay checkpoint"),
+        )
+        .expect("overwrite final WSV checkpoint with adversarial hash");
+
         let mut replay_state =
             replay_fixture_state(Arc::clone(&kura), chain_id, lane_id, dataspace_id);
         {
@@ -32547,14 +32704,14 @@ mod replay_validation_tests {
             &kura,
             &mut replay_state,
             &topology,
-            2,
+            3,
             ConsensusMode::Permissioned,
         )
         .expect("replay should reconstruct canonical state");
-        assert_eq!(replay_state.view().height(), 2);
+        assert_eq!(replay_state.view().height(), 3);
         assert_eq!(
             replay_state.view().latest_block_hash(),
-            Some(legacy_block.hash())
+            Some(legacy_block3.hash())
         );
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
@@ -40445,6 +40602,32 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_full_unmanaged_public_profile_has_no_transition_path() {
+        let lanes = ["core", "governance", "zk", "is", "nexus"]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, alias)| LaneConfig {
+                id: LaneId::new(u32::try_from(idx).expect("lane index")),
+                alias: alias.to_owned(),
+                ..LaneConfig::default()
+            })
+            .collect::<Vec<_>>();
+        let active_lanes = u64::try_from(lanes.len()).expect("lane count");
+        let min_lanes = 4_u32;
+        let max_lanes = 5_u32;
+
+        assert!(
+            active_lanes >= u64::from(max_lanes),
+            "full profile cannot scale out"
+        );
+        assert_eq!(
+            autoscale_managed_lane_for_retire(&lanes, min_lanes),
+            None,
+            "unmanaged base lanes cannot be retired"
+        );
+    }
+
+    #[test]
     fn autoscale_next_lane_id_never_reuses_base_lane_gaps() {
         let lanes = vec![
             LaneConfig {
@@ -48201,6 +48384,217 @@ mod tests {
     }
 
     #[test]
+    fn commit_roster_with_sidecar_keeps_hot_path_journal_in_memory() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let peer = PeerId::new(kp.public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
+                .expect("test block signing should succeed"),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+        let block_hash = canonical_block.hash();
+        kura.store_block(Arc::clone(&canonical_block))
+            .expect("store canonical block");
+        let roster = vec![peer];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAA; 96];
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        assert!(
+            state.record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None),
+            "committed sidecar path should accept canonical roster metadata"
+        );
+        assert!(
+            kura.read_roster_metadata(commit_cert.height).is_some(),
+            "committed sidecar path should still write retained sidecar metadata"
+        );
+
+        let journal_path = CommitRosterJournal::journal_path(&kura.store_root());
+        let reloaded = CommitRosterJournal::load(journal_path, kura.block_sync_roster_retention())
+            .expect("reload commit roster journal");
+        assert!(
+            reloaded
+                .get(commit_cert.height, commit_cert.subject_block_hash)
+                .is_none(),
+            "committed sidecar path must not rewrite the full journal on the hot commit path"
+        );
+        let snapshot = state
+            .commit_roster_journal
+            .read()
+            .get(commit_cert.height, commit_cert.subject_block_hash)
+            .expect("committed sidecar path should update the in-memory journal entry");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint);
+        assert!(snapshot.stake_snapshot.is_none());
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_snapshot_falls_back_to_roster_sidecar() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let peer = PeerId::new(kp.public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
+                .expect("test block signing should succeed"),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+        let block_hash = canonical_block.hash();
+        kura.store_block(Arc::clone(&canonical_block))
+            .expect("store canonical block");
+        let roster = vec![peer];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAA; 96];
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            block_hash,
+            Some(commit_cert.clone()),
+            Some(checkpoint.clone()),
+            None,
+        ));
+
+        let snapshot = state
+            .commit_roster_snapshot_for_block(1, block_hash)
+            .expect("snapshot should hydrate from sidecar");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint);
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(1, block_hash)
+                .is_some(),
+            "sidecar fallback should warm the in-memory journal"
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
     fn commit_roster_record_defers_sidecar_until_block_is_canonical() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
@@ -48265,6 +48659,86 @@ mod tests {
         assert_eq!(
             state
                 .commit_roster_snapshot_for_block(1, canonical_hash)
+                .map(|snapshot| snapshot.commit_qc),
+            Some(commit_cert)
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_hint_skips_world_and_sidecar_writes() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xBE; 96];
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            block_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        assert!(
+            state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
+            "commit roster hint should populate recovery metadata"
+        );
+        assert!(
+            kura.read_roster_metadata(1).is_none(),
+            "hint recording must not write committed-height sidecars"
+        );
+        let view = state.view();
+        assert!(
+            view.world()
+                .commit_qcs()
+                .get(&commit_cert.subject_block_hash)
+                .is_none(),
+            "hint recording must not mutate WSV commit-QC storage"
+        );
+        assert_eq!(
+            state
+                .commit_roster_snapshot_for_block(1, block_hash)
                 .map(|snapshot| snapshot.commit_qc),
             Some(commit_cert)
         );
@@ -49751,6 +50225,57 @@ mod tests {
         assert_eq!(
             block.world.axt_replay_ledger.get(&key).copied(),
             Some(record)
+        );
+    }
+
+    #[test]
+    fn ordinary_block_apply_does_not_prune_axt_replay_ledger() {
+        let dsid = DataSpaceId::new(42);
+        let lane = LaneId::new(0);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.axt.slot_length_ms = NonZeroU64::new(1).expect("slot length");
+        nexus.axt.replay_retention_slots = NonZeroU64::new(2).expect("retention");
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::new(), kura, query_handle);
+        state
+            .set_nexus(nexus)
+            .expect("apply Nexus config for replay ledger pruning test");
+
+        let key = AxtHandleReplayKey::from_parts([0xAB; 32], 3, 7, lane);
+        let stale = AxtReplayRecord {
+            dataspace: dsid,
+            used_slot: 1,
+            retain_until_slot: 2,
+        };
+        {
+            let mut block = state.world.axt_replay_ledger.block();
+            block.insert(key, stale);
+            block.commit();
+        }
+
+        let keypair = crate::state::checked_keypair();
+        let signed: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        assert!(
+            signed.axt_envelopes().is_none(),
+            "test block must not carry AXT envelopes"
+        );
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("ordinary block should commit");
+
+        assert_eq!(
+            state.world.axt_replay_ledger.view().get(&key).copied(),
+            Some(stale),
+            "ordinary block apply must not scan and prune the AXT replay ledger"
         );
     }
 

@@ -30,6 +30,55 @@ UPGRADEABLE_LOADER_ID = "BPFLoaderUpgradeab1e11111111111111111111111"
 UPGRADEABLE_LOADER_PROGRAM_TAG = 2
 UPGRADEABLE_LOADER_PROGRAMDATA_TAG = 3
 PROGRAMDATA_METADATA_LEN = 45
+PUBLIC_SUMMARY_FIELDS = (
+    "source_domain",
+    "domain",
+    "chain",
+    "verifier_plan",
+    "verifier_identity",
+    "verifier_code_hash",
+    "anchor_id",
+    "destination_binding_key",
+    "destination_binding_hash",
+    "expected_destination_binding_hash_matches",
+    "route_allowlist_evidence_ready",
+    "route_canary_ready",
+    "programdata_metadata_ready",
+    "verifier_program_bytes_present",
+    "verifier_program_bytes_base64",
+    "verifier_program_bytes_base64_sha256",
+    "source_verifier_material_hash",
+    "source_adapter_engine_deployment_hash",
+    "route_allowlist_id",
+    "route_allowlist_hash",
+    "expected_route_allowlist_hash",
+    "expected_route_allowlist_hash_matches",
+    "route_canary",
+    "verifier_program_id",
+    "rpc_commitment",
+    "programdata_address",
+    "programdata_slot",
+    "program_account_context_slot",
+    "programdata_account_context_slot",
+    "program_owner",
+    "programdata_owner",
+    "program_immutable",
+    "program_account_data_len",
+    "program_account_data_base64",
+    "programdata_metadata_blake2b256",
+    "programdata_metadata_base64",
+    "program_bytes_len",
+    "programdata_executable_base64",
+    "rpc_commitment_finalized",
+    "expected_verifier_code_hash_matches",
+    "expected_programdata_address_matches",
+    "expected_programdata_slot_matches",
+    "destination_toml_ready",
+    "full_toml_ready",
+    "toml_ready",
+    "offline_evidence_args",
+    "offline_toml_sha256",
+)
 
 
 def _hex(raw: bytes) -> str:
@@ -912,6 +961,14 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _public_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: summary[field]
+        for field in PUBLIC_SUMMARY_FIELDS
+        if field in summary
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -925,7 +982,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.toml:
             print(render_toml(args, live), end="")
         else:
-            print(json.dumps(_summary(args, live), sort_keys=True, indent=2))
+            print(
+                json.dumps(
+                    _public_summary(_summary(args, live)),
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,

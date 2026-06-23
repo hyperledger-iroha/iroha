@@ -11,20 +11,16 @@ title: Moderation Appeals & Sortition Panels
 summary: SFM-4b implementation status for appeal finance, policy-jury data foundations, and remaining moderation panel services.
 ---
 
----
-title: Moderation Appeals & Sortition Panels
-summary: SFM-4b implementation status for appeal finance, policy-jury data foundations, and remaining moderation panel services.
----
-
 # Moderation Appeals & Sortition Panels
 
 ## Current Status
 
 SFM-4b is partially implemented. The repository contains appeal finance helpers,
 moderation reproducibility tooling, honey-audit gateway probes, and reusable
-policy-jury sortition / commit-reveal data structures. It does not yet ship the
-full moderation appeal service, SoraFS juror panel engine, secure evidence
-viewer, voting orchestrator, or portal workflow described in the original plan.
+policy-jury sortition / commit-reveal data structures plus SoraFS-specific
+moderation ballot wrappers. It does not yet ship the full moderation appeal
+service, SoraFS juror panel engine, secure evidence viewer, voting orchestrator,
+or portal workflow described in the original plan.
 
 ## Shipped Foundations
 
@@ -37,6 +33,18 @@ viewer, voting orchestrator, or portal workflow described in the original plan.
   `PolicyJurySortitionV1`, `PolicyJuryBallotCommitV1`, and
   `PolicyJuryBallotRevealV1` for deterministic policy-jury draws and sealed
   commit/reveal payload validation.
+- `iroha_data_model::sorafs::moderation` provides
+  `SoraFsModerationBallotContextV1`,
+  `SoraFsModerationBallotCommitV1`,
+  `SoraFsModerationBallotRevealV1`, and `SoraFsModerationVoteChoice` so SoraFS
+  cases can bind case ids, evidence bundle digests, appeal finance versions,
+  panel roster hashes, policy references, and `uphold`/`overturn`/`modify`/
+  `escalate` choices before a runtime service exists.
+- `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
+  `sorafs_node::FilesystemGovernancePublisher` publish local moderation ballot
+  announcement, commit-accepted, reveal-accepted, and tally evidence into the
+  local Governance DAG `publish-index.json`, CAR queue, and optional signed
+  runtime DAG.
 - `docs/examples/ministry/policy_jury_roster_example.json` and
   `docs/examples/ministry/policy_jury_sortition_example.json` provide example
   inputs for the reusable policy-jury data path.
@@ -66,14 +74,19 @@ are available today.
 ## Data Boundaries
 
 The shipped `PolicyJury*` types are reusable governance data structures, not a
-complete SoraFS moderation-panel runtime. Before they can be used for moderation
-appeals, the runtime needs SoraFS-specific wrappers that bind:
+complete SoraFS moderation-panel runtime. SoraFS-specific ballot wrappers now
+bind:
 
 - appeal case identifiers;
 - moderation policy references;
 - proof-token and denylist evidence references;
-- panel-size and quorum policy;
+- panel roster hashes;
 - settlement manifest version;
+- moderation vote choices;
+
+The runtime still needs service-level state that binds:
+
+- panel-size and quorum policy;
 - evidence access attestation;
 - decision publication and appeal cache updates.
 
@@ -92,6 +105,8 @@ corresponding service and CLI handlers exist.
   `docs/source/sorafs_commit_reveal_plan.md`.
 - Connect panel outcomes to gateway compliance caches, appeal finance
   settlement, transparency publication, and reputation scoring.
+- Promote local Governance DAG moderation event publication into the durable
+  contract-backed and public IPFS/IPNS decision trail.
 - Add end-to-end tests for appeal submission, juror selection, evidence access,
   commit/reveal voting, decision publication, and settlement.
 
@@ -102,6 +117,7 @@ Focused checks for the currently shipped foundations are:
 ```sh
 cargo test -p sorafs_orchestrator appeal
 cargo test -p iroha_data_model policy_jury
+cargo test -p iroha_data_model sorafs_moderation_ballot
 ```
 
 Run the broader SoraFS moderation and gateway suites when the panel service

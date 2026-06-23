@@ -28,6 +28,7 @@ DEFAULT_READINESS_SUMMARY_PATH = "dist/kagemusha-production-readiness.json"
 DEFAULT_RELEASE_BUNDLE_OUT = "dist/kagemusha-production-release-bundle.json"
 MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES = 16 * 1024 * 1024
 MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES = 16 * 1024 * 1024
+EMPTY_SHA256_HEX = hashlib.sha256(b"").hexdigest()
 
 SUMMARY_REQUIRED_SECTION_STATES: dict[str, str] = {
     "abi7_recursive_compact": "package_aware_multi_hop_composed",
@@ -58,6 +59,12 @@ ANDROID_SLOT_RELEASE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
         "attestation_certificate_chain_sha256",
     ),
 )
+ANDROID_SLOT_RELEASE_ARTIFACT_ROOTS: dict[str, str] = {
+    "offline_wallet_apk": "evidence",
+    "d2d_payment_transcript": "handoff",
+    "wallet_integrity_transcript": "wallet",
+    "attestation_certificate_chain": "attestation",
+}
 ANDROID_D2D_TRANSCRIPT_ARTIFACT_PREFIX = "d2d_payment_transcript_"
 ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS = frozenset(
     (
@@ -103,6 +110,90 @@ def _android_d2d_transcript_artifact_transport(artifact: Any) -> str | None:
         return None
     transport = artifact[len(ANDROID_D2D_TRANSCRIPT_ARTIFACT_PREFIX):]
     return transport if transport in device_lab.D2D_PAYMENT_TRANSPORTS else None
+
+
+def _android_slot_artifact_root(artifact: str) -> str | None:
+    if _android_d2d_transcript_artifact_transport(artifact) is not None:
+        return "handoff"
+    return ANDROID_SLOT_RELEASE_ARTIFACT_ROOTS.get(artifact)
+
+
+def _check_android_slot_artifact_manifest_path_root(
+    entry: Any,
+    *,
+    slot: str,
+    artifact: str,
+    root: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(entry, dict):
+        return []
+    path = entry.get("path")
+    if not isinstance(path, str):
+        return []
+    prefix = f"artifacts/android/device_lab/{slot}/"
+    if not path.startswith(prefix):
+        return [
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_slot_artifact_path",
+                f"Kagemusha release bundle Android slot artifact {artifact} path must stay under {root}/",
+                group="android_slot_artifacts",
+                item=_display_summary_field(slot),
+                artifact=_display_summary_field(artifact),
+            )
+        ]
+    relative = path[len(prefix):]
+    path_errors: list[str] = []
+    safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+        relative,
+        path_errors,
+        "Kagemusha release bundle Android slot artifact path",
+    )
+    if (
+        safe_relative is not None
+        and safe_relative == relative
+        and device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+            safe_relative,
+            root,
+        )
+    ):
+        return []
+    return [
+        _blocker(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_path",
+            f"Kagemusha release bundle Android slot artifact {artifact} path must stay under {root}/",
+            group="android_slot_artifacts",
+            item=_display_summary_field(slot),
+            artifact=_display_summary_field(artifact),
+        )
+    ]
+
+
+def _check_android_signed_evidence_manifest_path(
+    entry: Any,
+    *,
+    slot: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(entry, dict):
+        return []
+    path = entry.get("path")
+    if not isinstance(path, str):
+        return []
+    expected_path = (
+        f"artifacts/android/device_lab/{slot}/"
+        f"{device_lab.KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH}"
+    )
+    if path == expected_path:
+        return []
+    return [
+        _blocker(
+            "kagemusha_release_bundle_manifest_android_signed_evidence_path",
+            "Kagemusha release bundle Android signed-evidence path must point to evidence/signed-evidence.json",
+            group="android_signed_evidence",
+            item=_display_summary_field(slot),
+        )
+    ]
+
+
 ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS = frozenset(("slots", "value_sha256"))
 SUMMARY_ALLOWED_TOP_LEVEL_KEYS = frozenset(
     (
@@ -139,6 +230,7 @@ RELEASE_BUNDLE_ALLOWED_TOP_LEVEL_KEYS = frozenset(
 RELEASE_BUNDLE_ALLOWED_ANDROID_SECTION_KEYS = frozenset(
     (
         "root",
+        "slots",
         "covered_device_families",
         "missing_device_families",
         "covered_d2d_payment_transports",
@@ -439,6 +531,7 @@ def _blocked_release_bundle_manifest(
                 readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
             ),
             "duplicate_bindings": {},
+            "slots": [],
             "signed_evidence": {},
             "trusted_signer_public_key_sha256": _safe_trusted_signer_public_key_sha256(
                 trusted_signer_public_keys
@@ -458,10 +551,45 @@ def _secret_path_error(path: str | None, label: str, code: str) -> dict[str, Any
     return None
 
 
+def _path_has_surrounding_whitespace(path_text: str, path: Path) -> bool:
+    """Return true when a release-bundle path is whitespace-normalized."""
+
+    return (
+        path_text != path_text.strip()
+        or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+            path
+        )
+    )
+
+
+def _local_cli_path_shape_error(
+    path: str | None,
+    label: str,
+    code: str,
+) -> dict[str, Any] | None:
+    """Reject local CLI path aliases before helper-specific metadata reads."""
+
+    if path is None:
+        return None
+    candidate = Path(path)
+    if _path_has_surrounding_whitespace(path, candidate):
+        return _blocker(code, f"{label} must not contain surrounding whitespace")
+    if "\\" in path:
+        return _blocker(code, f"{label} must not contain backslashes")
+    if ".." in candidate.parts:
+        return _blocker(code, f"{label} must be a canonical path")
+    return None
+
+
 def _bundle_path_shape_error(path: Path, label: str) -> dict[str, Any] | None:
     """Reject release-bundle path aliases before resolver normalization."""
 
     path_text = str(path)
+    if _path_has_surrounding_whitespace(path_text, path):
+        return _blocker(
+            "kagemusha_release_bundle_path_invalid",
+            f"{label} must not contain surrounding whitespace",
+        )
     if "\\" in path_text:
         return _blocker(
             "kagemusha_release_bundle_path_invalid",
@@ -479,6 +607,11 @@ def _bundle_root_shape_error(root: Path) -> dict[str, Any] | None:
     """Reject release-bundle root aliases before metadata preflight."""
 
     root_text = str(root)
+    if _path_has_surrounding_whitespace(root_text, root):
+        return _blocker(
+            "kagemusha_release_bundle_root_invalid",
+            "--bundle-root must not contain surrounding whitespace",
+        )
     if "\\" in root_text:
         return _blocker(
             "kagemusha_release_bundle_root_invalid",
@@ -490,6 +623,37 @@ def _bundle_root_shape_error(root: Path) -> dict[str, Any] | None:
             "--bundle-root must be a canonical directory path",
         )
     return None
+
+
+def _early_cli_path_shape_errors(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Reject CLI path aliases before any signer key material is loaded."""
+
+    blockers: list[dict[str, Any]] = []
+    repo_root_shape = readiness._repo_root_shape_blocker(  # type: ignore[attr-defined]
+        Path(args.repo_root)
+    )
+    if repo_root_shape is not None:
+        blockers.append(repo_root_shape)
+
+    bundle_root_shape = _bundle_root_shape_error(Path(args.bundle_root))
+    if bundle_root_shape is not None:
+        blockers.append(bundle_root_shape)
+
+    for raw_path, label in (
+        (args.readiness_summary, "Kagemusha readiness summary"),
+        (args.lineage_proof_evidence, "Reserved-lineage proof evidence"),
+        (args.compact_key_evidence, "ABI-7 recursive compact key evidence"),
+        (args.localnet_lifecycle_evidence, "Kagemusha localnet lifecycle evidence"),
+        (args.device_lab_root, "Android device-lab root"),
+        (args.out, "--out"),
+        (args.verify_existing, "Kagemusha release bundle manifest"),
+    ):
+        if raw_path is None:
+            continue
+        shape_error = _bundle_path_shape_error(Path(raw_path), label)
+        if shape_error is not None:
+            blockers.append(shape_error)
+    return blockers
 
 
 def _validate_bundle_root(root: Path) -> list[dict[str, Any]]:
@@ -1118,6 +1282,21 @@ def _check_android_signed_evidence_summary_shape(
                             field=field,
                         )
                         for error in path_errors
+                    )
+                elif (
+                    field == "offline_wallet_apk_path"
+                    and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                        safe_relative,
+                        "evidence",
+                    )
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_path",
+                            "Android signed-evidence summary offline_wallet_apk_path must stay under evidence/",
+                            slot=display_slot,
+                            field=field,
+                        )
                     )
                 elif (
                     field == "d2d_payment_transcript_path"
@@ -1997,6 +2176,21 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                 for error in path_errors
                             )
                         elif (
+                            path_field == "offline_wallet_apk_path"
+                            and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                safe_relative,
+                                "evidence",
+                            )
+                        ):
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_summary_android_slots_path",
+                                    "Android readiness summary Kagemusha slot offline_wallet_apk_path must stay under evidence/",
+                                    slot=display_slot,
+                                    field=path_field,
+                                )
+                            )
+                        elif (
                             path_field == "d2d_payment_transcript_path"
                             and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
                                 safe_relative,
@@ -2450,6 +2644,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 not isinstance(value, str)
                 or not device_lab.SHA256_HEX_RE.fullmatch(value)
                 or value == "0" * 64
+                or value == EMPTY_SHA256_HEX
             ):
                 blockers.append(
                     _blocker(
@@ -2527,6 +2722,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                     or not isinstance(digest, str)
                     or not device_lab.SHA256_HEX_RE.fullmatch(digest)
                     or digest == "0" * 64
+                    or digest == EMPTY_SHA256_HEX
                     or (
                         section_name == "localnet_lifecycle_evidence"
                         and len(set(digest)) == 1
@@ -2543,14 +2739,13 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                     )
                 )
             if (
-                section_name == "localnet_lifecycle_evidence"
-                and isinstance(value, dict)
+                isinstance(value, dict)
                 and len(set(value.values())) != len(value)
             ):
                 blockers.append(
                     _blocker(
                         "kagemusha_release_summary_section_sha256_distinct",
-                        "Kagemusha readiness summary localnet artifact hashes must be distinct",
+                        "Kagemusha readiness summary section SHA-256 map values must be distinct",
                         section=section_name,
                         field=field,
                     )
@@ -2561,6 +2756,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 not isinstance(generator_log_sha256, str)
                 or not device_lab.SHA256_HEX_RE.fullmatch(generator_log_sha256)
                 or generator_log_sha256 == "0" * 64
+                or generator_log_sha256 == EMPTY_SHA256_HEX
             ):
                 blockers.append(
                     _blocker(
@@ -3712,6 +3908,70 @@ def _android_slot_artifact_entries(
                     for error in path_errors
                 )
                 continue
+            if (
+                path_field == "offline_wallet_apk_path"
+                and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                    safe_relative,
+                    "evidence",
+                )
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_path",
+                        "Android slot artifact offline_wallet_apk path must stay under evidence/",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+            if (
+                path_field == "d2d_payment_transcript_path"
+                and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                    safe_relative,
+                    "handoff",
+                )
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_path",
+                        "Android slot artifact d2d_payment_transcript path must stay under handoff/",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+            if (
+                path_field == "wallet_integrity_transcript_path"
+                and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                    safe_relative,
+                    "wallet",
+                )
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_path",
+                        "Android slot artifact wallet_integrity_transcript path must stay under wallet/",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+            if (
+                path_field == "attestation_certificate_chain_path"
+                and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                    safe_relative,
+                    "attestation",
+                )
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_path",
+                        "Android slot artifact attestation_certificate_chain path must stay under attestation/",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
 
             entry, entry_blockers = _evidence_entry_with_size(
                 device_lab_root / slot / safe_relative,
@@ -3903,6 +4163,15 @@ def _cleanup_temp_output(
                 _blocker(
                     "kagemusha_release_bundle_out_invalid",
                     "--out temporary file could not be removed",
+                )
+            ]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [
+                _blocker(
+                    "kagemusha_release_bundle_out_invalid",
+                    "--out temporary file cleanup could not be synced",
                 )
             ]
     finally:
@@ -4110,6 +4379,13 @@ def _check_release_bundle_evidence_inventory_shape(
                     item=item,
                 )
             )
+            if group == "android_signed_evidence" and slot is not None:
+                blockers.extend(
+                    _check_android_signed_evidence_manifest_path(
+                        entry,
+                        slot=slot,
+                    )
+                )
 
     android_slot_artifacts = value.get("android_slot_artifacts")
     if "android_slot_artifacts" in value:
@@ -4196,6 +4472,16 @@ def _check_release_bundle_evidence_inventory_shape(
                             artifact=artifact,
                         )
                     )
+                    artifact_root = _android_slot_artifact_root(raw_artifact)
+                    if slot is not None and artifact_root is not None:
+                        blockers.extend(
+                            _check_android_slot_artifact_manifest_path_root(
+                                entry,
+                                slot=slot,
+                                artifact=raw_artifact,
+                                root=artifact_root,
+                            )
+                        )
     return blockers
 
 
@@ -4526,6 +4812,51 @@ def _check_release_bundle_expected_top_level_evidence_binding(
     return blockers
 
 
+def _check_release_bundle_expected_release_evidence_binding(
+    existing: dict[str, Any],
+    expected: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    existing_evidence = existing.get("evidence")
+    expected_evidence = expected.get("evidence")
+    if not isinstance(existing_evidence, dict) or not isinstance(
+        expected_evidence, dict
+    ):
+        return blockers
+    for group in (
+        "lineage_artifacts",
+        "lineage_proof_logs",
+        "compact_key_artifacts",
+    ):
+        entries = existing_evidence.get(group)
+        expected_entries = expected_evidence.get(group)
+        if not isinstance(entries, dict) or not isinstance(expected_entries, dict):
+            continue
+        if set(entries) != set(expected_entries):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_release_evidence_binding",
+                    "Kagemusha release bundle evidence group does not match freshly computed release evidence",
+                    group=group,
+                )
+            )
+        for item, entry in entries.items():
+            expected_entry = expected_entries.get(item)
+            if not isinstance(entry, dict) or not isinstance(expected_entry, dict):
+                continue
+            blockers.extend(
+                _check_release_bundle_single_section_evidence_binding(
+                    entry,
+                    group=group,
+                    expected_sha256=expected_entry.get("sha256"),
+                    expected_path=expected_entry.get("path"),
+                    expected_size=expected_entry.get("size_bytes"),
+                    item=item if isinstance(item, str) else None,
+                )
+            )
+    return blockers
+
+
 def _check_release_bundle_expected_android_summary_binding(
     existing: dict[str, Any],
     expected: dict[str, Any],
@@ -4574,17 +4905,96 @@ def _check_release_bundle_expected_android_summary_binding(
                         item=_display_summary_field(slot),
                     )
                 )
-        if _signed_evidence_without_android_identity_fields(
-            existing_signed
-        ) == _signed_evidence_without_android_identity_fields(expected_signed):
-            return blockers
-    if existing_signed != expected_signed:
+    signed_evidence_binding_without_identity_ok = (
+        isinstance(existing_signed, dict)
+        and isinstance(expected_signed, dict)
+        and _signed_evidence_without_android_identity_fields(existing_signed)
+        == _signed_evidence_without_android_identity_fields(expected_signed)
+    )
+    if (
+        existing_signed != expected_signed
+        and not signed_evidence_binding_without_identity_ok
+    ):
         blockers.append(
             _blocker(
                 "kagemusha_release_bundle_manifest_android_summary_binding",
                 "Kagemusha release bundle Android summary field does not "
                 "match freshly computed device-lab evidence",
                 field="signed_evidence",
+            )
+        )
+    blockers.extend(
+        _check_release_bundle_expected_android_slots_binding(
+            existing_android,
+            expected_android,
+        )
+    )
+    return blockers
+
+
+def _check_release_bundle_expected_android_slots_binding(
+    existing_android: dict[str, Any],
+    expected_android: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Bind release-bundle Android slot metadata to fresh device-lab scans."""
+
+    existing_slots = _android_slots_by_name(existing_android.get("slots"))
+    expected_slots = _android_slots_by_name(expected_android.get("slots"))
+    if existing_slots is None or expected_slots is None:
+        return []
+    blockers: list[dict[str, Any]] = []
+    if set(existing_slots) != set(expected_slots):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_slots_binding",
+                "Kagemusha release bundle Android slot inventory does not "
+                "match freshly computed device-lab evidence",
+                field="inventory",
+            )
+        )
+    for slot in sorted(set(existing_slots) & set(expected_slots)):
+        entry = existing_slots[slot]
+        expected_entry = expected_slots[slot]
+        for field in ("status", "errors", "present", "file_counts"):
+            if entry.get(field) == expected_entry.get(field):
+                continue
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_slots_binding",
+                    "Kagemusha release bundle Android slot metadata does not "
+                    "match freshly computed device-lab evidence",
+                    item=_display_summary_field(slot),
+                    field=field,
+                )
+            )
+        kagemusha = entry.get("kagemusha")
+        expected_kagemusha = expected_entry.get("kagemusha")
+        if isinstance(kagemusha, dict) and isinstance(expected_kagemusha, dict):
+            for field in sorted(ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS):
+                if kagemusha.get(field) == expected_kagemusha.get(field):
+                    continue
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_android_slots_identity_binding",
+                        "Kagemusha release bundle Android slot identity does not "
+                        "match freshly computed device-lab evidence",
+                        item=_display_summary_field(slot),
+                        field=field,
+                    )
+                )
+            if _without_android_identity_fields(
+                kagemusha
+            ) == _without_android_identity_fields(expected_kagemusha):
+                continue
+        if kagemusha == expected_kagemusha:
+            continue
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_slots_binding",
+                "Kagemusha release bundle Android slot details do not match "
+                "freshly computed device-lab evidence",
+                item=_display_summary_field(slot),
+                field="kagemusha",
             )
         )
     return blockers
@@ -4686,6 +5096,15 @@ def _check_release_bundle_expected_android_evidence_binding(
     if isinstance(signed_entries, dict) and isinstance(
         expected_signed_entries, dict
     ):
+        if set(signed_entries) != set(expected_signed_entries):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_signed_evidence_binding",
+                    "Kagemusha release bundle Android signed-evidence "
+                    "inventory does not match freshly computed release evidence",
+                    group="android_signed_evidence",
+                )
+            )
         for slot, entry in signed_entries.items():
             expected_entry = expected_signed_entries.get(slot)
             if not isinstance(entry, dict) or not isinstance(expected_entry, dict):
@@ -4709,6 +5128,15 @@ def _check_release_bundle_expected_android_evidence_binding(
     slot_artifacts = existing_evidence.get("android_slot_artifacts")
     expected_slot_artifacts = expected_evidence.get("android_slot_artifacts")
     if isinstance(slot_artifacts, dict) and isinstance(expected_slot_artifacts, dict):
+        if set(slot_artifacts) != set(expected_slot_artifacts):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+                    "Kagemusha release bundle Android slot artifact "
+                    "inventory does not match freshly computed release evidence",
+                    group="android_slot_artifacts",
+                )
+            )
         for slot, artifacts in slot_artifacts.items():
             expected_artifacts = expected_slot_artifacts.get(slot)
             if not isinstance(artifacts, dict) or not isinstance(
@@ -4787,6 +5215,8 @@ def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
                 "Kagemusha release bundle evidence inventory must be a JSON object",
             )
         ]
+    seen_paths: set[str] = set()
+    seen_digests: set[str] = set()
 
     def visit(item: Any) -> None:
         if isinstance(item, dict):
@@ -4816,6 +5246,15 @@ def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
                                     error,
                                 )
                             )
+                    elif safe_relative in seen_paths:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_bundle_manifest_evidence_path_duplicate",
+                                "Kagemusha release bundle evidence paths must not be reused across entries",
+                            )
+                        )
+                    else:
+                        seen_paths.add(safe_relative)
                 digest = item.get("sha256")
                 if (
                     not isinstance(digest, str)
@@ -4828,6 +5267,22 @@ def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
                             "Kagemusha release bundle evidence SHA-256 must be a non-zero lowercase hex digest",
                         )
                     )
+                elif digest == EMPTY_SHA256_HEX:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_sha256_empty",
+                            "Kagemusha release bundle evidence SHA-256 must not be the empty-file digest",
+                        )
+                    )
+                elif digest in seen_digests:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_sha256_duplicate",
+                            "Kagemusha release bundle evidence SHA-256 digests must not be reused across entries",
+                        )
+                    )
+                else:
+                    seen_digests.add(digest)
                 size = item.get("size_bytes")
                 if (
                     "size_bytes" not in item
@@ -5070,6 +5525,7 @@ def _check_release_bundle_section_shapes(
                 not isinstance(value, str)
                 or not device_lab.SHA256_HEX_RE.fullmatch(value)
                 or value == "0" * 64
+                or value == EMPTY_SHA256_HEX
             ):
                 blockers.append(
                     _blocker(
@@ -5185,6 +5641,7 @@ def _check_release_bundle_section_shapes(
                 not isinstance(generator_log_sha256, str)
                 or not device_lab.SHA256_HEX_RE.fullmatch(generator_log_sha256)
                 or generator_log_sha256 == "0" * 64
+                or generator_log_sha256 == EMPTY_SHA256_HEX
             ):
                 blockers.append(
                     _blocker(
@@ -5222,6 +5679,7 @@ def _check_release_bundle_section_shapes(
                     or not isinstance(digest, str)
                     or not device_lab.SHA256_HEX_RE.fullmatch(digest)
                     or digest == "0" * 64
+                    or digest == EMPTY_SHA256_HEX
                     or (
                         section_name == "localnet_lifecycle_evidence"
                         and len(set(digest)) == 1
@@ -5233,6 +5691,18 @@ def _check_release_bundle_section_shapes(
                     _blocker(
                         "kagemusha_release_bundle_manifest_section_sha256",
                         "Kagemusha release bundle section SHA-256 map must contain non-placeholder lowercase hex digests",
+                        section=section_name,
+                        field=field,
+                    )
+                )
+            if (
+                isinstance(value, dict)
+                and len(set(value.values())) != len(value)
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_sha256_distinct",
+                        "Kagemusha release bundle section SHA-256 map values must be distinct",
                         section=section_name,
                         field=field,
                     )
@@ -5282,18 +5752,6 @@ def _check_release_bundle_section_shapes(
                     )
                 )
         if section_name == "localnet_lifecycle_evidence":
-            artifact_hashes = section.get("artifact_sha256")
-            if isinstance(artifact_hashes, dict) and len(set(artifact_hashes.values())) != len(
-                artifact_hashes
-            ):
-                blockers.append(
-                    _blocker(
-                        "kagemusha_release_bundle_manifest_section_sha256_distinct",
-                        "Kagemusha release bundle localnet artifact hashes must be distinct",
-                        section=section_name,
-                        field="artifact_sha256",
-                    )
-                )
             if section.get("target") != readiness.EXPECTED_LOCALNET_TARGET:
                 blockers.append(
                     _blocker(
@@ -5480,6 +5938,12 @@ def _check_release_bundle_android_section_shape(
                     "Kagemusha release bundle Android trusted signer digests must be unique sorted non-zero lowercase sha256 hex strings",
                 )
             )
+    blockers.extend(
+        _release_manifest_android_blocker(item)
+        for item in _check_android_ready_summary_shape(android)
+        if isinstance(item.get("code"), str)
+        and item["code"].startswith("kagemusha_release_summary_android_slots")
+    )
     blockers.extend(
         _release_manifest_android_blocker(item)
         for item in _check_android_duplicate_bindings_summary_shape(android)
@@ -5975,6 +6439,7 @@ def build_release_bundle(
                 [],
             ),
             "duplicate_bindings": android.get("duplicate_bindings", {}),
+            "slots": android.get("slots", []),
             "signed_evidence": android.get("signed_evidence", {}),
             "trusted_signer_public_key_sha256": android.get(
                 "trusted_signer_public_key_sha256",
@@ -6094,6 +6559,15 @@ def verify_release_bundle(
             )
         )
         blockers.extend(top_level_binding_blockers)
+    release_evidence_binding_blockers: list[dict[str, Any]] = []
+    if expected is not None and existing is not None and not build_blockers:
+        release_evidence_binding_blockers = (
+            _check_release_bundle_expected_release_evidence_binding(
+                existing,
+                expected,
+            )
+        )
+        blockers.extend(release_evidence_binding_blockers)
     android_summary_binding_blockers: list[dict[str, Any]] = []
     if expected is not None and existing is not None and not build_blockers:
         android_summary_binding_blockers = (
@@ -6135,6 +6609,7 @@ def verify_release_bundle(
         and existing is not None
         and not build_blockers
         and not top_level_binding_blockers
+        and not release_evidence_binding_blockers
         and not android_summary_binding_blockers
         and not section_value_binding_blockers
         and not android_evidence_binding_blockers
@@ -6440,6 +6915,14 @@ def _unlink_output_if_identity_at(
                 "--out could not be removed after parent sync failure"
             )
         ]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [
+            _release_bundle_out_blocker(
+                "--out cleanup could not be synced after parent sync failure"
+            )
+        ]
     return []
 
 
@@ -6552,6 +7035,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if item is not None
     ]
+    path_blockers.extend(_early_cli_path_shape_errors(args))
     for index, key_path in enumerate(args.trusted_signer_public_keys or []):
         secret = _secret_path_error(
             key_path,
@@ -6560,6 +7044,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         if secret is not None:
             path_blockers.append(secret)
+        shape = _local_cli_path_shape_error(
+            key_path,
+            f"--trusted-signer-public-key[{index}]",
+            "android_trusted_signer_path_invalid",
+        )
+        if shape is not None:
+            path_blockers.append(shape)
 
     trusted: dict[str, Path] = {}
     if not path_blockers:

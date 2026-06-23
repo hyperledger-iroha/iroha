@@ -550,6 +550,19 @@ impl TransactionGossiper {
         }
     }
 
+    fn filter_targets_for_priority(
+        &self,
+        targets: Vec<PeerId>,
+        tx_hashes: &[HashOf<SignedTransaction>],
+        priority: Priority,
+    ) -> (Vec<PeerId>, usize, bool) {
+        if matches!(priority, Priority::High) {
+            (targets, 0, false)
+        } else {
+            self.filter_targets_or_replay_recent_suppressed(targets, tx_hashes)
+        }
+    }
+
     fn remember_peer_recent_sends(
         &mut self,
         targets: &[PeerId],
@@ -708,6 +721,15 @@ impl TransactionGossiper {
         self.advance_gossip_tick();
     }
 
+    fn gossip_priority(&self) -> Priority {
+        let pressure = self.queue.pressure_snapshot();
+        if pressure.saturated_by_age || pressure.saturated_by_count {
+            Priority::High
+        } else {
+            Priority::Low
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn gossip_public(
         &mut self,
@@ -766,14 +788,19 @@ impl TransactionGossiper {
             .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
         let total_online = targets.len();
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_PUBLIC_DOMAIN);
-        let public_target_cap = Self::effective_public_target_cap(
-            self.dataspace_cfg.public_target_cap,
-            self.gossip_size,
-            self.queue.active_len(),
-            self.queue.current_backpressure().is_saturated(),
-        );
+        let priority = self.gossip_priority();
+        let public_target_cap = if matches!(priority, Priority::High) {
+            None
+        } else {
+            Self::effective_public_target_cap(
+                self.dataspace_cfg.public_target_cap,
+                self.gossip_size,
+                self.queue.active_len(),
+                self.queue.current_backpressure().is_saturated(),
+            )
+        };
         let (targets, suppressed_targets, replaying_suppressed_targets) =
-            self.filter_targets_or_replay_recent_suppressed(targets, &sent_hashes);
+            self.filter_targets_for_priority(targets, &sent_hashes, priority);
         let (targets, _) = Self::select_targets_with_seed(targets, public_target_cap, seed);
 
         if targets.is_empty() {
@@ -805,6 +832,7 @@ impl TransactionGossiper {
                 tx_count = batch_txs,
                 size_bytes = encoded_len,
                 targets = targets.len(),
+                high_priority = matches!(priority, Priority::High),
                 suppressed_targets,
                 replaying_suppressed_targets,
                 online_peers = total_online,
@@ -816,7 +844,7 @@ impl TransactionGossiper {
                 self.network.post(Post {
                     data: payload.clone(),
                     peer_id: peer_id.clone(),
-                    priority: Priority::Low,
+                    priority,
                 });
             }
             self.record_sent_metric(
@@ -840,19 +868,21 @@ impl TransactionGossiper {
                 iroha_logger::debug!(
                     tx_count = batch_txs,
                     size_bytes = encoded_len,
+                    high_priority = matches!(priority, Priority::High),
                     online_peers = total_online,
                     dataspace = %dataspace_id,
                     "broadcasting transaction gossip batch"
                 );
                 self.network.broadcast(Broadcast {
                     data: NetworkMessage::TransactionGossiper(Arc::clone(&message)),
-                    priority: Priority::Low,
+                    priority,
                 });
             } else {
                 iroha_logger::debug!(
                     tx_count = batch_txs,
                     size_bytes = encoded_len,
                     targets = targets.len(),
+                    high_priority = matches!(priority, Priority::High),
                     suppressed_targets,
                     replaying_suppressed_targets,
                     online_peers = total_online,
@@ -864,7 +894,7 @@ impl TransactionGossiper {
                     self.network.post(Post {
                         data: payload.clone(),
                         peer_id: peer_id.clone(),
-                        priority: Priority::Low,
+                        priority,
                     });
                 }
             }
@@ -944,7 +974,13 @@ impl TransactionGossiper {
         }
 
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_RESTRICTED_DOMAIN);
-        let plan = self.restricted_target_plan(commit_topology, batch_txs, seed);
+        let priority = self.gossip_priority();
+        let plan = self.restricted_target_plan(
+            commit_topology,
+            batch_txs,
+            seed,
+            matches!(priority, Priority::High),
+        );
         let (targets, fallback_used, fallback_surface, reason) = match plan {
             RestrictedTargetPlan::Send {
                 targets,
@@ -975,7 +1011,7 @@ impl TransactionGossiper {
             }
         };
         let (targets, suppressed_targets, replaying_suppressed_targets) =
-            self.filter_targets_or_replay_recent_suppressed(targets, &sent_hashes);
+            self.filter_targets_for_priority(targets, &sent_hashes, priority);
         if targets.is_empty() {
             self.defer_gossip_hashes(sent_hashes);
             self.record_drop_metric(
@@ -999,7 +1035,7 @@ impl TransactionGossiper {
             self.network.post(Post {
                 data: payload.clone(),
                 peer_id: peer_id.clone(),
-                priority: Priority::Low,
+                priority,
             });
         }
 
@@ -1007,6 +1043,7 @@ impl TransactionGossiper {
             tx_count = message.txs.len(),
             size_bytes = encoded_len,
             targets = targets.len(),
+            high_priority = matches!(priority, Priority::High),
             suppressed_targets,
             replaying_suppressed_targets,
             %dataspace_id,
@@ -1291,6 +1328,7 @@ impl TransactionGossiper {
         commit_topology: &[PeerId],
         tx_count: usize,
         seed: u64,
+        urgent_gossip: bool,
     ) -> RestrictedTargetPlan {
         let fallback_targets: Vec<PeerId> = self.network.online_peers(|online| {
             let mut peers = Vec::with_capacity(online.len());
@@ -1302,7 +1340,11 @@ impl TransactionGossiper {
         Self::restricted_target_plan_with_targets(
             commit_topology.to_vec(),
             fallback_targets,
-            self.dataspace_cfg.restricted_target_cap,
+            if urgent_gossip {
+                None
+            } else {
+                self.dataspace_cfg.restricted_target_cap
+            },
             self.dataspace_cfg.restricted_fallback,
             self.dataspace_cfg.restricted_public_payload,
             tx_count,
@@ -3694,6 +3736,28 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
             restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
         }
+    }
+
+    #[test]
+    fn transaction_gossip_priority_elevates_under_queue_age_pressure() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(2).expect("nonzero resend ticks"));
+        let (_signed, accepted) = build_transaction("priority-pressure");
+
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+        gossiper
+            .queue
+            .set_pressure_age_budget_for_tests(Duration::from_secs(60));
+        assert_eq!(gossiper.gossip_priority(), Priority::Low);
+
+        gossiper
+            .queue
+            .set_pressure_age_budget_for_tests(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(2));
+
+        assert_eq!(gossiper.gossip_priority(), Priority::High);
     }
 
     #[test]

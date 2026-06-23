@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { blake2b } from "@noble/hashes/blake2b";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { AccountAddress } from "../src/address.js";
 import { noritoEncodeInstruction } from "../src/norito.js";
@@ -1486,6 +1487,185 @@ const replaceCanonicalSccpMessageProofBundleVec = (
   return out;
 };
 
+const TEST_SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH =
+  "7a27db10248ac178129ff7397f9a1ce7";
+const TEST_SCCP_SOURCE_EVENT_DIGEST_PREFIX = "sccp:source:event:v1";
+const TEST_NORITO_CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
+const TEST_U64_MAX = (1n << 64n) - 1n;
+
+const testNoritoCrc64Ecma = (payload) => {
+  let crc = TEST_U64_MAX;
+  for (const byte of payload) {
+    crc ^= BigInt(byte);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) === 0n
+          ? crc >> 1n
+          : (crc >> 1n) ^ TEST_NORITO_CRC64_REFLECTED_POLY;
+    }
+  }
+  return BigInt.asUintN(64, crc ^ TEST_U64_MAX);
+};
+
+const testNoritoFrame = (payload, schemaHashHex) =>
+  testConcatBytes(
+    testTextEncoder.encode("NRT0"),
+    Uint8Array.from([0, 0]),
+    testHexToBytes(schemaHashHex, 16),
+    Uint8Array.from([0]),
+    testU64Le(payload.length),
+    testU64Le(testNoritoCrc64Ecma(payload)),
+    Uint8Array.from([0]),
+    payload,
+  );
+
+const testNoritoField = (payload) =>
+  testConcatBytes(testU64Le(payload.length), payload);
+
+const testNoritoStringValue = (value) =>
+  testNoritoField(testTextEncoder.encode(value));
+
+const testNoritoRawByteVec = (bytes) =>
+  testConcatBytes(testU64Le(bytes.length), bytes);
+
+const testNoritoRawByteVecSequence = (items) =>
+  testConcatBytes(
+    testU64Le(items.length),
+    ...items.map((item) => testNoritoField(testNoritoRawByteVec(item))),
+  );
+
+const testSccpSourceChainKeyForDomain = (domain) => {
+  switch (domain) {
+    case SCCP_DOMAIN_ETH:
+      return "eth";
+    case SCCP_DOMAIN_BSC:
+      return "bsc";
+    case SCCP_DOMAIN_SOL:
+      return "sol";
+    case SCCP_DOMAIN_TON:
+      return "ton";
+    case SCCP_DOMAIN_TRON:
+      return "tron";
+    default:
+      throw new TypeError("unsupported test source domain");
+  }
+};
+
+const testSccpSourceProofPlanForDomain = (domain) => {
+  switch (domain) {
+    case SCCP_DOMAIN_ETH:
+      return 1;
+    case SCCP_DOMAIN_BSC:
+      return 2;
+    case SCCP_DOMAIN_SOL:
+      return 3;
+    case SCCP_DOMAIN_TON:
+      return 4;
+    case SCCP_DOMAIN_TRON:
+      return 5;
+    default:
+      throw new TypeError("unsupported test source domain");
+  }
+};
+
+const testSccpFinalityModelForDomain = (domain) => {
+  switch (domain) {
+    case SCCP_DOMAIN_ETH:
+      return 0;
+    case SCCP_DOMAIN_BSC:
+      return 1;
+    case SCCP_DOMAIN_SOL:
+      return 2;
+    case SCCP_DOMAIN_TON:
+      return 3;
+    case SCCP_DOMAIN_TRON:
+      return 4;
+    default:
+      throw new TypeError("unsupported test source domain");
+  }
+};
+
+const testSccpSourceEventDigest = (
+  sourceDomain,
+  targetDomain,
+  messageId,
+  payloadHash,
+) =>
+  testBytesToHex(
+    blake2b(
+      testConcatBytes(
+        testTextEncoder.encode(TEST_SCCP_SOURCE_EVENT_DIGEST_PREFIX),
+        testU8(1),
+        testU32Le(sourceDomain),
+        testU32Le(targetDomain),
+        testHexToBytes(messageId, 32),
+        testHexToBytes(payloadHash, 32),
+      ),
+      { dkLen: 32 },
+    ),
+  );
+
+const buildTestCanonicalSccpSourceChainProofBytes = ({
+  sourceDomain,
+  targetDomain,
+  publicInputs,
+  finalizedHeaderHash = HEX32_B,
+  receiptOrMessageRoot = HEX32_C,
+  consensusProof = Uint8Array.from([0x41]),
+  messageInclusionProof = Uint8Array.from([0x42]),
+  inclusionBranch = [testHexToBytes(HEX32_D, 32)],
+}) => {
+  const sourceEventDigest = testSccpSourceEventDigest(
+    sourceDomain,
+    targetDomain,
+    publicInputs.messageId,
+    publicInputs.payloadHash,
+  );
+  const payload = testConcatBytes(
+    testNoritoField(testU8(1)),
+    testNoritoField(testU32Le(sourceDomain)),
+    testNoritoField(testU32Le(targetDomain)),
+    testNoritoField(
+      testNoritoStringValue(testSccpSourceChainKeyForDomain(sourceDomain)),
+    ),
+    testNoritoField(testU32Le(testSccpSourceProofPlanForDomain(sourceDomain))),
+    testNoritoField(testU32Le(testSccpFinalityModelForDomain(sourceDomain))),
+    testNoritoField(testHexToBytes(publicInputs.messageId, 32)),
+    testNoritoField(testHexToBytes(publicInputs.payloadHash, 32)),
+    testNoritoField(testHexToBytes(sourceEventDigest, 32)),
+    testNoritoField(testHexToBytes(publicInputs.commitmentRoot, 32)),
+    testNoritoField(testU64Le(publicInputs.finalityHeight)),
+    testNoritoField(testHexToBytes(publicInputs.finalityBlockHash, 32)),
+    testNoritoField(testHexToBytes(finalizedHeaderHash, 32)),
+    testNoritoField(testHexToBytes(receiptOrMessageRoot, 32)),
+    testNoritoField(testNoritoRawByteVec(consensusProof)),
+    testNoritoField(testNoritoRawByteVec(messageInclusionProof)),
+    testNoritoField(testNoritoRawByteVecSequence(inclusionBranch)),
+  );
+  return testNoritoFrame(
+    payload,
+    TEST_SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH,
+  );
+};
+
+const withCanonicalSourceProofFinality = (fixture, sourceDomain) => {
+  const sourceProofBytes = buildTestCanonicalSccpSourceChainProofBytes({
+    sourceDomain,
+    targetDomain: fixture.publicInputs.targetDomain,
+    publicInputs: fixture.publicInputs,
+  });
+  const ranges = splitCanonicalSccpMessageProofBundleBytes(fixture.bundleBytes);
+  return Object.freeze({
+    publicInputs: fixture.publicInputs,
+    sourceProofBytes,
+    bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+      fixture.bundleBytes,
+      ranges.finalityProof,
+      sourceProofBytes,
+    ),
+  });
+};
+
 const buildSampleEvmFamilyProofBundleFixture = ({
   sourceDomain = SCCP_DOMAIN_SORA,
   senderCodec,
@@ -1687,8 +1867,7 @@ const bscNativeEvmProfile = (network) => {
       chainId: SCCP_BSC_MAINNET_EVM_CHAIN_ID,
       networkId: SCCP_BSC_MAINNET_NETWORK_ID,
       bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1",
-      parityFixtureSchema:
-        "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1",
+      paritySchema: "sccp-bsc-mainnet-native-evm-cross-sdk-parity-v1",
       selfTestFixtureSchema: "sccp-bsc-mainnet-native-evm-prover-self-test-v1",
       SccpClass: BscMainnetSccp,
       destinationBinding: sampleBscMainnetDestinationBinding,
@@ -1700,8 +1879,7 @@ const bscNativeEvmProfile = (network) => {
     chainId: SCCP_BSC_TESTNET_EVM_CHAIN_ID,
     networkId: SCCP_BSC_TESTNET_NETWORK_ID,
     bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1",
-    parityFixtureSchema:
-      "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1",
+    paritySchema: "sccp-bsc-testnet-native-evm-cross-sdk-parity-v1",
     selfTestFixtureSchema: "sccp-bsc-testnet-native-evm-prover-self-test-v1",
     SccpClass: BscTestnetSccp,
     destinationBinding: sampleBscTestnetDestinationBinding,
@@ -1772,7 +1950,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
       NATIVE_EVM_TEST_SDKS.map(([sdk]) => [sdk, structuredClone(value)]),
     );
   const parityFixture = {
-    schema: profile.parityFixtureSchema,
+    schema: profile.paritySchema,
     domain: SCCP_DOMAIN_BSC,
     chain: profile.chain,
     proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -1801,7 +1979,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     ...selfTestSdkResult,
     sdkResults: sdkResults(selfTestSdkResult),
   };
-  const crossSdkFixtureParityBytes = nativeEvmFixtureJsonBytes(parityFixture);
+  const crossSdkParityBytes = nativeEvmFixtureJsonBytes(parityFixture);
   const nativeProverSelfTestBytes = nativeEvmFixtureJsonBytes(selfTestFixture);
   const nativeProverBundle = {
     schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
@@ -1820,13 +1998,13 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     verifierKeyArtifactHash,
     verifierKey: `artifacts/${profile.chain}/verifier-key.json`,
     destinationBindingHash: destinationBinding.bindingHash,
-    crossSdkFixtureParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
+    crossSdkParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
     nativeProverSelfTestArtifact: `artifacts/${profile.chain}/self-test.json`,
     auditHashes: {
       circuit_security_audit: nativeEvmFixtureHex32(81),
       native_implementation_audit: nativeEvmFixtureHex32(82),
       reproducible_build_attestation: nativeEvmFixtureHex32(83),
-      cross_sdk_fixture_parity: testSha256Hex(crossSdkFixtureParityBytes),
+      cross_sdk_parity: testSha256Hex(crossSdkParityBytes),
       native_prover_self_test: testSha256Hex(nativeProverSelfTestBytes),
       no_wasm_no_remote_scan: nativeEvmFixtureHex32(84),
     },
@@ -1839,7 +2017,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     proofArtifactBytes,
     provingKeyBytes,
     verifierKeyBytes,
-    crossSdkFixtureParityBytes,
+    crossSdkParityBytes,
     nativeProverSelfTestBytes,
     implementationBytes: implementationBytesBySdk.javascript,
     sdk: "javascript",
@@ -3774,7 +3952,7 @@ test("builds Solana full light-client audit role proof requests", () => {
         ["0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3"],
         ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
         ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-        ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+        ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
         ["0xb1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"],
         ["0x0300000000000000000000000000000000000000000000000000000000000000"],
         ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -3805,7 +3983,7 @@ test("builds Solana full light-client audit role proof requests", () => {
         ["0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0"],
         ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
         ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-        ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+        ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
         ["0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"],
         ["0x0300000000000000000000000000000000000000000000000000000000000000"],
         ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -3833,7 +4011,7 @@ test("builds Solana full light-client audit role proof requests", () => {
         ["0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8"],
         ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
         ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-        ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+        ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
         ["0xd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"],
         ["0x0300000000000000000000000000000000000000000000000000000000000000"],
         ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -7016,6 +7194,61 @@ test("rejects EVM-family and TRON proof requests with non-canonical SCCP bundles
       }),
     /sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1/,
   );
+
+  const canonicalSolanaSourceEvm =
+    withCanonicalSourceProofFinality(
+      solanaSourceEvmProofBundleFixture,
+      SCCP_DOMAIN_SOL,
+    );
+  const replayedSolanaSourceEvm =
+    withCanonicalSourceProofFinality(
+      buildSampleEvmFamilyProofBundleFixture({
+        sourceDomain: SCCP_DOMAIN_SOL,
+        nonce: 4001n,
+        routeId: "sccp-sol-evm-source-proof-replay",
+      }),
+      SCCP_DOMAIN_SOL,
+    );
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        publicInputs: canonicalSolanaSourceEvm.publicInputs,
+        bundleBytes: canonicalSolanaSourceEvm.bundleBytes,
+        sourceProofBytes: replayedSolanaSourceEvm.sourceProofBytes,
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must match bundleBytes finality proof/,
+  );
+
+  const canonicalSolanaSourceTron =
+    withCanonicalSourceProofFinality(
+      solanaSourceTronProofBundleFixture,
+      SCCP_DOMAIN_SOL,
+    );
+  const replayedSolanaSourceTron =
+    withCanonicalSourceProofFinality(
+      buildSampleEvmFamilyProofBundleFixture({
+        sourceDomain: SCCP_DOMAIN_SOL,
+        targetDomain: SCCP_DOMAIN_TRON,
+        nonce: 4002n,
+        routeId: "sccp-sol-tron-source-proof-replay",
+      }),
+      SCCP_DOMAIN_SOL,
+    );
+  assert.throws(
+    () =>
+      buildTronSccpProofRequest({
+        publicInputs: canonicalSolanaSourceTron.publicInputs,
+        bundleBytes: canonicalSolanaSourceTron.bundleBytes,
+        sourceProofBytes: replayedSolanaSourceTron.sourceProofBytes,
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must match bundleBytes finality proof/,
+  );
 });
 
 test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () => {
@@ -7126,7 +7359,7 @@ test("BSC high-level facades require route-bound native prover artifacts", async
       proofArtifactBytes: fixture.proofArtifactBytes,
       provingKeyBytes: fixture.provingKeyBytes,
       verifierKeyBytes: fixture.verifierKeyBytes,
-      crossSdkFixtureParityBytes: fixture.crossSdkFixtureParityBytes,
+      crossSdkParityBytes: fixture.crossSdkParityBytes,
       nativeProverSelfTestBytes: fixture.nativeProverSelfTestBytes,
       implementationBytes: fixture.implementationBytes,
       sdk: fixture.sdk,
@@ -8629,7 +8862,14 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
   );
   assert.equal(
     sccpSolanaFullLightClientGateHash(auditedSolanaDeployment),
-    "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
+  );
+  assert.notEqual(
+    sccpSolanaFullLightClientGateHash({
+      ...auditedSolanaDeployment,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+    }),
+    sccpSolanaFullLightClientGateHash(auditedSolanaDeployment),
   );
   assert.throws(
     () =>
@@ -8722,7 +8962,14 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
   );
   assert.equal(
     sccpTonFullLightClientGateHash(auditedTonDeployment),
-    "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+  );
+  assert.notEqual(
+    sccpTonFullLightClientGateHash({
+      ...auditedTonDeployment,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+    }),
+    sccpTonFullLightClientGateHash(auditedTonDeployment),
   );
   assert.throws(
     () =>

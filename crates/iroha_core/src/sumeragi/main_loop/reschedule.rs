@@ -2506,6 +2506,28 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        let synthetic_body_progress_snapshot = if contiguous_frontier {
+            let has_vote_backed_evidence =
+                self.slot_has_vote_backed_consensus_evidence(height, view);
+            self.frontier_slot.as_ref().and_then(|slot| {
+                (slot.height == height
+                    && slot.view == view
+                    && slot.block_hash == block_hash
+                    && slot.body_missing()
+                    && slot.repair_state.last_reason == Some("quorum_timeout")
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc)
+                        || has_vote_backed_evidence))
+                    .then_some((
+                        slot.timers.last_progress_at,
+                        slot.timers.lag_window_started_at,
+                        slot.repair_state.quorum_timeout_rebroadcasted,
+                    ))
+            })
+        } else {
+            None
+        };
         if contiguous_frontier {
             let _ = self.handle_frontier_slot_event(
                 now,
@@ -2515,6 +2537,17 @@ impl Actor {
                     sender: None,
                 },
             );
+            if let Some((last_progress_at, lag_window_started_at, quorum_timeout_rebroadcasted)) =
+                synthetic_body_progress_snapshot
+                && let Some(slot) = self.frontier_slot.as_mut()
+                && slot.height == height
+                && slot.view == view
+                && slot.block_hash == block_hash
+            {
+                slot.timers.last_progress_at = last_progress_at;
+                slot.timers.lag_window_started_at = lag_window_started_at;
+                slot.repair_state.quorum_timeout_rebroadcasted = quorum_timeout_rebroadcasted;
+            }
         }
         let rotate_zero_vote_frontier_immediately = contiguous_frontier && drop_pending;
         let handoff_frontier_quorum_timeout_owner = contiguous_frontier
@@ -3311,6 +3344,23 @@ impl Actor {
             .filter(|peer| *peer != local_peer_id)
             .cloned()
             .collect();
+        let selected_target_set: std::collections::BTreeSet<_> = targets.iter().cloned().collect();
+        let full_fanout_target_set: std::collections::BTreeSet<_> =
+            all_non_local_targets.iter().cloned().collect();
+        let selected_reaches_stake_quorum =
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+                self.state.view().world(),
+                topology_peers,
+                &selected_target_set,
+            )
+            .unwrap_or(false);
+        let full_fanout_reaches_stake_quorum =
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+                self.state.view().world(),
+                topology_peers,
+                &full_fanout_target_set,
+            )
+            .unwrap_or(false);
         if near_commit_quorum && !all_non_local_targets.is_empty() {
             // Near quorum, peers can hold overlapping vote subsets. Fan out to every remote peer
             // so observed voters can merge partial sets instead of only targeting inferred gaps.
@@ -3324,6 +3374,21 @@ impl Actor {
                 );
             }
             return targets;
+        }
+        if matches!(consensus_mode, ConsensusMode::Npos)
+            && vote_count < min_votes_for_commit
+            && !targets.is_empty()
+            && !selected_reaches_stake_quorum
+            && full_fanout_reaches_stake_quorum
+        {
+            self.record_npos_repair_coverage(
+                height,
+                view,
+                "insufficient_target_stake_full_fanout",
+                topology_peers,
+                &all_non_local_targets,
+            );
+            return all_non_local_targets;
         }
         if matches!(consensus_mode, ConsensusMode::Npos) {
             self.record_npos_repair_coverage(

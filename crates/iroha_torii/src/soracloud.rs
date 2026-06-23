@@ -38,7 +38,9 @@ use iroha_crypto::{
         ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
         registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
         validate_bfv_full_bootstrap_circuit_artifact_bundle_v1,
-        validate_bfv_full_bootstrap_material_proof_profile_v1, validate_registered_bfv_parameters,
+        validate_bfv_full_bootstrap_material_proof_profile_v1,
+        validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1,
+        validate_registered_bfv_parameters,
     },
 };
 use iroha_data_model::{
@@ -5105,6 +5107,63 @@ fn validate_full_bootstrap_material_proof_profile_for_torii(
     })
 }
 
+fn validate_full_bootstrap_release_audit_for_torii(
+    params: &BfvParameters,
+    payload: &FheJobRunPayload,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+) -> Result<(), SoracloudError> {
+    let package = payload
+        .policy
+        .full_bootstrap_release_audit_package
+        .as_ref()
+        .ok_or_else(|| {
+            SoracloudError::bad_request(
+                "invalid FHE execution policy: full-bootstrap execution requires release audit package",
+            )
+        })?;
+    let expected_package_digest = payload
+        .policy
+        .full_bootstrap_release_audit_package_digest
+        .ok_or_else(|| {
+            SoracloudError::bad_request(
+                "invalid FHE execution policy: full-bootstrap execution requires release audit package digest",
+            )
+        })?;
+    let trusted_reviewer_id = payload
+        .policy
+        .full_bootstrap_release_audit_trusted_reviewer_id
+        .as_deref()
+        .ok_or_else(|| {
+            SoracloudError::bad_request(
+                "invalid FHE execution policy: full-bootstrap execution requires trusted release audit reviewer id",
+            )
+        })?;
+    let trusted_reviewer_public_key = payload
+        .policy
+        .full_bootstrap_release_audit_trusted_reviewer_public_key
+        .as_ref()
+        .ok_or_else(|| {
+            SoracloudError::bad_request(
+                "invalid FHE execution policy: full-bootstrap execution requires trusted release audit reviewer public key",
+            )
+        })?;
+    validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+        params,
+        material,
+        artifacts,
+        package,
+        expected_package_digest,
+        trusted_reviewer_id,
+        trusted_reviewer_public_key,
+    )
+    .map_err(|err| {
+        SoracloudError::bad_request(format!(
+            "invalid FHE execution policy: full-bootstrap release audit package failed validation: {err}"
+        ))
+    })
+}
+
 fn requires_full_bootstrap_execution_material_for_torii(payload: &FheJobRunPayload) -> bool {
     if payload.job.operation != FheJobOperationV1::Bootstrap || payload.job.bootstrap_count == 0 {
         return false;
@@ -5204,6 +5263,14 @@ fn validate_fhe_job_run_proof_attachments(
             payload,
             &expected_public_input_schema_digest,
         )?;
+        if requires_full_bootstrap_execution_material {
+            validate_full_bootstrap_release_audit_for_torii(
+                &registered_bfv_params,
+                payload,
+                material,
+                artifacts,
+            )?;
+        }
     }
     if requires_full_bootstrap_execution_material
         && payload.full_bootstrap_execution_proofs.is_empty()
@@ -14066,7 +14133,7 @@ mod tests {
         SoracloudRuntime, SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
         SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
     };
-    use iroha_crypto::{KeyPair, Signature};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         Encode,
         account::{Account, AccountId},
@@ -14113,6 +14180,25 @@ mod tests {
 
     fn checked_test_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
+    fn checked_test_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test fixture key derivation should succeed")
+    }
+
+    fn checked_test_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("test fixture BLS key derivation should succeed")
+    }
+
+    #[test]
+    fn checked_test_keypair_uses_fallible_seed_derivation() {
+        assert_eq!(checked_test_keypair(0x50).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     struct TestHfRuntimeHandle {
@@ -14345,6 +14431,66 @@ mod tests {
         transcript
     }
 
+    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID: &str = "sora-zk-audit-wg-2026";
+    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY: &[u8] =
+        b"Independent SORA BFV full bootstrap release review confirms governed arithmetic artifacts, verifier keys, and runtime binding are approved for deployment.";
+    const SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY: &[u8] =
+        b"Archive evidence for the SORA BFV full bootstrap release review binds artifact digests, native circuit payloads, and reviewer approval records.";
+
+    fn attach_full_bootstrap_release_audit_policy_fields(
+        policy: &mut FheExecutionPolicyV1,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) {
+        let reviewer_keypair = checked_test_keypair(0x91);
+        let params = ram_lfe_bfv_parameters_v1();
+        let material = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
+            .expect("fixture evaluation keys carry full-bootstrap material");
+        let audit_report_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_report_bytes_v1(
+                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY,
+            )
+            .expect("fixture release audit report bytes are canonical");
+        let audit_archive_bytes =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY,
+            )
+            .expect("fixture release audit archive bytes are canonical");
+        let package = iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_v1(
+            &params,
+            material,
+            artifacts,
+            &audit_report_bytes,
+            &audit_archive_bytes,
+            SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID,
+            reviewer_keypair.private_key(),
+        )
+        .expect("fixture release audit package validates");
+        let package_digest =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_digest_v1(&package)
+                .expect("fixture release audit package digest");
+        policy.full_bootstrap_release_audit_package = Some(package);
+        policy.full_bootstrap_release_audit_package_digest = Some(package_digest);
+        policy.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some(SAMPLE_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID.to_string());
+        policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(reviewer_keypair.public_key().clone());
+    }
+
+    fn fixture_release_audited_full_bootstrap_policy(
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        transcript: &BfvEvaluationKeyRefreshTranscriptV1,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) -> FheExecutionPolicyV1 {
+        let mut policy =
+            fixture_fhe_execution_policy_for_evaluation_material(evaluation_keys, transcript);
+        attach_full_bootstrap_release_audit_policy_fields(&mut policy, evaluation_keys, artifacts);
+        policy
+    }
+
     fn sample_fhe_public_key_proof() -> SoracloudFhePublicKeyProofV1 {
         sample_fhe_public_key_proof_with_statement(Hash::new(b"torii-public-key-proof-statement"))
     }
@@ -14361,6 +14507,42 @@ mod tests {
 
     fn attach_public_key_proof_for_policy(payload: &mut FheJobRunPayload) {
         payload.public_key_proof = Some(sample_fhe_public_key_proof_for_policy(&payload.policy));
+    }
+
+    fn fixture_release_audited_full_bootstrap_payload(
+        governance_tx_hash: Hash,
+    ) -> FheJobRunPayload {
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
+        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
+        let evaluation_key_refresh_transcript =
+            fixture_full_bootstrap_evaluation_key_refresh_transcript();
+        let policy = fixture_release_audited_full_bootstrap_policy(
+            &evaluation_keys,
+            &evaluation_key_refresh_transcript,
+            &artifacts,
+        );
+        let material_proof =
+            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
+                &policy,
+                &evaluation_keys,
+            );
+        let mut payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: fixture_full_bootstrap_job_spec(),
+            policy,
+            param_set: fixture_fhe_param_set(),
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            public_key_proof: None,
+            bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: Some(material_proof),
+            full_bootstrap_circuit_artifacts: Some(artifacts),
+            full_bootstrap_execution_proofs: vec![sample_fhe_full_bootstrap_execution_proof()],
+            governance_tx_hash,
+        };
+        attach_public_key_proof_for_policy(&mut payload);
+        payload
     }
 
     fn sample_fhe_public_key_proof_with_statement(
@@ -15204,7 +15386,7 @@ mod tests {
 
     #[test]
     fn require_soracloud_mutation_signer_rejects_inline_signing_material() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x60);
         let account = AccountId::new(key_pair.public_key().clone());
         let headers = verified_request_headers(&account, key_pair.public_key());
         let provenance = ManifestProvenance {
@@ -15232,8 +15414,8 @@ mod tests {
 
     #[test]
     fn require_soracloud_mutation_signer_binds_provenance_to_request_signer() {
-        let request_keypair = KeyPair::random();
-        let provenance_keypair = KeyPair::random();
+        let request_keypair = checked_test_keypair(0x61);
+        let provenance_keypair = checked_test_keypair(0x62);
         let account = AccountId::new(request_keypair.public_key().clone());
         let headers = verified_request_headers(&account, request_keypair.public_key());
         let provenance = ManifestProvenance {
@@ -15251,8 +15433,8 @@ mod tests {
 
     #[test]
     fn require_soracloud_mutation_signer_accepts_multisig_member_provenance() {
-        let primary_request_keypair = KeyPair::random();
-        let provenance_keypair = KeyPair::random();
+        let primary_request_keypair = checked_test_keypair(0x63);
+        let provenance_keypair = checked_test_keypair(0x64);
         let account = AccountId::new(primary_request_keypair.public_key().clone());
         let headers = verified_request_headers_with_signers(
             &account,
@@ -16011,7 +16193,7 @@ mod tests {
                         consent_evidence_hash: None,
                         break_glass: None,
                         break_glass_reason: None,
-                        signer: KeyPair::random().public_key().clone(),
+                        signer: checked_test_keypair(0x70).public_key().clone(),
                     },
                 );
             world
@@ -16041,13 +16223,11 @@ mod tests {
                     },
                 );
 
+            let query_signer = checked_test_keypair(0x71);
             let app = mk_app_state_for_tests_with_world(world);
             let response = authoritative_ciphertext_query_response(
                 &app,
-                signed_ciphertext_query_request(
-                    fixture_ciphertext_query_spec(),
-                    &KeyPair::random(),
-                ),
+                signed_ciphertext_query_request(fixture_ciphertext_query_spec(), &query_signer),
             )
             .map_err(|err| eyre::eyre!("authoritative ciphertext query failed: {err:?}"))?;
             assert_eq!(response.action, SoracloudAction::CiphertextQuery);
@@ -16152,7 +16332,9 @@ mod tests {
                             break_glass: Some(break_glass),
                             break_glass_reason: break_glass
                                 .then(|| "emergency override".to_string()),
-                            signer: KeyPair::random().public_key().clone(),
+                            signer: checked_test_keypair(0x70u8.wrapping_add(sequence as u8))
+                                .public_key()
+                                .clone(),
                         },
                     );
             }
@@ -16691,7 +16873,7 @@ mod tests {
                     registered_sequence: 7,
                     promoted_sequence: Some(9),
                     gate_report_hash: Some(Hash::new(b"gate")),
-                    promoted_by: Some(KeyPair::random().public_key().clone()),
+                    promoted_by: Some(checked_test_keypair(0x74).public_key().clone()),
                 },
             );
 
@@ -17635,7 +17817,7 @@ mod tests {
         let mut decryption_request = fixture_decryption_request();
         decryption_request.request_id = "decrypt-upload-input".to_string();
         decryption_request.ciphertext_commitment = input_artifact.artifact_hash;
-        let signer = KeyPair::random();
+        let signer = checked_test_keypair(0x80);
         let record = SoraDecryptionRequestRecordV1 {
             schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
             service_name: service_name.clone(),
@@ -17744,8 +17926,8 @@ mod tests {
 
     #[test]
     fn uploaded_model_register_signature_rejects_signer_mismatch() {
-        let key_pair = KeyPair::random();
-        let other_key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x81);
+        let other_key_pair = checked_test_keypair(0x82);
         let payload = sample_uploaded_model_register_payload();
         let finalize_encoded = encode_uploaded_model_register_finalize_signature_payload(&payload)
             .expect("encode uploaded model finalize payload");
@@ -17763,7 +17945,7 @@ mod tests {
 
     #[test]
     fn uploaded_model_register_signature_rejects_swapped_same_signer_provenances() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x83);
         let payload = sample_uploaded_model_register_payload();
         let bundle_encoded = encode_uploaded_model_register_bundle_signature_payload(&payload)
             .expect("encode uploaded model bundle payload");
@@ -17794,7 +17976,7 @@ mod tests {
 
     #[test]
     fn uploaded_model_register_signature_rejects_tampered_bundle_payload() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x84);
         let payload = sample_uploaded_model_register_payload();
         let mut request = signed_uploaded_model_register_request(payload, &key_pair);
         request.payload.bundle.model_id = "upload-replayed".to_string();
@@ -17810,7 +17992,7 @@ mod tests {
 
     #[test]
     fn uploaded_model_register_signature_rejects_tampered_finalize_payload() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x85);
         let payload = sample_uploaded_model_register_payload();
         let mut request = signed_uploaded_model_register_request(payload, &key_pair);
         request.payload.dataset_ref = "dataset://replayed".to_string();
@@ -18689,7 +18871,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-replay-shaped-execution-proof"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed replay-shaped payload still has a valid provenance signature");
@@ -18723,7 +18905,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-param-set"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed parameter-drift payload still has a valid provenance signature");
@@ -18759,7 +18941,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-policy-param-set"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed policy-drift payload still has a valid provenance signature");
@@ -18793,7 +18975,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-job-policy"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed job-drift payload still has a valid provenance signature");
@@ -18826,7 +19008,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-evaluation-key-digest"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed evaluation-key-drift payload still has a valid provenance signature");
@@ -18861,7 +19043,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-refresh-transcript-digest"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request).expect(
             "signed refresh-transcript-drift payload still has a valid provenance signature",
@@ -18898,7 +19080,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-missing-public-key-statement"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request).expect(
             "signed missing-public-key-statement payload still has a valid provenance signature",
@@ -18933,7 +19115,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-public-key-statement"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request).expect(
             "signed public-key-statement-drift payload still has a valid provenance signature",
@@ -18966,7 +19148,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-wrong-public-key-proof"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed wrong-public-key-proof payload still has a valid signature");
@@ -18998,7 +19180,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-without-public-key-proof"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed missing-public-key-proof payload still has a valid signature");
@@ -19033,7 +19215,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-bootstrap-statement"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed bootstrap-statement-drift payload still has a valid signature");
@@ -19077,7 +19259,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-full-bootstrap-statement"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed full-bootstrap-statement-drift payload still has a valid signature");
@@ -19122,7 +19304,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-full-bootstrap-multi-count"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed full-bootstrap multi-count payload still has a valid signature");
@@ -19166,7 +19348,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-full-bootstrap-zero-refresh-statement"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed full-bootstrap zero-refresh policy still has a valid signature");
@@ -19206,7 +19388,7 @@ mod tests {
                 b"governance-with-full-bootstrap-statement-refresh-only-key",
             ),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed refresh-only full-bootstrap policy still has a valid signature");
@@ -19238,7 +19420,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-missing-bootstrap-key-proof"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request).expect(
             "signed missing-bootstrap-proof payload still has a valid provenance signature",
@@ -19276,7 +19458,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-bootstrap-key-proof-statement-drift"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed bootstrap-proof-drift payload still has a valid provenance signature");
@@ -19316,7 +19498,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-missing-full-bootstrap-material-proof"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed missing-material-proof payload still has a valid provenance signature");
@@ -19364,7 +19546,7 @@ mod tests {
                 b"governance-with-full-bootstrap-material-proof-statement-drift",
             ),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed material-proof-drift payload still has a valid provenance signature");
@@ -19398,7 +19580,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-out-of-scope-material-proof"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed out-of-scope material-proof payload still has a valid signature");
@@ -19432,7 +19614,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-out-of-scope-execution-proof"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed out-of-scope execution-proof payload still has a valid signature");
@@ -19466,7 +19648,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-out-of-scope-artifacts"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed out-of-scope artifact payload still has a valid signature");
@@ -19516,7 +19698,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-execution-proof-without-artifacts"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed missing-artifact execution-proof payload still has a valid signature");
@@ -19562,7 +19744,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-missing-full-bootstrap-artifacts"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed missing-artifacts payload still has a valid signature");
@@ -19586,9 +19768,10 @@ mod tests {
         let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
         let evaluation_key_refresh_transcript =
             fixture_full_bootstrap_evaluation_key_refresh_transcript();
-        let policy = fixture_fhe_execution_policy_for_evaluation_material(
+        let policy = fixture_release_audited_full_bootstrap_policy(
             &evaluation_keys,
             &evaluation_key_refresh_transcript,
+            &artifacts,
         );
         let material_proof =
             sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
@@ -19611,7 +19794,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-empty-full-bootstrap-execution-proofs"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed empty-execution-proof payload still has a valid signature");
@@ -19626,6 +19809,135 @@ mod tests {
                     .message
                     .contains("requires at least one full-bootstrap execution proof"),
             "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn fhe_job_run_proof_preflight_rejects_placeholder_release_audit_package_digest() {
+        let artifacts = valid_full_bootstrap_circuit_artifacts();
+        let evaluation_keys = fixture_full_bootstrap_evaluation_key_bundle(&artifacts);
+        let evaluation_key_refresh_transcript =
+            fixture_full_bootstrap_evaluation_key_refresh_transcript();
+        let policy = fixture_release_audited_full_bootstrap_policy(
+            &evaluation_keys,
+            &evaluation_key_refresh_transcript,
+            &artifacts,
+        );
+        let material_proof =
+            sample_fhe_full_bootstrap_material_proof_for_policy_and_evaluation_keys(
+                &policy,
+                &evaluation_keys,
+            );
+
+        for (label, placeholder_digest) in [
+            ("direct", Hash::new(b"not production ready")),
+            (
+                "delayed",
+                Hash::new(b"governed material digest before placeholder: template"),
+            ),
+            ("mock", Hash::new(b"mock")),
+            (
+                "delayed-fixture",
+                Hash::new(b"full-bootstrap material before placeholder: fixture"),
+            ),
+        ] {
+            let mut payload = FheJobRunPayload {
+                service_name: "health_portal".to_owned(),
+                binding_name: "private_state".to_owned(),
+                job: fixture_full_bootstrap_job_spec(),
+                policy: policy.clone(),
+                param_set: fixture_fhe_param_set(),
+                evaluation_keys: evaluation_keys.clone(),
+                evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+                public_key_proof: None,
+                bootstrap_key_zero_refresh_proof: None,
+                full_bootstrap_material_proof: Some(material_proof.clone()),
+                full_bootstrap_circuit_artifacts: Some(artifacts.clone()),
+                full_bootstrap_execution_proofs: vec![sample_fhe_full_bootstrap_execution_proof()],
+                governance_tx_hash: Hash::new(
+                    format!("governance-with-{label}-placeholder-release-audit-digest").as_bytes(),
+                ),
+            };
+            payload.policy.full_bootstrap_release_audit_package_digest = Some(placeholder_digest);
+            attach_public_key_proof_for_policy(&mut payload);
+            let key_pair = checked_test_keypair(0x90);
+            let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
+            verify_fhe_job_run_signature(&request).expect(
+                "signed placeholder release-audit digest payload still has a valid signature",
+            );
+
+            let err = validate_fhe_job_run_proof_attachments(&payload)
+                .expect_err("placeholder release-audit package digest must fail preflight");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+            assert!(
+                err.message.contains("invalid FHE execution policy")
+                    && err.message.contains("placeholder full-bootstrap digest"),
+                "unexpected error for {label} placeholder digest: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fhe_job_run_proof_preflight_rejects_placeholder_release_audit_trusted_reviewer_id() {
+        let mut payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
+            b"governance-with-placeholder-release-audit-reviewer-id",
+        ));
+        payload
+            .policy
+            .full_bootstrap_release_audit_trusted_reviewer_id =
+            Some("not-production-ready-reviewer".to_owned());
+        let key_pair = checked_test_keypair(0x90);
+        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
+        verify_fhe_job_run_signature(&request)
+            .expect("signed placeholder reviewer-id payload still has a valid signature");
+
+        let err = validate_fhe_job_run_proof_attachments(&payload)
+            .expect_err("placeholder release-audit trusted reviewer id must fail preflight");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("invalid FHE execution policy")
+                && err
+                    .message
+                    .contains("full_bootstrap_release_audit_trusted_reviewer_id")
+                && err.message.contains("placeholder"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !err.message
+                .contains("release audit package failed validation"),
+            "reviewer id policy validation should fail before package matching: {err:?}"
+        );
+    }
+
+    #[test]
+    fn fhe_job_run_proof_preflight_rejects_non_ed25519_release_audit_trusted_reviewer_key() {
+        let mut payload = fixture_release_audited_full_bootstrap_payload(Hash::new(
+            b"governance-with-non-ed25519-release-audit-reviewer-key",
+        ));
+        payload
+            .policy
+            .full_bootstrap_release_audit_trusted_reviewer_public_key =
+            Some(checked_test_bls_keypair(0x92).public_key().clone());
+        let key_pair = checked_test_keypair(0x90);
+        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
+        verify_fhe_job_run_signature(&request)
+            .expect("signed non-Ed25519 reviewer-key payload still has a valid signature");
+
+        let err = validate_fhe_job_run_proof_attachments(&payload)
+            .expect_err("non-Ed25519 release-audit trusted reviewer key must fail preflight");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("invalid FHE execution policy")
+                && err
+                    .message
+                    .contains("full_bootstrap_release_audit_trusted_reviewer_public_key")
+                && err.message.contains("Ed25519"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !err.message
+                .contains("release audit package failed validation"),
+            "reviewer key policy validation should fail before package matching: {err:?}"
         );
     }
 
@@ -19662,7 +19974,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-too-many-execution-proofs"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed oversized execution-proof payload still has a valid signature");
@@ -19709,7 +20021,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-drifted-fhe-param-set-artifacts"),
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed parameter-drift payload still has a valid provenance signature");
@@ -19758,7 +20070,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-malformed-full-bootstrap-artifacts"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed malformed-artifact payload still has a valid provenance signature");
@@ -19809,7 +20121,7 @@ mod tests {
             governance_tx_hash: Hash::new(b"governance-with-role-swapped-full-bootstrap-artifacts"),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed role-swapped-artifact payload still has a valid provenance signature");
@@ -19864,7 +20176,7 @@ mod tests {
             ),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed verifier-commitment drift payload still has a valid signature");
@@ -19926,7 +20238,7 @@ mod tests {
             ),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed stale-verifier-key payload still has a valid provenance signature");
@@ -19988,7 +20300,7 @@ mod tests {
             ),
         };
         attach_public_key_proof_for_policy(&mut payload);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_test_keypair(0x90);
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
             .expect("signed stale-prover-key payload still has a valid provenance signature");
@@ -20592,7 +20904,7 @@ mod tests {
                 "gpt_oss_20b",
             );
             let app = mk_app_state_for_tests_with_world(World::default());
-            let signer = test_soracloud_mutation_signer(&KeyPair::random());
+            let signer = test_soracloud_mutation_signer(&checked_test_keypair(0xA0));
 
             let error = ensure_hf_generated_service_instruction(
                 &app,
@@ -20624,7 +20936,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async move {
-            let key_pair = KeyPair::random();
+            let key_pair = checked_test_keypair(0xA1);
             let signer = test_soracloud_mutation_signer(&key_pair);
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
@@ -20662,8 +20974,8 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async move {
-            let signer_keypair = KeyPair::random();
-            let provenance_keypair = KeyPair::random();
+            let signer_keypair = checked_test_keypair(0xA2);
+            let provenance_keypair = checked_test_keypair(0xA3);
             let signer = test_soracloud_mutation_signer(&signer_keypair);
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
@@ -20869,7 +21181,7 @@ mod tests {
                 &bundle,
             );
             let app = mk_app_state_for_tests_with_world(World::default());
-            let signer = test_soracloud_mutation_signer(&KeyPair::random());
+            let signer = test_soracloud_mutation_signer(&checked_test_keypair(0xA4));
 
             let error = ensure_hf_generated_agent_instruction(&app, &signer, &manifest, None)
                 .expect_err("new HF-generated apartment must require auxiliary provenance");
@@ -20892,7 +21204,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async move {
-            let key_pair = KeyPair::random();
+            let key_pair = checked_test_keypair(0xA5);
             let signer = test_soracloud_mutation_signer(&key_pair);
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
@@ -20926,8 +21238,8 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async move {
-            let signer_keypair = KeyPair::random();
-            let provenance_keypair = KeyPair::random();
+            let signer_keypair = checked_test_keypair(0xA6);
+            let provenance_keypair = checked_test_keypair(0xA7);
             let signer = test_soracloud_mutation_signer(&signer_keypair);
             let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
@@ -21534,8 +21846,8 @@ mod tests {
             let run = fixture_agent_run_record(apartment_name, "ops_agent:autonomy:1", 7, 1);
             let manifest = fixture_agent_manifest();
             let record = fixture_agent_apartment_record(manifest.clone(), run.clone(), 1);
-            let approval_signer = KeyPair::random();
-            let finalize_signer = KeyPair::random();
+            let approval_signer = checked_test_keypair(0xB0);
+            let finalize_signer = checked_test_keypair(0xB1);
 
             let mut world = World::default();
             world
@@ -21590,7 +21902,7 @@ mod tests {
             let mut manifest = fixture_agent_manifest();
             manifest.tool_capabilities.clear();
             let record = fixture_agent_apartment_record(manifest, run.clone(), 1);
-            let signer = KeyPair::random();
+            let signer = checked_test_keypair(0xB2);
 
             let mut world = World::default();
             world
@@ -21737,7 +22049,7 @@ mod tests {
                         lease_expires_sequence: 100,
                         manifest_hash: Hash::new(b"agent-manifest"),
                         restart_count: 0,
-                        signer: KeyPair::random().public_key().clone(),
+                        signer: checked_test_keypair(0xB3).public_key().clone(),
                         request_id: Some("ops_agent:autonomy:executed".to_owned()),
                         asset_definition: None,
                         amount_nanos: None,
@@ -21913,7 +22225,7 @@ mod tests {
                         lease_expires_sequence: 100,
                         manifest_hash: Hash::new(b"agent-manifest"),
                         restart_count: 0,
-                        signer: KeyPair::random().public_key().clone(),
+                        signer: checked_test_keypair(0xB4).public_key().clone(),
                         request_id: Some(run.run_id.clone()),
                         asset_definition: None,
                         amount_nanos: None,

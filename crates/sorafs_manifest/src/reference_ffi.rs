@@ -4,6 +4,10 @@
 //! scripting SDKs can call the Rust reference validators without duplicating
 //! SoraFS wire-format logic.
 
+// The FFI surface returns full validation outcomes as errors so every caller
+// receives the same machine-readable diagnostics as the Rust reference CLI.
+#![allow(clippy::result_large_err)]
+
 use std::{panic, slice};
 
 use norito::json;
@@ -943,13 +947,13 @@ fn outcome_json_buffer(outcome: &ValidationOutcomeV1) -> SorafsReferenceFfiBuffe
     }
 }
 
-fn read_input<'scope>(
-    _scope: &'scope FfiInputScope,
+fn read_input(
+    _scope: &FfiInputScope,
     ptr: *const u8,
     len: usize,
     label: impl Into<String>,
     generated_at: u64,
-) -> Result<&'scope [u8], ValidationOutcomeV1> {
+) -> Result<&[u8], ValidationOutcomeV1> {
     if len == 0 {
         return Ok(&[]);
     }
@@ -961,13 +965,13 @@ fn read_input<'scope>(
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
 
-fn read_optional_input<'scope>(
-    scope: &'scope FfiInputScope,
+fn read_optional_input(
+    scope: &FfiInputScope,
     ptr: *const u8,
     len: usize,
     label: impl Into<String>,
     generated_at: u64,
-) -> Result<Option<&'scope [u8]>, ValidationOutcomeV1> {
+) -> Result<Option<&[u8]>, ValidationOutcomeV1> {
     if len == 0 {
         return Ok(None);
     }
@@ -988,12 +992,12 @@ fn read_label(
     Ok(String::from_utf8_lossy(bytes).to_string())
 }
 
-fn read_payload_descriptors<'scope>(
-    _scope: &'scope FfiInputScope,
+fn read_payload_descriptors(
+    _scope: &FfiInputScope,
     ptr: *const SorafsReferenceFfiBundlePayload,
     len: usize,
     generated_at: u64,
-) -> Result<&'scope [SorafsReferenceFfiBundlePayload], ValidationOutcomeV1> {
+) -> Result<&[SorafsReferenceFfiBundlePayload], ValidationOutcomeV1> {
     if len == 0 {
         return Ok(&[]);
     }

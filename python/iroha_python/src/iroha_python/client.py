@@ -11027,6 +11027,7 @@ class ToriiClient(_BaseToriiClient):
         hash_hex: str,
         *,
         scope: str = "global",
+        timeout: Optional[float] = None,
     ) -> Optional[Any]:
         """Fetch transaction pipeline status for the given hash (hex encoded)."""
 
@@ -11035,6 +11036,7 @@ class ToriiClient(_BaseToriiClient):
             "GET",
             "/v1/pipeline/transactions/status",
             params={"hash": hash_hex, "scope": scope},
+            timeout=timeout,
         )
         if response.status_code == 404:
             return None
@@ -11077,8 +11079,23 @@ class ToriiClient(_BaseToriiClient):
         deadline = None if timeout is None else (time.monotonic() + max(timeout, 0.0))
 
         while True:
+            request_timeout = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    raise TimeoutError(
+                        f"transaction {hash_hex} did not reach a terminal status "
+                        f"within {timeout} seconds"
+                    )
+                request_timeout = (
+                    remaining if self._timeout is None else min(self._timeout, remaining)
+                )
             attempts += 1
-            payload = self.get_transaction_status(hash_hex, scope=scope)
+            payload = self.get_transaction_status(
+                hash_hex,
+                scope=scope,
+                timeout=request_timeout,
+            )
             status = _extract_pipeline_status_kind(payload)
 
             if on_status is not None:
@@ -11103,7 +11120,12 @@ class ToriiClient(_BaseToriiClient):
                 )
 
             if interval > 0.0:
-                time.sleep(interval)
+                if deadline is None:
+                    time.sleep(interval)
+                else:
+                    sleep_for = min(interval, max(deadline - time.monotonic(), 0.0))
+                    if sleep_for > 0.0:
+                        time.sleep(sleep_for)
 
     # ------------------------------------------------------------------
     # Transaction construction convenience helpers
@@ -13576,6 +13598,42 @@ class ToriiClient(_BaseToriiClient):
         visit(payload)
         return _dedupe_strings(hashes)
 
+    @staticmethod
+    def _contract_response_pipeline_statuses(response: Any) -> List[Mapping[str, Any]]:
+        payload = ToriiClient._contract_response_payload(response)
+        statuses: List[Mapping[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        def add(candidate: Any) -> None:
+            if not isinstance(candidate, Mapping):
+                return
+            kind = _extract_pipeline_status_kind(candidate)
+            if kind is None:
+                return
+            status_hash = candidate.get("hash") or candidate.get("tx_hash_hex")
+            key = (
+                str(status_hash or ""),
+                kind,
+                json.dumps(_json_safe_value(candidate), sort_keys=True, default=str),
+            )
+            if key in seen:
+                return
+            seen.add(key)
+            statuses.append(candidate)
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                add(value.get("pipeline_status"))
+                add(value)
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+        return statuses
+
     def _wait_for_contract_response(
         self,
         response: Any,
@@ -13588,8 +13646,34 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         submit_payload = self._contract_response_payload(response)
         tx_hashes = self._contract_response_tx_hashes(response)
+        embedded_statuses = self._contract_response_pipeline_statuses(response)
+        embedded_by_hash: Dict[str, Mapping[str, Any]] = {}
+        for status_payload in embedded_statuses:
+            status_hash = status_payload.get("hash") or status_payload.get("tx_hash_hex")
+            if isinstance(status_hash, str) and status_hash.strip():
+                embedded_by_hash[status_hash.strip().lower()] = status_payload
+        success_set = (
+            frozenset(str(s) for s in success_statuses)
+            if success_statuses is not None
+            else _DEFAULT_SUCCESS_STATUSES
+        )
+        failure_set = (
+            frozenset(str(s) for s in failure_statuses)
+            if failure_statuses is not None
+            else _DEFAULT_FAILURE_STATUSES
+        )
         final_payloads: List[Any] = []
         for tx_hash in tx_hashes:
+            embedded_status = embedded_by_hash.get(tx_hash.lower())
+            if embedded_status is None and len(tx_hashes) == 1 and len(embedded_statuses) == 1:
+                embedded_status = embedded_statuses[0]
+            embedded_kind = _extract_pipeline_status_kind(embedded_status)
+            if embedded_kind is not None:
+                if embedded_kind in success_set:
+                    final_payloads.append(embedded_status)
+                    continue
+                if embedded_kind in failure_set:
+                    raise TransactionStatusError(tx_hash, embedded_kind, embedded_status)
             final_payloads.append(
                 self.wait_for_transaction_status(
                     tx_hash,

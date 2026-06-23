@@ -51,6 +51,15 @@ SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
     SCCP_DOMAIN_TRON,
 )
 SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS: tuple[int, ...] = ()
+ALL_LANES_PUBLIC_SUMMARY_FIELDS = (
+    "production_ready",
+    "required_domains",
+    "supported_launch_domains",
+    "unsupported_launch_domains",
+    "lanes",
+    "blockers",
+    "release_checklist",
+)
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN = {
@@ -1188,6 +1197,21 @@ def _reject_source_material_template_hashes(
             )
 
 
+def _reject_source_adapter_deployment_template_hashes(
+    errors: list[str],
+    profile: LaneProfile,
+    record: dict[str, Any],
+) -> None:
+    template_hashes = _source_material_template_hashes(profile)
+    for field, template_hash in template_hashes.items():
+        raw = _hex_bytes(record.get(field), byte_length=32)
+        if raw == template_hash:
+            errors.append(
+                f"{field} must be deployed source-adapter evidence, "
+                "not built-in template material"
+            )
+
+
 def _reject_source_adapter_audit_template_hashes(
     errors: list[str],
     profile: LaneProfile,
@@ -1203,6 +1227,70 @@ def _reject_source_adapter_audit_template_hashes(
             errors.append(
                 f"{field} must be deployed audit evidence, "
                 "not built-in template material"
+            )
+
+
+def _check_source_role_shape(
+    errors: list[str],
+    profile: LaneProfile,
+    record: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    if profile.source_state_verifier_id:
+        if record.get("source_state_verifier_id") != profile.source_state_verifier_id:
+            errors.append(
+                f"{label} source_state_verifier_id must be "
+                f"{profile.source_state_verifier_id!r}"
+            )
+        if not _nonzero_hex(record.get("source_state_verifier_hash"), byte_length=32):
+            errors.append(
+                f"{label} source_state_verifier_hash must be a non-zero 32-byte hex value"
+            )
+    else:
+        if record.get("source_state_verifier_id") not in (None, ""):
+            errors.append(f"{label} source_state_verifier_id must be empty for this lane")
+        if not _empty_hex_or_absent(record.get("source_state_verifier_hash"), byte_length=32):
+            errors.append(f"{label} source_state_verifier_hash must be empty for this lane")
+
+    if profile.source_bridge_emitter_id:
+        if record.get("source_bridge_emitter_id") != profile.source_bridge_emitter_id:
+            errors.append(
+                f"{label} source_bridge_emitter_id must be "
+                f"{profile.source_bridge_emitter_id!r}"
+            )
+        if not _nonzero_hex(
+            record.get("source_bridge_emitter_address"),
+            byte_length=20,
+        ):
+            errors.append(
+                f"{label} source_bridge_emitter_address must be a non-zero 20-byte hex value"
+            )
+        if not _nonzero_hex(
+            record.get("source_bridge_emitter_code_hash"),
+            byte_length=32,
+        ):
+            errors.append(
+                f"{label} source_bridge_emitter_code_hash must be a non-zero 32-byte hex value"
+            )
+    else:
+        if record.get("source_bridge_emitter_id") not in (None, ""):
+            errors.append(
+                f"{label} source_bridge_emitter_id must be empty for this lane"
+            )
+        if not _empty_hex_or_absent(
+            record.get("source_bridge_emitter_address"),
+            byte_length=20,
+        ):
+            errors.append(
+                f"{label} source_bridge_emitter_address must be empty for this lane"
+            )
+        if not _empty_hex_or_absent(
+            record.get("source_bridge_emitter_code_hash"),
+            byte_length=32,
+        ):
+            errors.append(
+                f"{label} source_bridge_emitter_code_hash must be empty for this lane"
             )
 
 
@@ -2097,6 +2185,14 @@ def _check_deployment(
         deployment_value = record.get(field, "")
         if deployment_value != material_value:
             errors.append(f"{field} must match source verifier material")
+
+    _check_source_role_shape(
+        errors,
+        profile,
+        record,
+        label="source adapter deployment",
+    )
+    _reject_source_adapter_deployment_template_hashes(errors, profile, record)
 
     if profile.solana_full_light_client_audit_required:
         for field in SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
@@ -6284,6 +6380,29 @@ def _source_adapter_gate_requirements(
     return "", ()
 
 
+def _source_adapter_gate_template_hash_blockers(
+    lane_label: str,
+    domain: Any,
+    *,
+    field_label: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(domain, int):
+        return []
+    profile = LANE_PROFILES.get(domain)
+    if profile is None:
+        return []
+    raw = _hex_bytes(value, byte_length=32)
+    if raw is None:
+        return []
+    if raw not in _source_material_template_hashes(profile).values():
+        return []
+    return [
+        f"{lane_label}: {field_label} must be deployed evidence, "
+        "not built-in template material"
+    ]
+
+
 def _source_adapter_gate_release_metadata_blockers(
     lane_label: str,
     lane: dict[str, Any],
@@ -6321,6 +6440,15 @@ def _source_adapter_gate_release_metadata_blockers(
         blockers.append(
             f"{lane_label}: source adapter gate hash must be a canonical non-zero bytes32 when required"
         )
+    else:
+        blockers.extend(
+            _source_adapter_gate_template_hash_blockers(
+                lane_label,
+                lane.get("domain"),
+                field_label="source adapter gate hash",
+                value=gate_hash,
+            )
+        )
 
     if not isinstance(audit_hashes, dict):
         blockers.append(
@@ -6343,6 +6471,15 @@ def _source_adapter_gate_release_metadata_blockers(
         if parsed is None or not any(parsed):
             blockers.append(
                 f"{lane_label}: source adapter gate audit hashes {field} must be a canonical non-zero bytes32"
+            )
+        else:
+            blockers.extend(
+                _source_adapter_gate_template_hash_blockers(
+                    lane_label,
+                    lane.get("domain"),
+                    field_label=f"source adapter gate audit hashes {field}",
+                    value=value,
+                )
             )
     if (
         gate_field
@@ -6418,7 +6555,7 @@ def _source_adapter_gate_release_metadata_blockers(
 
 
 def _release_checklist(
-    lanes: list[dict[str, Any]],
+    lanes: list[Any],
     all_blockers: list[str],
 ) -> dict[str, Any]:
     """Return operator-facing release gates derived from lane evidence."""
@@ -6440,8 +6577,19 @@ def _release_checklist(
         if blocker not in unresolved_blockers:
             unresolved_blockers.append(blocker)
 
-    for lane in lanes:
-        lane_label = f"domain {lane.get('domain')} ({lane.get('chain')})"
+    for lane_index, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            blocker = f"lane {lane_index}: lane summary must be an object"
+            records_blockers.append(blocker)
+            deployment_blockers.append(blocker)
+            route_blockers.append(blocker)
+            canary_blockers.append(blocker)
+            append_unresolved(blocker)
+            continue
+        lane_label = _release_checklist_lane_label(lane)
+        records_blockers.extend(
+            _release_checklist_lane_metadata_blockers(lane_label, lane)
+        )
         lane_blockers, lane_blocker_schema_errors = _canonical_blocker_list(
             lane.get("blockers", []),
             f"{lane_label}: lane",
@@ -6577,7 +6725,7 @@ def _release_checklist(
                 f"{lane_label}: route canary evidence hash must be a canonical non-zero bytes32"
             )
         expected_evidence_source = ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN.get(
-            lane["domain"]
+            lane.get("domain")
         )
         canary_evidence_source = canary.get("evidence_source")
         if canary_evidence_source in (None, ""):
@@ -6591,10 +6739,49 @@ def _release_checklist(
             canary_blockers.append(
                 f"{lane_label}: live route canary evidence source must be a non-empty canonical string"
             )
+        elif expected_evidence_source is None:
+            canary_blockers.append(
+                f"{lane_label}: live route canary evidence source cannot be validated for malformed lane domain"
+            )
         elif canary_evidence_source != expected_evidence_source:
             canary_blockers.append(
                 f"{lane_label}: live route canary evidence source must be {expected_evidence_source}"
             )
+        if (
+            "evidence_bound" in canary
+            and type(canary.get("evidence_bound")) is not bool
+        ):
+            canary_blockers.append(
+                f"{lane_label}: route canary evidence_bound must be boolean"
+            )
+        for field, schema_blocker, semantic_blocker in (
+            (
+                "message_proof_used",
+                "route canary message_proof_used must be boolean",
+                "route canary message proof must be used",
+            ),
+            (
+                "receipt_block_finalized",
+                "route canary receipt_block_finalized must be boolean",
+                "route canary receipt block must be finalized",
+            ),
+            (
+                "raw_data_owner_matches_transaction",
+                "route canary raw_data_owner_matches_transaction must be boolean",
+                "route canary raw_data owner must match transaction",
+            ),
+            (
+                "signature_recovers_to_owner",
+                "route canary signature_recovers_to_owner must be boolean",
+                "route canary signature must recover to owner",
+            ),
+        ):
+            if field not in canary:
+                continue
+            if type(canary.get(field)) is not bool:
+                canary_blockers.append(f"{lane_label}: {schema_blocker}")
+            elif canary.get(field) is not True:
+                canary_blockers.append(f"{lane_label}: {semantic_blocker}")
         lane_canary_blockers = [
             item for item in lane_blockers if "route canary" in item
         ]
@@ -6633,6 +6820,47 @@ def _release_checklist(
         "ready": all(item["ready"] is True for item in items),
         "items": items,
     }
+
+
+def _release_checklist_lane_label(lane: dict[str, Any]) -> str:
+    """Return a bounded label for a copied all-lanes checklist lane."""
+
+    domain = lane.get("domain")
+    chain = lane.get("chain")
+    if (
+        type(domain) is int
+        and isinstance(chain, str)
+        and chain
+        and chain.strip() == chain
+    ):
+        return f"domain {domain} ({chain})"
+    if type(domain) is int:
+        return f"domain {domain}"
+    if isinstance(chain, str) and chain and chain.strip() == chain:
+        return f"lane {chain}"
+    return "lane"
+
+
+def _release_checklist_lane_metadata_blockers(
+    lane_label: str,
+    lane: dict[str, Any],
+) -> list[str]:
+    """Return blockers for malformed copied all-lanes lane identity."""
+
+    blockers: list[str] = []
+    domain = lane.get("domain")
+    if type(domain) is not int:
+        blockers.append(f"{lane_label}: lane domain must be an integer")
+    elif domain not in LANE_PROFILES:
+        blockers.append(f"{lane_label}: lane domain must be a production remote domain")
+    chain = lane.get("chain")
+    if not isinstance(chain, str) or not chain or chain.strip() != chain:
+        blockers.append(f"{lane_label}: lane chain must be a non-empty canonical string")
+    elif type(domain) is int and domain in LANE_PROFILES:
+        expected_chain = LANE_PROFILES[domain].chain
+        if chain != expected_chain:
+            blockers.append(f"{lane_label}: lane chain must be {expected_chain}")
+    return blockers
 
 
 def _evm_live_metadata_summary(
@@ -6951,6 +7179,72 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     return text
 
 
+def _public_summary_payload(summary: Any) -> dict[str, Any]:
+    """Return a fail-closed public all-lanes summary payload."""
+
+    if not isinstance(summary, dict):
+        return {
+            "production_ready": False,
+            "blockers": ["all-lanes summary must be an object"],
+        }
+
+    blockers: list[str] = []
+    public_summary_fields = set(ALL_LANES_PUBLIC_SUMMARY_FIELDS)
+    for field in sorted(
+        (field for field in summary if field not in public_summary_fields),
+        key=lambda item: str(item),
+    ):
+        blockers.append(
+            f"all-lanes summary {_unexpected_record_field_detail(field)}"
+        )
+
+    if "blockers" not in summary:
+        blockers.append("all-lanes summary blockers missing")
+    else:
+        canonical_blockers, blocker_errors = _canonical_blocker_list(
+            summary.get("blockers"),
+            "all-lanes summary",
+        )
+        blockers.extend(canonical_blockers)
+        blockers.extend(blocker_errors)
+
+    production_ready = summary.get("production_ready")
+    if type(production_ready) is not bool:
+        blockers.append("all-lanes summary production_ready must be boolean")
+
+    root_errors: dict[str, str] = {}
+    for field in (
+        "required_domains",
+        "supported_launch_domains",
+        "unsupported_launch_domains",
+    ):
+        value = summary.get(field)
+        if field in summary and (
+            not isinstance(value, list) or not all(type(domain) is int for domain in value)
+        ):
+            root_errors[field] = f"all-lanes summary {field} must be a list of integers"
+    lanes = summary.get("lanes")
+    if "lanes" in summary and (
+        not isinstance(lanes, list) or not all(isinstance(lane, dict) for lane in lanes)
+    ):
+        root_errors["lanes"] = "all-lanes summary lanes must be a list of objects"
+    release_checklist = summary.get("release_checklist")
+    if "release_checklist" in summary and not isinstance(release_checklist, dict):
+        root_errors["release_checklist"] = (
+            "all-lanes summary release_checklist must be an object"
+        )
+    blockers.extend(root_errors.values())
+
+    public_summary = {
+        field: summary[field]
+        for field in ALL_LANES_PUBLIC_SUMMARY_FIELDS
+        if field in summary and field not in root_errors
+    }
+    public_summary["production_ready"] = production_ready is True and not blockers
+    public_summary["blockers"] = blockers
+    return public_summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -6964,9 +7258,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         parser.exit(2, f"{parser.prog}: error: {detail}\n")
 
+    summary = _public_summary_payload(summary)
     if not args.quiet:
         print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if summary["production_ready"] is True else 1
+    return 0 if summary.get("production_ready") is True else 1
 
 
 if __name__ == "__main__":

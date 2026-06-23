@@ -4047,10 +4047,12 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         &chunker_handle,
         &plan,
         &session,
-        client_id.as_deref(),
-        rollout_phase,
-        write_mode,
-        cache_profile,
+        FetchSummaryOptions {
+            client_id: client_id.as_deref(),
+            rollout_phase,
+            write_mode,
+            cache_profile,
+        },
     );
     if let Some(region) = telemetry_region_effective.as_deref()
         && let Some(obj) = summary.as_object_mut()
@@ -5416,6 +5418,7 @@ fn format_decimal(value: Decimal, places: u32) -> String {
 mod manifest_tests {
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
+    use iroha_data_model::account::AccountId;
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
@@ -5428,7 +5431,7 @@ mod manifest_tests {
         let pk_bytes = signer.verifying_key().to_bytes();
         let pk =
             PublicKey::from_bytes(Algorithm::Ed25519, pk_bytes.as_slice()).expect("public key");
-        format!("{pk}@panel")
+        AccountId::new(pk).to_string()
     }
 
     #[test]
@@ -9400,7 +9403,7 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
         "expected_head_cid_hex".into(),
         head_cid
             .as_ref()
-            .map(|cid| hex_encode(cid))
+            .map(hex_encode)
             .map_or(Value::Null, Value::from),
     );
     summary.insert("head".into(), Value::Object(head_value));
@@ -10454,10 +10457,12 @@ fn print_governance_dag_mirror_query_table(value: &Value) {
     }
 }
 
+type GovernanceDagBlockSnapshot = (Vec<GovernanceDagBlockV1>, Vec<Value>, Vec<Value>);
+
 fn load_governance_dag_block_snapshot(
     root: &Path,
     require_sidecars: bool,
-) -> Result<(Vec<GovernanceDagBlockV1>, Vec<Value>, Vec<Value>), String> {
+) -> Result<GovernanceDagBlockSnapshot, String> {
     let blocks_dir = root.join("blocks");
     if !blocks_dir.is_dir() {
         return Err(format!(
@@ -11291,6 +11296,9 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement",
+        GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event",
+        GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report",
+        GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => "appeal_finance_weekly_rollup",
         GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot",
     }
 }
@@ -11560,7 +11568,7 @@ fn governance_dag_artifact_value(artifact: &GovernanceDagArtifact, include_outco
             if include_outcome {
                 obj.insert(
                     "validation_outcome".into(),
-                    to_value(outcome).unwrap_or_else(|_| Value::Null),
+                    to_value(outcome).unwrap_or(Value::Null),
                 );
             }
         }
@@ -11667,7 +11675,7 @@ fn parse_governance_cid_arg(raw: &str) -> Result<Vec<u8>, String> {
         return hex::decode(hex)
             .map_err(|err| format!("failed to decode governance DAG hex CID `{trimmed}`: {err}"));
     }
-    if trimmed.len() % 2 == 0 && trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+    if trimmed.len().is_multiple_of(2) && trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         return hex::decode(trimmed)
             .map_err(|err| format!("failed to decode governance DAG hex CID `{trimmed}`: {err}"));
     }
@@ -13186,9 +13194,12 @@ mod tests {
             "sorafs.sf1@1.0.0",
             &plan,
             &session,
-            None,
-            RolloutPhase::Default,
-            WriteModeHint::UploadPqOnly,
+            FetchSummaryOptions {
+                client_id: None,
+                rollout_phase: RolloutPhase::Default,
+                write_mode: WriteModeHint::UploadPqOnly,
+                cache_profile: None,
+            },
         );
         let map = summary.as_object().expect("summary object");
         assert_eq!(
@@ -13383,32 +13394,39 @@ fn build_plan_from_specs(
     })
 }
 
+struct FetchSummaryOptions<'a> {
+    client_id: Option<&'a str>,
+    rollout_phase: RolloutPhase,
+    write_mode: WriteModeHint,
+    cache_profile: Option<FetchCacheProfile>,
+}
+
 fn build_fetch_summary(
     manifest_id_hex: &str,
     chunker_handle: &str,
     plan: &CarBuildPlan,
     session: &FetchSession,
-    client_id: Option<&str>,
-    rollout_phase: RolloutPhase,
-    write_mode: WriteModeHint,
-    cache_profile: Option<FetchCacheProfile>,
+    options: FetchSummaryOptions<'_>,
 ) -> Value {
     let outcome = &session.outcome;
     let policy_report = &session.policy_report;
     let mut root = Map::new();
     root.insert("manifest_id_hex".into(), Value::from(manifest_id_hex));
     root.insert("chunker_handle".into(), Value::from(chunker_handle));
-    root.insert("rollout_phase".into(), Value::from(rollout_phase.label()));
-    let write_mode_label = write_mode.label().replace('_', "-");
+    root.insert(
+        "rollout_phase".into(),
+        Value::from(options.rollout_phase.label()),
+    );
+    let write_mode_label = options.write_mode.label().replace('_', "-");
     root.insert("write_mode".into(), Value::from(write_mode_label));
     root.insert(
         "write_mode_enforces_pq".into(),
-        Value::from(write_mode.enforces_pq_only()),
+        Value::from(options.write_mode.enforces_pq_only()),
     );
-    if let Some(client) = client_id {
+    if let Some(client) = options.client_id {
         root.insert("client_id".into(), Value::from(client));
     }
-    if let Some(profile) = cache_profile {
+    if let Some(profile) = options.cache_profile {
         let label = profile.label();
         root.insert("cache_profile".into(), Value::from(label));
         root.insert("cache_state".into(), Value::from(label));

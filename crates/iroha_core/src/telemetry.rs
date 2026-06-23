@@ -4909,12 +4909,12 @@ fn emit_sorafs_proof_health_alert(metrics: &Metrics, alert: &SorafsProofHealthAl
     );
 }
 
-/// Update gauges that track transaction queue load and saturation as observed by consensus.
+/// Update gauges that track transaction queue load and capacity saturation as observed by consensus.
 pub fn record_state_tx_queue_backpressure(
     telemetry: &StateTelemetry,
     depth: u64,
     capacity: u64,
-    saturated: bool,
+    saturated_by_count: bool,
 ) {
     if telemetry.is_enabled() {
         telemetry.metrics.sumeragi_tx_queue_depth.set(depth);
@@ -4922,7 +4922,7 @@ pub fn record_state_tx_queue_backpressure(
         telemetry
             .metrics
             .sumeragi_tx_queue_saturated
-            .set(u64::from(saturated));
+            .set(u64::from(saturated_by_count));
     }
 }
 
@@ -4994,7 +4994,7 @@ const METRICS_SYNC_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 enum Message {
-    Sync { reply: oneshot::Sender<()> },
+    Sync { reply: Option<oneshot::Sender<()>> },
 }
 
 #[cfg(feature = "telemetry")]
@@ -5008,6 +5008,7 @@ pub struct Telemetry {
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
+    sync_requested: Arc<AtomicBool>,
     nexus_enabled: Arc<AtomicBool>,
     time_source: TimeSource,
     soranet_privacy: Arc<SoranetSecureAggregator>,
@@ -5030,6 +5031,7 @@ impl Clone for Telemetry {
             last_reported_block: Arc::clone(&self.last_reported_block),
             metrics: Arc::clone(&self.metrics),
             enabled: Arc::clone(&self.enabled),
+            sync_requested: Arc::clone(&self.sync_requested),
             nexus_enabled: Arc::clone(&self.nexus_enabled),
             time_source: self.time_source.clone(),
             soranet_privacy: Arc::clone(&self.soranet_privacy),
@@ -5333,6 +5335,7 @@ impl Telemetry {
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
+            sync_requested: Arc::new(AtomicBool::new(false)),
             nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: TimeSource::new_system(),
             soranet_privacy,
@@ -6115,14 +6118,19 @@ impl Telemetry {
         }
     }
 
-    /// Update gauges that track transaction queue load and saturation as observed by consensus.
-    pub fn record_tx_queue_backpressure(&self, depth: u64, capacity: u64, saturated: bool) {
+    /// Update gauges that track transaction queue load and capacity saturation as observed by consensus.
+    pub fn record_tx_queue_backpressure(
+        &self,
+        depth: u64,
+        capacity: u64,
+        saturated_by_count: bool,
+    ) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.sumeragi_tx_queue_depth.set(depth);
             self.metrics.sumeragi_tx_queue_capacity.set(capacity);
             self.metrics
                 .sumeragi_tx_queue_saturated
-                .set(u64::from(saturated));
+                .set(u64::from(saturated_by_count));
         }
     }
 
@@ -8667,14 +8675,44 @@ impl Telemetry {
         }
     }
 
-    /// Some metrics are updated lazily, on demand.
-    /// This async function completes once data is up to date.
+    #[cfg(feature = "telemetry")]
+    fn request_metrics_sync(&self) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        if self
+            .sync_requested
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        if let Err(err) = self.actor.try_send(Message::Sync { reply: None }) {
+            self.sync_requested.store(false, Ordering::Release);
+            iroha_logger::debug!(
+                ?err,
+                "telemetry sync request skipped; returning last metrics snapshot"
+            );
+        }
+    }
+
+    /// Return the latest metrics snapshot and schedule a best-effort lazy refresh.
     #[cfg(feature = "telemetry")]
     pub async fn metrics(&self) -> &Metrics {
+        self.request_metrics_sync();
+        refresh_ivm_cache_metrics(&self.metrics);
+        &self.metrics
+    }
+
+    /// Refresh lazy metrics before returning, bounded so callers can fall back
+    /// to the last snapshot when the telemetry actor is unavailable.
+    #[cfg(feature = "telemetry")]
+    pub async fn metrics_fresh(&self) -> &Metrics {
         let sync_result = async {
             let (tx, rx) = oneshot::channel();
+            self.sync_requested.store(true, Ordering::Release);
             self.actor
-                .try_send(Message::Sync { reply: tx })
+                .try_send(Message::Sync { reply: Some(tx) })
                 .map_err(|err| format!("schedule telemetry sync: {err}"))?;
             tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
                 .await
@@ -8685,6 +8723,7 @@ impl Telemetry {
         .await;
 
         if let Err(err) = sync_result {
+            self.sync_requested.store(false, Ordering::Release);
             iroha_logger::warn!(
                 ?err,
                 timeout_ms = METRICS_SYNC_TIMEOUT.as_millis(),
@@ -8757,6 +8796,7 @@ impl From<StateTelemetry> for Telemetry {
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics: st.metrics.clone(),
             enabled: st.enabled.clone(),
+            sync_requested: Arc::new(AtomicBool::new(false)),
             nexus_enabled: st.nexus_enabled.clone(),
             time_source: TimeSource::new_system(),
             soranet_privacy: st.soranet_privacy(),
@@ -8780,6 +8820,7 @@ struct Actor {
     kura: Arc<Kura>,
     queue: Arc<Queue>,
     enabled: Arc<AtomicBool>,
+    sync_requested: Arc<AtomicBool>,
     time_source: TimeSource,
 }
 
@@ -8791,7 +8832,10 @@ impl Actor {
             match message {
                 Message::Sync { reply } => {
                     self.sync().await;
-                    let _ = reply.send(());
+                    self.sync_requested.store(false, Ordering::Release);
+                    if let Some(reply) = reply {
+                        let _ = reply.send(());
+                    }
                 }
             }
         }
@@ -9419,6 +9463,7 @@ pub fn start(
     let (actor, handle) = mpsc::channel(CHANNEL_CAPACITY);
     let last_reported_block = Arc::new(RwLock::new(None));
     let enabled_arc = Arc::new(AtomicBool::new(enabled));
+    let sync_requested = Arc::new(AtomicBool::new(false));
     let soranet_privacy = Arc::new(
         SoranetSecureAggregator::new(PrivacyBucketConfig::default())
             .expect("valid default SoraNet privacy config"),
@@ -9429,6 +9474,7 @@ pub fn start(
             last_reported_block: last_reported_block.clone(),
             metrics: metrics.clone(),
             enabled: enabled_arc.clone(),
+            sync_requested: sync_requested.clone(),
             nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: time_source.clone(),
             soranet_privacy: Arc::clone(&soranet_privacy),
@@ -9451,6 +9497,7 @@ pub fn start(
                     online_peers,
                     local_peer_id,
                     enabled: enabled_arc,
+                    sync_requested,
                     time_source,
                 }
                 .run(),
@@ -13021,7 +13068,7 @@ mod tests {
         }
 
         async fn force_sync(&self) {
-            let _ = self.telemetry.metrics().await;
+            let _ = self.telemetry.metrics_fresh().await;
         }
     }
 
@@ -13407,7 +13454,7 @@ mod tests {
         .collect();
 
         sut.online_peers_tx.send(peers.clone()).unwrap();
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
 
         assert_eq!(metrics.connected_peers.get(), 2);
         assert_eq!(
@@ -13431,7 +13478,7 @@ mod tests {
             remaining.remove(&to_remove);
         }
         sut.online_peers_tx.send(remaining.clone()).unwrap();
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.connected_peers.get(), remaining.len() as u64);
         assert_eq!(
             metrics
@@ -13450,7 +13497,7 @@ mod tests {
 
         // Finally, drop all peers to observe another disconnect increment.
         sut.online_peers_tx.send(HashSet::new()).unwrap();
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.connected_peers.get(), 0);
         assert_eq!(
             metrics
@@ -13522,7 +13569,7 @@ mod tests {
         let block = sut.commit_block(block);
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.block_height.get(), 1);
         assert_eq!(metrics.block_height_non_empty.get(), 1);
         assert_eq!(metrics.last_commit_time_ms.get(), 0); // zero for genesis
@@ -13541,7 +13588,7 @@ mod tests {
         let block = sut.commit_block(block);
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
         assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
@@ -13574,7 +13621,7 @@ mod tests {
 
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         assert_eq!(metrics.block_height.get(), 3);
         assert_eq!(metrics.block_height_non_empty.get(), 3);
         assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
@@ -13613,7 +13660,7 @@ mod tests {
         sut.report_commit_block(&register_block.as_ref().header())
             .await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         let base_accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let base_rejected = metrics.txs.with_label_values(&["rejected"]).get();
         let base_total = metrics.txs.with_label_values(&["total"]).get();
@@ -13630,7 +13677,7 @@ mod tests {
         assert!(errors.next().is_none(), "only time trigger should fail");
         sut.report_commit_block(&block.as_ref().header()).await;
 
-        let metrics = sut.telemetry.metrics().await;
+        let metrics = sut.telemetry.metrics_fresh().await;
         let accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let rejected = metrics.txs.with_label_values(&["rejected"]).get();
         let total = metrics.txs.with_label_values(&["total"]).get();

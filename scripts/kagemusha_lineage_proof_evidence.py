@@ -118,9 +118,15 @@ def _secret_path_error(path: str | None, label: str) -> str | None:
         return f"{label} must not contain secret-looking material"
     if device_lab._contains_control_character(path):
         return f"{label} must not contain control characters"
+    candidate = Path(path)
+    if (
+        path != path.strip()
+        or device_lab._path_has_surrounding_whitespace_component(candidate)
+    ):
+        return f"{label} must not contain surrounding whitespace"
     if "\\" in path:
         return f"{label} must not contain backslashes"
-    if ".." in Path(path).parts:
+    if ".." in candidate.parts:
         return f"{label} must be canonical"
     return None
 
@@ -198,6 +204,10 @@ def _cleanup_validation_temp_output(
             return []
         except OSError:
             return ["lineage proof evidence validation file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["lineage proof evidence validation file cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -230,10 +240,7 @@ def build_evidence(
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build a Reserved-lineage proof evidence document from local artifacts."""
 
-    errors = validate_lineage_input_paths(artifact_dir, proof_log)
-    if errors:
-        return None, errors
-
+    errors: list[str] = []
     errors.extend(_validate_generated_at_utc(generated_at_utc))
     generated_at, timestamp_error = readiness.parse_utc_timestamp(
         generated_at_utc,
@@ -249,6 +256,12 @@ def build_evidence(
     )
     errors.extend(_validate_command(command))
     errors.extend(_validate_elapsed_seconds(elapsed_seconds))
+    if errors:
+        return None, errors
+
+    errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))
+    if errors:
+        return None, errors
 
     artifact_digests: dict[str, str] = {}
     artifact_sizes: dict[str, int] = {}
@@ -456,6 +469,14 @@ def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[st
     proof_log_secret_error = _secret_path_error(str(proof_log), "--proof-log")
     if proof_log_secret_error is not None:
         return [proof_log_secret_error]
+    expected_proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+        "record_archive_proof"
+    ]
+    if proof_log.name != expected_proof_log_name:
+        return [
+            "--proof-log must be written directly under --artifact-dir as "
+            f"{expected_proof_log_name}"
+        ]
     errors = validate_artifact_dir_path(artifact_dir)
     if errors:
         return errors
@@ -465,13 +486,10 @@ def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[st
     )
     if proof_log_ancestor_errors:
         return proof_log_ancestor_errors
-    expected_proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
-        "record_archive_proof"
-    ]
     same_parent, corridor_errors = _same_resolved_parent(proof_log, artifact_dir)
     if corridor_errors:
         return corridor_errors
-    if proof_log.name != expected_proof_log_name or not same_parent:
+    if not same_parent:
         return [
             "--proof-log must be written directly under --artifact-dir as "
             f"{expected_proof_log_name}"
@@ -713,7 +731,12 @@ def _read_output_text(
         return None, [f"{label} write verification failed"]
 
 
-def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
+def write_evidence(
+    path: Path,
+    evidence: dict[str, Any],
+    *,
+    max_bytes: int | None = None,
+) -> list[str]:
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
@@ -733,7 +756,9 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         ) + "\n"
     except ValueError:
         return ["--out evidence is not strict JSON"]
-    if len(evidence_text.encode("utf-8")) > readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES:
+    if max_bytes is None:
+        max_bytes = readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES
+    if len(evidence_text.encode("utf-8")) > max_bytes:
         return ["--out evidence exceeds maximum size"]
     try:
         parent_fd = os.open(path.parent, _directory_open_flags())
@@ -752,7 +777,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         return _write_evidence_with_parent_fd(
             path,
             evidence_text,
-            max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,
+            max_bytes=max_bytes,
             parent_fd=parent_fd,
             parent_identity=parent_identity,
         )
@@ -876,6 +901,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return ["--out could not be removed after parent sync failure"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return ["--out cleanup could not be synced after parent sync failure"]
     return []
 
 
@@ -911,6 +940,10 @@ def _cleanup_temp_output(
             return []
         except OSError:
             return ["--out temporary file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["--out temporary file cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -979,12 +1012,38 @@ def main(argv: list[str] | None = None) -> int:
     artifact_dir = Path(args.artifact_dir)
     proof_log = Path(args.proof_log)
     out_path = Path(args.out)
-    path_errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))
-    path_errors.extend(validate_output_corridor(out_path, artifact_dir))
     if out_path.name != readiness.LINEAGE_PROOF_EVIDENCE_FILENAME:
         path_errors.append(
             f"--out must be named {readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}"
         )
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    scalar_errors: list[str] = []
+    scalar_errors.extend(_validate_generated_at_utc(args.generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        args.generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        scalar_errors.append(timestamp_error["message"])
+    scalar_errors.extend(
+        _validate_generated_at_future_skew(
+            generated_at,
+            args.max_generated_at_future_skew_seconds,
+        )
+    )
+    scalar_errors.extend(_validate_command(args.command))
+    scalar_errors.extend(_validate_elapsed_seconds(args.elapsed_seconds))
+    if scalar_errors:
+        for error in scalar_errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    path_errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))
+    path_errors.extend(validate_output_corridor(out_path, artifact_dir))
     early_output_errors = preflight_output_path(out_path, "--out")
     path_errors.extend(early_output_errors)
     if path_errors:

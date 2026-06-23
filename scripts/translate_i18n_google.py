@@ -1001,7 +1001,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--status-filter",
-        choices=("any", "needs-translation", "complete"),
+        choices=(
+            "any",
+            "needs-translation",
+            "needs-review",
+            "needs-update",
+            "complete",
+            "draft",
+        ),
         default="any",
         help="Restrict markdown/org candidates by translation status metadata.",
     )

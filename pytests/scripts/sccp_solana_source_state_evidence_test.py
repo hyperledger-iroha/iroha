@@ -34,7 +34,7 @@ SOLANA_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR = (
     "97e5c4196aff6387b9d973e663de3ce9345e1d8c3de89d22505b2197e282dc61"
 )
 SOLANA_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR = (
-    "2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9"
+    "e23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02"
 )
 
 
@@ -347,6 +347,21 @@ def test_solana_source_record_hashes_match_rust_vectors():
         == SOLANA_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
     )
     assert module.solana_full_light_client_gate_hash(args) is None
+
+    args.tower_replay_verifier_hash = bytes.fromhex("bb" * 32)
+    args.full_accountsdb_lattice_verifier_hash = bytes.fromhex("cc" * 32)
+    args.bank_fork_choice_verifier_hash = bytes.fromhex("dd" * 32)
+    assert (
+        module.solana_source_adapter_engine_deployment_record_hash(args).hex()
+        == SOLANA_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+    )
+    gate_hash = module.solana_full_light_client_gate_hash(args)
+    assert gate_hash is not None
+    assert gate_hash.hex() == SOLANA_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR
+
+    replayed_receipt = SimpleNamespace(**vars(args))
+    replayed_receipt.deployment_receipt_hash = bytes.fromhex("ab" * 32)
+    assert module.solana_full_light_client_gate_hash(replayed_receipt) != gate_hash
 
 
 def test_direct_record_hashes_reject_template_component_hashes():

@@ -5,12 +5,13 @@
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     convert::{Infallible, TryInto},
     fs,
     io::{self, Read, Write},
     net::SocketAddr,
     num::NonZeroU32,
+    str::FromStr,
     sync::{
         LazyLock, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -44,14 +45,29 @@ use iroha_core::{
     smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
     state::{StateReadOnly, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, HashOf, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
+    account::{AccountId, ParsedAccountId},
+    asset::AssetDefinitionId,
     block::BlockHeader,
     da::{ingest::DaStripeLayout, manifest::ChunkRole},
+    escrow::{
+        AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution, AssetEscrowStatus, EscrowId,
+    },
+    isi::{
+        Instruction, InstructionBox,
+        escrow::{CancelAssetLock, DrawdownAssetLock, OpenAssetLock},
+    },
     soracloud::SoraRouteVisibilityV1,
-    sorafs::pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
+    sorafs::{
+        moderation::{
+            SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
+            SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
+            SoraFsModerationVoteChoice,
+        },
+        pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
+    },
 };
 use iroha_logger::{debug, error, warn};
 use mv::storage::StorageReadOnly;
@@ -74,8 +90,8 @@ use sorafs_manifest::{
     ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
     ReputationDegradationFlagV1, ReputationMerkleProofV1, ReputationSnapshotEventV1,
     ReputationSnapshotV1, SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
-    StakePointer, StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1,
-    TransportProtocol,
+    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer, StreamBudgetV1,
+    StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -84,11 +100,14 @@ use sorafs_manifest::{
     validate_manifest,
 };
 use sorafs_node::{
+    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotCommitOutcome,
+    ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
+    ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
     NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
     OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
     PorTrackerError, RepairEvent,
     capacity::CapacityUsageSnapshot,
-    local_orderbook_provider_id_for_owner_account,
+    local_moderation_panel_roster_hash, local_orderbook_provider_id_for_owner_account,
     metering::{FeeProjection, MeteringSnapshot},
     store::{
         ChunkFileRecord, ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest,
@@ -96,8 +115,9 @@ use sorafs_node::{
     telemetry::TelemetryError,
 };
 use sorafs_orchestrator::appeals::{
-    AppealClass, AppealClassConfig, AppealPricingConfig, AppealQuote, AppealQuoteInput,
-    AppealUrgency,
+    AppealClass, AppealClassConfig, AppealDisbursementInput, AppealDisbursementPlan,
+    AppealPricingConfig, AppealQuote, AppealQuoteInput, AppealSettlementBreakdown,
+    AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_decimal_literal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, mpsc};
@@ -187,6 +207,24 @@ const ORDERBOOK_ROUTE_CHANNELS: &str = "/v1/sorafs/orderbook/channels";
 const ORDERBOOK_ROUTE_EVENTS: &str = "/v1/sorafs/orderbook/events";
 const ORDERBOOK_ROUTE_EVENTS_STREAM: &str = "/v1/sorafs/orderbook/events/stream";
 const ORDERBOOK_ROUTE_EVENTS_WS: &str = "/v1/sorafs/orderbook/events/ws";
+const MODERATION_ROUTE_BALLOTS: &str = "/v1/sorafs/moderation/ballots";
+const MODERATION_ROUTE_COMMITS: &str = "/v1/sorafs/moderation/ballots/commits";
+const MODERATION_ROUTE_REVEALS: &str = "/v1/sorafs/moderation/ballots/reveals";
+const MODERATION_ROUTE_TALLY: &str = "/v1/sorafs/moderation/ballots/tally";
+const MODERATION_ROUTE_EVENTS: &str = "/v1/sorafs/moderation/ballots/events";
+#[cfg(test)]
+const APPEAL_FINANCE_ROUTE_REPORTS: &str = "/v1/sorafs/appeals/finance/reports";
+#[cfg(test)]
+const APPEAL_FINANCE_ROUTE_DEPOSITS: &str = "/v1/sorafs/appeals/finance/deposits";
+#[cfg(test)]
+const APPEAL_FINANCE_ROUTE_DEPOSIT_CONFIRM: &str = "/v1/sorafs/appeals/finance/deposits/confirm";
+#[cfg(test)]
+const APPEAL_FINANCE_ROUTE_DEPOSIT_SETTLE: &str = "/v1/sorafs/appeals/finance/deposits/settle";
+#[cfg(test)]
+const APPEAL_FINANCE_ROUTE_DEPOSIT_RECONCILE: &str =
+    "/v1/sorafs/appeals/finance/deposits/reconcile";
+#[cfg(test)]
+const APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS: &str = "/v1/sorafs/appeals/finance/weekly-rollups";
 const RANGE_THROTTLE_REASON_QUOTA: &str = "quota";
 const RANGE_THROTTLE_REASON_CONCURRENCY: &str = "concurrency";
 const RANGE_THROTTLE_REASON_BYTE_RATE: &str = "byte_rate";
@@ -201,6 +239,8 @@ const GOVERNANCE_DAG_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_DAG_CAR_QUEUE_FILE: &str = "car-queue.json";
 const GOVERNANCE_DAG_RUNTIME_INDEX_FILE: &str = "runtime-dag-index.json";
 const GOVERNANCE_DAG_CACHE_CONTROL: &str = "public, max-age=15, must-revalidate";
+const APPEAL_FINANCE_REPORT_KIND: &str = "appeal_finance_report";
+const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
 
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ORDERBOOK_API_ROUTE_COUNTS: LazyLock<Mutex<BTreeMap<&'static str, (u64, u64)>>> =
@@ -367,6 +407,13 @@ fn unix_timestamp_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn unix_timestamp_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default()
 }
 
@@ -1594,6 +1641,172 @@ pub struct AppealPricingQuoteRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/appeals/finance/settle`.
+pub struct AppealFinanceSettleRequestDto {
+    /// Deposited XOR amount as an exact decimal string.
+    pub deposit_xor: String,
+    /// Appeal outcome (`uphold`, `overturn`, `modify`, `withdrawn_before_panel`, `withdrawn_after_panel`, `frivolous`, or `escalated`).
+    pub outcome: String,
+    /// Optional panel size; defaults to the active settlement config.
+    pub panel_size: Option<u32>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/appeals/finance/disburse`.
+pub struct AppealFinanceDisburseRequestDto {
+    /// Deposited XOR amount as an exact decimal string.
+    pub deposit_xor: String,
+    /// Appeal outcome (`uphold`, `overturn`, `modify`, `withdrawn_before_panel`, `withdrawn_after_panel`, `frivolous`, or `escalated`).
+    pub outcome: String,
+    /// Canonical account receiving any refund.
+    pub refund_account: String,
+    /// Canonical treasury account receiving slashed deposit or forfeited rewards.
+    pub treasury_account: String,
+    /// Canonical escrow account retaining held funds.
+    pub escrow_account: String,
+    /// Ordered canonical juror account identifiers for the panel.
+    pub juror_ids: Vec<String>,
+    /// Optional canonical juror account identifiers that did not attend.
+    pub no_show_account_ids: Option<Vec<String>>,
+    /// Optional panel size; defaults to the active settlement config.
+    pub panel_size: Option<u32>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/appeals/finance/deposits/settle`.
+pub struct AppealFinanceDepositSettleRequestDto {
+    /// Confirmed runtime asset-lock deposit to settle.
+    pub deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
+    /// Appeal outcome (`uphold`, `overturn`, `modify`, `withdrawn_before_panel`, `withdrawn_after_panel`, `frivolous`, or `escalated`).
+    pub outcome: String,
+    /// Optional panel size; defaults to the active settlement config.
+    pub panel_size: Option<u32>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/appeals/finance/deposits`.
+pub struct AppealFinanceDepositRequestDto {
+    /// Moderation or appeal case identifier that owns this deposit.
+    pub case_id: String,
+    /// Optional moderation round identifier.
+    pub round_id: Option<String>,
+    /// Canonical account that must sign the request and the returned transaction.
+    pub payer_account: String,
+    /// Canonical account that receives approved drawdowns from the lock.
+    pub destination_account: String,
+    /// Optional canonical account required to approve drawdowns.
+    pub release_authority_account: Option<String>,
+    /// Canonical asset definition identifier for the XOR deposit asset.
+    pub asset_definition_id: String,
+    /// Deposited XOR amount as an exact decimal string.
+    pub deposit_xor: String,
+    /// Optional Unix timestamp in milliseconds after which the lock may expire.
+    pub expires_at_ms: Option<u64>,
+    /// Client-supplied idempotency key used to derive a stable escrow id.
+    pub idempotency_key: String,
+    /// Optional canonical Iroha hash evidence references attached to the escrow.
+    pub evidence_hashes_hex: Option<Vec<String>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/appeals/finance/deposits/confirm`.
+pub struct AppealFinanceDepositConfirmRequestDto {
+    /// Canonical hex-encoded native asset-lock identifier to confirm.
+    pub escrow_id_hex: String,
+    /// Moderation or appeal case identifier that owns this deposit.
+    pub case_id: String,
+    /// Optional moderation round identifier.
+    pub round_id: Option<String>,
+    /// Canonical account that funded the lock.
+    pub payer_account: String,
+    /// Canonical account that receives approved drawdowns from the lock.
+    pub destination_account: String,
+    /// Optional canonical account required to approve drawdowns.
+    pub release_authority_account: Option<String>,
+    /// Canonical asset definition identifier for the XOR deposit asset.
+    pub asset_definition_id: String,
+    /// Deposited XOR amount as an exact decimal string.
+    pub deposit_xor: String,
+    /// Optional Unix timestamp in milliseconds after which the lock may expire.
+    pub expires_at_ms: Option<u64>,
+    /// Client-supplied idempotency key used to derive the stable escrow id.
+    pub idempotency_key: String,
+    /// Optional canonical Iroha hash evidence references attached to the lock.
+    pub evidence_hashes_hex: Option<Vec<String>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/ballots`.
+pub struct ModerationBallotAnnounceRequestDto {
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Required runtime asset-lock deposit confirmation for this appeal round.
+    pub deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
+    /// Digest of the evidence bundle reviewed by the panel (hex, 32 bytes).
+    pub evidence_bundle_digest_hex: String,
+    /// Appeal pricing/settlement config version used by this case.
+    pub appeal_finance_config_version: String,
+    /// Optional panel roster hash (hex, 32 bytes); when omitted Torii derives it from jurors+quorum.
+    pub panel_roster_hash_hex: Option<String>,
+    /// Moderation policy reference reviewed by the panel.
+    pub policy_reference: String,
+    /// Optional transparency or governance DAG reference for the evidence bundle.
+    pub evidence_uri: Option<String>,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Ordered juror identifiers eligible to participate.
+    pub juror_ids: Vec<String>,
+    /// Minimum number of valid reveals required before tally finalization.
+    pub quorum: u16,
+    /// UTC timestamp (milliseconds) when the ballot was announced.
+    pub announced_at_unix_ms: u64,
+    /// Last UTC timestamp (milliseconds) at which commits are accepted.
+    pub commit_deadline_unix_ms: u64,
+    /// Last UTC timestamp (milliseconds) for the challenge buffer.
+    pub challenge_deadline_unix_ms: u64,
+    /// Last UTC timestamp (milliseconds) at which reveals are accepted.
+    pub reveal_deadline_unix_ms: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/ballots/commits`.
+pub struct ModerationBallotCommitRequestDto {
+    /// Base64-encoded Norito `SoraFsModerationBallotCommitV1` payload.
+    pub commit_b64: String,
+    /// Optional acceptance timestamp override for deterministic tests.
+    pub now_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/ballots/reveals`.
+pub struct ModerationBallotRevealRequestDto {
+    /// Base64-encoded Norito `SoraFsModerationBallotRevealV1` payload.
+    pub reveal_b64: String,
+    /// Optional acceptance timestamp override for deterministic tests.
+    pub now_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/ballots/tally`.
+pub struct ModerationBallotTallyRequestDto {
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Optional tally timestamp override for deterministic tests.
+    pub now_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/storage/por-challenge`.
 pub struct StoragePorChallengeDto {
     /// Base64-encoded Norito PoR challenge payload.
@@ -2220,6 +2433,172 @@ pub(crate) async fn handle_get_sorafs_governance_dag_publish_kind(
         "by_payload_kind",
         &payload_kind,
     )
+}
+
+pub(crate) async fn handle_get_sorafs_appeal_finance_reports(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let entries = match governance_publish_index_lookup_entries(
+        &index,
+        "by_payload_kind",
+        APPEAL_FINANCE_REPORT_KIND,
+    ) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let summary = match appeal_finance_report_publish_summary(&entries) {
+        Ok(summary) => summary,
+        Err(response) => return response,
+    };
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.appeal_finance.reports.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "payload_kind".into(),
+        Value::from(APPEAL_FINANCE_REPORT_KIND),
+    );
+    response.insert(
+        "published_report_count".into(),
+        Value::from(entries.len() as u64),
+    );
+    response.insert(
+        "latest_published_at_unix".into(),
+        summary
+            .latest_published_at_unix
+            .map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "distinct_case_count".into(),
+        Value::from(summary.distinct_case_count),
+    );
+    response.insert(
+        "juror_payout_count_total".into(),
+        Value::from(summary.juror_payout_count_total),
+    );
+    response.insert(
+        "no_show_count_total".into(),
+        Value::from(summary.no_show_count_total),
+    );
+    response.insert(
+        "total_deposit_xor".into(),
+        Value::from(summary.total_deposit_xor),
+    );
+    response.insert(
+        "total_refund_xor".into(),
+        Value::from(summary.total_refund_xor),
+    );
+    response.insert(
+        "total_treasury_xor".into(),
+        Value::from(summary.total_treasury_xor),
+    );
+    response.insert("total_held_xor".into(), Value::from(summary.total_held_xor));
+    response.insert(
+        "total_panel_reward_xor".into(),
+        Value::from(summary.total_panel_reward_xor),
+    );
+    response.insert(
+        "total_rewards_paid_xor".into(),
+        Value::from(summary.total_rewards_paid_xor),
+    );
+    response.insert(
+        "total_rewards_forfeited_treasury_xor".into(),
+        Value::from(summary.total_rewards_forfeited_treasury_xor),
+    );
+    response.insert("outcomes".into(), Value::Object(summary.outcomes));
+    response.insert("entries".into(), Value::Array(entries));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_appeal_finance_weekly_rollups(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let entries = match governance_publish_index_lookup_entries(
+        &index,
+        "by_payload_kind",
+        APPEAL_FINANCE_WEEKLY_ROLLUP_KIND,
+    ) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let summary = appeal_finance_weekly_rollup_publish_summary(&entries);
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.appeal_finance.weekly_rollups.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "payload_kind".into(),
+        Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND),
+    );
+    response.insert(
+        "published_rollup_count".into(),
+        Value::from(entries.len() as u64),
+    );
+    response.insert(
+        "latest_published_at_unix".into(),
+        summary
+            .latest_published_at_unix
+            .map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "source_report_count_total".into(),
+        Value::from(summary.source_report_count_total),
+    );
+    response.insert(
+        "reported_case_count_total".into(),
+        Value::from(summary.reported_case_count_total),
+    );
+    response.insert(
+        "juror_payout_count_total".into(),
+        Value::from(summary.juror_payout_count_total),
+    );
+    response.insert(
+        "no_show_count_total".into(),
+        Value::from(summary.no_show_count_total),
+    );
+    response.insert("cycles".into(), Value::Object(summary.cycles));
+    response.insert("entries".into(), Value::Array(entries));
+    governance_dag_json_response(Value::Object(response), &etag)
 }
 
 pub(crate) async fn handle_get_sorafs_governance_dag_car_queue(
@@ -3161,6 +3540,326 @@ fn governance_publish_index_lookup_entries(
     Ok(found)
 }
 
+struct AppealFinanceReportPublishSummary {
+    outcomes: Map,
+    latest_published_at_unix: Option<u64>,
+    distinct_case_count: u64,
+    juror_payout_count_total: u64,
+    no_show_count_total: u64,
+    total_deposit_xor: String,
+    total_refund_xor: String,
+    total_treasury_xor: String,
+    total_held_xor: String,
+    total_panel_reward_xor: String,
+    total_rewards_paid_xor: String,
+    total_rewards_forfeited_treasury_xor: String,
+}
+
+fn appeal_finance_report_publish_summary(
+    entries: &[Value],
+) -> Result<AppealFinanceReportPublishSummary, Response> {
+    let mut outcomes = Map::new();
+    let mut latest_published_at_unix = None;
+    let mut case_ids = BTreeSet::new();
+    let mut juror_payout_count_total = 0_u64;
+    let mut no_show_count_total = 0_u64;
+    let mut total_deposit_xor = "0".to_string();
+    let mut total_refund_xor = "0".to_string();
+    let mut total_treasury_xor = "0".to_string();
+    let mut total_held_xor = "0".to_string();
+    let mut total_panel_reward_xor = "0".to_string();
+    let mut total_rewards_paid_xor = "0".to_string();
+    let mut total_rewards_forfeited_treasury_xor = "0".to_string();
+
+    for entry in entries {
+        if let Some(published_at) = entry.get("published_at_unix").and_then(Value::as_u64) {
+            latest_published_at_unix = Some(
+                latest_published_at_unix
+                    .map_or(published_at, |current: u64| current.max(published_at)),
+            );
+        }
+
+        let labels = entry.get("labels").and_then(Value::as_object);
+        if let Some(case_id) = labels
+            .and_then(|labels| labels.get("case_id"))
+            .and_then(Value::as_str)
+        {
+            case_ids.insert(case_id.to_owned());
+        }
+        juror_payout_count_total = juror_payout_count_total.saturating_add(
+            labels
+                .and_then(|labels| labels.get("juror_payout_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+        no_show_count_total = no_show_count_total.saturating_add(
+            labels
+                .and_then(|labels| labels.get("no_show_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+
+        add_appeal_finance_report_label_amount(&mut total_deposit_xor, labels, "deposit_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_refund_xor, labels, "refund_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_treasury_xor, labels, "treasury_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_held_xor, labels, "held_xor")?;
+        add_appeal_finance_report_label_amount(
+            &mut total_panel_reward_xor,
+            labels,
+            "panel_reward_total_xor",
+        )?;
+        add_appeal_finance_report_label_amount(
+            &mut total_rewards_paid_xor,
+            labels,
+            "rewards_paid_total_xor",
+        )?;
+        add_appeal_finance_report_label_amount(
+            &mut total_rewards_forfeited_treasury_xor,
+            labels,
+            "rewards_forfeited_treasury_xor",
+        )?;
+
+        let outcome = labels
+            .and_then(|labels| labels.get("outcome"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let mut outcome_summary = outcomes
+            .remove(outcome)
+            .and_then(|value| match value {
+                Value::Object(map) => Some(map),
+                _ => None,
+            })
+            .unwrap_or_else(appeal_finance_report_outcome_summary_empty);
+        let count = outcome_summary
+            .get("published_report_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .saturating_add(1);
+        outcome_summary.insert("published_report_count".into(), Value::from(count));
+        for field in ["juror_payout_count", "no_show_count"] {
+            let current = outcome_summary
+                .get(field)
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let next = current.saturating_add(
+                labels
+                    .and_then(|labels| labels.get(field))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            );
+            outcome_summary.insert(field.to_string(), Value::from(next));
+        }
+        for field in [
+            "deposit_xor",
+            "refund_xor",
+            "treasury_xor",
+            "held_xor",
+            "panel_reward_total_xor",
+            "rewards_paid_total_xor",
+            "rewards_forfeited_treasury_xor",
+        ] {
+            add_appeal_finance_report_summary_amount(&mut outcome_summary, labels, field)?;
+        }
+        if let Some(generated_at) = labels
+            .and_then(|labels| labels.get("generated_at_unix_ms"))
+            .and_then(Value::as_u64)
+        {
+            let latest = outcome_summary
+                .get("latest_generated_at_unix_ms")
+                .and_then(Value::as_u64)
+                .map_or(generated_at, |current| current.max(generated_at));
+            outcome_summary.insert("latest_generated_at_unix_ms".into(), Value::from(latest));
+        }
+        outcomes.insert(outcome.to_owned(), Value::Object(outcome_summary));
+    }
+
+    Ok(AppealFinanceReportPublishSummary {
+        outcomes,
+        latest_published_at_unix,
+        distinct_case_count: case_ids.len() as u64,
+        juror_payout_count_total,
+        no_show_count_total,
+        total_deposit_xor,
+        total_refund_xor,
+        total_treasury_xor,
+        total_held_xor,
+        total_panel_reward_xor,
+        total_rewards_paid_xor,
+        total_rewards_forfeited_treasury_xor,
+    })
+}
+
+fn appeal_finance_report_outcome_summary_empty() -> Map {
+    let mut summary = Map::new();
+    summary.insert("published_report_count".into(), Value::from(0_u64));
+    summary.insert("juror_payout_count".into(), Value::from(0_u64));
+    summary.insert("no_show_count".into(), Value::from(0_u64));
+    for field in [
+        "deposit_xor",
+        "refund_xor",
+        "treasury_xor",
+        "held_xor",
+        "panel_reward_total_xor",
+        "rewards_paid_total_xor",
+        "rewards_forfeited_treasury_xor",
+    ] {
+        summary.insert(field.into(), Value::from("0"));
+    }
+    summary
+}
+
+fn add_appeal_finance_report_summary_amount(
+    summary: &mut Map,
+    labels: Option<&Map>,
+    field: &'static str,
+) -> Result<(), Response> {
+    let current = summary
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or("0")
+        .to_string();
+    let mut next = current;
+    add_appeal_finance_report_label_amount(&mut next, labels, field)?;
+    summary.insert(field.to_owned(), Value::from(next));
+    Ok(())
+}
+
+fn add_appeal_finance_report_label_amount(
+    total: &mut String,
+    labels: Option<&Map>,
+    field: &'static str,
+) -> Result<(), Response> {
+    let amount = labels
+        .and_then(|labels| labels.get(field))
+        .and_then(Value::as_str)
+        .unwrap_or("0");
+    let left = parse_appeal_decimal_literal(field, total).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("invalid accumulated appeal finance `{field}` amount: {err}"),
+        )
+    })?;
+    let right = parse_appeal_decimal_literal(field, amount).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("invalid appeal finance report label `{field}` amount: {err}"),
+        )
+    })?;
+    *total = (left + right).to_string();
+    Ok(())
+}
+
+struct AppealFinanceWeeklyRollupPublishSummary {
+    cycles: Map,
+    latest_published_at_unix: Option<u64>,
+    source_report_count_total: u64,
+    reported_case_count_total: u64,
+    juror_payout_count_total: u64,
+    no_show_count_total: u64,
+}
+
+fn appeal_finance_weekly_rollup_publish_summary(
+    entries: &[Value],
+) -> AppealFinanceWeeklyRollupPublishSummary {
+    let mut cycles = Map::new();
+    let mut latest_published_at_unix = None;
+    let mut source_report_count_total = 0_u64;
+    let mut reported_case_count_total = 0_u64;
+    let mut juror_payout_count_total = 0_u64;
+    let mut no_show_count_total = 0_u64;
+
+    for entry in entries {
+        if let Some(published_at) = entry.get("published_at_unix").and_then(Value::as_u64) {
+            latest_published_at_unix = Some(
+                latest_published_at_unix
+                    .map_or(published_at, |current: u64| current.max(published_at)),
+            );
+        }
+
+        let labels = entry.get("labels").and_then(Value::as_object);
+        source_report_count_total = source_report_count_total.saturating_add(
+            labels
+                .and_then(|labels| labels.get("report_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+        reported_case_count_total = reported_case_count_total.saturating_add(
+            labels
+                .and_then(|labels| labels.get("case_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+        juror_payout_count_total = juror_payout_count_total.saturating_add(
+            labels
+                .and_then(|labels| labels.get("juror_payout_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+        no_show_count_total = no_show_count_total.saturating_add(
+            labels
+                .and_then(|labels| labels.get("no_show_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+
+        let cycle = labels
+            .and_then(|labels| labels.get("cycle"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let mut cycle_summary = cycles
+            .remove(cycle)
+            .and_then(|value| match value {
+                Value::Object(map) => Some(map),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let count = cycle_summary
+            .get("published_rollup_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .saturating_add(1);
+        cycle_summary.insert("published_rollup_count".into(), Value::from(count));
+        for field in [
+            "report_count",
+            "case_count",
+            "juror_payout_count",
+            "no_show_count",
+        ] {
+            let current = cycle_summary
+                .get(field)
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let next = current.saturating_add(
+                labels
+                    .and_then(|labels| labels.get(field))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            );
+            cycle_summary.insert(field.to_string(), Value::from(next));
+        }
+        if let Some(generated_at) = labels
+            .and_then(|labels| labels.get("generated_at_unix_ms"))
+            .and_then(Value::as_u64)
+        {
+            let latest = cycle_summary
+                .get("latest_generated_at_unix_ms")
+                .and_then(Value::as_u64)
+                .map_or(generated_at, |current| current.max(generated_at));
+            cycle_summary.insert("latest_generated_at_unix_ms".into(), Value::from(latest));
+        }
+        cycles.insert(cycle.to_string(), Value::Object(cycle_summary));
+    }
+
+    AppealFinanceWeeklyRollupPublishSummary {
+        cycles,
+        latest_published_at_unix,
+        source_report_count_total,
+        reported_case_count_total,
+        juror_payout_count_total,
+        no_show_count_total,
+    }
+}
+
 fn governance_car_queue_lookup_response(
     state: &SharedAppState,
     headers: HeaderMap,
@@ -3664,6 +4363,263 @@ fn reset_orderbook_api_outcome_for_test(route: &'static str) {
     }
 }
 
+pub(crate) async fn handle_post_sorafs_moderation_ballot_announce(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let request = match json::from_slice::<ModerationBallotAnnounceRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot announcement JSON: {err}"),
+            );
+        }
+    };
+    let deposit_confirmation = match request.deposit_confirmation.as_ref() {
+        Some(deposit_confirmation) => deposit_confirmation,
+        None => {
+            return json_error(
+                StatusCode::PRECONDITION_FAILED,
+                "SoraFS moderation ballot announcement requires a confirmed appeal deposit",
+            );
+        }
+    };
+    if let Err(response) =
+        ensure_moderation_deposit_confirmation_matches_request(&request, deposit_confirmation)
+    {
+        return response;
+    }
+    let (confirmed_deposit, deposit_record) = match confirm_appeal_finance_deposit_record(
+        &state,
+        deposit_confirmation,
+        &verified.account,
+    ) {
+        Ok(confirmation) => confirmation,
+        Err(response) => return response,
+    };
+    let appeal_deposit =
+        moderation_appeal_deposit_from_confirmation(&confirmed_deposit, &deposit_record);
+    let announcement = match moderation_announcement_from_request(
+        request,
+        Some(confirmed_deposit.escrow_id.as_hash().to_string()),
+        Some(appeal_deposit),
+    ) {
+        Ok(announcement) => announcement,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.announce_moderation_ballot(announcement) {
+        Ok(record) => JsonBody(moderation_ballot_record_json(&record)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_commit(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ModerationBallotCommitRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot commit JSON: {err}"),
+            );
+        }
+    };
+    let commit = match moderation_commit_from_request(&request) {
+        Ok(commit) => commit,
+        Err(response) => return response,
+    };
+    let expected_account = match moderation_juror_account_id(&state, &commit.juror_id) {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_moderation_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&expected_account),
+    ) {
+        return response;
+    }
+    let now_unix_ms = request.now_unix_ms.unwrap_or_else(unix_timestamp_now_ms);
+    match state
+        .sorafs_node
+        .submit_moderation_ballot_commit(commit, now_unix_ms)
+    {
+        Ok(outcome) => JsonBody(moderation_ballot_commit_outcome_json(&outcome)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_reveal(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ModerationBallotRevealRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot reveal JSON: {err}"),
+            );
+        }
+    };
+    let reveal = match moderation_reveal_from_request(&request) {
+        Ok(reveal) => reveal,
+        Err(response) => return response,
+    };
+    let expected_account = match moderation_juror_account_id(&state, &reveal.juror_id) {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_moderation_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&expected_account),
+    ) {
+        return response;
+    }
+    let now_unix_ms = request.now_unix_ms.unwrap_or_else(unix_timestamp_now_ms);
+    match state
+        .sorafs_node
+        .submit_moderation_ballot_reveal(reveal, now_unix_ms)
+    {
+        Ok(outcome) => JsonBody(moderation_ballot_reveal_outcome_json(&outcome)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_tally(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    if let Err(response) =
+        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+    {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationBallotTallyRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot tally JSON: {err}"),
+            );
+        }
+    };
+    let now_unix_ms = request.now_unix_ms.unwrap_or_else(unix_timestamp_now_ms);
+    match state.sorafs_node.tally_moderation_ballot(
+        &request.case_id,
+        &request.round_id,
+        now_unix_ms,
+    ) {
+        Ok(tally) => JsonBody(moderation_ballot_tally_json(&tally)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_ballots(
+    State(state): State<SharedAppState>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let records = state.sorafs_node.moderation_ballots();
+    JsonBody(json_object(vec![
+        json_entry("schema", Value::from("sorafs.moderation.ballots.v1")),
+        json_entry("source", Value::from("local")),
+        json_entry("count", records.len() as u64),
+        json_entry(
+            "ballots",
+            Value::Array(records.iter().map(moderation_ballot_record_json).collect()),
+        ),
+    ]))
+    .into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_ballot(
+    State(state): State<SharedAppState>,
+    Path((case_id, round_id)): Path<(String, String)>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    match state.sorafs_node.moderation_ballot(&case_id, &round_id) {
+        Some(record) => JsonBody(moderation_ballot_record_json(&record)).into_response(),
+        None => json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS moderation ballot `{case_id}` round `{round_id}` was not found"),
+        ),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let events = state
+        .sorafs_node
+        .moderation_ballot_events_since(query.since, limit);
+    let tip_sequence = state
+        .sorafs_node
+        .latest_moderation_ballot_event_sequence()
+        .unwrap_or(0);
+    let etag = moderation_ballot_events_etag(query.since, limit, tip_sequence, &events);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    reputation_json_response(
+        moderation_ballot_events_json(query.since, limit, &events),
+        &etag,
+    )
+}
+
 pub(crate) async fn handle_post_sorafs_orderbook_order(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -3819,6 +4775,245 @@ pub(crate) async fn handle_post_sorafs_orderbook_receipt(
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
+}
+
+fn moderation_announcement_from_request(
+    request: ModerationBallotAnnounceRequestDto,
+    appeal_deposit_escrow_id_hex: Option<String>,
+    appeal_deposit: Option<ModerationAppealDeposit>,
+) -> Result<ModerationBallotAnnouncement, Response> {
+    let evidence_bundle_digest = decode_hex_32_field(
+        &request.evidence_bundle_digest_hex,
+        "evidence_bundle_digest_hex",
+    )?;
+    let panel_roster_hash = match request.panel_roster_hash_hex {
+        Some(value) => decode_hex_32_field(&value, "panel_roster_hash_hex")?,
+        None => local_moderation_panel_roster_hash(&request.juror_ids, request.quorum),
+    };
+    Ok(ModerationBallotAnnouncement {
+        context: SoraFsModerationBallotContextV1 {
+            version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            case_id: request.case_id,
+            evidence_bundle_digest,
+            appeal_finance_config_version: request.appeal_finance_config_version,
+            panel_roster_hash,
+            policy_reference: request.policy_reference,
+            evidence_uri: request.evidence_uri,
+        },
+        appeal_deposit_escrow_id_hex,
+        appeal_deposit,
+        round_id: request.round_id,
+        juror_ids: request.juror_ids,
+        quorum: request.quorum,
+        announced_at_unix_ms: request.announced_at_unix_ms,
+        commit_deadline_unix_ms: request.commit_deadline_unix_ms,
+        challenge_deadline_unix_ms: request.challenge_deadline_unix_ms,
+        reveal_deadline_unix_ms: request.reveal_deadline_unix_ms,
+    })
+}
+
+fn moderation_appeal_deposit_from_confirmation(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+) -> ModerationAppealDeposit {
+    ModerationAppealDeposit {
+        escrow_id_hex: expected.escrow_id.as_hash().to_string(),
+        payer_account: expected.payer_account.to_string(),
+        destination_account: expected.destination_account.to_string(),
+        release_authority_account: expected
+            .release_authority_account
+            .as_ref()
+            .map(ToString::to_string),
+        asset_definition_id: expected.asset_definition_id.to_string(),
+        custody_account: record.custody.to_string(),
+        deposit_xor: expected.deposit_xor.to_string(),
+        expires_at_ms: expected.expires_at_ms,
+        idempotency_key: expected.idempotency_key.clone(),
+    }
+}
+
+fn ensure_moderation_deposit_confirmation_matches_request(
+    request: &ModerationBallotAnnounceRequestDto,
+    deposit_confirmation: &AppealFinanceDepositConfirmRequestDto,
+) -> Result<(), Response> {
+    if deposit_confirmation.case_id.trim() != request.case_id.trim() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation ballot deposit_confirmation.case_id must match case_id",
+        ));
+    }
+    if deposit_confirmation.round_id.as_deref().map(str::trim) != Some(request.round_id.trim()) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation ballot deposit_confirmation.round_id must match round_id",
+        ));
+    }
+    let evidence_bundle_digest = decode_hex_32_field(
+        &request.evidence_bundle_digest_hex,
+        "evidence_bundle_digest_hex",
+    )?;
+    let expected_evidence_hash = Hash::prehashed(evidence_bundle_digest).to_string();
+    let includes_evidence_hash = deposit_confirmation
+        .evidence_hashes_hex
+        .as_ref()
+        .is_some_and(|hashes| {
+            hashes
+                .iter()
+                .any(|hash| hash.trim() == expected_evidence_hash)
+        });
+    if !includes_evidence_hash {
+        return Err(json_error(
+            StatusCode::PRECONDITION_FAILED,
+            "SoraFS moderation ballot deposit_confirmation.evidence_hashes_hex must include evidence_bundle_digest_hex",
+        ));
+    }
+    Ok(())
+}
+
+fn moderation_commit_from_request(
+    request: &ModerationBallotCommitRequestDto,
+) -> Result<SoraFsModerationBallotCommitV1, Response> {
+    let bytes = BASE64_STANDARD
+        .decode(request.commit_b64.as_bytes())
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS moderation ballot commit_b64: {err}"),
+            )
+        })?;
+    let commit =
+        norito::decode_from_bytes::<SoraFsModerationBallotCommitV1>(&bytes).map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot commit: {err}"),
+            )
+        })?;
+    commit.validate().map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS moderation ballot commit: {err}"),
+        )
+    })?;
+    Ok(commit)
+}
+
+fn moderation_reveal_from_request(
+    request: &ModerationBallotRevealRequestDto,
+) -> Result<SoraFsModerationBallotRevealV1, Response> {
+    let bytes = BASE64_STANDARD
+        .decode(request.reveal_b64.as_bytes())
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS moderation ballot reveal_b64: {err}"),
+            )
+        })?;
+    let reveal =
+        norito::decode_from_bytes::<SoraFsModerationBallotRevealV1>(&bytes).map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot reveal: {err}"),
+            )
+        })?;
+    reveal.validate().map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS moderation ballot reveal: {err}"),
+        )
+    })?;
+    Ok(reveal)
+}
+
+fn moderation_juror_account_id(
+    state: &SharedAppState,
+    juror_id: &str,
+) -> Result<AccountId, Response> {
+    if juror_id.trim().is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation juror_id must not be empty",
+        ));
+    }
+    let (account, canonical) = crate::routing::parse_account_literal_with_state(
+        &state.state,
+        juror_id,
+        &state.telemetry,
+        "sorafs_moderation_juror_id",
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS moderation juror_id: {}", err.reason()),
+        )
+    })?;
+    if juror_id != canonical {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation juror_id must be a canonical AccountId",
+        ));
+    }
+    Ok(account)
+}
+
+fn require_moderation_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(
+        &state.state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+    ) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS moderation ballot submissions require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS moderation canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS moderation request authentication",
+            ))
+        }
+    }
+}
+
+fn require_appeal_finance_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
+    {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS appeal finance submissions require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS appeal finance canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS appeal finance request authentication",
+            ))
+        }
+    }
 }
 
 fn orderbook_owner_account_id(
@@ -4275,8 +5470,459 @@ pub(crate) async fn handle_post_sorafs_appeal_pricing_quote(
         .into_response()
 }
 
+pub(crate) async fn handle_post_sorafs_appeal_finance_settle(
+    JsonOnly(req): JsonOnly<AppealFinanceSettleRequestDto>,
+) -> Response {
+    let config = baseline_appeal_settlement_config();
+    let deposit_xor = match parse_appeal_decimal_literal("deposit_xor", &req.deposit_xor) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    let verdict = match appeal_verdict_from_request(&req.outcome) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let panel_size = req
+        .panel_size
+        .unwrap_or_else(|| config.default_panel_size());
+    let breakdown = match config.settle(deposit_xor, panel_size, verdict) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_settlement_json(
+            &config,
+            deposit_xor,
+            panel_size,
+            verdict,
+            &breakdown,
+        )),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_disburse(
+    JsonOnly(req): JsonOnly<AppealFinanceDisburseRequestDto>,
+) -> Response {
+    let config = baseline_appeal_settlement_config();
+    let deposit_xor = match parse_appeal_decimal_literal("deposit_xor", &req.deposit_xor) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    let verdict = match appeal_verdict_from_request(&req.outcome) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let refund_account = match appeal_finance_account_id("refund_account", &req.refund_account) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let treasury_account =
+        match appeal_finance_account_id("treasury_account", &req.treasury_account) {
+            Ok(value) => value,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+        };
+    let escrow_account = match appeal_finance_account_id("escrow_account", &req.escrow_account) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let jurors = match appeal_finance_account_ids("juror_ids", &req.juror_ids) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let no_show_account_ids = req.no_show_account_ids.unwrap_or_default();
+    let no_shows = match appeal_finance_account_ids("no_show_account_ids", &no_show_account_ids) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let panel_size = req
+        .panel_size
+        .unwrap_or_else(|| config.default_panel_size());
+    let plan = match config.disburse(AppealDisbursementInput {
+        deposit_xor,
+        panel_size,
+        verdict,
+        jurors: &jurors,
+        no_shows: &no_shows,
+        refund_account: &refund_account,
+        treasury_account: &treasury_account,
+        escrow_account: &escrow_account,
+    }) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_disbursement_json(&config, &plan)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_settle(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs appeal finance deposit settlement API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let req = match json::from_slice::<AppealFinanceDepositSettleRequestDto>(body.as_ref()) {
+        Ok(req) => req,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS appeal finance deposit settlement JSON: {err}"),
+            );
+        }
+    };
+    let (expected, record) = match confirm_appeal_finance_deposit_record(
+        &state,
+        &req.deposit_confirmation,
+        &verified.account,
+    ) {
+        Ok(confirmation) => confirmation,
+        Err(response) => return response,
+    };
+    let config = baseline_appeal_settlement_config();
+    let deposit_xor =
+        match parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string()) {
+            Ok(value) => value,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+        };
+    let verdict = match appeal_verdict_from_request(&req.outcome) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let panel_size = req
+        .panel_size
+        .unwrap_or_else(|| config.default_panel_size());
+    let breakdown = match config.settle(deposit_xor, panel_size, verdict) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    let execution =
+        match appeal_finance_deposit_settlement_execution(&expected, &record, &breakdown) {
+            Ok(execution) => execution,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+        };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_deposit_settlement_execution_json(
+            &config, &expected, &record, verdict, panel_size, &breakdown, &execution,
+        )),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_reconcile(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs appeal finance deposit settlement reconciliation API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let req = match json::from_slice::<AppealFinanceDepositSettleRequestDto>(body.as_ref()) {
+        Ok(req) => req,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "failed to decode SoraFS appeal finance deposit settlement reconciliation JSON: {err}"
+                ),
+            );
+        }
+    };
+    let (expected, record) = match load_appeal_finance_deposit_record_for_reconciliation(
+        &state,
+        &req.deposit_confirmation,
+        &verified.account,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let config = baseline_appeal_settlement_config();
+    let deposit_xor =
+        match parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string()) {
+            Ok(value) => value,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+        };
+    let verdict = match appeal_verdict_from_request(&req.outcome) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let panel_size = req
+        .panel_size
+        .unwrap_or_else(|| config.default_panel_size());
+    let breakdown = match config.settle(deposit_xor, panel_size, verdict) {
+        Ok(value) => value,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.to_string()),
+    };
+    let reconciliation =
+        match appeal_finance_deposit_settlement_reconciliation(&expected, &record, &breakdown) {
+            Ok(value) => value,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+        };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_deposit_settlement_reconciliation_json(
+            &config,
+            &expected,
+            &record,
+            verdict,
+            panel_size,
+            &breakdown,
+            &reconciliation,
+        )),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_deposit(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs appeal finance deposit API is not enabled on this node");
+    }
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let req = match json::from_slice::<AppealFinanceDepositRequestDto>(body.as_ref()) {
+        Ok(req) => req,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS appeal finance deposit JSON: {err}"),
+            );
+        }
+    };
+    let deposit = match appeal_finance_deposit_instruction(req, &verified.account) {
+        Ok(deposit) => deposit,
+        Err(DepositInstructionError::Forbidden(reason)) => {
+            return json_error(StatusCode::FORBIDDEN, reason);
+        }
+        Err(DepositInstructionError::Invalid(reason)) => {
+            return json_error(StatusCode::BAD_REQUEST, reason);
+        }
+    };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_deposit_instruction_json(&deposit)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_confirm(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs appeal finance deposit API is not enabled on this node");
+    }
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let req = match json::from_slice::<AppealFinanceDepositConfirmRequestDto>(body.as_ref()) {
+        Ok(req) => req,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS appeal finance deposit confirmation JSON: {err}"),
+            );
+        }
+    };
+    let (expected, record) =
+        match confirm_appeal_finance_deposit_record(&state, &req, &verified.account) {
+            Ok(confirmation) => confirmation,
+            Err(response) => return response,
+        };
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_deposit_confirmation_json(&expected, &record)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_appeal_finance_deposit(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(escrow_id_hex): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs appeal finance deposit API is not enabled on this node");
+    }
+    let verified = match require_appeal_finance_request_auth(&state, &headers, &method, &uri, &[]) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    let escrow_id = match appeal_finance_escrow_id_from_hex(&escrow_id_hex) {
+        Ok(escrow_id) => escrow_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let world = state.state.world_view();
+    let Some(record) = world.asset_escrows().get(&escrow_id).cloned() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "SoraFS appeal finance deposit asset lock was not found in the runtime ledger",
+        );
+    };
+    if !appeal_finance_deposit_record_visible_to(&record, &verified.account) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS appeal finance deposit asset lock is visible only to the opener, destination, or release authority",
+        );
+    }
+    (
+        StatusCode::OK,
+        JsonBody(appeal_finance_deposit_status_json(&record)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_report(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs appeal finance report API is not enabled on this node");
+    }
+    if !state.sorafs_node.has_governance_publisher() {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sorafs appeal finance report API requires a configured governance publisher",
+        );
+    }
+    if let Err(response) =
+        require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref())
+    {
+        return response;
+    }
+    let report = match json::from_slice::<SoraFsAppealFinanceReportV1>(body.as_ref()) {
+        Ok(report) => report,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS appeal finance report JSON: {err}"),
+            );
+        }
+    };
+    if let Err(err) = report.validate() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS appeal finance report: {err}"),
+        );
+    }
+    if let Err(err) = state
+        .sorafs_node
+        .publish_appeal_finance_report(report.clone())
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to publish SoraFS appeal finance report: {err}"),
+        );
+    }
+    (
+        StatusCode::ACCEPTED,
+        JsonBody(appeal_finance_report_publish_json(&report)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_weekly_rollup(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs appeal finance weekly rollup API is not enabled on this node",
+        );
+    }
+    if !state.sorafs_node.has_governance_publisher() {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sorafs appeal finance weekly rollup API requires a configured governance publisher",
+        );
+    }
+    if let Err(response) =
+        require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref())
+    {
+        return response;
+    }
+    let rollup = match json::from_slice::<SoraFsAppealFinanceWeeklyRollupV1>(body.as_ref()) {
+        Ok(rollup) => rollup,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS appeal finance weekly rollup JSON: {err}"),
+            );
+        }
+    };
+    if let Err(err) = rollup.validate() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS appeal finance weekly rollup: {err}"),
+        );
+    }
+    if let Err(err) = state
+        .sorafs_node
+        .publish_appeal_finance_weekly_rollup(rollup.clone())
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to publish SoraFS appeal finance weekly rollup: {err}"),
+        );
+    }
+    (
+        StatusCode::ACCEPTED,
+        JsonBody(appeal_finance_weekly_rollup_publish_json(&rollup)),
+    )
+        .into_response()
+}
+
 fn baseline_appeal_pricing_config() -> AppealPricingConfig {
     AppealPricingConfig::baseline_v1()
+}
+
+fn baseline_appeal_settlement_config() -> AppealSettlementConfig {
+    AppealSettlementConfig::baseline_v1()
 }
 
 fn appeal_quote_input(
@@ -4381,16 +6027,659 @@ fn appeal_pricing_status_json(config: &AppealPricingConfig) -> Value {
             "default_panel_size",
             Value::from(u64::from(config.default_panel_size())),
         ),
-        json_entry("deposit_api", Value::from("pending_runtime_escrow")),
+        json_entry(
+            "deposit_api",
+            Value::from("enabled_canonical_auth_native_asset_lock_instruction_status_confirmation"),
+        ),
+        json_entry("settlement_plan_api", Value::from("enabled")),
+        json_entry(
+            "settlement_execution_api",
+            Value::from("enabled_canonical_auth_native_asset_lock_instruction_builder"),
+        ),
+        json_entry(
+            "settlement_reconciliation_api",
+            Value::from("enabled_canonical_auth_runtime_asset_lock_reconciliation"),
+        ),
+        json_entry("disbursement_plan_api", Value::from("enabled")),
+        json_entry(
+            "report_publication",
+            Value::from("enabled_local_governance_dag"),
+        ),
+        json_entry(
+            "weekly_rollup_publication",
+            Value::from("enabled_local_governance_dag"),
+        ),
+        json_entry(
+            "weekly_rollup_dashboard_api",
+            Value::from("enabled_local_publish_index"),
+        ),
         json_entry(
             "report_api",
-            Value::from("pending_governance_dag_publisher"),
+            Value::from("enabled_canonical_auth_local_governance_dag"),
+        ),
+        json_entry(
+            "weekly_rollup_api",
+            Value::from("enabled_canonical_auth_local_governance_dag"),
         ),
         json_entry(
             "settlement_processor",
             Value::from("pending_runtime_ledger"),
         ),
     ])
+}
+
+fn appeal_verdict_from_request(raw: &str) -> Result<AppealVerdict, String> {
+    raw.parse::<AppealVerdict>()
+        .map_err(|err| format!("invalid SoraFS appeal outcome: {err}"))
+}
+
+fn appeal_finance_account_id(field: &'static str, raw: &str) -> Result<AccountId, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("SoraFS appeal finance `{field}` must not be empty"));
+    }
+    let account = AccountId::parse_encoded(trimmed)
+        .map(ParsedAccountId::into_account_id)
+        .map_err(|err| format!("invalid SoraFS appeal finance `{field}`: {err}"))?;
+    if trimmed != account.to_string() {
+        return Err(format!(
+            "SoraFS appeal finance `{field}` must be a canonical AccountId"
+        ));
+    }
+    Ok(account)
+}
+
+fn appeal_finance_account_ids(
+    field: &'static str,
+    raw_accounts: &[String],
+) -> Result<Vec<AccountId>, String> {
+    raw_accounts
+        .iter()
+        .map(|raw| appeal_finance_account_id(field, raw))
+        .collect()
+}
+
+#[derive(Debug)]
+enum DepositInstructionError {
+    Forbidden(String),
+    Invalid(String),
+}
+
+#[derive(Debug)]
+struct AppealFinanceTxInstruction {
+    wire_id: String,
+    payload_hex: String,
+}
+
+#[derive(Debug)]
+struct AppealFinanceDepositExpectation {
+    case_id: String,
+    round_id: Option<String>,
+    payer_account: AccountId,
+    destination_account: AccountId,
+    release_authority_account: Option<AccountId>,
+    asset_definition_id: AssetDefinitionId,
+    deposit_xor: iroha_primitives::numeric::Numeric,
+    expires_at_ms: Option<u64>,
+    idempotency_key: String,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+    escrow_id: EscrowId,
+}
+
+#[derive(Debug)]
+struct AppealFinanceDepositInstruction {
+    expected: AppealFinanceDepositExpectation,
+    instruction: AppealFinanceTxInstruction,
+}
+
+#[derive(Debug)]
+struct AppealFinanceSettlementStep {
+    action: &'static str,
+    required_authority: AccountId,
+    amount_xor: iroha_primitives::numeric::Numeric,
+    instruction: AppealFinanceTxInstruction,
+}
+
+#[derive(Debug)]
+struct AppealFinanceDepositSettlementExecution {
+    drawdown_xor: iroha_primitives::numeric::Numeric,
+    refund_xor: iroha_primitives::numeric::Numeric,
+    steps: Vec<AppealFinanceSettlementStep>,
+}
+
+#[derive(Debug)]
+struct AppealFinanceDepositSettlementReconciliation {
+    status: &'static str,
+    reconciled: bool,
+    expected_final_status: AssetEscrowStatus,
+    expected_remaining_xor: iroha_primitives::numeric::Numeric,
+    drawdown_xor: iroha_primitives::numeric::Numeric,
+    refund_xor: iroha_primitives::numeric::Numeric,
+    mismatches: Vec<String>,
+}
+
+fn appeal_finance_deposit_expectation(
+    req: AppealFinanceDepositRequestDto,
+) -> Result<AppealFinanceDepositExpectation, String> {
+    let case_id = required_appeal_finance_label("case_id", &req.case_id)?;
+    let round_id = req
+        .round_id
+        .as_deref()
+        .map(|round_id| required_appeal_finance_label("round_id", round_id))
+        .transpose()?;
+    let idempotency_key = required_appeal_finance_label("idempotency_key", &req.idempotency_key)?;
+    let payer_account = appeal_finance_account_id("payer_account", &req.payer_account)?;
+    let destination_account =
+        appeal_finance_account_id("destination_account", &req.destination_account)?;
+    let release_authority_account = req
+        .release_authority_account
+        .as_deref()
+        .map(|raw| appeal_finance_account_id("release_authority_account", raw))
+        .transpose()?;
+    let asset_definition_id = appeal_finance_asset_definition_id(&req.asset_definition_id)?;
+    let deposit_xor = appeal_finance_deposit_amount(&req.deposit_xor)?;
+    let evidence_hashes = appeal_finance_evidence_hashes(req.evidence_hashes_hex.as_deref())?;
+    let escrow_id = appeal_finance_deposit_escrow_id(
+        &case_id,
+        round_id.as_deref(),
+        &payer_account,
+        &destination_account,
+        release_authority_account.as_ref(),
+        &asset_definition_id,
+        &deposit_xor,
+        req.expires_at_ms,
+        &idempotency_key,
+        &evidence_hashes,
+    );
+
+    Ok(AppealFinanceDepositExpectation {
+        case_id,
+        round_id,
+        payer_account,
+        destination_account,
+        release_authority_account,
+        asset_definition_id,
+        deposit_xor,
+        expires_at_ms: req.expires_at_ms,
+        idempotency_key,
+        evidence_hashes,
+        escrow_id,
+    })
+}
+
+fn appeal_finance_deposit_instruction(
+    req: AppealFinanceDepositRequestDto,
+    authenticated_account: &AccountId,
+) -> Result<AppealFinanceDepositInstruction, DepositInstructionError> {
+    let expected =
+        appeal_finance_deposit_expectation(req).map_err(DepositInstructionError::Invalid)?;
+    if &expected.payer_account != authenticated_account {
+        return Err(DepositInstructionError::Forbidden(
+            "SoraFS appeal finance deposit payer_account must match the authenticated account"
+                .to_owned(),
+        ));
+    }
+    let instruction: InstructionBox = OpenAssetLock::with_options(
+        expected.escrow_id,
+        expected.asset_definition_id.clone(),
+        expected.destination_account.clone(),
+        expected.deposit_xor.clone(),
+        expected.release_authority_account.clone(),
+        expected.expires_at_ms,
+        expected.evidence_hashes.clone(),
+    )
+    .into();
+    let instruction = appeal_finance_tx_instr_from_box(instruction);
+
+    Ok(AppealFinanceDepositInstruction {
+        expected,
+        instruction,
+    })
+}
+
+fn appeal_finance_deposit_settlement_execution(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    breakdown: &AppealSettlementBreakdown,
+) -> Result<AppealFinanceDepositSettlementExecution, String> {
+    let drawdown_xor = appeal_finance_decimal_to_numeric(
+        "drawdown_xor",
+        &(breakdown.treasury_xor + breakdown.held_xor),
+    )?;
+    let refund_xor = appeal_finance_decimal_to_numeric("refund_xor", &breakdown.refund_xor)?;
+    let zero = iroha_primitives::numeric::Numeric::from(0_u32);
+    let mut steps = Vec::new();
+
+    if drawdown_xor > zero {
+        let required_authority = record
+            .release_authority
+            .clone()
+            .or_else(|| record.buyer.clone())
+            .ok_or_else(|| {
+                "SoraFS appeal finance asset lock settlement requires a lock destination".to_owned()
+            })?;
+        let instruction: InstructionBox =
+            DrawdownAssetLock::new(expected.escrow_id, drawdown_xor.clone()).into();
+        steps.push(AppealFinanceSettlementStep {
+            action: "drawdown_non_refund",
+            required_authority,
+            amount_xor: drawdown_xor.clone(),
+            instruction: appeal_finance_tx_instr_from_box(instruction),
+        });
+    }
+
+    if refund_xor > zero {
+        let instruction: InstructionBox = CancelAssetLock::new(expected.escrow_id).into();
+        steps.push(AppealFinanceSettlementStep {
+            action: "cancel_refund",
+            required_authority: expected.payer_account.clone(),
+            amount_xor: refund_xor.clone(),
+            instruction: appeal_finance_tx_instr_from_box(instruction),
+        });
+    }
+
+    Ok(AppealFinanceDepositSettlementExecution {
+        drawdown_xor,
+        refund_xor,
+        steps,
+    })
+}
+
+fn appeal_finance_deposit_settlement_reconciliation(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    breakdown: &AppealSettlementBreakdown,
+) -> Result<AppealFinanceDepositSettlementReconciliation, String> {
+    let execution = appeal_finance_deposit_settlement_execution(expected, record, breakdown)?;
+    let zero = iroha_primitives::numeric::Numeric::from(0_u32);
+    let mut mismatches = appeal_finance_deposit_static_mismatches(expected, record);
+    let expected_remaining_xor = if execution.refund_xor > zero {
+        zero.clone()
+    } else {
+        expected
+            .deposit_xor
+            .clone()
+            .checked_sub(execution.drawdown_xor.clone())
+            .ok_or_else(|| {
+                "SoraFS appeal finance settlement drawdown exceeds deposit amount".to_owned()
+            })?
+    };
+    let expected_final_status = if execution.refund_xor > zero {
+        AssetEscrowStatus::Cancelled
+    } else if expected_remaining_xor.is_zero() {
+        AssetEscrowStatus::DrawnDown
+    } else {
+        AssetEscrowStatus::Locked
+    };
+
+    let status = if mismatches.is_empty()
+        && record.status == expected_final_status
+        && record.remaining_amount == expected_remaining_xor
+    {
+        "settled"
+    } else if mismatches.is_empty()
+        && record.status == AssetEscrowStatus::Locked
+        && record.remaining_amount == expected.deposit_xor
+    {
+        "pending_client_submission"
+    } else if mismatches.is_empty()
+        && record.status == AssetEscrowStatus::Locked
+        && execution.refund_xor > zero
+        && execution.drawdown_xor > zero
+        && record.remaining_amount == execution.refund_xor
+    {
+        "awaiting_refund_cancel"
+    } else {
+        if record.status != expected_final_status {
+            mismatches.push(format!(
+                "lifecycle_status expected `{}` after settlement but ledger has `{}`",
+                asset_escrow_status_label(expected_final_status),
+                asset_escrow_status_label(record.status)
+            ));
+        }
+        if record.remaining_amount != expected_remaining_xor {
+            mismatches.push(format!(
+                "remaining_amount expected `{}` after settlement but ledger has `{}`",
+                expected_remaining_xor, record.remaining_amount
+            ));
+        }
+        "mismatch"
+    };
+
+    Ok(AppealFinanceDepositSettlementReconciliation {
+        status,
+        reconciled: status == "settled",
+        expected_final_status,
+        expected_remaining_xor,
+        drawdown_xor: execution.drawdown_xor,
+        refund_xor: execution.refund_xor,
+        mismatches,
+    })
+}
+
+fn appeal_finance_deposit_confirm_base_request(
+    req: &AppealFinanceDepositConfirmRequestDto,
+) -> AppealFinanceDepositRequestDto {
+    AppealFinanceDepositRequestDto {
+        case_id: req.case_id.clone(),
+        round_id: req.round_id.clone(),
+        payer_account: req.payer_account.clone(),
+        destination_account: req.destination_account.clone(),
+        release_authority_account: req.release_authority_account.clone(),
+        asset_definition_id: req.asset_definition_id.clone(),
+        deposit_xor: req.deposit_xor.clone(),
+        expires_at_ms: req.expires_at_ms,
+        idempotency_key: req.idempotency_key.clone(),
+        evidence_hashes_hex: req.evidence_hashes_hex.clone(),
+    }
+}
+
+fn confirm_appeal_finance_deposit_record(
+    state: &SharedAppState,
+    req: &AppealFinanceDepositConfirmRequestDto,
+    authenticated_account: &AccountId,
+) -> Result<(AppealFinanceDepositExpectation, AssetEscrowRecord), Response> {
+    let escrow_id = appeal_finance_escrow_id_from_hex(&req.escrow_id_hex)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let expected =
+        appeal_finance_deposit_expectation(appeal_finance_deposit_confirm_base_request(req))
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    if escrow_id != expected.escrow_id {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS appeal finance `escrow_id_hex` does not match the expected deposit parameters",
+        ));
+    }
+
+    let world = state.state.world_view();
+    let record = world
+        .asset_escrows()
+        .get(&escrow_id)
+        .cloned()
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::NOT_FOUND,
+                "SoraFS appeal finance deposit asset lock was not found in the runtime ledger",
+            )
+        })?;
+    if !appeal_finance_deposit_record_visible_to(&record, authenticated_account) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS appeal finance deposit asset lock confirmation is visible only to the opener, destination, or release authority",
+        ));
+    }
+    let mismatches = appeal_finance_deposit_confirmation_mismatches(&expected, &record);
+    if !mismatches.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            JsonBody(appeal_finance_deposit_confirmation_mismatch_json(
+                &expected, &record, mismatches,
+            )),
+        )
+            .into_response());
+    }
+    Ok((expected, record))
+}
+
+fn load_appeal_finance_deposit_record_for_reconciliation(
+    state: &SharedAppState,
+    req: &AppealFinanceDepositConfirmRequestDto,
+    authenticated_account: &AccountId,
+) -> Result<(AppealFinanceDepositExpectation, AssetEscrowRecord), Response> {
+    let escrow_id = appeal_finance_escrow_id_from_hex(&req.escrow_id_hex)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let expected =
+        appeal_finance_deposit_expectation(appeal_finance_deposit_confirm_base_request(req))
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    if escrow_id != expected.escrow_id {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS appeal finance `escrow_id_hex` does not match the expected deposit parameters",
+        ));
+    }
+
+    let world = state.state.world_view();
+    let record = world
+        .asset_escrows()
+        .get(&escrow_id)
+        .cloned()
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::NOT_FOUND,
+                "SoraFS appeal finance deposit asset lock was not found in the runtime ledger",
+            )
+        })?;
+    if !appeal_finance_deposit_record_visible_to(&record, authenticated_account) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS appeal finance deposit settlement reconciliation is visible only to the opener, destination, or release authority",
+        ));
+    }
+    Ok((expected, record))
+}
+
+fn appeal_finance_deposit_static_mismatches(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+) -> Vec<String> {
+    let mut mismatches = Vec::new();
+    if record.id != expected.escrow_id {
+        mismatches.push("escrow_id_hex does not match the expected derived escrow id".to_owned());
+    }
+    if record.kind != AssetEscrowKind::Lock {
+        mismatches.push(format!(
+            "kind expected lock but found {}",
+            asset_escrow_kind_label(record.kind)
+        ));
+    }
+    if record.seller != expected.payer_account {
+        mismatches.push("payer_account does not match the lock opener".to_owned());
+    }
+    if record.buyer.as_ref() != Some(&expected.destination_account) {
+        mismatches.push("destination_account does not match the lock destination".to_owned());
+    }
+    if record.release_authority != expected.release_authority_account {
+        mismatches.push("release_authority_account does not match the runtime lock".to_owned());
+    }
+    if record.asset_definition != expected.asset_definition_id {
+        mismatches.push("asset_definition_id does not match the runtime lock".to_owned());
+    }
+    if record.amount != expected.deposit_xor {
+        mismatches.push("deposit_xor does not match the runtime lock amount".to_owned());
+    }
+    if record.expires_at_ms != expected.expires_at_ms {
+        mismatches.push("expires_at_ms does not match the runtime lock".to_owned());
+    }
+    if record.evidence_hashes != expected.evidence_hashes {
+        mismatches.push("evidence_hashes_hex do not match the runtime lock".to_owned());
+    }
+    mismatches
+}
+
+fn appeal_finance_deposit_confirmation_mismatches(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+) -> Vec<String> {
+    let mut mismatches = appeal_finance_deposit_static_mismatches(expected, record);
+    if record.status != AssetEscrowStatus::Locked {
+        mismatches.push(format!(
+            "lifecycle_status expected locked but found {}",
+            asset_escrow_status_label(record.status)
+        ));
+    }
+    if record.remaining_amount != expected.deposit_xor {
+        mismatches.push("remaining_amount is not the full expected deposit amount".to_owned());
+    }
+    mismatches
+}
+
+fn required_appeal_finance_label(field: &'static str, raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        Err(format!("SoraFS appeal finance `{field}` must not be empty"))
+    } else {
+        Ok(trimmed.to_owned())
+    }
+}
+
+fn appeal_finance_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("SoraFS appeal finance `asset_definition_id` must not be empty".to_owned());
+    }
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(trimmed)
+        .map_err(|err| format!("invalid SoraFS appeal finance `asset_definition_id`: {err}"))?;
+    if trimmed != asset_definition_id.to_string() {
+        return Err(
+            "SoraFS appeal finance `asset_definition_id` must be a canonical AssetDefinitionId"
+                .to_owned(),
+        );
+    }
+    Ok(asset_definition_id)
+}
+
+fn appeal_finance_deposit_amount(raw: &str) -> Result<iroha_primitives::numeric::Numeric, String> {
+    let trimmed = raw.trim();
+    parse_appeal_decimal_literal("deposit_xor", trimmed).map_err(|err| err.to_string())?;
+    let amount = iroha_primitives::numeric::Numeric::from_str(trimmed)
+        .map_err(|err| format!("invalid SoraFS appeal finance `deposit_xor`: {err}"))?;
+    if amount <= iroha_primitives::numeric::Numeric::from(0_u32) {
+        return Err("SoraFS appeal finance `deposit_xor` must be positive".to_owned());
+    }
+    Ok(amount)
+}
+
+fn appeal_finance_decimal_to_numeric(
+    field: &'static str,
+    value: &impl ToString,
+) -> Result<iroha_primitives::numeric::Numeric, String> {
+    let raw = value.to_string();
+    let amount = iroha_primitives::numeric::Numeric::from_str(&raw)
+        .map_err(|err| format!("invalid SoraFS appeal finance `{field}`: {err}"))?;
+    if amount < iroha_primitives::numeric::Numeric::from(0_u32) {
+        return Err(format!(
+            "SoraFS appeal finance `{field}` must not be negative"
+        ));
+    }
+    Ok(amount)
+}
+
+fn appeal_finance_evidence_hashes(
+    raw_hashes: Option<&[String]>,
+) -> Result<Vec<iroha_crypto::Hash>, String> {
+    let Some(raw_hashes) = raw_hashes else {
+        return Ok(Vec::new());
+    };
+    raw_hashes
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "SoraFS appeal finance `evidence_hashes_hex[{index}]` must not be empty"
+                ));
+            }
+            let hash = iroha_crypto::Hash::from_str(trimmed).map_err(|err| {
+                format!("invalid SoraFS appeal finance `evidence_hashes_hex[{index}]`: {err}")
+            })?;
+            if trimmed != hash.to_string() {
+                return Err(format!(
+                    "SoraFS appeal finance `evidence_hashes_hex[{index}]` must be canonical lowercase hex"
+                ));
+            }
+            Ok(hash)
+        })
+        .collect()
+}
+
+fn appeal_finance_escrow_id_from_hex(raw: &str) -> Result<EscrowId, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("SoraFS appeal finance `escrow_id_hex` must not be empty".to_owned());
+    }
+    let hash = iroha_crypto::Hash::from_str(trimmed)
+        .map_err(|err| format!("invalid SoraFS appeal finance `escrow_id_hex`: {err}"))?;
+    if trimmed != hash.to_string() {
+        return Err(
+            "SoraFS appeal finance `escrow_id_hex` must be canonical lowercase hex".to_owned(),
+        );
+    }
+    Ok(EscrowId::new(hash))
+}
+
+fn appeal_finance_deposit_record_visible_to(
+    record: &AssetEscrowRecord,
+    account: &AccountId,
+) -> bool {
+    record.seller == *account
+        || record.buyer.as_ref() == Some(account)
+        || record.release_authority.as_ref() == Some(account)
+}
+
+fn appeal_finance_deposit_escrow_id(
+    case_id: &str,
+    round_id: Option<&str>,
+    payer_account: &AccountId,
+    destination_account: &AccountId,
+    release_authority_account: Option<&AccountId>,
+    asset_definition_id: &AssetDefinitionId,
+    deposit_xor: &iroha_primitives::numeric::Numeric,
+    expires_at_ms: Option<u64>,
+    idempotency_key: &str,
+    evidence_hashes: &[iroha_crypto::Hash],
+) -> EscrowId {
+    let mut material = String::new();
+    material.push_str("sorafs-appeal-finance-deposit-v1\n");
+    material.push_str("case_id=");
+    material.push_str(case_id);
+    material.push('\n');
+    material.push_str("round_id=");
+    material.push_str(round_id.unwrap_or_default());
+    material.push('\n');
+    material.push_str("payer_account=");
+    material.push_str(&payer_account.to_string());
+    material.push('\n');
+    material.push_str("destination_account=");
+    material.push_str(&destination_account.to_string());
+    material.push('\n');
+    material.push_str("release_authority_account=");
+    if let Some(release_authority_account) = release_authority_account {
+        material.push_str(&release_authority_account.to_string());
+    }
+    material.push('\n');
+    material.push_str("asset_definition_id=");
+    material.push_str(&asset_definition_id.to_string());
+    material.push('\n');
+    material.push_str("deposit_xor=");
+    material.push_str(&deposit_xor.to_string());
+    material.push('\n');
+    material.push_str("expires_at_ms=");
+    if let Some(expires_at_ms) = expires_at_ms {
+        material.push_str(&expires_at_ms.to_string());
+    }
+    material.push('\n');
+    material.push_str("idempotency_key=");
+    material.push_str(idempotency_key);
+    material.push('\n');
+    material.push_str("evidence_hashes=");
+    for hash in evidence_hashes {
+        material.push_str(&hash.to_string());
+        material.push('\n');
+    }
+    EscrowId::new(iroha_crypto::Hash::new(material))
+}
+
+fn appeal_finance_tx_instr_from_box(boxed: InstructionBox) -> AppealFinanceTxInstruction {
+    let type_name = Instruction::id(&*boxed);
+    let wire_id = type_name.to_string();
+    let payload = Instruction::dyn_encode(&*boxed);
+    let framed = iroha_data_model::isi::frame_instruction_payload(type_name, &payload)
+        .expect("instruction payload must use canonical Norito framing");
+    AppealFinanceTxInstruction {
+        wire_id,
+        payload_hex: hex::encode(framed),
+    }
 }
 
 fn appeal_pricing_quote_json(
@@ -4460,6 +6749,695 @@ fn appeal_pricing_quote_json(
     ])
 }
 
+fn appeal_finance_settlement_json(
+    config: &AppealSettlementConfig,
+    deposit_xor: impl ToString,
+    panel_size: u32,
+    verdict: AppealVerdict,
+    breakdown: &AppealSettlementBreakdown,
+) -> Value {
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.appeal_finance.settlement.v1")),
+        json_entry("source", Value::from("baseline_v1")),
+        json_entry(
+            "settlement_config_version",
+            Value::from(config.version().to_owned()),
+        ),
+        json_entry("outcome", Value::from(verdict.to_string())),
+        json_entry("deposit_xor", appeal_decimal_json(deposit_xor)),
+        json_entry("panel_size", Value::from(u64::from(panel_size))),
+        json_entry("refund_xor", appeal_decimal_json(&breakdown.refund_xor)),
+        json_entry("treasury_xor", appeal_decimal_json(&breakdown.treasury_xor)),
+        json_entry("held_xor", appeal_decimal_json(&breakdown.held_xor)),
+        json_entry(
+            "panel_reward_per_juror_xor",
+            appeal_decimal_json(&breakdown.panel_reward_per_juror_xor),
+        ),
+        json_entry(
+            "panel_reward_total_xor",
+            appeal_decimal_json(&breakdown.panel_reward_total_xor),
+        ),
+    ])
+}
+
+fn appeal_finance_disbursement_json(
+    config: &AppealSettlementConfig,
+    plan: &AppealDisbursementPlan,
+) -> Value {
+    let participants = plan
+        .juror_payouts
+        .iter()
+        .map(|payout| {
+            json_object(vec![
+                json_entry("account", Value::from(payout.juror.to_string())),
+                json_entry("stipend_xor", appeal_decimal_json(&payout.stipend_xor)),
+                json_entry("bonus_xor", appeal_decimal_json(&payout.bonus_xor)),
+                json_entry("total_xor", appeal_decimal_json(payout.total())),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let no_shows = plan
+        .no_show_accounts
+        .iter()
+        .map(|account| Value::from(account.to_string()))
+        .collect::<Vec<_>>();
+
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.disbursement.v1"),
+        ),
+        json_entry("source", Value::from("baseline_v1")),
+        json_entry(
+            "settlement_config_version",
+            Value::from(config.version().to_owned()),
+        ),
+        json_entry("outcome", Value::from(plan.verdict.to_string())),
+        json_entry("deposit_xor", appeal_decimal_json(&plan.deposit_xor)),
+        json_entry("panel_size", Value::from(u64::from(plan.panel_size))),
+        json_entry(
+            "refund",
+            json_object(vec![
+                json_entry("account", Value::from(plan.refund_account.to_string())),
+                json_entry(
+                    "amount_xor",
+                    appeal_decimal_json(&plan.settlement.refund_xor),
+                ),
+            ]),
+        ),
+        json_entry(
+            "treasury",
+            json_object(vec![
+                json_entry("account", Value::from(plan.treasury_account.to_string())),
+                json_entry(
+                    "deposit_component_xor",
+                    appeal_decimal_json(&plan.settlement.treasury_xor),
+                ),
+                json_entry(
+                    "forfeited_rewards_xor",
+                    appeal_decimal_json(&plan.rewards_forfeited_treasury_xor),
+                ),
+                json_entry("total_xor", appeal_decimal_json(&plan.total_treasury_xor)),
+            ]),
+        ),
+        json_entry(
+            "held",
+            json_object(vec![
+                json_entry("account", Value::from(plan.escrow_account.to_string())),
+                json_entry("amount_xor", appeal_decimal_json(&plan.settlement.held_xor)),
+            ]),
+        ),
+        json_entry(
+            "rewards",
+            json_object(vec![
+                json_entry(
+                    "available_xor",
+                    appeal_decimal_json(&plan.rewards_available_xor),
+                ),
+                json_entry(
+                    "paid_xor",
+                    appeal_decimal_json(&plan.rewards_paid_total_xor),
+                ),
+                json_entry(
+                    "forfeited_xor",
+                    appeal_decimal_json(&plan.rewards_forfeited_treasury_xor),
+                ),
+                json_entry(
+                    "attending",
+                    Value::from(u64::try_from(plan.attending_count()).unwrap_or(u64::MAX)),
+                ),
+                json_entry("no_shows", Value::Array(no_shows)),
+                json_entry("participants", Value::Array(participants)),
+            ]),
+        ),
+    ])
+}
+
+fn appeal_finance_deposit_settlement_execution_json(
+    config: &AppealSettlementConfig,
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    verdict: AppealVerdict,
+    panel_size: u32,
+    breakdown: &AppealSettlementBreakdown,
+    execution: &AppealFinanceDepositSettlementExecution,
+) -> Value {
+    let authority_count = execution
+        .steps
+        .iter()
+        .map(|step| step.required_authority.to_string())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let steps = execution
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            json_object(vec![
+                json_entry("step", Value::from((index + 1) as u64)),
+                json_entry("action", Value::from(step.action)),
+                json_entry(
+                    "required_authority_account",
+                    Value::from(step.required_authority.to_string()),
+                ),
+                json_entry("amount_xor", appeal_decimal_json(&step.amount_xor)),
+                json_entry("wire_id", Value::from(step.instruction.wire_id.clone())),
+                json_entry(
+                    "payload_hex",
+                    Value::from(step.instruction.payload_hex.clone()),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_settlement_execution.v1"),
+        ),
+        json_entry("status", Value::from("ready_for_client_signing")),
+        json_entry(
+            "ledger_mutation",
+            Value::from("client_signed_transactions_required"),
+        ),
+        json_entry("execution_mode", Value::from("ordered_native_asset_lock")),
+        json_entry(
+            "requires_multiple_authorities",
+            Value::Bool(authority_count > 1),
+        ),
+        json_entry("source", Value::from("baseline_v1")),
+        json_entry(
+            "settlement_config_version",
+            Value::from(config.version().to_owned()),
+        ),
+        json_entry("outcome", Value::from(verdict.to_string())),
+        json_entry("panel_size", Value::from(u64::from(panel_size))),
+        json_entry(
+            "escrow_id_hex",
+            Value::from(expected.escrow_id.as_hash().to_string()),
+        ),
+        json_entry(
+            "payer_account",
+            Value::from(expected.payer_account.to_string()),
+        ),
+        json_entry(
+            "destination_account",
+            Value::from(expected.destination_account.to_string()),
+        ),
+        json_entry(
+            "release_authority_account",
+            expected
+                .release_authority_account
+                .as_ref()
+                .map(|account| Value::from(account.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry("refund_xor", appeal_decimal_json(&breakdown.refund_xor)),
+        json_entry("treasury_xor", appeal_decimal_json(&breakdown.treasury_xor)),
+        json_entry("held_xor", appeal_decimal_json(&breakdown.held_xor)),
+        json_entry("drawdown_xor", appeal_decimal_json(&execution.drawdown_xor)),
+        json_entry(
+            "cancel_refund_xor",
+            appeal_decimal_json(&execution.refund_xor),
+        ),
+        json_entry("tx_steps", Value::Array(steps)),
+        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+    ])
+}
+
+fn appeal_finance_deposit_settlement_reconciliation_json(
+    config: &AppealSettlementConfig,
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    verdict: AppealVerdict,
+    panel_size: u32,
+    breakdown: &AppealSettlementBreakdown,
+    reconciliation: &AppealFinanceDepositSettlementReconciliation,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_settlement_reconciliation.v1"),
+        ),
+        json_entry("status", Value::from(reconciliation.status)),
+        json_entry("reconciled", Value::Bool(reconciliation.reconciled)),
+        json_entry("source", Value::from("baseline_v1")),
+        json_entry(
+            "settlement_config_version",
+            Value::from(config.version().to_owned()),
+        ),
+        json_entry("outcome", Value::from(verdict.to_string())),
+        json_entry("panel_size", Value::from(u64::from(panel_size))),
+        json_entry(
+            "escrow_id_hex",
+            Value::from(expected.escrow_id.as_hash().to_string()),
+        ),
+        json_entry(
+            "payer_account",
+            Value::from(expected.payer_account.to_string()),
+        ),
+        json_entry(
+            "destination_account",
+            Value::from(expected.destination_account.to_string()),
+        ),
+        json_entry(
+            "release_authority_account",
+            expected
+                .release_authority_account
+                .as_ref()
+                .map(|account| Value::from(account.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry("refund_xor", appeal_decimal_json(&breakdown.refund_xor)),
+        json_entry("treasury_xor", appeal_decimal_json(&breakdown.treasury_xor)),
+        json_entry("held_xor", appeal_decimal_json(&breakdown.held_xor)),
+        json_entry(
+            "expected_drawdown_xor",
+            appeal_decimal_json(&reconciliation.drawdown_xor),
+        ),
+        json_entry(
+            "expected_cancel_refund_xor",
+            appeal_decimal_json(&reconciliation.refund_xor),
+        ),
+        json_entry(
+            "expected_final_lifecycle_status",
+            Value::from(asset_escrow_status_label(
+                reconciliation.expected_final_status,
+            )),
+        ),
+        json_entry(
+            "expected_remaining_amount",
+            appeal_decimal_json(&reconciliation.expected_remaining_xor),
+        ),
+        json_entry(
+            "observed_lifecycle_status",
+            Value::from(asset_escrow_status_label(record.status)),
+        ),
+        json_entry(
+            "observed_remaining_amount",
+            appeal_decimal_json(&record.remaining_amount),
+        ),
+        json_entry(
+            "mismatches",
+            Value::Array(
+                reconciliation
+                    .mismatches
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+    ])
+}
+
+fn appeal_finance_deposit_instruction_json(deposit: &AppealFinanceDepositInstruction) -> Value {
+    let expected = &deposit.expected;
+    let evidence_hashes = expected
+        .evidence_hashes
+        .iter()
+        .map(|hash| Value::from(hash.to_string()))
+        .collect::<Vec<_>>();
+
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_instruction.v1"),
+        ),
+        json_entry("status", Value::from("ready_for_client_signing")),
+        json_entry(
+            "ledger_mutation",
+            Value::from("client_signed_transaction_required"),
+        ),
+        json_entry("case_id", Value::from(expected.case_id.clone())),
+        json_entry(
+            "round_id",
+            expected
+                .round_id
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "payer_account",
+            Value::from(expected.payer_account.to_string()),
+        ),
+        json_entry(
+            "destination_account",
+            Value::from(expected.destination_account.to_string()),
+        ),
+        json_entry(
+            "release_authority_account",
+            expected
+                .release_authority_account
+                .as_ref()
+                .map(|account| Value::from(account.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "asset_definition_id",
+            Value::from(expected.asset_definition_id.to_string()),
+        ),
+        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry(
+            "expires_at_ms",
+            expected
+                .expires_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "idempotency_key",
+            Value::from(expected.idempotency_key.clone()),
+        ),
+        json_entry(
+            "escrow_id_hex",
+            Value::from(expected.escrow_id.as_hash().to_string()),
+        ),
+        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
+        json_entry(
+            "tx_instructions",
+            Value::Array(vec![json_object(vec![
+                json_entry("wire_id", Value::from(deposit.instruction.wire_id.clone())),
+                json_entry(
+                    "payload_hex",
+                    Value::from(deposit.instruction.payload_hex.clone()),
+                ),
+            ])]),
+        ),
+    ])
+}
+
+fn appeal_finance_deposit_confirmation_json(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_confirmation.v1"),
+        ),
+        json_entry("status", Value::from("confirmed")),
+        json_entry("confirmed", Value::Bool(true)),
+        json_entry(
+            "escrow_id_hex",
+            Value::from(expected.escrow_id.as_hash().to_string()),
+        ),
+        json_entry("case_id", Value::from(expected.case_id.clone())),
+        json_entry(
+            "round_id",
+            expected
+                .round_id
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "payer_account",
+            Value::from(expected.payer_account.to_string()),
+        ),
+        json_entry(
+            "destination_account",
+            Value::from(expected.destination_account.to_string()),
+        ),
+        json_entry(
+            "release_authority_account",
+            expected
+                .release_authority_account
+                .as_ref()
+                .map(|account| Value::from(account.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "asset_definition_id",
+            Value::from(expected.asset_definition_id.to_string()),
+        ),
+        json_entry("deposit_xor", appeal_decimal_json(&expected.deposit_xor)),
+        json_entry(
+            "remaining_amount",
+            appeal_decimal_json(&record.remaining_amount),
+        ),
+        json_entry(
+            "lifecycle_status",
+            Value::from(asset_escrow_status_label(record.status)),
+        ),
+        json_entry("kind", Value::from(asset_escrow_kind_label(record.kind))),
+        json_entry(
+            "expires_at_ms",
+            expected
+                .expires_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+    ])
+}
+
+fn appeal_finance_deposit_confirmation_mismatch_json(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    mismatches: Vec<String>,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_confirmation.v1"),
+        ),
+        json_entry("status", Value::from("mismatch")),
+        json_entry("confirmed", Value::Bool(false)),
+        json_entry(
+            "escrow_id_hex",
+            Value::from(expected.escrow_id.as_hash().to_string()),
+        ),
+        json_entry(
+            "mismatches",
+            Value::Array(mismatches.into_iter().map(Value::from).collect()),
+        ),
+        json_entry("ledger_record", appeal_finance_deposit_status_json(record)),
+    ])
+}
+
+fn appeal_finance_deposit_status_json(record: &AssetEscrowRecord) -> Value {
+    let evidence_hashes = record
+        .evidence_hashes
+        .iter()
+        .map(|hash| Value::from(hash.to_string()))
+        .collect::<Vec<_>>();
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_status.v1"),
+        ),
+        json_entry("status", Value::from("found")),
+        json_entry(
+            "escrow_id_hex",
+            Value::from(record.id.as_hash().to_string()),
+        ),
+        json_entry("seller_account", Value::from(record.seller.to_string())),
+        json_entry(
+            "buyer_account",
+            record
+                .buyer
+                .as_ref()
+                .map(|buyer| Value::from(buyer.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "asset_definition_id",
+            Value::from(record.asset_definition.to_string()),
+        ),
+        json_entry("amount", appeal_decimal_json(&record.amount)),
+        json_entry(
+            "remaining_amount",
+            appeal_decimal_json(&record.remaining_amount),
+        ),
+        json_entry("custody_account", Value::from(record.custody.to_string())),
+        json_entry(
+            "lifecycle_status",
+            Value::from(asset_escrow_status_label(record.status)),
+        ),
+        json_entry("kind", Value::from(asset_escrow_kind_label(record.kind))),
+        json_entry(
+            "release_authority",
+            record
+                .release_authority
+                .as_ref()
+                .map(|authority| Value::from(authority.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "expires_at_ms",
+            record.expires_at_ms.map(Value::from).unwrap_or(Value::Null),
+        ),
+        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
+        json_entry("created_at_ms", Value::from(record.created_at_ms)),
+        json_entry(
+            "accepted_at_ms",
+            record
+                .accepted_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "payment_sent_at_ms",
+            record
+                .payment_sent_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "disputed_at_ms",
+            record
+                .disputed_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "closed_at_ms",
+            record.closed_at_ms.map(Value::from).unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "resolution",
+            record
+                .resolution
+                .as_ref()
+                .map(asset_escrow_resolution_json)
+                .unwrap_or(Value::Null),
+        ),
+    ])
+}
+
+fn asset_escrow_resolution_json(resolution: &AssetEscrowResolution) -> Value {
+    let evidence_hashes = resolution
+        .evidence_hashes
+        .iter()
+        .map(|hash| Value::from(hash.to_string()))
+        .collect::<Vec<_>>();
+    json_object(vec![
+        json_entry(
+            "resolver_account",
+            Value::from(resolution.resolver.to_string()),
+        ),
+        json_entry(
+            "buyer_amount",
+            appeal_decimal_json(&resolution.buyer_amount),
+        ),
+        json_entry(
+            "seller_amount",
+            appeal_decimal_json(&resolution.seller_amount),
+        ),
+        json_entry("evidence_hashes_hex", Value::Array(evidence_hashes)),
+        json_entry("resolved_at_ms", Value::from(resolution.resolved_at_ms)),
+    ])
+}
+
+fn asset_escrow_status_label(status: AssetEscrowStatus) -> &'static str {
+    match status {
+        AssetEscrowStatus::Open => "open",
+        AssetEscrowStatus::Accepted => "accepted",
+        AssetEscrowStatus::PaymentSent => "payment_sent",
+        AssetEscrowStatus::Disputed => "disputed",
+        AssetEscrowStatus::Released => "released",
+        AssetEscrowStatus::Cancelled => "cancelled",
+        AssetEscrowStatus::Resolved => "resolved",
+        AssetEscrowStatus::Locked => "locked",
+        AssetEscrowStatus::DrawnDown => "drawn_down",
+        AssetEscrowStatus::Expired => "expired",
+    }
+}
+
+fn asset_escrow_kind_label(kind: AssetEscrowKind) -> &'static str {
+    match kind {
+        AssetEscrowKind::Marketplace => "marketplace",
+        AssetEscrowKind::Lock => "lock",
+    }
+}
+
+fn appeal_finance_report_publish_json(report: &SoraFsAppealFinanceReportV1) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.report.publish.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry("payload_kind", Value::from(APPEAL_FINANCE_REPORT_KIND)),
+        json_entry("report_id_hex", Value::from(encode(report.report_id))),
+        json_entry("case_id", Value::from(report.case_id.clone())),
+        json_entry(
+            "round_id",
+            report
+                .round_id
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "generated_at_unix_ms",
+            Value::from(report.generated_at_unix_ms),
+        ),
+        json_entry(
+            "appeal_finance_config_version",
+            Value::from(report.appeal_finance_config_version.clone()),
+        ),
+        json_entry("outcome", Value::from(report.outcome.as_str())),
+        json_entry("panel_size", Value::from(u64::from(report.panel_size))),
+        json_entry(
+            "juror_payout_count",
+            Value::from(report.juror_payouts.len() as u64),
+        ),
+        json_entry(
+            "no_show_count",
+            Value::from(report.no_show_juror_ids.len() as u64),
+        ),
+        json_entry(
+            "publication",
+            Value::from("local_governance_dag_filesystem"),
+        ),
+    ])
+}
+
+fn appeal_finance_weekly_rollup_publish_json(rollup: &SoraFsAppealFinanceWeeklyRollupV1) -> Value {
+    let source_report_ids = rollup
+        .source_report_ids
+        .iter()
+        .map(|report_id| Value::from(encode(report_id)))
+        .collect::<Vec<_>>();
+
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.weekly_rollup.publish.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry(
+            "payload_kind",
+            Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND),
+        ),
+        json_entry("cycle", Value::from(rollup.cycle.to_string())),
+        json_entry(
+            "generated_at_unix_ms",
+            Value::from(rollup.generated_at_unix_ms),
+        ),
+        json_entry("report_count", Value::from(rollup.report_count)),
+        json_entry("case_count", Value::from(rollup.case_count)),
+        json_entry(
+            "config_version_count",
+            Value::from(rollup.appeal_finance_config_versions.len() as u64),
+        ),
+        json_entry("outcome_count", Value::from(rollup.outcomes.len() as u64)),
+        json_entry("juror_payout_count", Value::from(rollup.juror_payout_count)),
+        json_entry("no_show_count", Value::from(rollup.no_show_juror_count)),
+        json_entry("source_report_ids_hex", Value::Array(source_report_ids)),
+        json_entry(
+            "publication",
+            Value::from("local_governance_dag_filesystem"),
+        ),
+    ])
+}
+
 fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
     let status = match err {
         OrderbookRuntimeError::DuplicateOrderId { .. } => StatusCode::CONFLICT,
@@ -4476,6 +7454,403 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
         | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs orderbook error: {err}"))
+}
+
+fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
+    let status = match err {
+        ModerationBallotRuntimeError::DuplicateBallot { .. }
+        | ModerationBallotRuntimeError::DuplicateCommit { .. }
+        | ModerationBallotRuntimeError::DuplicateReveal { .. }
+        | ModerationBallotRuntimeError::AlreadyTallied { .. } => StatusCode::CONFLICT,
+        ModerationBallotRuntimeError::UnknownBallot { .. } => StatusCode::NOT_FOUND,
+        ModerationBallotRuntimeError::IneligibleJuror { .. } => StatusCode::FORBIDDEN,
+        ModerationBallotRuntimeError::CommitWindowClosed { .. }
+        | ModerationBallotRuntimeError::RevealWindowNotOpen { .. }
+        | ModerationBallotRuntimeError::RevealWindowClosed { .. }
+        | ModerationBallotRuntimeError::MissingCommit { .. }
+        | ModerationBallotRuntimeError::TallyWindowOpen { .. }
+        | ModerationBallotRuntimeError::QuorumNotMet { .. } => StatusCode::PRECONDITION_FAILED,
+        ModerationBallotRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+        ModerationBallotRuntimeError::Validation(_)
+        | ModerationBallotRuntimeError::MissingRoundId
+        | ModerationBallotRuntimeError::MissingJurors
+        | ModerationBallotRuntimeError::BlankJurorId
+        | ModerationBallotRuntimeError::DuplicateJuror { .. }
+        | ModerationBallotRuntimeError::InvalidQuorum { .. }
+        | ModerationBallotRuntimeError::RosterHashMismatch
+        | ModerationBallotRuntimeError::MissingAppealDepositEscrowId
+        | ModerationBallotRuntimeError::AppealDepositEscrowIdMismatch
+        | ModerationBallotRuntimeError::InvalidWindows
+        | ModerationBallotRuntimeError::PayloadContextMismatch
+        | ModerationBallotRuntimeError::PayloadRoundMismatch { .. } => StatusCode::BAD_REQUEST,
+    };
+    json_error(status, format!("sorafs moderation ballot error: {err}"))
+}
+
+fn moderation_ballot_commit_outcome_json(outcome: &ModerationBallotCommitOutcome) -> Value {
+    json_object(vec![
+        json_entry("status", Value::from("accepted")),
+        json_entry(
+            "committed_count",
+            Value::from(outcome.committed_count as u64),
+        ),
+        json_entry("revealed_count", Value::from(outcome.revealed_count as u64)),
+        json_entry(
+            "accepted_commit",
+            moderation_ballot_commit_json(&outcome.accepted_commit),
+        ),
+    ])
+}
+
+fn moderation_ballot_reveal_outcome_json(outcome: &ModerationBallotRevealOutcome) -> Value {
+    json_object(vec![
+        json_entry("status", Value::from("accepted")),
+        json_entry(
+            "committed_count",
+            Value::from(outcome.committed_count as u64),
+        ),
+        json_entry("revealed_count", Value::from(outcome.revealed_count as u64)),
+        json_entry(
+            "accepted_reveal",
+            moderation_ballot_reveal_json(&outcome.accepted_reveal),
+        ),
+    ])
+}
+
+fn moderation_ballot_record_json(record: &ModerationBallotRecord) -> Value {
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.moderation.ballot.local.v1")),
+        json_entry("source", Value::from("local")),
+        json_entry(
+            "announcement",
+            moderation_ballot_announcement_json(&record.announcement),
+        ),
+        json_entry("commit_count", Value::from(record.commits.len() as u64)),
+        json_entry("reveal_count", Value::from(record.reveals.len() as u64)),
+        json_entry(
+            "commits",
+            Value::Array(
+                record
+                    .commits
+                    .iter()
+                    .map(moderation_ballot_commit_json)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "reveals",
+            Value::Array(
+                record
+                    .reveals
+                    .iter()
+                    .map(moderation_ballot_reveal_json)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "tally",
+            record
+                .tally
+                .as_ref()
+                .map_or(Value::Null, moderation_ballot_tally_json),
+        ),
+    ])
+}
+
+fn moderation_ballot_announcement_json(announcement: &ModerationBallotAnnouncement) -> Value {
+    json_object(vec![
+        json_entry(
+            "context",
+            moderation_ballot_context_json(&announcement.context),
+        ),
+        json_entry(
+            "appeal_deposit_escrow_id_hex",
+            announcement
+                .appeal_deposit_escrow_id_hex
+                .as_ref()
+                .map(|escrow_id| Value::from(escrow_id.clone()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "appeal_deposit",
+            announcement
+                .appeal_deposit
+                .as_ref()
+                .map_or(Value::Null, moderation_appeal_deposit_json),
+        ),
+        json_entry("round_id", Value::from(announcement.round_id.clone())),
+        json_entry(
+            "juror_ids",
+            Value::Array(
+                announcement
+                    .juror_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry("quorum", Value::from(u64::from(announcement.quorum))),
+        json_entry(
+            "announced_at_unix_ms",
+            Value::from(announcement.announced_at_unix_ms),
+        ),
+        json_entry(
+            "commit_deadline_unix_ms",
+            Value::from(announcement.commit_deadline_unix_ms),
+        ),
+        json_entry(
+            "challenge_deadline_unix_ms",
+            Value::from(announcement.challenge_deadline_unix_ms),
+        ),
+        json_entry(
+            "reveal_deadline_unix_ms",
+            Value::from(announcement.reveal_deadline_unix_ms),
+        ),
+    ])
+}
+
+fn moderation_appeal_deposit_json(deposit: &ModerationAppealDeposit) -> Value {
+    json_object(vec![
+        json_entry("escrow_id_hex", Value::from(deposit.escrow_id_hex.clone())),
+        json_entry("payer_account", Value::from(deposit.payer_account.clone())),
+        json_entry(
+            "destination_account",
+            Value::from(deposit.destination_account.clone()),
+        ),
+        json_entry(
+            "release_authority_account",
+            deposit
+                .release_authority_account
+                .as_ref()
+                .map(|account| Value::from(account.clone()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "asset_definition_id",
+            Value::from(deposit.asset_definition_id.clone()),
+        ),
+        json_entry(
+            "custody_account",
+            Value::from(deposit.custody_account.clone()),
+        ),
+        json_entry("deposit_xor", Value::from(deposit.deposit_xor.clone())),
+        json_entry(
+            "expires_at_ms",
+            deposit
+                .expires_at_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "idempotency_key",
+            Value::from(deposit.idempotency_key.clone()),
+        ),
+    ])
+}
+
+fn moderation_ballot_context_json(context: &SoraFsModerationBallotContextV1) -> Value {
+    json_object(vec![
+        json_entry("version", Value::from(u64::from(context.version))),
+        json_entry("case_id", Value::from(context.case_id.clone())),
+        json_entry(
+            "evidence_bundle_digest_hex",
+            Value::from(hex::encode(context.evidence_bundle_digest)),
+        ),
+        json_entry(
+            "appeal_finance_config_version",
+            Value::from(context.appeal_finance_config_version.clone()),
+        ),
+        json_entry(
+            "panel_roster_hash_hex",
+            Value::from(hex::encode(context.panel_roster_hash)),
+        ),
+        json_entry(
+            "policy_reference",
+            Value::from(context.policy_reference.clone()),
+        ),
+        json_entry(
+            "evidence_uri",
+            context
+                .evidence_uri
+                .as_ref()
+                .map_or(Value::Null, |uri| Value::from(uri.clone())),
+        ),
+    ])
+}
+
+fn moderation_ballot_commit_json(commit: &SoraFsModerationBallotCommitV1) -> Value {
+    json_object(vec![
+        json_entry("version", Value::from(u64::from(commit.version))),
+        json_entry("context", moderation_ballot_context_json(&commit.context)),
+        json_entry("round_id", Value::from(commit.round_id.clone())),
+        json_entry("juror_id", Value::from(commit.juror_id.clone())),
+        json_entry(
+            "commitment_blake2b_256_hex",
+            Value::from(hex::encode(commit.commitment_blake2b_256)),
+        ),
+        json_entry(
+            "committed_at_unix_ms",
+            Value::from(commit.committed_at_unix_ms),
+        ),
+    ])
+}
+
+fn moderation_ballot_reveal_json(reveal: &SoraFsModerationBallotRevealV1) -> Value {
+    json_object(vec![
+        json_entry("version", Value::from(u64::from(reveal.version))),
+        json_entry("context", moderation_ballot_context_json(&reveal.context)),
+        json_entry("round_id", Value::from(reveal.round_id.clone())),
+        json_entry("juror_id", Value::from(reveal.juror_id.clone())),
+        json_entry(
+            "choice",
+            Value::from(moderation_vote_choice_label(reveal.choice)),
+        ),
+        json_entry(
+            "nonce_b64",
+            Value::from(BASE64_STANDARD.encode(&reveal.nonce)),
+        ),
+        json_entry(
+            "revealed_at_unix_ms",
+            Value::from(reveal.revealed_at_unix_ms),
+        ),
+    ])
+}
+
+fn moderation_ballot_tally_json(tally: &ModerationBallotTally) -> Value {
+    json_object(vec![
+        json_entry("case_id", Value::from(tally.case_id.clone())),
+        json_entry("round_id", Value::from(tally.round_id.clone())),
+        json_entry("counts", moderation_vote_counts_json(&tally.counts)),
+        json_entry("votes_total", Value::from(u64::from(tally.votes_total))),
+        json_entry("quorum", Value::from(u64::from(tally.quorum))),
+        json_entry(
+            "winning_choice",
+            tally.winning_choice.map_or(Value::Null, |choice| {
+                Value::from(moderation_vote_choice_label(choice))
+            }),
+        ),
+        json_entry("contested", Value::from(tally.contested)),
+        json_entry("tallied_at_unix_ms", Value::from(tally.tallied_at_unix_ms)),
+    ])
+}
+
+fn moderation_vote_counts_json(counts: &sorafs_node::ModerationVoteCounts) -> Value {
+    json_object(vec![
+        json_entry("uphold", Value::from(u64::from(counts.uphold))),
+        json_entry("overturn", Value::from(u64::from(counts.overturn))),
+        json_entry("modify", Value::from(u64::from(counts.modify))),
+        json_entry("escalate", Value::from(u64::from(counts.escalate))),
+    ])
+}
+
+fn moderation_ballot_events_etag(
+    since: Option<u64>,
+    limit: usize,
+    tip_sequence: u64,
+    events: &[ModerationBallotEvent],
+) -> String {
+    let since = since.unwrap_or(0).to_le_bytes();
+    let limit = (limit as u64).to_le_bytes();
+    let tip = tip_sequence.to_le_bytes();
+    let count = (events.len() as u64).to_le_bytes();
+    let last_sequence = events
+        .last()
+        .map_or(0, |event| event.sequence)
+        .to_le_bytes();
+    moderation_ballot_cache_etag(
+        "events",
+        &[
+            since.as_ref(),
+            limit.as_ref(),
+            tip.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn moderation_ballot_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-moderation-ballot:");
+    material.extend_from_slice(kind.as_bytes());
+    for part in parts {
+        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        material.extend_from_slice(part);
+    }
+    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
+}
+
+fn moderation_ballot_events_json(
+    since: Option<u64>,
+    limit: usize,
+    events: &[ModerationBallotEvent],
+) -> Value {
+    json_object(vec![
+        json_entry("since", since.map_or(Value::Null, Value::from)),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("count", Value::from(events.len() as u64)),
+        json_entry(
+            "next_since",
+            events
+                .last()
+                .map_or(Value::Null, |event| Value::from(event.sequence)),
+        ),
+        json_entry(
+            "events",
+            Value::Array(events.iter().map(moderation_ballot_event_json).collect()),
+        ),
+    ])
+}
+
+fn moderation_ballot_event_json(event: &ModerationBallotEvent) -> Value {
+    json_object(vec![
+        json_entry("sequence", Value::from(event.sequence)),
+        json_entry(
+            "kind",
+            Value::from(moderation_ballot_event_kind_label(event.kind)),
+        ),
+        json_entry(
+            "generated_at_unix_ms",
+            Value::from(event.generated_at_unix_ms),
+        ),
+        json_entry("case_id", Value::from(event.case_id.clone())),
+        json_entry("round_id", Value::from(event.round_id.clone())),
+        json_entry(
+            "juror_id",
+            event
+                .juror_id
+                .as_ref()
+                .map_or(Value::Null, |juror_id| Value::from(juror_id.clone())),
+        ),
+        json_entry("committed_count", Value::from(event.committed_count)),
+        json_entry("revealed_count", Value::from(event.revealed_count)),
+        json_entry(
+            "tally",
+            event
+                .tally
+                .as_ref()
+                .map_or(Value::Null, moderation_ballot_tally_json),
+        ),
+    ])
+}
+
+fn moderation_vote_choice_label(choice: SoraFsModerationVoteChoice) -> &'static str {
+    match choice {
+        SoraFsModerationVoteChoice::Uphold => "uphold",
+        SoraFsModerationVoteChoice::Overturn => "overturn",
+        SoraFsModerationVoteChoice::Modify => "modify",
+        SoraFsModerationVoteChoice::Escalate => "escalate",
+    }
+}
+
+fn moderation_ballot_event_kind_label(kind: ModerationBallotEventKind) -> &'static str {
+    match kind {
+        ModerationBallotEventKind::BallotAnnounced => "ballot_announced",
+        ModerationBallotEventKind::CommitAccepted => "commit_accepted",
+        ModerationBallotEventKind::RevealAccepted => "reveal_accepted",
+        ModerationBallotEventKind::BallotTallied => "ballot_tallied",
+    }
 }
 
 fn orderbook_submit_outcome_json(outcome: &OrderbookSubmitOutcome) -> Result<Value, String> {
@@ -11965,6 +15340,10 @@ fn decode_hex_32(value: &str) -> Result<[u8; 32], String> {
     Ok(array)
 }
 
+fn decode_hex_32_field(value: &str, field: &str) -> Result<[u8; 32], Response> {
+    parse_hex_fixed::<32>(value, field).map_err(|err| json_error(StatusCode::BAD_REQUEST, err))
+}
+
 #[derive(Debug)]
 enum RangeParseError {
     Invalid(String),
@@ -13782,6 +17161,7 @@ pub(crate) fn init_cache(
 mod advert_tests {
     use std::{
         io::Write,
+        num::NonZeroU64,
         str::FromStr,
         sync::{
             Arc,
@@ -13805,12 +17185,14 @@ mod advert_tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature as IrohaSignature};
     use iroha_data_model::{
         Encode, Registrable,
         account::{Account, AccountId},
+        asset::{Asset, AssetDefinition, AssetId},
         block::BlockHeader,
         domain::Domain,
         domain::DomainId,
@@ -13841,12 +17223,15 @@ mod advert_tests {
         ProviderAdvertBodyV1, ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
         REPUTATION_PROVIDER_METRICS_VERSION_V1, RendezvousTopic, ReputationProviderInputV1,
         ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, SignatureAlgorithm, StakePointer, build_reputation_snapshot,
+        SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SignatureAlgorithm,
+        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+        SoraFsAppealFinanceWeeklyRollupV1, StakePointer, build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_proposal_digest,
         por::{
             AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
-            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1,
+            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
             derive_challenge_id, derive_challenge_seed,
         },
         potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus},
@@ -13996,6 +17381,8 @@ mod advert_tests {
 
         let digest_hex = "aa".repeat(32);
         let reputation_digest_hex = "bb".repeat(32);
+        let rollup_digest_hex = "cc".repeat(32);
+        let report_digest_hex = "dd".repeat(32);
         let mut repair_labels = Map::new();
         repair_labels.insert("ticket_id".into(), Value::from("REP-123"));
         repair_labels.insert("status".into(), Value::from("queued"));
@@ -14036,15 +17423,98 @@ mod advert_tests {
         reputation_entry.insert("published_at_unix".into(), Value::from(1_800_000_301_u64));
         reputation_entry.insert("labels".into(), Value::Object(reputation_labels));
 
+        let mut report_labels = Map::new();
+        report_labels.insert("case_id".into(), Value::from("case-appeal-dashboard"));
+        report_labels.insert("round_id".into(), Value::from("round-1"));
+        report_labels.insert("report_id_hex".into(), Value::from("42".repeat(16)));
+        report_labels.insert("outcome".into(), Value::from("overturn"));
+        report_labels.insert(
+            "generated_at_unix_ms".into(),
+            Value::from(1_800_000_090_000_u64),
+        );
+        report_labels.insert(
+            "appeal_finance_config_version".into(),
+            Value::from("baseline-v1"),
+        );
+        report_labels.insert("deposit_xor".into(), Value::from("420"));
+        report_labels.insert("refund_xor".into(), Value::from("420"));
+        report_labels.insert("treasury_xor".into(), Value::from("25"));
+        report_labels.insert("held_xor".into(), Value::from("0"));
+        report_labels.insert("panel_size".into(), Value::from(3_u64));
+        report_labels.insert("panel_reward_total_xor".into(), Value::from("85"));
+        report_labels.insert("rewards_paid_total_xor".into(), Value::from("60"));
+        report_labels.insert("rewards_forfeited_treasury_xor".into(), Value::from("25"));
+        report_labels.insert("juror_payout_count".into(), Value::from(2_u64));
+        report_labels.insert("no_show_count".into(), Value::from(1_u64));
+        let mut report_entry = Map::new();
+        report_entry.insert("position".into(), Value::from(2_u64));
+        report_entry.insert(
+            "payload_kind".into(),
+            Value::from(APPEAL_FINANCE_REPORT_KIND),
+        );
+        report_entry.insert(
+            "encoded_path".into(),
+            Value::from("appeals/finance/reports/case-appeal-dashboard/report.to"),
+        );
+        report_entry.insert(
+            "json_path".into(),
+            Value::from("appeals/finance/reports/case-appeal-dashboard/report.json"),
+        );
+        report_entry.insert(
+            "encoded_blake3".into(),
+            Value::from(report_digest_hex.clone()),
+        );
+        report_entry.insert("encoded_len".into(), Value::from(320_u64));
+        report_entry.insert("published_at_unix".into(), Value::from(1_800_000_302_u64));
+        report_entry.insert("labels".into(), Value::Object(report_labels));
+
+        let mut rollup_labels = Map::new();
+        rollup_labels.insert("cycle".into(), Value::from("2026-W26"));
+        rollup_labels.insert(
+            "generated_at_unix_ms".into(),
+            Value::from(1_800_000_100_000_u64),
+        );
+        rollup_labels.insert("report_count".into(), Value::from(3_u64));
+        rollup_labels.insert("case_count".into(), Value::from(2_u64));
+        rollup_labels.insert("config_version_count".into(), Value::from(1_u64));
+        rollup_labels.insert("outcome_count".into(), Value::from(2_u64));
+        rollup_labels.insert("juror_payout_count".into(), Value::from(7_u64));
+        rollup_labels.insert("no_show_count".into(), Value::from(1_u64));
+        let mut rollup_entry = Map::new();
+        rollup_entry.insert("position".into(), Value::from(3_u64));
+        rollup_entry.insert(
+            "payload_kind".into(),
+            Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND),
+        );
+        rollup_entry.insert(
+            "encoded_path".into(),
+            Value::from("appeals/finance/weekly/2026-W26/rollup.to"),
+        );
+        rollup_entry.insert(
+            "json_path".into(),
+            Value::from("appeals/finance/weekly/2026-W26/rollup.json"),
+        );
+        rollup_entry.insert(
+            "encoded_blake3".into(),
+            Value::from(rollup_digest_hex.clone()),
+        );
+        rollup_entry.insert("encoded_len".into(), Value::from(384_u64));
+        rollup_entry.insert("published_at_unix".into(), Value::from(1_800_000_303_u64));
+        rollup_entry.insert("labels".into(), Value::Object(rollup_labels));
+
         let mut payload_kind_counts = Map::new();
         payload_kind_counts.insert("repair_audit".into(), Value::from(1_u64));
         payload_kind_counts.insert("reputation_snapshot".into(), Value::from(1_u64));
+        payload_kind_counts.insert(APPEAL_FINANCE_REPORT_KIND.into(), Value::from(1_u64));
+        payload_kind_counts.insert(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(), Value::from(1_u64));
         let mut by_encoded_blake3 = Map::new();
         by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
         by_encoded_blake3.insert(
             reputation_digest_hex,
             Value::Array(vec![Value::from(1_u64)]),
         );
+        by_encoded_blake3.insert(report_digest_hex, Value::Array(vec![Value::from(2_u64)]));
+        by_encoded_blake3.insert(rollup_digest_hex, Value::Array(vec![Value::from(3_u64)]));
         let mut by_payload_kind = Map::new();
         by_payload_kind.insert(
             "repair_audit".into(),
@@ -14053,6 +17523,14 @@ mod advert_tests {
         by_payload_kind.insert(
             "reputation_snapshot".into(),
             Value::Array(vec![Value::from(1_u64)]),
+        );
+        by_payload_kind.insert(
+            APPEAL_FINANCE_REPORT_KIND.into(),
+            Value::Array(vec![Value::from(2_u64)]),
+        );
+        by_payload_kind.insert(
+            APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(),
+            Value::Array(vec![Value::from(3_u64)]),
         );
 
         let mut index = Map::new();
@@ -14066,7 +17544,7 @@ mod advert_tests {
             Value::from(governance_dir.display().to_string()),
         );
         index.insert("generated_at".into(), Value::from(1_800_000_400_u64));
-        index.insert("entry_count".into(), Value::from(2_u64));
+        index.insert("entry_count".into(), Value::from(4_u64));
         index.insert(
             "payload_kind_counts".into(),
             Value::Object(payload_kind_counts),
@@ -14078,6 +17556,8 @@ mod advert_tests {
             Value::Array(vec![
                 Value::Object(repair_entry),
                 Value::Object(reputation_entry),
+                Value::Object(report_entry),
+                Value::Object(rollup_entry),
             ]),
         );
         fs::write(
@@ -14541,7 +18021,7 @@ mod advert_tests {
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.governance_dag.publish_index.v1")
         );
-        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(4));
         assert_eq!(
             value
                 .get("payload_kind_counts")
@@ -14608,6 +18088,169 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some(digest_hex.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_reports_dashboard_reads_local_publish_index() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response =
+            handle_get_sorafs_appeal_finance_reports(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response.headers().get(ETAG).cloned().expect("report etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect appeal finance report dashboard body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode report dashboard");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.reports.v1")
+        );
+        assert_eq!(
+            value.get("payload_kind").and_then(Value::as_str),
+            Some(APPEAL_FINANCE_REPORT_KIND)
+        );
+        assert_eq!(
+            value.get("published_report_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("distinct_case_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("total_deposit_xor").and_then(Value::as_str),
+            Some("420")
+        );
+        assert_eq!(
+            value.get("total_refund_xor").and_then(Value::as_str),
+            Some("420")
+        );
+        assert_eq!(
+            value.get("total_treasury_xor").and_then(Value::as_str),
+            Some("25")
+        );
+        assert_eq!(
+            value.get("total_held_xor").and_then(Value::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            value.get("total_panel_reward_xor").and_then(Value::as_str),
+            Some("85")
+        );
+        assert_eq!(
+            value.get("total_rewards_paid_xor").and_then(Value::as_str),
+            Some("60")
+        );
+        assert_eq!(
+            value
+                .get("total_rewards_forfeited_treasury_xor")
+                .and_then(Value::as_str),
+            Some("25")
+        );
+        assert_eq!(
+            value
+                .get("outcomes")
+                .and_then(Value::as_object)
+                .and_then(|outcomes| outcomes.get("overturn"))
+                .and_then(|outcome| outcome.get("published_report_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("outcomes")
+                .and_then(Value::as_object)
+                .and_then(|outcomes| outcomes.get("overturn"))
+                .and_then(|outcome| outcome.get("treasury_xor"))
+                .and_then(Value::as_str),
+            Some("25")
+        );
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some(APPEAL_FINANCE_REPORT_KIND)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag.clone());
+        let response = handle_get_sorafs_appeal_finance_reports(State(app), headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&etag));
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_weekly_rollups_dashboard_reads_local_publish_index() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response =
+            handle_get_sorafs_appeal_finance_weekly_rollups(State(app.clone()), HeaderMap::new())
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response.headers().get(ETAG).cloned().expect("rollup etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect weekly rollup dashboard body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode weekly rollup dashboard");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.weekly_rollups.v1")
+        );
+        assert_eq!(
+            value.get("payload_kind").and_then(Value::as_str),
+            Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
+        );
+        assert_eq!(
+            value.get("published_rollup_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("source_report_count_total")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            value
+                .get("reported_case_count_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("juror_payout_count_total")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            value
+                .get("cycles")
+                .and_then(Value::as_object)
+                .and_then(|cycles| cycles.get("2026-W26"))
+                .and_then(|cycle| cycle.get("published_rollup_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag.clone());
+        let response = handle_get_sorafs_appeal_finance_weekly_rollups(State(app), headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&etag));
     }
 
     #[tokio::test]
@@ -15111,6 +18754,349 @@ mod advert_tests {
         (app, temp_dir, auth)
     }
 
+    fn sorafs_app_state_with_appeal_finance_governance_publisher()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        let node = sorafs_node::NodeHandle::new(cfg);
+        assert!(node.has_governance_publisher());
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
+    fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
+        SoraFsAppealFinanceReportV1 {
+            version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+            report_id: [0x42; 16],
+            case_id: "case-42".to_string(),
+            round_id: Some("round-1".to_string()),
+            generated_at_unix_ms: 1_800_000_031_000,
+            appeal_finance_config_version: "baseline-v1".to_string(),
+            evidence_bundle_digest: Some([0xA7; 32]),
+            outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
+            deposit_xor: "420".to_string(),
+            refund: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "refund-account".to_string(),
+                amount_xor: "420".to_string(),
+            },
+            treasury: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "treasury-account".to_string(),
+                amount_xor: "50".to_string(),
+            },
+            held: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "escrow-account".to_string(),
+                amount_xor: "0".to_string(),
+            },
+            panel_size: 3,
+            panel_reward_total_xor: "85".to_string(),
+            rewards_paid_total_xor: "60".to_string(),
+            rewards_forfeited_treasury_xor: "25".to_string(),
+            juror_payouts: vec![
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-a".to_string(),
+                    stipend_xor: "25".to_string(),
+                    bonus_xor: "5".to_string(),
+                    total_xor: "30".to_string(),
+                },
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-b".to_string(),
+                    stipend_xor: "25".to_string(),
+                    bonus_xor: "5".to_string(),
+                    total_xor: "30".to_string(),
+                },
+            ],
+            no_show_juror_ids: vec!["juror-c".to_string()],
+        }
+    }
+
+    fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
+        let report = appeal_finance_report_fixture();
+        SoraFsAppealFinanceWeeklyRollupV1::from_reports(
+            PorReportIsoWeek {
+                year: 2026,
+                week: 26,
+            },
+            1_800_000_100_000,
+            &[report],
+        )
+        .expect("appeal finance weekly rollup fixture")
+    }
+
+    fn appeal_finance_report_body(report: SoraFsAppealFinanceReportV1) -> Bytes {
+        Bytes::from(norito::json::to_vec(&report).expect("encode appeal finance report"))
+    }
+
+    fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
+        Bytes::from(norito::json::to_vec(&rollup).expect("encode appeal finance weekly rollup"))
+    }
+
+    fn appeal_finance_deposit_request(
+        payer_account: &AccountId,
+        destination_account: &AccountId,
+        release_authority_account: Option<&AccountId>,
+    ) -> AppealFinanceDepositRequestDto {
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        AppealFinanceDepositRequestDto {
+            case_id: "case-42".to_owned(),
+            round_id: Some("round-1".to_owned()),
+            payer_account: payer_account.to_string(),
+            destination_account: destination_account.to_string(),
+            release_authority_account: release_authority_account.map(ToString::to_string),
+            asset_definition_id: asset_definition_id.to_string(),
+            deposit_xor: "420".to_owned(),
+            expires_at_ms: Some(1_800_086_400_000),
+            idempotency_key: "deposit-attempt-1".to_owned(),
+            evidence_hashes_hex: Some(vec![Hash::prehashed([0xD1; Hash::LENGTH]).to_string()]),
+        }
+    }
+
+    fn appeal_finance_deposit_body(req: AppealFinanceDepositRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(&req).expect("encode appeal finance deposit request"))
+    }
+
+    fn appeal_finance_deposit_confirm_request(
+        req: &AppealFinanceDepositRequestDto,
+        escrow_id_hex: String,
+    ) -> AppealFinanceDepositConfirmRequestDto {
+        AppealFinanceDepositConfirmRequestDto {
+            escrow_id_hex,
+            case_id: req.case_id.clone(),
+            round_id: req.round_id.clone(),
+            payer_account: req.payer_account.clone(),
+            destination_account: req.destination_account.clone(),
+            release_authority_account: req.release_authority_account.clone(),
+            asset_definition_id: req.asset_definition_id.clone(),
+            deposit_xor: req.deposit_xor.clone(),
+            expires_at_ms: req.expires_at_ms,
+            idempotency_key: req.idempotency_key.clone(),
+            evidence_hashes_hex: req.evidence_hashes_hex.clone(),
+        }
+    }
+
+    fn appeal_finance_deposit_confirm_body(req: AppealFinanceDepositConfirmRequestDto) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&req).expect("encode appeal finance deposit confirmation request"),
+        )
+    }
+
+    fn appeal_finance_deposit_settle_body(
+        deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
+        outcome: &str,
+    ) -> Bytes {
+        let req = AppealFinanceDepositSettleRequestDto {
+            deposit_confirmation,
+            outcome: outcome.to_owned(),
+            panel_size: Some(7),
+        };
+        Bytes::from(
+            norito::json::to_vec(&req).expect("encode appeal finance deposit settlement request"),
+        )
+    }
+
+    fn appeal_finance_deposit_status_record(
+        seller: AccountId,
+        buyer: Option<AccountId>,
+        release_authority: Option<AccountId>,
+    ) -> AssetEscrowRecord {
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        AssetEscrowRecord {
+            id: EscrowId::new(Hash::new("appeal deposit status fixture")),
+            seller: seller.clone(),
+            buyer,
+            asset_definition: asset_definition_id,
+            amount: iroha_primitives::numeric::Numeric::new(420_u32, 0),
+            custody: seller,
+            status: AssetEscrowStatus::Locked,
+            kind: AssetEscrowKind::Lock,
+            remaining_amount: iroha_primitives::numeric::Numeric::new(420_u32, 0),
+            release_authority,
+            expires_at_ms: Some(1_800_086_400_000),
+            evidence_hashes: vec![Hash::new("appeal deposit status evidence")],
+            created_at_ms: 1_800_000_001_000,
+            accepted_at_ms: None,
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        }
+    }
+
+    fn appeal_finance_asset_lock_world(
+        auth: &OrderbookAuthFixture,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> World {
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("XOR".to_owned())
+            .build(&auth.provider.account);
+        let seller_asset_id =
+            AssetId::of(asset_definition_id.clone(), auth.provider.account.clone());
+        let seller_asset = Asset::new(
+            seller_asset_id,
+            iroha_primitives::numeric::Numeric::new(1_000_u32, 0),
+        );
+        World::with_assets(
+            [],
+            [
+                Account::new(auth.provider.account.clone()).build(&auth.provider.account),
+                Account::new(auth.buyer.account.clone()).build(&auth.buyer.account),
+            ],
+            [asset_definition],
+            [seller_asset],
+            [],
+        )
+    }
+
+    fn sorafs_app_state_with_appeal_finance_asset_lock_world(
+        auth: &OrderbookAuthFixture,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> (SharedAppState, TempDir) {
+        let mut app = mk_app_state_for_tests_with_world(appeal_finance_asset_lock_world(
+            auth,
+            asset_definition_id,
+        ));
+        let (node, temp_dir) = sorafs_node_with_temp_storage();
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir)
+    }
+
+    fn seed_appeal_finance_asset_lock(
+        app: &SharedAppState,
+        expected: &AppealFinanceDepositExpectation,
+    ) {
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(Hash::prehashed([0xAF; Hash::LENGTH]));
+        OpenAssetLock::with_options(
+            expected.escrow_id,
+            expected.asset_definition_id.clone(),
+            expected.destination_account.clone(),
+            expected.deposit_xor.clone(),
+            expected.release_authority_account.clone(),
+            expected.expires_at_ms,
+            expected.evidence_hashes.clone(),
+        )
+        .execute(&expected.payer_account, &mut tx)
+        .expect("open appeal finance asset lock");
+        tx.apply();
+        block.commit().expect("commit appeal finance asset lock");
+    }
+
+    fn drawdown_appeal_finance_asset_lock(
+        app: &SharedAppState,
+        expected: &AppealFinanceDepositExpectation,
+        authority: &AccountId,
+        amount: iroha_primitives::numeric::Numeric,
+        height: u64,
+    ) {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(Hash::prehashed([0xB1; Hash::LENGTH]));
+        DrawdownAssetLock::new(expected.escrow_id, amount)
+            .execute(authority, &mut tx)
+            .expect("drawdown appeal finance asset lock");
+        tx.apply();
+        block
+            .commit()
+            .expect("commit appeal finance asset lock drawdown");
+    }
+
+    fn cancel_appeal_finance_asset_lock(
+        app: &SharedAppState,
+        expected: &AppealFinanceDepositExpectation,
+        authority: &AccountId,
+        height: u64,
+    ) {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(Hash::prehashed([0xB2; Hash::LENGTH]));
+        CancelAssetLock::new(expected.escrow_id)
+            .execute(authority, &mut tx)
+            .expect("cancel appeal finance asset lock");
+        tx.apply();
+        block
+            .commit()
+            .expect("commit appeal finance asset lock cancellation");
+    }
+
+    fn sorafs_app_state_with_confirmed_appeal_deposit(
+        case_id: &str,
+        round_id: &str,
+    ) -> (
+        SharedAppState,
+        TempDir,
+        OrderbookAuthFixture,
+        AppealFinanceDepositConfirmRequestDto,
+    ) {
+        let auth = orderbook_auth_fixture();
+        let mut deposit_request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        deposit_request.case_id = case_id.to_owned();
+        deposit_request.round_id = Some(round_id.to_owned());
+        let expected = appeal_finance_deposit_expectation(deposit_request.clone())
+            .expect("valid moderation deposit expectation");
+        let (app, temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &deposit_request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        (app, temp_dir, auth, confirmation)
+    }
+
     fn enable_orderbook_capability_policy(
         app: SharedAppState,
         cache: Option<ProviderAdvertCache>,
@@ -15172,7 +19158,7 @@ mod advert_tests {
     }
 
     #[test]
-    fn appeal_pricing_status_marks_mutating_flows_pending() {
+    fn appeal_pricing_status_marks_deposit_builder_and_publish_flows_enabled() {
         let config = baseline_appeal_pricing_config();
         let value = appeal_pricing_status_json(&config);
 
@@ -15186,11 +19172,51 @@ mod advert_tests {
         );
         assert_eq!(
             value.get("deposit_api").and_then(Value::as_str),
-            Some("pending_runtime_escrow")
+            Some("enabled_canonical_auth_native_asset_lock_instruction_status_confirmation")
+        );
+        assert_eq!(
+            value.get("settlement_plan_api").and_then(Value::as_str),
+            Some("enabled")
+        );
+        assert_eq!(
+            value
+                .get("settlement_execution_api")
+                .and_then(Value::as_str),
+            Some("enabled_canonical_auth_native_asset_lock_instruction_builder")
+        );
+        assert_eq!(
+            value
+                .get("settlement_reconciliation_api")
+                .and_then(Value::as_str),
+            Some("enabled_canonical_auth_runtime_asset_lock_reconciliation")
+        );
+        assert_eq!(
+            value.get("disbursement_plan_api").and_then(Value::as_str),
+            Some("enabled")
+        );
+        assert_eq!(
+            value.get("report_publication").and_then(Value::as_str),
+            Some("enabled_local_governance_dag")
+        );
+        assert_eq!(
+            value
+                .get("weekly_rollup_publication")
+                .and_then(Value::as_str),
+            Some("enabled_local_governance_dag")
+        );
+        assert_eq!(
+            value
+                .get("weekly_rollup_dashboard_api")
+                .and_then(Value::as_str),
+            Some("enabled_local_publish_index")
         );
         assert_eq!(
             value.get("report_api").and_then(Value::as_str),
-            Some("pending_governance_dag_publisher")
+            Some("enabled_canonical_auth_local_governance_dag")
+        );
+        assert_eq!(
+            value.get("weekly_rollup_api").and_then(Value::as_str),
+            Some("enabled_canonical_auth_local_governance_dag")
         );
         assert_eq!(
             value.get("settlement_processor").and_then(Value::as_str),
@@ -15260,7 +19286,35 @@ mod advert_tests {
             norito::json::from_slice(&status_body).expect("decode pricing status body");
         assert_eq!(
             status_value.get("deposit_api").and_then(Value::as_str),
-            Some("pending_runtime_escrow")
+            Some("enabled_canonical_auth_native_asset_lock_instruction_status_confirmation")
+        );
+        assert_eq!(
+            status_value
+                .get("settlement_plan_api")
+                .and_then(Value::as_str),
+            Some("enabled")
+        );
+        assert_eq!(
+            status_value
+                .get("settlement_execution_api")
+                .and_then(Value::as_str),
+            Some("enabled_canonical_auth_native_asset_lock_instruction_builder")
+        );
+        assert_eq!(
+            status_value
+                .get("settlement_reconciliation_api")
+                .and_then(Value::as_str),
+            Some("enabled_canonical_auth_runtime_asset_lock_reconciliation")
+        );
+        assert_eq!(
+            status_value
+                .get("weekly_rollup_publication")
+                .and_then(Value::as_str),
+            Some("enabled_local_governance_dag")
+        );
+        assert_eq!(
+            status_value.get("report_api").and_then(Value::as_str),
+            Some("enabled_canonical_auth_local_governance_dag")
         );
     }
 
@@ -15285,6 +19339,852 @@ mod advert_tests {
                 .get("error")
                 .and_then(Value::as_str)
                 .is_some_and(|error| error.contains("panel"))
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_settle_handler_returns_baseline_plan() {
+        let response =
+            handle_post_sorafs_appeal_finance_settle(JsonOnly(AppealFinanceSettleRequestDto {
+                deposit_xor: "400".to_owned(),
+                outcome: "overturn".to_owned(),
+                panel_size: Some(7),
+            }))
+            .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect settlement body");
+        let value: Value = norito::json::from_slice(&body).expect("decode settlement body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.settlement.v1")
+        );
+        assert_eq!(
+            value.get("outcome").and_then(Value::as_str),
+            Some("overturn")
+        );
+        assert_eq!(value.get("refund_xor").and_then(Value::as_str), Some("400"));
+        assert_eq!(value.get("treasury_xor").and_then(Value::as_str), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_disburse_handler_returns_juror_plan() {
+        fn account(seed: u8) -> String {
+            AccountId::new(checked_test_keypair(seed).public_key().clone()).to_string()
+        }
+
+        let juror_ids = (0x10..0x17).map(account).collect::<Vec<_>>();
+        let no_show = juror_ids[0].clone();
+        let response =
+            handle_post_sorafs_appeal_finance_disburse(JsonOnly(AppealFinanceDisburseRequestDto {
+                deposit_xor: "420".to_owned(),
+                outcome: "overturn".to_owned(),
+                refund_account: account(0x40),
+                treasury_account: account(0x41),
+                escrow_account: account(0x42),
+                juror_ids,
+                no_show_account_ids: Some(vec![no_show.clone()]),
+                panel_size: Some(7),
+            }))
+            .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect disbursement body");
+        let value: Value = norito::json::from_slice(&body).expect("decode disbursement body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.disbursement.v1")
+        );
+        assert_eq!(
+            value
+                .get("rewards")
+                .and_then(|rewards| rewards.get("attending"))
+                .and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(
+            value
+                .get("rewards")
+                .and_then(|rewards| rewards.get("no_shows"))
+                .and_then(Value::as_array)
+                .and_then(|no_shows| no_shows.first())
+                .and_then(Value::as_str),
+            Some(no_show.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let body = appeal_finance_deposit_body(appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        ));
+
+        let response = handle_post_sorafs_appeal_finance_deposit(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSITS),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_endpoint_rejects_payer_mismatch() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let body = appeal_finance_deposit_body(appeal_finance_deposit_request(
+            &auth.buyer.account,
+            &auth.provider.account,
+            Some(&auth.provider.account),
+        ));
+
+        let response = post_appeal_finance_deposit(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_endpoint_builds_open_asset_lock_instruction() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let asset_definition_id = request.asset_definition_id.clone();
+        let destination_account = request.destination_account.clone();
+        let release_authority_account = request
+            .release_authority_account
+            .clone()
+            .expect("release authority fixture");
+        let expires_at_ms = request.expires_at_ms;
+        let body = appeal_finance_deposit_body(request);
+
+        let response = post_appeal_finance_deposit(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect deposit instruction body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode deposit instruction body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.deposit_instruction.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("ready_for_client_signing")
+        );
+        let payer_account = auth.provider.account.to_string();
+        assert_eq!(
+            value.get("payer_account").and_then(Value::as_str),
+            Some(payer_account.as_str())
+        );
+        assert_eq!(
+            value.get("asset_definition_id").and_then(Value::as_str),
+            Some(asset_definition_id.as_str())
+        );
+        assert_eq!(
+            value.get("destination_account").and_then(Value::as_str),
+            Some(destination_account.as_str())
+        );
+        assert_eq!(
+            value
+                .get("release_authority_account")
+                .and_then(Value::as_str),
+            Some(release_authority_account.as_str())
+        );
+        assert_eq!(
+            value.get("expires_at_ms").and_then(Value::as_u64),
+            expires_at_ms
+        );
+        assert_eq!(
+            value.get("deposit_xor").and_then(Value::as_str),
+            Some("420")
+        );
+
+        let instruction = value
+            .get("tx_instructions")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_object)
+            .expect("single transaction instruction");
+        let wire_id = instruction
+            .get("wire_id")
+            .and_then(Value::as_str)
+            .expect("wire id");
+        let payload_hex = instruction
+            .get("payload_hex")
+            .and_then(Value::as_str)
+            .expect("payload hex");
+        let payload = hex::decode(payload_hex).expect("decode instruction payload");
+        let decoded = iroha_data_model::isi::decode_instruction_from_pair(wire_id, &payload)
+            .expect("decode framed instruction");
+        let open = decoded
+            .as_any()
+            .downcast_ref::<OpenAssetLock>()
+            .expect("open asset lock instruction");
+
+        assert_eq!(open.amount.to_string(), "420");
+        assert_eq!(open.asset_definition.to_string(), asset_definition_id);
+        assert_eq!(open.destination.to_string(), destination_account);
+        assert_eq!(
+            open.release_authority
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(release_authority_account.as_str())
+        );
+        assert_eq!(open.expires_at_ms, expires_at_ms);
+        assert_eq!(open.evidence_hashes.len(), 1);
+        let escrow_id_hex = open.escrow_id.as_hash().to_string();
+        assert_eq!(
+            value.get("escrow_id_hex").and_then(Value::as_str),
+            Some(escrow_id_hex.as_str())
+        );
+    }
+
+    #[test]
+    fn appeal_finance_deposit_visibility_is_limited_to_participants() {
+        let auth = orderbook_auth_fixture();
+        let release_authority = AccountId::new(checked_test_keypair(0x7A).public_key().clone());
+        let record = appeal_finance_deposit_status_record(
+            auth.provider.account.clone(),
+            Some(auth.buyer.account.clone()),
+            Some(release_authority.clone()),
+        );
+
+        assert!(appeal_finance_deposit_record_visible_to(
+            &record,
+            &auth.provider.account
+        ));
+        assert!(appeal_finance_deposit_record_visible_to(
+            &record,
+            &auth.buyer.account
+        ));
+        assert!(appeal_finance_deposit_record_visible_to(
+            &record,
+            &release_authority
+        ));
+        let outsider = AccountId::new(checked_test_keypair(0x7B).public_key().clone());
+        assert!(!appeal_finance_deposit_record_visible_to(
+            &record, &outsider
+        ));
+    }
+
+    #[test]
+    fn appeal_finance_deposit_confirmation_detects_runtime_mismatches() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request).expect("valid deposit expectation");
+        let mut record = appeal_finance_deposit_status_record(
+            auth.provider.account.clone(),
+            Some(auth.buyer.account.clone()),
+            Some(auth.provider.account.clone()),
+        );
+        record.id = expected.escrow_id;
+        record.asset_definition = expected.asset_definition_id.clone();
+        record.evidence_hashes = expected.evidence_hashes.clone();
+        record.status = AssetEscrowStatus::DrawnDown;
+        record.remaining_amount = iroha_primitives::numeric::Numeric::new(0_u32, 0);
+
+        let mismatches = appeal_finance_deposit_confirmation_mismatches(&expected, &record);
+
+        assert!(mismatches.iter().any(|item| item.contains("locked")));
+        assert!(
+            mismatches
+                .iter()
+                .any(|item| item.contains("remaining_amount"))
+        );
+    }
+
+    #[test]
+    fn appeal_finance_deposit_status_json_renders_native_asset_lock_record() {
+        let auth = orderbook_auth_fixture();
+        let release_authority = AccountId::new(checked_test_keypair(0x7A).public_key().clone());
+        let record = appeal_finance_deposit_status_record(
+            auth.provider.account.clone(),
+            Some(auth.buyer.account.clone()),
+            Some(release_authority.clone()),
+        );
+
+        let value = appeal_finance_deposit_status_json(&record);
+
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.deposit_status.v1")
+        );
+        let escrow_id_hex = record.id.as_hash().to_string();
+        assert_eq!(
+            value.get("escrow_id_hex").and_then(Value::as_str),
+            Some(escrow_id_hex.as_str())
+        );
+        let seller_account = auth.provider.account.to_string();
+        assert_eq!(
+            value.get("seller_account").and_then(Value::as_str),
+            Some(seller_account.as_str())
+        );
+        let buyer_account = auth.buyer.account.to_string();
+        assert_eq!(
+            value.get("buyer_account").and_then(Value::as_str),
+            Some(buyer_account.as_str())
+        );
+        assert_eq!(
+            value.get("lifecycle_status").and_then(Value::as_str),
+            Some("locked")
+        );
+        assert_eq!(value.get("kind").and_then(Value::as_str), Some("lock"));
+        let release_authority_account = release_authority.to_string();
+        assert_eq!(
+            value.get("release_authority").and_then(Value::as_str),
+            Some(release_authority_account.as_str())
+        );
+        assert_eq!(
+            value.get("expires_at_ms").and_then(Value::as_u64),
+            Some(1_800_086_400_000)
+        );
+        assert_eq!(value.get("amount").and_then(Value::as_str), Some("420"));
+        assert_eq!(
+            value
+                .get("evidence_hashes_hex")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_status_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let escrow_id_hex = Hash::new("missing deposit status").to_string();
+
+        let response = handle_get_sorafs_appeal_finance_deposit(
+            State(app),
+            HeaderMap::new(),
+            Method::GET,
+            format!("{APPEAL_FINANCE_ROUTE_DEPOSITS}/{escrow_id_hex}")
+                .parse()
+                .expect("deposit status uri"),
+            Path(escrow_id_hex),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_status_endpoint_returns_not_found_for_absent_escrow() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let escrow_id_hex = Hash::new("missing deposit status").to_string();
+
+        let response = get_appeal_finance_deposit(app, &auth.provider, &escrow_id_hex).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_confirm_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let body = appeal_finance_deposit_confirm_body(appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        ));
+
+        let response = handle_post_sorafs_appeal_finance_deposit_confirm(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_CONFIRM),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let body = appeal_finance_deposit_confirm_body(appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        ));
+
+        let response = post_appeal_finance_deposit_confirm(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect deposit confirmation body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode deposit confirmation body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.deposit_confirmation.v1")
+        );
+        assert_eq!(value.get("confirmed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("confirmed")
+        );
+        assert_eq!(
+            value
+                .get("ledger_record")
+                .and_then(|record| record.get("lifecycle_status"))
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_settle_endpoint_builds_drawdown_and_cancel_instructions() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+
+        let response = post_appeal_finance_deposit_settle(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect deposit settlement execution body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode deposit settlement execution body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.deposit_settlement_execution.v1")
+        );
+        assert_eq!(
+            value.get("drawdown_xor").and_then(Value::as_str),
+            Some("210.0")
+        );
+        assert_eq!(
+            value.get("cancel_refund_xor").and_then(Value::as_str),
+            Some("210.0")
+        );
+        assert_eq!(
+            value
+                .get("requires_multiple_authorities")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let steps = value
+            .get("tx_steps")
+            .and_then(Value::as_array)
+            .expect("settlement tx steps");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps[0].get("action").and_then(Value::as_str),
+            Some("drawdown_non_refund")
+        );
+        assert_eq!(
+            steps[1].get("action").and_then(Value::as_str),
+            Some("cancel_refund")
+        );
+
+        let drawdown_wire = steps[0]
+            .get("wire_id")
+            .and_then(Value::as_str)
+            .expect("drawdown wire id");
+        let drawdown_payload = hex::decode(
+            steps[0]
+                .get("payload_hex")
+                .and_then(Value::as_str)
+                .expect("drawdown payload"),
+        )
+        .expect("decode drawdown payload");
+        let drawdown =
+            iroha_data_model::isi::decode_instruction_from_pair(drawdown_wire, &drawdown_payload)
+                .expect("decode drawdown instruction");
+        let drawdown = drawdown
+            .as_any()
+            .downcast_ref::<DrawdownAssetLock>()
+            .expect("drawdown asset lock instruction");
+        assert_eq!(drawdown.escrow_id, expected.escrow_id);
+        assert_eq!(drawdown.amount.to_string(), "210.0");
+
+        let cancel_wire = steps[1]
+            .get("wire_id")
+            .and_then(Value::as_str)
+            .expect("cancel wire id");
+        let cancel_payload = hex::decode(
+            steps[1]
+                .get("payload_hex")
+                .and_then(Value::as_str)
+                .expect("cancel payload"),
+        )
+        .expect("decode cancel payload");
+        let cancel =
+            iroha_data_model::isi::decode_instruction_from_pair(cancel_wire, &cancel_payload)
+                .expect("decode cancel instruction");
+        let cancel = cancel
+            .as_any()
+            .downcast_ref::<CancelAssetLock>()
+            .expect("cancel asset lock instruction");
+        assert_eq!(cancel.escrow_id, expected.escrow_id);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_settle_endpoint_builds_refund_only_cancel() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        let body = appeal_finance_deposit_settle_body(confirmation, "overturn");
+
+        let response = post_appeal_finance_deposit_settle(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect refund-only settlement body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode refund-only settlement body");
+        assert_eq!(value.get("drawdown_xor").and_then(Value::as_str), Some("0"));
+        assert_eq!(
+            value.get("cancel_refund_xor").and_then(Value::as_str),
+            Some("420")
+        );
+        let steps = value
+            .get("tx_steps")
+            .and_then(Value::as_array)
+            .expect("refund-only settlement tx steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].get("action").and_then(Value::as_str),
+            Some("cancel_refund")
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_client_submission() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+
+        let response = post_appeal_finance_deposit_reconcile(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect pending reconciliation body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode pending reconciliation body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.deposit_settlement_reconciliation.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("pending_client_submission")
+        );
+        assert_eq!(
+            value.get("reconciled").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("expected_final_lifecycle_status")
+                .and_then(Value::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(
+            value
+                .get("observed_lifecycle_status")
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+        assert_eq!(
+            value
+                .get("mismatches")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settled() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        drawdown_appeal_finance_asset_lock(
+            &app,
+            &expected,
+            &auth.provider.account,
+            iroha_primitives::numeric::Numeric::from_str("210.0").expect("drawdown amount numeric"),
+            2,
+        );
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+
+        let response = post_appeal_finance_deposit_reconcile(
+            app.clone(),
+            &auth.provider,
+            appeal_finance_deposit_settle_body(confirmation.clone(), "frivolous"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect in-progress reconciliation body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode in-progress reconciliation body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("awaiting_refund_cancel")
+        );
+        assert_eq!(
+            value.get("reconciled").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("observed_remaining_amount")
+                .and_then(Value::as_str),
+            Some("210.0")
+        );
+
+        cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
+
+        let response = post_appeal_finance_deposit_reconcile(
+            app,
+            &auth.provider,
+            appeal_finance_deposit_settle_body(confirmation, "frivolous"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect settled reconciliation body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode settled reconciliation body");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("settled"));
+        assert_eq!(value.get("reconciled").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("observed_lifecycle_status")
+                .and_then(Value::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(
+            value
+                .get("observed_remaining_amount")
+                .and_then(Value::as_str),
+            Some("0")
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_report_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let body = appeal_finance_report_body(appeal_finance_report_fixture());
+
+        let response = handle_post_sorafs_appeal_finance_report(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
+        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let report = appeal_finance_report_fixture();
+        let body = appeal_finance_report_body(report.clone());
+
+        let response = post_appeal_finance_report(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect report publish body");
+        let value: Value = norito::json::from_slice(&body).expect("decode report publish body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.report.publish.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let report_id_hex = hex::encode(report.report_id);
+        assert_eq!(
+            value.get("report_id_hex").and_then(Value::as_str),
+            Some(report_id_hex.as_str())
+        );
+
+        let governance_dir = temp_dir.path().join("governance");
+        let report_dir = governance_dir
+            .join("appeals")
+            .join("finance")
+            .join("case-42");
+        let encoded_files = fs::read_dir(&report_dir)
+            .expect("read appeal finance report dir")
+            .map(|entry| entry.expect("report dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        assert_eq!(encoded_files.len(), 1);
+
+        let index_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE))
+            .expect("read publish index");
+        let index: Value = norito::json::from_slice(&index_bytes).expect("decode publish index");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get(APPEAL_FINANCE_REPORT_KIND))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
+        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let rollup = appeal_finance_weekly_rollup_fixture();
+        let body = appeal_finance_weekly_rollup_body(rollup.clone());
+
+        let response = post_appeal_finance_weekly_rollup(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect weekly rollup publish body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode weekly rollup publish body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.weekly_rollup.publish.v1")
+        );
+        assert_eq!(value.get("cycle").and_then(Value::as_str), Some("2026-W26"));
+        assert_eq!(
+            value
+                .get("source_report_ids_hex")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let governance_dir = temp_dir.path().join("governance");
+        let rollup_dir = governance_dir
+            .join("appeals")
+            .join("finance")
+            .join("weekly")
+            .join("2026-W26");
+        let encoded_files = fs::read_dir(&rollup_dir)
+            .expect("read appeal finance weekly rollup dir")
+            .map(|entry| entry.expect("weekly rollup dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        assert_eq!(encoded_files.len(), 1);
+
+        let index_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE))
+            .expect("read publish index");
+        let index: Value = norito::json::from_slice(&index_bytes).expect("decode publish index");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
         );
     }
 
@@ -15511,6 +20411,239 @@ mod advert_tests {
         handle_post_sorafs_orderbook_receipt(State(app), headers, method, uri, body).await
     }
 
+    async fn post_appeal_finance_report(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_appeal_finance_deposit(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSITS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_deposit(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_appeal_finance_deposit_confirm(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_CONFIRM);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_deposit_confirm(State(app), headers, method, uri, body)
+            .await
+    }
+
+    async fn post_appeal_finance_deposit_settle(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_SETTLE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_deposit_settle(State(app), headers, method, uri, body)
+            .await
+    }
+
+    async fn post_appeal_finance_deposit_reconcile(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_RECONCILE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_deposit_reconcile(State(app), headers, method, uri, body)
+            .await
+    }
+
+    async fn get_appeal_finance_deposit(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        escrow_id_hex: &str,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = format!("{APPEAL_FINANCE_ROUTE_DEPOSITS}/{escrow_id_hex}")
+            .parse()
+            .expect("deposit status uri");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_appeal_finance_deposit(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(escrow_id_hex.to_owned()),
+        )
+        .await
+    }
+
+    async fn post_appeal_finance_weekly_rollup(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_weekly_rollup(State(app), headers, method, uri, body)
+            .await
+    }
+
+    fn moderation_announce_request(
+        case_id: &str,
+        round_id: &str,
+        auth: &OrderbookAuthFixture,
+        deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
+    ) -> ModerationBallotAnnounceRequestDto {
+        ModerationBallotAnnounceRequestDto {
+            case_id: case_id.to_owned(),
+            deposit_confirmation,
+            evidence_bundle_digest_hex: hex::encode([0xD1; 32]),
+            appeal_finance_config_version: "appeal-pricing-baseline-v1".to_owned(),
+            panel_roster_hash_hex: None,
+            policy_reference: "policy://sorafs/moderation/test".to_owned(),
+            evidence_uri: Some("bafy-test-evidence".to_owned()),
+            round_id: round_id.to_owned(),
+            juror_ids: vec![
+                auth.provider.account.to_string(),
+                auth.buyer.account.to_string(),
+            ],
+            quorum: 2,
+            announced_at_unix_ms: 1_000,
+            commit_deadline_unix_ms: 2_000,
+            challenge_deadline_unix_ms: 3_000,
+            reveal_deadline_unix_ms: 4_000,
+        }
+    }
+
+    fn moderation_announce_body(request: ModerationBallotAnnounceRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(&request).expect("encode moderation announcement"))
+    }
+
+    fn moderation_reveal_fixture(
+        context: &SoraFsModerationBallotContextV1,
+        round_id: &str,
+        juror: &OrderbookAccountFixture,
+        choice: SoraFsModerationVoteChoice,
+        nonce_byte: u8,
+        revealed_at_unix_ms: u64,
+    ) -> SoraFsModerationBallotRevealV1 {
+        SoraFsModerationBallotRevealV1 {
+            version:
+                iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
+            context: context.clone(),
+            round_id: round_id.to_owned(),
+            juror_id: juror.account.to_string(),
+            choice,
+            nonce: vec![nonce_byte; 32],
+            revealed_at_unix_ms,
+        }
+    }
+
+    fn moderation_commit_fixture(
+        reveal: &SoraFsModerationBallotRevealV1,
+        committed_at_unix_ms: u64,
+    ) -> SoraFsModerationBallotCommitV1 {
+        SoraFsModerationBallotCommitV1 {
+            version:
+                iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context: reveal.context.clone(),
+            round_id: reveal.round_id.clone(),
+            juror_id: reveal.juror_id.clone(),
+            commitment_blake2b_256: reveal.compute_commitment(),
+            committed_at_unix_ms,
+        }
+    }
+
+    fn moderation_commit_body(commit: SoraFsModerationBallotCommitV1, now_unix_ms: u64) -> Bytes {
+        let commit_b64 =
+            BASE64_STANDARD.encode(norito::to_bytes(&commit).expect("encode moderation commit"));
+        let request = ModerationBallotCommitRequestDto {
+            commit_b64,
+            now_unix_ms: Some(now_unix_ms),
+        };
+        Bytes::from(norito::json::to_vec(&request).expect("encode commit request"))
+    }
+
+    fn moderation_reveal_body(reveal: SoraFsModerationBallotRevealV1, now_unix_ms: u64) -> Bytes {
+        let reveal_b64 =
+            BASE64_STANDARD.encode(norito::to_bytes(&reveal).expect("encode moderation reveal"));
+        let request = ModerationBallotRevealRequestDto {
+            reveal_b64,
+            now_unix_ms: Some(now_unix_ms),
+        };
+        Bytes::from(norito::json::to_vec(&request).expect("encode reveal request"))
+    }
+
+    fn moderation_tally_body(case_id: &str, round_id: &str, now_unix_ms: u64) -> Bytes {
+        let request = ModerationBallotTallyRequestDto {
+            case_id: case_id.to_owned(),
+            round_id: round_id.to_owned(),
+            now_unix_ms: Some(now_unix_ms),
+        };
+        Bytes::from(norito::json::to_vec(&request).expect("encode tally request"))
+    }
+
+    fn moderation_uri(path: &'static str) -> Uri {
+        Uri::from_static(path)
+    }
+
+    async fn post_moderation_announce(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_BALLOTS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_ballot_announce(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_commit(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_COMMITS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_ballot_commit(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_reveal(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_REVEALS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_ballot_reveal(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_tally(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_TALLY);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_ballot_tally(State(app), headers, method, uri, body).await
+    }
+
     #[test]
     fn orderbook_api_error_ratio_tracks_route_outcomes() {
         const ROUTE: &str = "/test/sorafs/orderbook/error-ratio";
@@ -15568,6 +20701,289 @@ mod advert_tests {
         let response = post_orderbook_order(app, &auth.buyer, orderbook_order_body(order)).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_handlers_accept_lifecycle_and_events() {
+        let case_id = "case-api";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let deposit_escrow_id_hex = deposit_confirmation.escrow_id_hex.clone();
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect moderation announcement body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode moderation announcement body");
+        assert_eq!(
+            value
+                .get("announcement")
+                .and_then(|announcement| announcement.get("appeal_deposit_escrow_id_hex"))
+                .and_then(Value::as_str),
+            Some(deposit_escrow_id_hex.as_str())
+        );
+        let appeal_deposit = value
+            .get("announcement")
+            .and_then(|announcement| announcement.get("appeal_deposit"))
+            .and_then(Value::as_object)
+            .expect("appeal deposit metadata");
+        assert_eq!(
+            appeal_deposit.get("escrow_id_hex").and_then(Value::as_str),
+            Some(deposit_escrow_id_hex.as_str())
+        );
+        let payer_account = auth.provider.account.to_string();
+        let destination_account = auth.buyer.account.to_string();
+        assert_eq!(
+            appeal_deposit.get("payer_account").and_then(Value::as_str),
+            Some(payer_account.as_str())
+        );
+        assert_eq!(
+            appeal_deposit
+                .get("destination_account")
+                .and_then(Value::as_str),
+            Some(destination_account.as_str())
+        );
+        assert_eq!(
+            appeal_deposit.get("deposit_xor").and_then(Value::as_str),
+            Some("420")
+        );
+        assert!(
+            appeal_deposit
+                .get("custody_account")
+                .and_then(Value::as_str)
+                .is_some_and(|account| !account.is_empty())
+        );
+
+        let response = handle_get_sorafs_moderation_ballots(State(app.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect moderation list body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode moderation list body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+
+        let context = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement
+            .context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x11,
+            3_500,
+        );
+        let buyer_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.buyer,
+            SoraFsModerationVoteChoice::Uphold,
+            0x22,
+            3_501,
+        );
+
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.buyer,
+            moderation_commit_body(moderation_commit_fixture(&buyer_reveal, 1_501), 1_501),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.provider,
+            moderation_reveal_body(provider_reveal, 3_500),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.buyer,
+            moderation_reveal_body(buyer_reveal, 3_501),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = post_moderation_tally(
+            app.clone(),
+            &auth.provider,
+            moderation_tally_body(case_id, round_id, 3_600),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect moderation tally body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode moderation tally body");
+        assert_eq!(
+            value.get("winning_choice").and_then(Value::as_str),
+            Some("uphold")
+        );
+        assert_eq!(value.get("contested").and_then(Value::as_bool), Some(false));
+
+        let response = handle_get_sorafs_moderation_ballot(
+            State(app.clone()),
+            Path((case_id.to_owned(), round_id.to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect moderation record body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode moderation record body");
+        assert_eq!(value.get("commit_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("reveal_count").and_then(Value::as_u64), Some(2));
+        assert!(
+            value
+                .get("tally")
+                .and_then(|tally| tally.get("winning_choice"))
+                .and_then(Value::as_str)
+                .is_some_and(|choice| choice == "uphold")
+        );
+
+        let response = handle_get_sorafs_moderation_ballot_events(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("since=0&limit=10".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect moderation events body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode moderation events body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(6));
+        let events = value
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("moderation events");
+        assert_eq!(
+            events
+                .last()
+                .and_then(|event| event.get("kind"))
+                .and_then(Value::as_str),
+            Some("ballot_tallied")
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_announcement_requires_confirmed_appeal_deposit() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let case_id = "case-no-deposit";
+        let round_id = "round-1";
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request(case_id, round_id, &auth, None)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        assert!(
+            app.sorafs_node
+                .moderation_ballot(case_id, round_id)
+                .is_none()
+        );
+
+        let mut deposit_request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        deposit_request.case_id = case_id.to_owned();
+        deposit_request.round_id = Some(round_id.to_owned());
+        let expected = appeal_finance_deposit_expectation(deposit_request.clone())
+            .expect("valid deposit expectation");
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request(
+                case_id,
+                round_id,
+                &auth,
+                Some(appeal_finance_deposit_confirm_request(
+                    &deposit_request,
+                    expected.escrow_id.as_hash().to_string(),
+                )),
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            app.sorafs_node
+                .moderation_ballot(case_id, round_id)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_commit_requires_juror_auth() {
+        let case_id = "case-auth";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let context = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement
+            .context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x33,
+            3_500,
+        );
+        let body =
+            moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500);
+
+        let response = post_moderation_commit(app, &auth.buyer, body).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

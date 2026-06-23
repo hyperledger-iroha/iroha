@@ -4,6 +4,10 @@
 //! SoraFS Norito models and reports deterministic, machine-readable outcomes
 //! that can be consumed by CLIs, CI, and dashboards.
 
+// Reference validators intentionally return the full structured outcome as the
+// error so FFI/CLI callers can render identical diagnostics without side state.
+#![allow(clippy::result_large_err)]
+
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -145,6 +149,7 @@ impl ValidationOutcomeV1 {
 
     /// Creates a rejected validation outcome.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn error(
         code: impl Into<String>,
         category: impl Into<String>,
@@ -1892,6 +1897,9 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement",
         GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot",
+        GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event",
+        GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report",
+        GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => "appeal_finance_weekly_rollup",
     }
 }
 
@@ -1915,6 +1923,9 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         GovernanceLogValidationError::AuditVerdict(_)
         | GovernanceLogValidationError::DealSettlement(_)
         | GovernanceLogValidationError::ReputationSnapshot(_)
+        | GovernanceLogValidationError::ModerationBallotEvent(_)
+        | GovernanceLogValidationError::AppealFinanceReport(_)
+        | GovernanceLogValidationError::AppealFinanceWeeklyRollup(_)
         | GovernanceLogValidationError::MissingNodeCid
         | GovernanceLogValidationError::InvalidPrevCid
         | GovernanceLogValidationError::MissingPublisherPeerId => "SFS-GOV-001",
@@ -1936,6 +1947,9 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         GovernanceLogValidationError::AuditVerdict(_)
         | GovernanceLogValidationError::DealSettlement(_)
         | GovernanceLogValidationError::ReputationSnapshot(_)
+        | GovernanceLogValidationError::ModerationBallotEvent(_)
+        | GovernanceLogValidationError::AppealFinanceReport(_)
+        | GovernanceLogValidationError::AppealFinanceWeeklyRollup(_)
         | GovernanceLogValidationError::MissingNodeCid
         | GovernanceLogValidationError::InvalidPrevCid
         | GovernanceLogValidationError::MissingPublisherPeerId => CATEGORY_VALIDATION,

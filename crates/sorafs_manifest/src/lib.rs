@@ -76,8 +76,18 @@ pub use governance::{
     GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
     GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
     GovernanceLogSignatureVerificationError, GovernanceLogValidationError,
-    GovernanceSignatureAlgorithm, governance_dag_block_cid_v1, governance_log_node_cid_v1,
-    validate_governance_dag_chain_v1, validate_governance_dag_head_against_chain_v1,
+    GovernanceSignatureAlgorithm, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+    SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1,
+    SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
+    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeRollupV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceReportValidationError, SoraFsAppealFinanceWeeklyRollupBuildError,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsAppealFinanceWeeklyRollupValidationError,
+    SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
+    SoraFsModerationBallotGovernanceEventValidationError, SoraFsModerationBallotGovernanceTallyV1,
+    SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1, governance_dag_block_cid_v1,
+    governance_log_node_cid_v1, validate_governance_dag_chain_v1,
+    validate_governance_dag_head_against_chain_v1,
 };
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{
@@ -152,8 +162,8 @@ pub use provider_advert::{
     TransportHintV1, TransportProtocol,
 };
 pub use reconciliation::{
-    ReconciliationValidationError, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-    SorafsReconciliationReportV1,
+    AppealFinanceReconciliationSummaryV1, ReconciliationValidationError,
+    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
 };
 pub use reference::{
     FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderbookValidationPayloadKindV1,

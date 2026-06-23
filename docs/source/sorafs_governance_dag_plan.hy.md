@@ -43,7 +43,9 @@ index. It does not yet ship the full IPFS/IPNS governance DAG pipeline
 described by the roadmap.
 
 Implemented foundations include:
-- `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`, `GovernanceLogSignatureV1`, and validation errors in `crates/sorafs_manifest/src/governance.rs`.
+- `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
+  `GovernanceLogSignatureV1`, and validation errors in
+  `crates/sorafs_manifest/src/governance.rs`.
 - Public `GovernanceDagBlockV1` and `GovernanceDagHeadV1` schemas with
   deterministic node-CID/block-CID derivation, block/head signing payloads,
   parent-chain validation, and signed-head-to-chain binding helpers.
@@ -56,17 +58,19 @@ Implemented foundations include:
   remain SDK distribution work.
 - Governance fixtures under `fixtures/sorafs_manifest/governance/` and PoR fixture generation that emits governance nodes.
 - `FilesystemGovernancePublisher` support in `crates/sorafs_node` for local
-  deal settlement, repair, GC, reconciliation, and reputation evidence. Each
-  successful filesystem publish now updates a local
+  deal settlement, repair, GC, reconciliation, reputation, and moderation
+  ballot lifecycle evidence. Each successful filesystem publish now updates a
+  local
   `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
   artifact paths, BLAKE3 digests, payload-kind counts, digest lookup maps, and
   compact labels for query surfaces, then ensures a local
   `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` entry and
   assembled CARv2 segment under `car-segments/` for that publication. With
   `sorafs.storage.governance_dag_publisher_peer_id` and
-  `sorafs.storage.governance_dag_signing_key_path` configured, deal settlements
-  and reputation snapshots also append to the local signed runtime DAG; duplicate
-  publishes are idempotent and malformed runtime DAG index state fails closed.
+  `sorafs.storage.governance_dag_signing_key_path` configured, deal
+  settlements, reputation snapshots, and moderation ballot lifecycle events
+  also append to the local signed runtime DAG; duplicate publishes are
+  idempotent and malformed runtime DAG index state fails closed.
   The local filesystem sink also updates the Governance DAG backlog gauge from
   CAR queue pending segment counts and refreshes the local signed runtime-head
   age gauge when runtime DAG state is written or de-duplicated.
@@ -216,6 +220,7 @@ struct GovernanceLogNodeV1 {
 - `AuditVerdict`
 - `DealSettlement`
 - `ReputationSnapshot`
+- `ModerationBallotEvent`
 
 `GovernanceLogSignatureV1` stores the algorithm, public key, and raw signature.
 Validation rejects unsupported versions, empty node CIDs, empty previous CIDs,

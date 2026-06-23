@@ -1,5 +1,9 @@
 //! SCCP payload, proof, and counterparty submission helpers for Iroha bridge flows.
 //!
+//! Current SCCP launch support is limited to Ethereum, BSC, Solana, TON, and
+//! TRON. SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now; treat
+//! that as launch scope, not pending compatibility work.
+//!
 //! The crate targets the Rust standard library. The historical `std` feature is
 //! kept as a compatibility alias for workspace consumers that still enable it.
 #![allow(missing_docs)]
@@ -10121,6 +10125,8 @@ pub fn sccp_solana_full_light_client_gate_hash_v1(
     push_vec(&mut out, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
     out.extend_from_slice(&sccp_source_verifier_material_hash(material));
     out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
+    out.extend_from_slice(&deployment.adapter_verifier_vk_hash);
+    out.extend_from_slice(&deployment.deployment_receipt_hash);
     let verifier_hashes = [
         (
             SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
@@ -10232,6 +10238,8 @@ pub fn sccp_ton_full_light_client_gate_hash_v1(
     out.extend_from_slice(&material.source_state_verifier_hash);
     out.extend_from_slice(&sccp_source_verifier_material_hash(material));
     out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
+    out.extend_from_slice(&deployment.adapter_verifier_vk_hash);
+    out.extend_from_slice(&deployment.deployment_receipt_hash);
     let verifier_hashes = [
         (
             SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
@@ -10342,6 +10350,7 @@ pub fn sccp_tron_dpos_source_gate_hash_v1(
     out.extend_from_slice(&sccp_source_verifier_material_hash(material));
     out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
     out.extend_from_slice(&deployment.adapter_verifier_vk_hash);
+    out.extend_from_slice(&deployment.deployment_receipt_hash);
     push_vec(&mut out, material.source_trust_anchor_id.as_bytes());
     out.extend_from_slice(&material.source_trust_anchor_hash);
     push_vec(&mut out, material.consensus_verifier_id.as_bytes());
@@ -13548,6 +13557,15 @@ fn source_verifier_evidence_has_common_valid_shape(
         source_verifier_evidence_deployment_fields_are_empty(evidence);
     let deployment_fields_are_consistent =
         deployment_fields_are_populated || deployment_fields_are_empty;
+    let source_state_shape_is_consistent = source_verifier_evidence_source_state_shape_is_valid(
+        evidence,
+        deployment_fields_are_populated,
+    );
+    let source_bridge_emitter_shape_is_consistent =
+        source_verifier_evidence_bridge_emitter_shape_is_valid(
+            evidence,
+            deployment_fields_are_populated,
+        );
     let source_bridge_config_hash_is_consistent =
         if sccp_source_bridge_config_hash_required(evidence.source_domain) {
             let source_bridge_config_fields_are_empty =
@@ -13593,8 +13611,64 @@ fn source_verifier_evidence_has_common_valid_shape(
         && h256_is_nonzero(&evidence.message_inclusion_verifier_hash)
         && h256_is_nonzero(&evidence.finality_policy_hash)
         && deployment_fields_are_consistent
+        && source_state_shape_is_consistent
+        && source_bridge_emitter_shape_is_consistent
         && source_bridge_config_hash_is_consistent
         && h256_is_nonzero(&sccp_source_verifier_evidence_hash(evidence))
+}
+
+fn source_verifier_evidence_source_state_shape_is_valid(
+    evidence: &SccpSourceVerifierEvidenceV1,
+    deployment_fields_are_populated: bool,
+) -> bool {
+    let fields_are_empty = evidence.source_state_verifier_id.is_empty()
+        && !h256_is_nonzero(&evidence.source_state_verifier_hash);
+    if !sccp_source_state_verifier_required(evidence.source_domain) {
+        return fields_are_empty;
+    }
+
+    let Some(expected_id) = sccp_source_state_verifier_id_for_domain(evidence.source_domain) else {
+        return false;
+    };
+    let fields_have_expected_shape = evidence.source_state_verifier_id == expected_id
+        && h256_is_nonzero(&evidence.source_state_verifier_hash);
+    if !fields_have_expected_shape {
+        return !deployment_fields_are_populated && fields_are_empty;
+    }
+    if !deployment_fields_are_populated {
+        return true;
+    }
+
+    let Some(template) = sccp_source_verifier_material_for_domain(evidence.source_domain) else {
+        return false;
+    };
+    evidence.source_state_verifier_hash != template.source_state_verifier_hash
+}
+
+fn source_verifier_evidence_bridge_emitter_shape_is_valid(
+    evidence: &SccpSourceVerifierEvidenceV1,
+    deployment_fields_are_populated: bool,
+) -> bool {
+    let fields_are_empty = evidence.source_bridge_emitter_id.is_empty()
+        && evidence.source_bridge_emitter_address.is_empty()
+        && !h256_is_nonzero(&evidence.source_bridge_emitter_code_hash);
+    if !sccp_source_bridge_emitter_binding_required(evidence.source_domain) {
+        return fields_are_empty;
+    }
+
+    let Some(expected_id) = sccp_source_bridge_emitter_id_for_domain(evidence.source_domain) else {
+        return false;
+    };
+    let fields_have_expected_shape = evidence.source_bridge_emitter_id == expected_id
+        && sccp_source_bridge_emitter_address_is_nonzero(&evidence.source_bridge_emitter_address)
+        && sccp_source_bridge_emitter_code_hash_is_nonzero(
+            &evidence.source_bridge_emitter_code_hash,
+        );
+    if fields_have_expected_shape {
+        true
+    } else {
+        !deployment_fields_are_populated && fields_are_empty
+    }
 }
 
 fn source_verifier_evidence_deployment_fields_are_populated(
@@ -57017,7 +57091,7 @@ mod tests {
                 );
             }
 
-            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 4] = [
+            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 5] = [
                 ("unpaired deployment hash", |evidence| {
                     evidence.source_adapter_deployment_hash = [0x44; 32];
                     evidence.source_adapter_deployment_receipt_hash = [0; 32];
@@ -57032,6 +57106,13 @@ mod tests {
                 ("zero adapter transcript hash", |evidence| {
                     evidence.adapter_transcript_hash = [0; 32];
                 }),
+                (
+                    "deployment hash pair without deployment-bound source roles",
+                    |evidence| {
+                        evidence.source_adapter_deployment_hash = [0x46; 32];
+                        evidence.source_adapter_deployment_receipt_hash = [0x47; 32];
+                    },
+                ),
             ];
             for (label, mutate) in malformed_evidence_cases {
                 let mut malformed_evidence = valid.clone();
@@ -57105,8 +57186,51 @@ mod tests {
                 );
             }
 
-            let material_only_evidence_replay_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1));
-                4] = [
+            fn refresh_shape_valid_source_bridge_config(
+                evidence: &mut SccpSourceVerifierEvidenceV1,
+            ) {
+                match evidence.source_domain {
+                    SCCP_DOMAIN_ETH => {
+                        let source_bridge_address = sccp_source_bridge_emitter_address_as_array(
+                            &evidence.source_bridge_emitter_address,
+                        )
+                        .expect("ETH source bridge address");
+                        evidence.source_bridge_config_hash = sccp_eth_source_bridge_config_hash_v1(
+                            evidence.source_bridge_network_id,
+                            evidence.source_domain,
+                            SCCP_DOMAIN_SORA,
+                            source_bridge_address,
+                            evidence.source_bridge_emitter_code_hash,
+                        )
+                        .expect("shape-valid ETH source bridge config hash");
+                    }
+                    SCCP_DOMAIN_TRON => {
+                        let source_bridge_address = sccp_source_bridge_emitter_address_as_array(
+                            &evidence.source_bridge_emitter_address,
+                        )
+                        .expect("TRON source bridge address");
+                        let source_bridge_owner = sccp_source_bridge_emitter_address_as_array(
+                            &evidence.source_bridge_owner_address,
+                        )
+                        .expect("TRON source bridge owner");
+                        evidence.source_bridge_config_hash =
+                            sccp_tron_source_bridge_config_hash_v1(
+                                evidence.source_bridge_network_id,
+                                evidence.source_domain,
+                                SCCP_DOMAIN_SORA,
+                                source_bridge_address,
+                                source_bridge_owner,
+                            )
+                            .expect("shape-valid TRON source bridge config hash");
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut material_only_evidence_replay_cases: Vec<(
+                &str,
+                fn(&mut SccpSourceVerifierEvidenceV1),
+            )> = vec![
                 ("source trust-anchor hash drift", |evidence| {
                     evidence.source_trust_anchor_hash[0] ^= 0x5A;
                 }),
@@ -57120,6 +57244,64 @@ mod tests {
                     evidence.finality_policy_id.push_str("-fork");
                 }),
             ];
+            if sccp_source_state_verifier_required(source_domain)
+                && !consensus
+                    .verifier_evidence
+                    .source_state_verifier_id
+                    .is_empty()
+                && h256_is_nonzero(&consensus.verifier_evidence.source_state_verifier_hash)
+            {
+                material_only_evidence_replay_cases.push((
+                    "source-state verifier hash drift",
+                    |evidence| {
+                        evidence.source_state_verifier_hash[0] ^= 0x55;
+                    },
+                ));
+            }
+            if sccp_source_bridge_emitter_binding_required(source_domain)
+                && !consensus
+                    .verifier_evidence
+                    .source_bridge_emitter_address
+                    .is_empty()
+                && h256_is_nonzero(&consensus.verifier_evidence.source_bridge_emitter_code_hash)
+            {
+                material_only_evidence_replay_cases.push((
+                    "source bridge emitter address drift",
+                    |evidence| {
+                        let last = evidence
+                            .source_bridge_emitter_address
+                            .last_mut()
+                            .expect("source bridge emitter address");
+                        *last ^= 0x01;
+                        refresh_shape_valid_source_bridge_config(evidence);
+                    },
+                ));
+                material_only_evidence_replay_cases.push((
+                    "source bridge emitter code-hash drift",
+                    |evidence| {
+                        evidence.source_bridge_emitter_code_hash[0] ^= 0x33;
+                        refresh_shape_valid_source_bridge_config(evidence);
+                    },
+                ));
+            }
+            if source_domain == SCCP_DOMAIN_TRON
+                && !consensus
+                    .verifier_evidence
+                    .source_bridge_owner_address
+                    .is_empty()
+            {
+                material_only_evidence_replay_cases.push((
+                    "source bridge config owner drift",
+                    |evidence| {
+                        let last = evidence
+                            .source_bridge_owner_address
+                            .last_mut()
+                            .expect("source bridge owner address");
+                        *last ^= 0x01;
+                        refresh_shape_valid_source_bridge_config(evidence);
+                    },
+                ));
+            }
             for (label, mutate) in material_only_evidence_replay_cases {
                 let mut replayed_evidence = valid.clone();
                 mutate_source_verifier_evidence(&mut replayed_evidence, mutate);
@@ -58477,6 +58659,8 @@ mod tests {
             build_sccp_message_transparent_inner_proof(&remote_source_bundle, &manifest)
                 .expect("remote-source TON inner proof");
         let remote_source_proof_bytes = remote_source_bundle.finality_proof.clone();
+        let mismatched_remote_source_proof_bytes =
+            sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_TON, 31).finality_proof;
         assert!(
             build_sccp_ton_proof_request(
                 &remote_source_public_inputs,
@@ -58489,6 +58673,19 @@ mod tests {
             )
             .is_none(),
             "TON proof requests for non-SORA source bundles must carry source proof bytes"
+        );
+        assert!(
+            build_sccp_ton_proof_request(
+                &remote_source_public_inputs,
+                &remote_source_bundle_bytes,
+                Some(mismatched_remote_source_proof_bytes.as_slice()),
+                remote_source_inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject canonical but mismatched non-SORA source proof bytes"
         );
         let remote_source_request = build_sccp_ton_proof_request(
             &remote_source_public_inputs,
@@ -62615,9 +62812,20 @@ mod tests {
         assert_eq!(
             gate_hash,
             decode_fixed_hex_bytes::<32>(
-                "776e8ebaf68ce872b0596330e4eb0c26bc6151ea23cb45dcd46316bb1f12bd28",
+                "7db1d06e59c820fa2d9bee706d1d6d979dfad7813fd3bfaf4952e3c9b3810785",
             )
             .expect("TRON DPoS source gate vector")
+        );
+        let mut replayed_receipt = deployment.clone();
+        replayed_receipt.deployment_receipt_hash = [0xab; 32];
+        assert!(
+            sccp_source_adapter_engine_deployment_matches_material(&material, &replayed_receipt),
+            "receipt drift is structurally valid deployment metadata but must change the gate transcript"
+        );
+        assert_ne!(
+            sccp_tron_dpos_source_gate_hash_from_deployment_v1(&material, &replayed_receipt),
+            Some(gate_hash),
+            "TRON source gate hash must explicitly bind deployment receipts"
         );
         let mut wrong_target_deployment = deployment.clone();
         wrong_target_deployment.target_domain = SCCP_DOMAIN_ETH;
@@ -62661,7 +62869,7 @@ mod tests {
             ),
             Some(
                 decode_fixed_hex_bytes::<32>(
-                    "df4d4313314e6068723af6b0bf77efbb668daba7be2d588798d33fd34d2dfc46",
+                    "b732afee4b72cfed52a27c26a93cd0e1c339d55d212c157bee16a6cf59a0541f",
                 )
                 .expect("Solana full light-client audit vector")
             )
@@ -62681,17 +62889,34 @@ mod tests {
             )
             .expect("Solana audited source adapter deployment vector")
         );
+        let audited_sol_gate_hash = sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+            &sol_material,
+            &audited_sol_deployment,
+        )
+        .expect("Solana audited full light-client audit hash");
         assert_eq!(
+            audited_sol_gate_hash,
+            decode_fixed_hex_bytes::<32>(
+                "e23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
+            )
+            .expect("Solana audited full light-client audit vector")
+        );
+        let mut replayed_sol_receipt = audited_sol_deployment.clone();
+        replayed_sol_receipt.deployment_receipt_hash = [0xab; 32];
+        assert!(
+            sccp_source_adapter_engine_deployment_matches_material(
+                &sol_material,
+                &replayed_sol_receipt,
+            ),
+            "receipt drift is structurally valid deployment metadata but must change the Solana gate transcript"
+        );
+        assert_ne!(
             sccp_solana_full_light_client_gate_hash_from_deployment_v1(
                 &sol_material,
-                &audited_sol_deployment,
+                &replayed_sol_receipt,
             ),
-            Some(
-                decode_fixed_hex_bytes::<32>(
-                    "2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
-                )
-                .expect("Solana audited full light-client audit vector")
-            )
+            Some(audited_sol_gate_hash),
+            "Solana source gate hash must explicitly bind deployment receipts"
         );
         assert_eq!(
             sccp_solana_full_light_client_gate_hash_v1(
@@ -62791,7 +63016,7 @@ mod tests {
             ),
             Some(
                 decode_fixed_hex_bytes::<32>(
-                    "41d87df0c1dabd192ca575bd1e85ebebdfed742a767ac66f1b2f40aa8c7110f4",
+                    "aca1af709be600a754c24426fc0bd30748c97b29ef56e51ac9eb4e799e8de581",
                 )
                 .expect("TON full light-client audit vector")
             )
@@ -62811,17 +63036,34 @@ mod tests {
             )
             .expect("TON audited source adapter deployment vector")
         );
+        let audited_ton_gate_hash = sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+            &ton_material,
+            &audited_ton_deployment,
+        )
+        .expect("TON audited full light-client audit hash");
         assert_eq!(
+            audited_ton_gate_hash,
+            decode_fixed_hex_bytes::<32>(
+                "5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+            )
+            .expect("TON audited full light-client audit vector")
+        );
+        let mut replayed_ton_receipt = audited_ton_deployment.clone();
+        replayed_ton_receipt.deployment_receipt_hash = [0xab; 32];
+        assert!(
+            sccp_source_adapter_engine_deployment_matches_material(
+                &ton_material,
+                &replayed_ton_receipt,
+            ),
+            "receipt drift is structurally valid deployment metadata but must change the TON gate transcript"
+        );
+        assert_ne!(
             sccp_ton_full_light_client_gate_hash_from_deployment_v1(
                 &ton_material,
-                &audited_ton_deployment,
+                &replayed_ton_receipt,
             ),
-            Some(
-                decode_fixed_hex_bytes::<32>(
-                    "c32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
-                )
-                .expect("TON audited full light-client audit vector")
-            )
+            Some(audited_ton_gate_hash),
+            "TON source gate hash must explicitly bind deployment receipts"
         );
         assert_eq!(
             sccp_ton_full_light_client_gate_hash_v1(
@@ -65471,6 +65713,29 @@ mod tests {
                 replay.source_state_verifier_hash = template.source_state_verifier_hash;
                 replay_cases.push(("source_state_verifier_hash", replay));
             }
+            if sccp_source_bridge_emitter_binding_required(source_domain) {
+                let mut replay = deployment.clone();
+                replay.source_bridge_emitter_address =
+                    template.source_bridge_emitter_address.clone();
+                replay_cases.push(("source_bridge_emitter_address", replay));
+                let mut replay = deployment.clone();
+                replay.source_bridge_emitter_code_hash = template.source_bridge_emitter_code_hash;
+                replay_cases.push(("source_bridge_emitter_code_hash", replay));
+            }
+            if sccp_source_bridge_config_hash_required(source_domain) {
+                let mut replay = deployment.clone();
+                replay.source_bridge_network_id = template.source_bridge_network_id;
+                replay_cases.push(("source_bridge_network_id", replay));
+                let mut replay = deployment.clone();
+                replay.source_bridge_config_hash = template.source_bridge_config_hash;
+                replay_cases.push(("source_bridge_config_hash", replay));
+                if source_domain == SCCP_DOMAIN_TRON {
+                    let mut replay = deployment.clone();
+                    replay.source_bridge_owner_address =
+                        template.source_bridge_owner_address.clone();
+                    replay_cases.push(("source_bridge_owner_address", replay));
+                }
+            }
 
             for (label, replayed_deployment) in replay_cases {
                 assert!(
@@ -66350,6 +66615,42 @@ mod tests {
             &audited_deployment,
         ));
 
+        let mut drifted_source_state_evidence = proof.clone();
+        mutate_source_verifier_evidence(&mut drifted_source_state_evidence, |evidence| {
+            evidence.source_state_verifier_hash[0] ^= 0x01;
+        });
+        let drifted_source_state_consensus =
+            source_consensus_proof_from_envelope(&drifted_source_state_evidence);
+        assert!(
+            source_verifier_evidence_has_common_valid_shape(
+                &drifted_source_state_consensus.verifier_evidence,
+            ),
+            "non-template Solana source-state evidence drift must remain shape-valid before deployment matching"
+        );
+        rebuild_source_adapter_verification_proof_for_current_evidence(
+            &mut drifted_source_state_evidence,
+        );
+        assert!(
+            sccp_source_chain_proof_adapter_verifier_commitment(&drifted_source_state_evidence,)
+                .is_some(),
+            "shape-valid Solana source-state evidence drift should still carry a rebuilt adapter proof"
+        );
+        assert!(
+            !sccp_source_chain_proof_matches_adapter_deployment(
+                &drifted_source_state_evidence,
+                &audited_deployment,
+            ),
+            "deployment matcher must reject shape-valid source-state evidence drift"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                &drifted_source_state_evidence,
+                &material,
+                &audited_deployment,
+            ),
+            "Solana production verifier must reject shape-valid source-state evidence drift"
+        );
+
         let malformed_standalone_deployments: [(&str, fn(&mut SccpSourceAdapterEngineDeploymentV1));
             10] = [
             ("missing source-state verifier id", |deployment| {
@@ -66415,10 +66716,22 @@ mod tests {
                 ),
                 "forged Solana {label} evidence should mirror the malformed deployment"
             );
-            assert!(
-                sccp_source_chain_proof_adapter_verifier_commitment(&forged_proof).is_some(),
-                "forged Solana {label} proof should carry a valid adapter proof over retargeted evidence"
+            let forged_evidence_has_common_shape = source_verifier_evidence_has_common_valid_shape(
+                &forged_consensus.verifier_evidence,
             );
+            let forged_verifier_commitment =
+                sccp_source_chain_proof_adapter_verifier_commitment(&forged_proof);
+            if forged_evidence_has_common_shape {
+                assert!(
+                    forged_verifier_commitment.is_some(),
+                    "forged Solana {label} proof should carry a valid adapter proof over shape-valid retargeted evidence"
+                );
+            } else {
+                assert!(
+                    forged_verifier_commitment.is_none(),
+                    "forged Solana {label} proof should fail at the common evidence shape gate"
+                );
+            }
             assert!(
                 !source_adapter_deployment_has_standalone_valid_shape(&malformed_deployment),
                 "standalone Solana deployment shape must reject {label}"
@@ -66480,6 +66793,25 @@ mod tests {
             )
             .expect("recover Solana audited source proof bytes");
         assert_eq!(recovered_solana_source_proof.message_id, proof.message_id);
+        let mut wrong_target_audited_deployment = audited_deployment.clone();
+        wrong_target_audited_deployment.target_domain = SCCP_DOMAIN_ETH;
+        assert!(
+            !verify_sccp_solana_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &wrong_target_audited_deployment,
+            ),
+            "Solana facade must reject audited deployments for non-SORA targets"
+        );
+        assert!(
+            recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &wrong_target_audited_deployment,
+            )
+            .is_none(),
+            "Solana source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target"
+        );
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_SOL,
             SCCP_DOMAIN_SORA,
@@ -67591,6 +67923,25 @@ mod tests {
         assert_eq!(
             recovered_ton_source_proof.message_id,
             deployment_bound_proof.message_id,
+        );
+        let mut wrong_target_audited_deployment = audited_deployment.clone();
+        wrong_target_audited_deployment.target_domain = SCCP_DOMAIN_ETH;
+        assert!(
+            !verify_sccp_ton_mainnet_source_chain_proof_envelope_production(
+                &deployment_bound_proof,
+                &material,
+                &wrong_target_audited_deployment,
+            ),
+            "TON facade must reject audited deployments for non-SORA targets"
+        );
+        assert!(
+            recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &wrong_target_audited_deployment,
+            )
+            .is_none(),
+            "TON source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target"
         );
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_TON,
@@ -72149,6 +72500,8 @@ mod tests {
             sccp_message_transparent_public_inputs(&remote_bundle).expect("public inputs");
         let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&remote_bundle);
         let source_proof_bytes = remote_bundle.finality_proof.clone();
+        let mismatched_source_proof_bytes =
+            sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, 592).finality_proof;
         let opaque_source_proof_bytes = [0x7A; 32];
         let deployment_binding =
             sample_evm_destination_binding(&manifest, [0x61; 32], [0x62; 20], [0x63; 20]);
@@ -72220,6 +72573,18 @@ mod tests {
             )
             .is_none(),
             "EVM Groth16 proof requests must bind bundle bytes to public inputs"
+        );
+        assert!(
+            build_sccp_evm_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(mismatched_source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "EVM Groth16 proof requests must reject canonical but mismatched source proof bytes"
         );
 
         let request = build_sccp_evm_groth16_bn254_proof_request(
@@ -72734,7 +73099,7 @@ mod tests {
             "BSC source proof byte recovery must reject replayed deployment receipts"
         );
 
-        let forged_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 8] = [
+        let forged_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 10] = [
             ("source chain", |evidence| {
                 evidence.source_chain = "eth".to_owned();
             }),
@@ -72756,6 +73121,12 @@ mod tests {
             ("source bridge emitter", |evidence| {
                 evidence.source_bridge_emitter_address = vec![0xA5; 20];
             }),
+            ("missing source bridge emitter", |evidence| {
+                evidence.source_bridge_emitter_address.clear();
+            }),
+            ("zero source bridge emitter code hash", |evidence| {
+                evidence.source_bridge_emitter_code_hash = [0; 32];
+            }),
             ("source bridge config", |evidence| {
                 evidence.source_bridge_config_hash = [0xA6; 32];
             }),
@@ -72764,10 +73135,23 @@ mod tests {
             let mut forged_evidence = proof.clone();
             mutate_source_verifier_evidence(&mut forged_evidence, mutate);
             rebuild_source_adapter_verification_proof_for_current_evidence(&mut forged_evidence);
-            assert!(
-                sccp_source_chain_proof_adapter_verifier_commitment(&forged_evidence).is_some(),
-                "forged BSC {label} verifier evidence should still carry a valid adapter proof"
+            let forged_consensus = source_consensus_proof_from_envelope(&forged_evidence);
+            let forged_evidence_has_common_shape = source_verifier_evidence_has_common_valid_shape(
+                &forged_consensus.verifier_evidence,
             );
+            let forged_verifier_commitment =
+                sccp_source_chain_proof_adapter_verifier_commitment(&forged_evidence);
+            if forged_evidence_has_common_shape {
+                assert!(
+                    forged_verifier_commitment.is_some(),
+                    "forged BSC {label} verifier evidence should still carry a valid adapter proof"
+                );
+            } else {
+                assert!(
+                    forged_verifier_commitment.is_none(),
+                    "forged BSC {label} verifier evidence should fail at the common evidence shape gate"
+                );
+            }
             assert!(
                 !sccp_source_chain_proof_matches_adapter_deployment(&forged_evidence, &deployment,),
                 "BSC deployment matcher must reject verifier evidence with forged {label}"
@@ -74255,6 +74639,8 @@ mod tests {
             sccp_message_transparent_public_inputs(&remote_bundle).expect("public inputs");
         let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&remote_bundle);
         let source_proof_bytes = remote_bundle.finality_proof.clone();
+        let mismatched_source_proof_bytes =
+            sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_TRON, 593).finality_proof;
         let opaque_source_proof_bytes = [0x7B; 32];
         let deployment_binding = sample_tron_destination_binding(&manifest);
         let inner = build_sccp_message_transparent_inner_proof(&remote_bundle, &manifest)
@@ -74301,6 +74687,18 @@ mod tests {
             )
             .is_none(),
             "SORA-source TRON proof requests must reject canonical but extraneous source proof bytes"
+        );
+        assert!(
+            build_sccp_tron_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(mismatched_source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TRON Groth16 proof requests must reject canonical but mismatched source proof bytes"
         );
 
         let request = build_sccp_tron_groth16_bn254_proof_request(

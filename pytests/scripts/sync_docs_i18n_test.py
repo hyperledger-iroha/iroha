@@ -45,3 +45,19 @@ def test_nested_translation_path_remains_next_to_source():
     assert module.compute_translation_path(
         Path("docs/source/community.md"), "fr"
     ) == Path("docs/source/community.fr.md")
+
+
+def test_needs_review_translation_is_not_managed_stub():
+    module = load_sync_docs_i18n_module()
+    content = "\n".join(
+        [
+            "---",
+            "status: needs-review",
+            "generator: scripts/sync_docs_i18n.py",
+            "---",
+            "# Existing translation requiring review",
+            "",
+        ]
+    )
+
+    assert not module._is_managed_stub(content, Path("README.es.md"))

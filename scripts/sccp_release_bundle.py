@@ -840,6 +840,36 @@ def _source_adapter_gate_hash_key_for_domain_chain(
     return str(key) if key is not None else None
 
 
+def _source_adapter_gate_template_hashes(
+    domain: Any,
+) -> tuple[bytes, ...]:
+    if type(domain) is not int:
+        return ()
+    if domain not in (_sccp_domain_sol(), _sccp_domain_ton()):
+        return ()
+    all_lanes = _all_lanes_module()
+    profile = all_lanes.LANE_PROFILES.get(domain)
+    if profile is None:
+        return ()
+    return tuple(
+        all_lanes._source_material_template_hashes(profile).values()
+    )
+
+
+def _source_adapter_gate_template_hash_errors(
+    label: str,
+    domain: Any,
+    gate_hash: Any,
+) -> list[str]:
+    if not _is_canonical_bytes32_hex_text(gate_hash):
+        return []
+    if bytes.fromhex(gate_hash[2:]) not in _source_adapter_gate_template_hashes(domain):
+        return []
+    return [
+        f"{label} must be deployed gate evidence, not built-in template material"
+    ]
+
+
 def _source_adapter_gate_template_audit_errors(
     label: str,
     domain: Any,
@@ -848,18 +878,13 @@ def _source_adapter_gate_template_audit_errors(
     if type(domain) is not int or not isinstance(audit_hashes, dict):
         return []
     all_lanes = _all_lanes_module()
-    profile = all_lanes.LANE_PROFILES.get(domain)
-    if profile is None:
-        return []
     if domain == _sccp_domain_sol():
         audit_fields = all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
     elif domain == _sccp_domain_ton():
         audit_fields = all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
     else:
         return []
-    template_hashes = tuple(
-        all_lanes._source_material_template_hashes(profile).values()
-    )
+    template_hashes = _source_adapter_gate_template_hashes(domain)
     errors: list[str] = []
     for audit_field in audit_fields:
         audit_hash = audit_hashes.get(audit_field)
@@ -1009,6 +1034,13 @@ def _source_adapter_gate_semantic_errors(
         )
         return errors
 
+    errors.extend(
+        _source_adapter_gate_template_hash_errors(
+            f"{label}.source_adapter_gate gate_hash",
+            domain,
+            gate_hash,
+        )
+    )
     if not _is_nonzero_bytes32_hex_text(gate_hash):
         errors.append(
             f"{label}.source_adapter_gate gate_hash must be a non-zero "
@@ -1100,6 +1132,13 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
             errors.append(
                 f"{label} source_adapter_gate_required must be false for this domain"
             )
+        errors.extend(
+            _source_adapter_gate_template_hash_errors(
+                f"{label} source_adapter_gate_hash",
+                domain,
+                gate_hash,
+            )
+        )
         if not _is_nonzero_bytes32_hex_text(gate_hash):
             errors.append(
                 f"{label} source_adapter_gate_hash must be a non-zero canonical "
@@ -5040,11 +5079,75 @@ def _release_notes_attachment_bundle_errors(
     return errors
 
 
+def _release_notes_artifact_path_is_safe(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value.strip() == value
+        and value.isascii()
+        and _path_control_character(value) is None
+        and _path_markdown_unsafe_character(value) is None
+        and _path_percent_encoded_traversal(value) is None
+        and not any(
+            marker in value.lower()
+            for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+        )
+    )
+
+
+def _release_notes_artifact_row_cells(artifact: Any) -> list[str]:
+    if not isinstance(artifact, dict):
+        return [
+            "`<invalid artifact>`",
+            "`<invalid bytes>`",
+            "`<invalid artifact.sha256>`",
+        ]
+    artifact_path = artifact.get("path")
+    path_cell = (
+        f"`{artifact_path}`"
+        if _release_notes_artifact_path_is_safe(artifact_path)
+        else "`<invalid artifact>`"
+    )
+    artifact_bytes = artifact.get("bytes")
+    bytes_cell = (
+        str(artifact_bytes)
+        if type(artifact_bytes) is int and artifact_bytes >= 0
+        else "`<invalid bytes>`"
+    )
+    artifact_hash = artifact.get("sha256")
+    hash_cell = (
+        f"`{artifact_hash}`"
+        if _is_canonical_sha256_text(artifact_hash)
+        else "`<invalid artifact.sha256>`"
+    )
+    return [path_cell, bytes_cell, hash_cell]
+
+
+def _release_notes_artifact_rows(artifacts: Any) -> list[list[str]]:
+    if not isinstance(artifacts, list):
+        return [
+            [
+                "`<invalid artifact>`",
+                "`<invalid bytes>`",
+                "`<invalid artifact.sha256>`",
+            ]
+        ]
+    rows: list[list[str]] = []
+    for artifact in artifacts:
+        if (
+            isinstance(artifact, dict)
+            and artifact.get("path") == "sccp-release-notes-attachment.md"
+        ):
+            continue
+        rows.append(_release_notes_artifact_row_cells(artifact))
+    return rows
+
+
 def _release_notes_attachment(
     report: dict[str, Any],
     artifacts: list[dict[str, Any]],
 ) -> str:
-    status = "READY" if report["production_ready"] is True else "NOT READY"
+    status = "READY" if report.get("production_ready") is True else "NOT READY"
     lines = [
         "# SCCP Public Release Notes Attachment",
         "",
@@ -5066,14 +5169,8 @@ def _release_notes_attachment(
         "| Artifact | Bytes | SHA-256 |",
         "| --- | ---: | --- |",
     ]
-    for artifact in artifacts:
-        lines.append(
-            "| `{path}` | {bytes} | `{sha256}` |".format(
-                path=artifact["path"],
-                bytes=artifact["bytes"],
-                sha256=artifact["sha256"],
-            )
-        )
+    for row in _release_notes_artifact_rows(artifacts):
+        lines.append("| " + " | ".join(row) + " |")
     blocker_lines = _markdown_string_list_items(
         report.get("blockers"),
         field_label="blockers",
@@ -5214,6 +5311,35 @@ def _release_bundle_manifest_errors(
     return errors
 
 
+def _manifest_report_value(report: dict[str, Any], field: str) -> Any:
+    return report.get(field)
+
+
+def _manifest_report_nested_value(
+    report: dict[str, Any],
+    section: str,
+    field: str,
+) -> Any:
+    """Return nested readiness value with malformed readiness-root suppression."""
+
+    payload = report.get(section)
+    if isinstance(payload, dict):
+        return payload.get(field)
+    return None
+
+
+def _manifest_report_blockers(report: dict[str, Any]) -> list[str]:
+    blockers = report.get("blockers")
+    if isinstance(blockers, list) and not _public_blocker_list_field_errors(
+        "readiness report",
+        {"blockers": blockers},
+        "blockers",
+        allow_empty=True,
+    ):
+        return blockers
+    return ["invalid blockers"]
+
+
 def _release_bundle_manifest(
     output_dir: Path,
     report: dict[str, Any],
@@ -5223,16 +5349,70 @@ def _release_bundle_manifest(
 
     return {
         "schema": "sccp-release-bundle-v1",
-        "production_ready": report["production_ready"],
-        "release_checklist_ready": report["release_checklist"]["ready"],
-        "corridor_ready": report["corridor"]["production_ready"],
-        "blockers": report["blockers"],
+        "production_ready": _manifest_report_value(report, "production_ready"),
+        "release_checklist_ready": _manifest_report_nested_value(
+            report,
+            "release_checklist",
+            "ready",
+        ),
+        "corridor_ready": _manifest_report_nested_value(
+            report,
+            "corridor",
+            "production_ready",
+        ),
+        "blockers": _manifest_report_blockers(report),
         "artifacts": _bundle_artifacts(output_dir, artifact_paths),
     }
 
 
+def _strict_verifier_summary_errors(summary: Any) -> list[str]:
+    label = "strict verifier summary"
+    if not isinstance(summary, dict):
+        return [f"{label} must be an object"]
+
+    errors: list[str] = []
+    if type(summary.get("verified")) is not bool:
+        errors.append("strict verifier summary verified must be boolean")
+    errors.extend(
+        _public_blocker_list_field_errors(
+            label,
+            summary,
+            "errors",
+            allow_empty=True,
+        )
+    )
+    summary_errors = summary.get("errors")
+    if (
+        summary.get("verified") is True
+        and isinstance(summary_errors, list)
+        and summary_errors
+    ):
+        errors.append(f"{label} errors must be empty when verified is true")
+    if (
+        summary.get("verified") is False
+        and isinstance(summary_errors, list)
+        and not summary_errors
+    ):
+        errors.append(f"{label} errors must not be empty when verified is false")
+
+    if summary.get("verified") is True and not _is_canonical_sha256_text(
+        summary.get("manifest_sha256")
+    ):
+        errors.append(
+            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string"
+        )
+    return errors
+
+
 def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
     summary = _verify_module().verify_bundle(output_dir)
+    summary_errors = _strict_verifier_summary_errors(summary)
+    if summary_errors:
+        details = "\n".join(f"- {error}" for error in summary_errors)
+        raise RuntimeError(
+            "generated SCCP release bundle strict verifier returned malformed "
+            "summary:\n" + details
+        )
     if summary["verified"]:
         return summary
     errors = "\n".join(f"- {error}" for error in summary["errors"])

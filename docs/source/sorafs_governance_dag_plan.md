@@ -35,7 +35,9 @@ index. It does not yet ship the full IPFS/IPNS governance DAG pipeline
 described by the roadmap.
 
 Implemented foundations include:
-- `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`, `GovernanceLogSignatureV1`, and validation errors in `crates/sorafs_manifest/src/governance.rs`.
+- `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
+  `GovernanceLogSignatureV1`, and validation errors in
+  `crates/sorafs_manifest/src/governance.rs`.
 - Public `GovernanceDagBlockV1` and `GovernanceDagHeadV1` schemas with
   deterministic node-CID/block-CID derivation, block/head signing payloads,
   parent-chain validation, and signed-head-to-chain binding helpers.
@@ -48,20 +50,27 @@ Implemented foundations include:
   remain SDK distribution work.
 - Governance fixtures under `fixtures/sorafs_manifest/governance/` and PoR fixture generation that emits governance nodes.
 - `FilesystemGovernancePublisher` support in `crates/sorafs_node` for local
-  deal settlement, repair, GC, reconciliation, and reputation evidence. Each
-  successful filesystem publish now updates a local
-  `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
+  deal settlement, repair, GC, reconciliation, reputation, moderation ballot
+  lifecycle, appeal finance report, and appeal finance weekly rollup evidence.
+  Each successful filesystem publish now updates a
+  local `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
   artifact paths, BLAKE3 digests, payload-kind counts, digest lookup maps, and
   compact labels for query surfaces, then ensures a local
   `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` entry and
   assembled CARv2 segment under `car-segments/` for that publication. With
   `sorafs.storage.governance_dag_publisher_peer_id` and
-  `sorafs.storage.governance_dag_signing_key_path` configured, deal settlements
-  and reputation snapshots also append to the local signed runtime DAG; duplicate
-  publishes are idempotent and malformed runtime DAG index state fails closed.
+  `sorafs.storage.governance_dag_signing_key_path` configured, deal
+  settlements, reputation snapshots, moderation ballot lifecycle events, and
+  appeal finance reports/weekly rollups also append to the local signed runtime
+  DAG; duplicate publishes are idempotent and malformed runtime DAG index state
+  fails closed.
   The local filesystem sink also updates the Governance DAG backlog gauge from
   CAR queue pending segment counts and refreshes the local signed runtime-head
   age gauge when runtime DAG state is written or de-duplicated.
+- Typed appeal finance transparency rollups: `sorafs_manifest` validates
+  `SoraFsAppealFinanceWeeklyRollupV1` payloads and can aggregate validated
+  finance reports into deterministic weekly dashboard rows for the filesystem
+  publisher and signed runtime DAG.
 - Torii PoR filesystem publishing for challenge/report artifacts rooted at the configured `sorafs_por.governance_dag_dir`.
 - Taikai cache governance bundle generation via `cargo xtask sorafs-taikai-cache-bundle`.
 - Local operator commands:
@@ -208,6 +217,7 @@ struct GovernanceLogNodeV1 {
 - `AuditVerdict`
 - `DealSettlement`
 - `ReputationSnapshot`
+- `ModerationBallotEvent`
 
 `GovernanceLogSignatureV1` stores the algorithm, public key, and raw signature.
 Validation rejects unsupported versions, empty node CIDs, empty previous CIDs,
@@ -442,5 +452,5 @@ tests above require the runtime builder/publisher and IPFS/IPNS stack.
   the IPFS/IPNS pipeline and metrics actually exist.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json`, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, and local Governance DAG publication metrics/dashboard/alerts.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports and weekly rollups, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports and weekly rollups, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, and local Governance DAG publication metrics/dashboard/alerts.
 - Remaining: implement the always-on ingest/publisher services, IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service, live-head/public-checkpoint publication and recovery operator commands, runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests, and staged/live publication evidence.

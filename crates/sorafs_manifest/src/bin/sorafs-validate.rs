@@ -1903,7 +1903,7 @@ fn parse_cid_arg_bytes(value: &str) -> Result<Vec<u8>, CliError> {
             CliError::Config(format!("invalid governance --cid hex `{trimmed}`: {err}"))
         });
     }
-    if trimmed.len() % 2 == 0
+    if trimmed.len().is_multiple_of(2)
         && trimmed
             .as_bytes()
             .iter()

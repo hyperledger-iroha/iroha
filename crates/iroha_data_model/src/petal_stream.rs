@@ -18,6 +18,10 @@ pub const PETAL_STREAM_DEFAULT_BORDER: u8 = 1;
 pub const PETAL_STREAM_DEFAULT_ANCHOR: u8 = 3;
 /// Default grid size candidates for auto sizing.
 pub const PETAL_STREAM_GRID_SIZES: &[u16] = &[33, 37, 41, 45, 49, 53, 57, 61, 65, 69];
+/// Basis-point scale used for deterministic capture success ratios.
+pub const PETAL_CAPTURE_RATIO_BPS_SCALE: u16 = 10_000;
+/// Default minimum success ratio for production capture gates (95%).
+pub const PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS: u16 = 9_500;
 
 /// Errors raised while encoding or decoding petal stream frames.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +120,66 @@ impl PetalStreamSampleGrid {
             ));
         }
         Ok(Self { grid_size, samples })
+    }
+}
+
+/// Deterministic capture profile used to score Petal Stream readability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PetalStreamCaptureProfile {
+    /// Number of deterministic capture attempts to simulate.
+    pub attempts: u16,
+    /// Nominal luminance for dark cells (0 = black).
+    pub dark_luma: u8,
+    /// Nominal luminance for light cells (255 = white).
+    pub light_luma: u8,
+    /// Per-cell deterministic luminance jitter applied to each attempt.
+    pub luminance_jitter: u8,
+}
+
+impl Default for PetalStreamCaptureProfile {
+    fn default() -> Self {
+        Self {
+            attempts: 12,
+            dark_luma: 32,
+            light_luma: 224,
+            luminance_jitter: 24,
+        }
+    }
+}
+
+/// Deterministic capture score for a Petal Stream payload/profile pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PetalStreamCaptureScore {
+    /// Number of scheduled capture attempts.
+    pub attempts: u16,
+    /// Number of attempts that decoded back to the original payload.
+    pub successes: u16,
+}
+
+impl PetalStreamCaptureScore {
+    /// Return the success ratio in basis points.
+    pub fn success_ratio_bps(&self) -> u16 {
+        if self.attempts == 0 {
+            return 0;
+        }
+        let numerator = u32::from(self.successes) * u32::from(PETAL_CAPTURE_RATIO_BPS_SCALE);
+        u16::try_from(numerator / u32::from(self.attempts)).unwrap_or(PETAL_CAPTURE_RATIO_BPS_SCALE)
+    }
+
+    /// Return whether the score meets the requested minimum success ratio.
+    ///
+    /// # Errors
+    /// Returns an error if `min_success_ratio_bps` exceeds 100%.
+    pub fn meets_min_success_ratio_bps(
+        &self,
+        min_success_ratio_bps: u16,
+    ) -> Result<bool, PetalStreamError> {
+        if min_success_ratio_bps > PETAL_CAPTURE_RATIO_BPS_SCALE {
+            return Err(PetalStreamError::InvalidOptions(
+                "min_success_ratio_bps exceeds 100%",
+            ));
+        }
+        Ok(self.success_ratio_bps() >= min_success_ratio_bps)
     }
 }
 
@@ -263,6 +327,127 @@ impl PetalStreamDecoder {
         let grid = PetalStreamGrid { grid_size, cells };
         Self::decode_grid(&grid, options)
     }
+}
+
+/// Score deterministic capture readability for a payload.
+///
+/// # Errors
+/// Returns an error when the profile or grid options are invalid, or when the
+/// payload cannot be encoded into the selected grid.
+pub fn score_petal_capture_profile(
+    payload: &[u8],
+    options: PetalStreamOptions,
+    profile: PetalStreamCaptureProfile,
+) -> Result<PetalStreamCaptureScore, PetalStreamError> {
+    score_petal_capture_profile_with_seed(payload, options, profile, 0)
+}
+
+/// Score deterministic capture readability for a payload with an explicit seed.
+///
+/// The seed is mixed only into the deterministic luminance perturbation stream;
+/// no runtime randomness is used, so the same inputs always produce the same
+/// score on every node and host architecture.
+///
+/// # Errors
+/// Returns an error when the profile or grid options are invalid, or when the
+/// payload cannot be encoded into the selected grid.
+pub fn score_petal_capture_profile_with_seed(
+    payload: &[u8],
+    options: PetalStreamOptions,
+    profile: PetalStreamCaptureProfile,
+    seed: u64,
+) -> Result<PetalStreamCaptureScore, PetalStreamError> {
+    validate_capture_profile(profile)?;
+    let grid = PetalStreamEncoder::encode_grid(payload, options)?;
+    let mut successes = 0u16;
+    for attempt in 0..profile.attempts {
+        let samples = render_capture_samples(&grid, profile, attempt, seed)?;
+        if PetalStreamDecoder::decode_samples(&samples, options)
+            .is_ok_and(|decoded| decoded == payload)
+        {
+            successes = successes.saturating_add(1);
+        }
+    }
+    Ok(PetalStreamCaptureScore {
+        attempts: profile.attempts,
+        successes,
+    })
+}
+
+/// Render one deterministic capture-attempt sample grid for a Petal bit grid.
+///
+/// The `attempt` and `seed` values select the deterministic luminance
+/// perturbation stream. No runtime randomness is used, so identical inputs
+/// produce identical samples on every host.
+///
+/// # Errors
+/// Returns an error when the profile is invalid or the generated sample grid
+/// would not match the input grid geometry.
+pub fn render_petal_capture_samples_with_seed(
+    grid: &PetalStreamGrid,
+    profile: PetalStreamCaptureProfile,
+    attempt: u16,
+    seed: u64,
+) -> Result<PetalStreamSampleGrid, PetalStreamError> {
+    validate_capture_profile(profile)?;
+    render_capture_samples(grid, profile, attempt, seed)
+}
+
+fn validate_capture_profile(profile: PetalStreamCaptureProfile) -> Result<(), PetalStreamError> {
+    if profile.attempts == 0 {
+        return Err(PetalStreamError::InvalidOptions(
+            "capture attempts must be > 0",
+        ));
+    }
+    if profile.dark_luma >= profile.light_luma {
+        return Err(PetalStreamError::InvalidOptions(
+            "dark_luma must be lower than light_luma",
+        ));
+    }
+    Ok(())
+}
+
+fn render_capture_samples(
+    grid: &PetalStreamGrid,
+    profile: PetalStreamCaptureProfile,
+    attempt: u16,
+    seed: u64,
+) -> Result<PetalStreamSampleGrid, PetalStreamError> {
+    let mut samples = Vec::with_capacity(grid.cells.len());
+    for (idx, cell) in grid.cells.iter().enumerate() {
+        let base = if *cell {
+            profile.dark_luma
+        } else {
+            profile.light_luma
+        };
+        samples.push(apply_luminance_jitter(
+            base,
+            profile.luminance_jitter,
+            idx,
+            attempt,
+            seed,
+        ));
+    }
+    PetalStreamSampleGrid::new(grid.grid_size, samples)
+}
+
+fn apply_luminance_jitter(base: u8, jitter: u8, index: usize, attempt: u16, seed: u64) -> u8 {
+    if jitter == 0 {
+        return base;
+    }
+    let span = u32::from(jitter) * 2 + 1;
+    let seed_bytes = seed.to_le_bytes();
+    let seed32 = u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]])
+        ^ u32::from_le_bytes([seed_bytes[4], seed_bytes[5], seed_bytes[6], seed_bytes[7]]);
+    let index32 = u32::try_from(index).unwrap_or(u32::MAX);
+    let mixed = index32
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(u32::from(attempt).wrapping_mul(12_345))
+        .wrapping_add(seed32.rotate_left(u32::from(attempt % 31)))
+        .rotate_left(u32::from(attempt % 17));
+    let offset = i16::try_from(mixed % span).unwrap_or(i16::MAX) - i16::from(jitter);
+    let value = i16::from(base) + offset;
+    u8::try_from(value.clamp(0, i16::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
 fn resolve_grid_size(
@@ -507,5 +692,142 @@ mod tests {
         let grid = PetalStreamEncoder::encode_grid(&payload, PetalStreamOptions::default())
             .expect("encode");
         assert!(PETAL_STREAM_GRID_SIZES.contains(&grid.grid_size));
+    }
+
+    #[test]
+    fn default_capture_profile_meets_production_gate() {
+        let payload = b"sora-temple-capture-baseline";
+        let score = score_petal_capture_profile(
+            payload,
+            PetalStreamOptions::default(),
+            PetalStreamCaptureProfile::default(),
+        )
+        .expect("score profile");
+
+        assert_eq!(
+            score.attempts,
+            PetalStreamCaptureProfile::default().attempts
+        );
+        assert_eq!(score.successes, score.attempts);
+        assert_eq!(score.success_ratio_bps(), PETAL_CAPTURE_RATIO_BPS_SCALE);
+        assert!(
+            score
+                .meets_min_success_ratio_bps(PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS)
+                .expect("valid threshold")
+        );
+    }
+
+    #[test]
+    fn seeded_capture_profile_is_deterministic_and_default_seed_matches_unseeded() {
+        let payload = b"sora-temple-capture-baseline";
+        let options = PetalStreamOptions::default();
+        let profile = PetalStreamCaptureProfile::default();
+        let unseeded =
+            score_petal_capture_profile(payload, options, profile).expect("unseeded score");
+        let seeded_a =
+            score_petal_capture_profile_with_seed(payload, options, profile, 42).expect("seeded a");
+        let seeded_b =
+            score_petal_capture_profile_with_seed(payload, options, profile, 42).expect("seeded b");
+        let seed_zero =
+            score_petal_capture_profile_with_seed(payload, options, profile, 0).expect("seed zero");
+
+        assert_eq!(seeded_a, seeded_b);
+        assert_eq!(seed_zero, unseeded);
+    }
+
+    #[test]
+    fn low_contrast_capture_profile_fails_gate() {
+        let payload = b"sora-temple-low-contrast";
+        let score = score_petal_capture_profile(
+            payload,
+            PetalStreamOptions::default(),
+            PetalStreamCaptureProfile {
+                attempts: 4,
+                dark_luma: 128,
+                light_luma: 129,
+                luminance_jitter: 0,
+            },
+        )
+        .expect("score profile");
+
+        assert_eq!(score.successes, 0);
+        assert_eq!(score.success_ratio_bps(), 0);
+        assert!(
+            !score
+                .meets_min_success_ratio_bps(PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS)
+                .expect("valid threshold")
+        );
+    }
+
+    #[test]
+    fn capture_profile_rejects_invalid_options() {
+        let err = score_petal_capture_profile(
+            b"payload",
+            PetalStreamOptions::default(),
+            PetalStreamCaptureProfile {
+                attempts: 0,
+                ..PetalStreamCaptureProfile::default()
+            },
+        )
+        .expect_err("zero attempts rejected");
+        assert_eq!(
+            err,
+            PetalStreamError::InvalidOptions("capture attempts must be > 0")
+        );
+
+        let err = score_petal_capture_profile(
+            b"payload",
+            PetalStreamOptions::default(),
+            PetalStreamCaptureProfile {
+                dark_luma: 200,
+                light_luma: 128,
+                ..PetalStreamCaptureProfile::default()
+            },
+        )
+        .expect_err("inverted luminance rejected");
+        assert_eq!(
+            err,
+            PetalStreamError::InvalidOptions("dark_luma must be lower than light_luma")
+        );
+
+        let err = PetalStreamCaptureScore {
+            attempts: 1,
+            successes: 1,
+        }
+        .meets_min_success_ratio_bps(PETAL_CAPTURE_RATIO_BPS_SCALE + 1)
+        .expect_err("invalid threshold rejected");
+        assert_eq!(
+            err,
+            PetalStreamError::InvalidOptions("min_success_ratio_bps exceeds 100%")
+        );
+    }
+
+    #[test]
+    fn render_capture_samples_with_seed_is_public_and_deterministic() {
+        let payload = b"sora-temple-capture-baseline";
+        let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
+            .expect("encode");
+        let profile = PetalStreamCaptureProfile::default();
+
+        let samples_a =
+            render_petal_capture_samples_with_seed(&grid, profile, 3, 99).expect("samples a");
+        let samples_b =
+            render_petal_capture_samples_with_seed(&grid, profile, 3, 99).expect("samples b");
+        let samples_other_attempt =
+            render_petal_capture_samples_with_seed(&grid, profile, 4, 99).expect("samples c");
+
+        assert_eq!(samples_a, samples_b);
+        assert_ne!(samples_a, samples_other_attempt);
+        let decoded = PetalStreamDecoder::decode_samples(&samples_a, PetalStreamOptions::default())
+            .expect("decode samples");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn luminance_jitter_folds_high_seed_bits_without_truncating() {
+        let low_seed = apply_luminance_jitter(128, 24, 7, 5, 1);
+        let high_seed = apply_luminance_jitter(128, 24, 7, 5, 2_u64 << 32);
+
+        assert_ne!(low_seed, high_seed);
     }
 }

@@ -615,6 +615,12 @@ class KagemushaRecursiveSpendProverTest {
             verifierNativeAvailable,
             KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable(),
         )
+        val projectionNativeAvailable =
+            KagemushaRecursiveCompactPaymentTokenProver.isProjectionNativeAvailable()
+        assertEquals(
+            projectionNativeAvailable,
+            KagemushaRecursiveCompactPaymentTokenProver.isProjectionNativeAvailable(),
+        )
         val projectionVerifierNativeAvailable =
             KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()
         assertEquals(
@@ -2136,6 +2142,16 @@ class KagemushaRecursiveSpendProverTest {
             malformedPallasBuilder.message.orEmpty()
                 .contains("native build Pallas open envelopes returned invalid Norito archive"),
         )
+        val malformedProjection = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                byteArrayOf(0x01, 0x02),
+                "nativeRecursiveSpendCompactPaymentTokenFromBundle",
+            )
+        }
+        assertTrue(
+            malformedProjection.message.orEmpty()
+                .contains("nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive"),
+        )
 
         val compressed = kagemushaNoritoFrameWithPayload(0x4b)
         compressed[22] = 1
@@ -2172,6 +2188,16 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(
             emptyPreviousProofBuilderPayload.message.orEmpty()
                 .contains("native build previous proof open envelopes returned empty Norito payload"),
+        )
+        val emptyProjectionPayload = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                kagemushaNoritoFrame(0x4d),
+                "nativeRecursiveSpendCompactPaymentTokenFromBundle",
+            )
+        }
+        assertTrue(
+            emptyProjectionPayload.message.orEmpty()
+                .contains("nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload"),
         )
 
         val output = kagemushaNoritoFrameWithPayload(0x4b)

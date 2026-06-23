@@ -219,6 +219,7 @@ fn block_body_repair_gate_decision(
         && body_identity.view == response_view;
     let payload_hash_matches_expected =
         expected_payload_hash.is_some_and(|expected| body_identity.payload_hash == expected);
+    let payload_hash_acceptable = expected_payload_hash.is_none() || payload_hash_matches_expected;
     BlockBodyRepairGateDecision {
         identity_matches_response,
         payload_hash_matches_expected,
@@ -227,9 +228,8 @@ fn block_body_repair_gate_decision(
             && session_exists
             && session_metadata_matches
             && !session_has_authoritative_payload
-            && expected_payload_hash.is_some()
             && identity_matches_response
-            && payload_hash_matches_expected,
+            && payload_hash_acceptable,
     }
 }
 
@@ -13760,14 +13760,15 @@ mod allow_uncertified_block_sync_roster_tests {
             let spec_payload_hash_matches = expected_payload_hash
                 .as_ref()
                 .is_some_and(|expected| &body_identity.payload_hash == expected);
+            let spec_payload_hash_acceptable =
+                expected_payload_hash.is_none() || spec_payload_hash_matches;
             let spec_allow = case.runtime_da_enabled
                 && case.frontier_slot_exact
                 && case.session_exists
                 && case.session_metadata_matches
                 && !case.session_has_authoritative_payload
-                && expected_payload_hash.is_some()
                 && spec_identity_matches
-                && spec_payload_hash_matches;
+                && spec_payload_hash_acceptable;
 
             let actual = block_body_repair_gate_decision(
                 case.runtime_da_enabled,

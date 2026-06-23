@@ -28,7 +28,7 @@ TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR = (
     "94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8"
 )
 TRON_DPOS_SOURCE_GATE_HASH_VECTOR = (
-    "776e8ebaf68ce872b0596330e4eb0c26bc6151ea23cb45dcd46316bb1f12bd28"
+    "7db1d06e59c820fa2d9bee706d1d6d979dfad7813fd3bfaf4952e3c9b3810785"
 )
 TRON_ROUTE_ALLOWLIST_HASH_VECTOR = (
     "fea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a"
@@ -537,6 +537,10 @@ def test_tron_source_record_hashes_match_rust_vectors():
     assert material_hash.hex() == TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
     assert deployment_hash.hex() == TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
     assert gate_hash.hex() == TRON_DPOS_SOURCE_GATE_HASH_VECTOR
+
+    replayed_receipt = SimpleNamespace(**vars(args))
+    replayed_receipt.deployment_receipt_hash = bytes.fromhex("ab" * 32)
+    assert module.tron_dpos_source_gate_hash(replayed_receipt, config_hash) != gate_hash
 
 
 def test_tron_source_deployment_hash_rejects_noncanonical_adapter_vk_hash():

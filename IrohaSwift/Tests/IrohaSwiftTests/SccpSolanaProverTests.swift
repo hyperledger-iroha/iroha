@@ -2511,7 +2511,7 @@ final class SccpSolanaProverTests: XCTestCase {
             ["0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3"],
             ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
             ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-            ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+            ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
             ["0xb1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"],
             ["0x0300000000000000000000000000000000000000000000000000000000000000"],
             ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -2537,7 +2537,7 @@ final class SccpSolanaProverTests: XCTestCase {
             ["0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0"],
             ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
             ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-            ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+            ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
             ["0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"],
             ["0x0300000000000000000000000000000000000000000000000000000000000000"],
             ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -2560,7 +2560,7 @@ final class SccpSolanaProverTests: XCTestCase {
             ["0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8"],
             ["0xf0c76a74d7368857b724a8299f0851a30041acfbb03d6fc6bd4a6070358c093c"],
             ["0x9c33ee13a70d2c960e27e28680f7816b84bda7d6cb4888fb449f6407c87a2bbd"],
-            ["0x3e0126e340dac71435abbb43b2df3bb5635568e8445326cd8723fef8a3dfd78f"],
+            ["0x8584e42713d21415970ceb9d51b71c6b7a5999093b3d6cec84dfc13a38e47c0f"],
             ["0xd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"],
             ["0x0300000000000000000000000000000000000000000000000000000000000000"],
             ["0xc1c6130000000000000000000000000000000000000000000000000000000000"],
@@ -5135,7 +5135,13 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertEqual(
             try Self.sampleSolanaFullLightClientGateHash(),
-            "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9"
+            "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02"
+        )
+        XCTAssertNotEqual(
+            try Self.sampleSolanaFullLightClientGateHash(
+                deploymentReceiptHash: "0x" + String(repeating: "ab", count: 32)
+            ),
+            try Self.sampleSolanaFullLightClientGateHash()
         )
         XCTAssertThrowsError(try Self.sampleSolanaFullLightClientGateHash(towerReplayHash: "0x" + String(repeating: "00", count: 32))) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("solanaTowerReplayVerifierHash"))
@@ -5198,7 +5204,13 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertEqual(
             try Self.sampleTonFullLightClientGateHash(),
-            "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596"
+            "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48"
+        )
+        XCTAssertNotEqual(
+            try Self.sampleTonFullLightClientGateHash(
+                deploymentReceiptHash: "0x" + String(repeating: "ab", count: 32)
+            ),
+            try Self.sampleTonFullLightClientGateHash()
         )
         XCTAssertThrowsError(try Self.sampleTonFullLightClientGateHash(masterchainConfigHash: "0x" + String(repeating: "00", count: 32))) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("tonMasterchainConfigVerifierHash"))
@@ -8635,7 +8647,38 @@ final class SccpSolanaProverTests: XCTestCase {
             bundleBytes: nonSoraBundle.bundleBytes,
             sourceProofBytes: Data([9, 10])
         ))) { error in
-            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes and publicInputs"))
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes finality proof"))
+        }
+        let replaySourceFixture = Self.sampleTronBundleFixture(
+            sourceDomain: sccpDomainEthereum,
+            nonce: 328
+        )
+        let replayBoundSourceFixture = Self.sampleTronBundleFixture(
+            sourceDomain: sccpDomainEthereum,
+            finalityProof: Self.testCanonicalSccpSourceProofBytes(
+                sourceDomain: sccpDomainEthereum,
+                targetDomain: nonSoraBundle.publicInputs.targetDomain,
+                messageId: nonSoraBundle.publicInputs.messageId,
+                payloadHash: nonSoraBundle.publicInputs.payloadHash,
+                commitmentRoot: nonSoraBundle.publicInputs.commitmentRoot,
+                finalityHeight: nonSoraBundle.publicInputs.finalityHeight,
+                finalityBlockHash: nonSoraBundle.publicInputs.finalityBlockHash
+            )
+        )
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            publicInputs: replayBoundSourceFixture.publicInputs,
+            bundleBytes: replayBoundSourceFixture.bundleBytes,
+            sourceProofBytes: Self.testCanonicalSccpSourceProofBytes(
+                sourceDomain: sccpDomainEthereum,
+                targetDomain: replaySourceFixture.publicInputs.targetDomain,
+                messageId: replaySourceFixture.publicInputs.messageId,
+                payloadHash: replaySourceFixture.publicInputs.payloadHash,
+                commitmentRoot: replaySourceFixture.publicInputs.commitmentRoot,
+                finalityHeight: replaySourceFixture.publicInputs.finalityHeight,
+                finalityBlockHash: replaySourceFixture.publicInputs.finalityBlockHash
+            )
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes finality proof"))
         }
         XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
             publicInputs: nonSoraBundle.publicInputs,
@@ -9183,7 +9226,38 @@ final class SccpSolanaProverTests: XCTestCase {
             bundleBytes: nonSoraBundle.bundleBytes,
             sourceProofBytes: Data([9, 10])
         ))) { error in
-            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes and publicInputs"))
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes finality proof"))
+        }
+        let replaySourceFixture = Self.sampleEvmBundleFixture(
+            sourceDomain: sccpDomainBsc,
+            nonce: 328
+        )
+        let replayBoundSourceFixture = Self.sampleEvmBundleFixture(
+            sourceDomain: sccpDomainBsc,
+            finalityProof: Self.testCanonicalSccpSourceProofBytes(
+                sourceDomain: sccpDomainBsc,
+                targetDomain: nonSoraBundle.publicInputs.targetDomain,
+                messageId: nonSoraBundle.publicInputs.messageId,
+                payloadHash: nonSoraBundle.publicInputs.payloadHash,
+                commitmentRoot: nonSoraBundle.publicInputs.commitmentRoot,
+                finalityHeight: nonSoraBundle.publicInputs.finalityHeight,
+                finalityBlockHash: nonSoraBundle.publicInputs.finalityBlockHash
+            )
+        )
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: replayBoundSourceFixture.publicInputs,
+            bundleBytes: replayBoundSourceFixture.bundleBytes,
+            sourceProofBytes: Self.testCanonicalSccpSourceProofBytes(
+                sourceDomain: sccpDomainBsc,
+                targetDomain: replaySourceFixture.publicInputs.targetDomain,
+                messageId: replaySourceFixture.publicInputs.messageId,
+                payloadHash: replaySourceFixture.publicInputs.payloadHash,
+                commitmentRoot: replaySourceFixture.publicInputs.commitmentRoot,
+                finalityHeight: replaySourceFixture.publicInputs.finalityHeight,
+                finalityBlockHash: replaySourceFixture.publicInputs.finalityBlockHash
+            )
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes finality proof"))
         }
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             publicInputs: nonSoraBundle.publicInputs,
@@ -13167,6 +13241,141 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testBscTestnetSccpFacadeRequiresChainId97AndBscTarget() async throws {
+        let verifierAddress = "0x" + String(repeating: "11", count: 20)
+        let bridgeAddress = "0x" + String(repeating: "22", count: 20)
+        let verifierCodeHash = "0x" + String(repeating: "bb", count: 32)
+        let verifierKeyHash = "0x" + String(repeating: "cc", count: 32)
+        let expectedBindingHash = "0x16eb6817844e492f8fea4fc4742b9e464a80ae392f25d5e6fad9960d49414dcc"
+        let binding = try sccpBscTestnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        )
+
+        XCTAssertEqual(sccpBscTestnetChainId, 97)
+        XCTAssertEqual(binding.networkId, sccpBscTestnetNetworkId)
+        XCTAssertEqual(binding.targetDomain, sccpDomainBsc)
+        XCTAssertEqual(binding.hash, expectedBindingHash)
+        XCTAssertEqual(
+            binding.key,
+            "evm:0:2:0000000000000000000000000000000000000000000000000000000000000061:"
+                + "\(verifierAddress):\(bridgeAddress):\(verifierCodeHash):\(verifierKeyHash)"
+        )
+        XCTAssertEqual(
+            binding.hash,
+            try sccpBscTestnetDestinationBindingHash(
+                verifierAddress: verifierAddress,
+                bridgeAddress: bridgeAddress,
+                verifierCodeHash: verifierCodeHash,
+                verifierKeyHash: verifierKeyHash
+            )
+        )
+        XCTAssertNoThrow(try BscTestnetSccp.requireTestnetChainId(sccpBscTestnetChainId))
+        XCTAssertThrowsError(try BscTestnetSccp.requireTestnetChainId(sccpBscMainnetChainId)) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("eth_chainId"))
+        }
+
+        let input = try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            bundleBytes: Self.sampleEvmBundleFixture(targetDomain: sccpDomainBsc).bundleBytes,
+            sourceProofBytes: Data(),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: binding
+        )
+        let request = try buildBscTestnetSccpDestinationProofRequest(input)
+        let proofBytes = Self.sampleEvmGroth16ProofBytes(publicInputs: request.publicInputs)
+        let proofResult = try wrapBscTestnetSccpDestinationProofResult(
+            proofBytes: proofBytes,
+            request: request
+        )
+        let submission = try buildBscTestnetSccpDestinationSubmission(
+            EvmSccpSubmissionInput(proofResult: proofResult)
+        )
+
+        XCTAssertEqual(request.targetDomain, sccpDomainBsc)
+        XCTAssertEqual(request.destinationBinding?.networkId, sccpBscTestnetNetworkId)
+        XCTAssertEqual(proofResult.destinationBindingHash, expectedBindingHash)
+        XCTAssertEqual(submission.targetDomain, sccpDomainBsc)
+        XCTAssertEqual(submission.destinationBindingHash, expectedBindingHash)
+
+        let submitFacade = BscTestnetSccp(outboundSubmitFunction: { outboundSubmission in
+            XCTAssertEqual(outboundSubmission.targetDomain, sccpDomainBsc)
+            XCTAssertEqual(outboundSubmission.proofBytes, proofBytes)
+            XCTAssertEqual(outboundSubmission.destinationBindingHash, expectedBindingHash)
+            return "bsc-testnet-submitted"
+        })
+        let submitted = try await submitFacade.submitOutboundToBsc(EvmSccpSubmissionInput(proofResult: proofResult))
+        XCTAssertEqual(submitted as? String, "bsc-testnet-submitted")
+        do {
+            _ = try await BscTestnetSccp().submitOutboundToBsc(EvmSccpSubmissionInput(proofResult: proofResult))
+            XCTFail("BSC testnet outbound submitter must be app-supplied")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .localProverUnavailable)
+        }
+
+        let prover = BscTestnetSccpProver { request in
+            XCTAssertEqual(request.targetDomain, sccpDomainBsc)
+            XCTAssertEqual(request.destinationBinding?.networkId, sccpBscTestnetNetworkId)
+            return proofBytes
+        }
+        let asyncResult = try await prover.prove(input)
+        XCTAssertEqual(asyncResult.destinationBindingHash, expectedBindingHash)
+
+        XCTAssertThrowsError(try sccpBscTestnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash,
+            networkId: sccpBscMainnetNetworkId
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("networkId"))
+        }
+
+        let mainnetBinding = try sccpBscMainnetDestinationBinding(
+            verifierAddress: verifierAddress,
+            bridgeAddress: bridgeAddress,
+            verifierCodeHash: verifierCodeHash,
+            verifierKeyHash: verifierKeyHash
+        )
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationProofRequest(
+            try EvmSccpProofRequestInput(
+                publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+                bundleBytes: Self.sampleEvmBundleFixture(targetDomain: sccpDomainBsc).bundleBytes,
+                sourceProofBytes: Data(),
+                statementHash: String(repeating: "56", count: 32),
+                destinationBinding: mainnetBinding
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBinding.networkId"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationProofRequest(
+            try Self.sampleProductionEvmProofRequestInput()
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("request.targetDomain"))
+        }
+        let forgedHashInput = EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            bundleBytes: Self.sampleEvmBundleFixture(targetDomain: sccpDomainBsc).bundleBytes,
+            sourceProofBytes: Data(),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: "0x" + String(repeating: "99", count: 32),
+            destinationBinding: binding
+        )
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationProofRequest(forgedHashInput)) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpDestinationSubmission(EvmSccpSubmissionInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
+            proofBytes: proofBytes,
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: binding.hash
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.destinationBinding"))
+        }
+    }
+
     func testBscMainnetSccpBuildsLocalAdmissionSubmission() throws {
         let input = BscMainnetLocalAdmissionSubmissionInput(
             proofBytes: Data([1, 2, 3]),
@@ -13249,6 +13458,102 @@ final class SccpSolanaProverTests: XCTestCase {
         }
         XCTAssertThrowsError(try buildBscMainnetSccpLocalAdmissionSubmission(
             BscMainnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32),
+                proofFamily: "debug-proof-family"
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("localAdmission.metadata"))
+        }
+    }
+
+    func testBscTestnetSccpBuildsLocalAdmissionSubmission() throws {
+        let input = BscTestnetLocalAdmissionSubmissionInput(
+            proofBytes: Data([1, 2, 3]),
+            publicInputsBytes: Data([4, 5, 6]),
+            bundleBytes: Data([7, 8, 9]),
+            envelopeBytes: Data([10, 11, 12]),
+            statementHash: "0x" + String(repeating: "66", count: 32),
+            sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+            sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32)
+        )
+        let submission = try buildBscTestnetSccpLocalAdmissionSubmission(input)
+        let facadeSubmission = try BscTestnetSccp().buildLocalAdmissionSubmission(input)
+
+        XCTAssertEqual(submission.platformPayload, sccpLocalAdmissionSubmissionKindV1)
+        XCTAssertEqual(submission.envelopeEncoding, sccpLocalAdmissionEnvelopeEncodingV1)
+        XCTAssertEqual(submission.verifierEntrypoint, sccpLocalAdmissionEntrypointV1)
+        XCTAssertEqual(submission.sourceDomain, sccpDomainBsc)
+        XCTAssertEqual(submission.targetDomain, sccpDomainSora)
+        XCTAssertTrue(submission.arguments.isEmpty)
+        XCTAssertEqual(submission.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(submission.publicInputsBytes, Data([4, 5, 6]))
+        XCTAssertEqual(submission.bundleBytes, Data([7, 8, 9]))
+        XCTAssertEqual(submission.envelopeBytes, Data([10, 11, 12]))
+        XCTAssertEqual(submission.localAdmission.proofBytes, Data([1, 2, 3]))
+        XCTAssertEqual(submission.envelopeHex, facadeSubmission.envelopeHex)
+
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32),
+                sourceDomain: sccpDomainEthereum
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("BSC testnet -> SORA"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([0, 0]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32)
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .allZeroProof)
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data(),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32)
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .emptyProof)
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
+                proofBytes: Data([1, 2, 3]),
+                publicInputsBytes: Data([4, 5, 6]),
+                bundleBytes: Data([7, 8, 9]),
+                envelopeBytes: Data([10, 11, 12]),
+                statementHash: "0x" + String(repeating: "66", count: 32),
+                sourceVerifierMaterialHash: "0x" + String(repeating: "77", count: 32),
+                sourceAdapterEngineDeploymentHash: "0x" + String(repeating: "88", count: 32),
+                envelopeEncoding: "abi_tuple_v1"
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("localAdmission.metadata"))
+        }
+        XCTAssertThrowsError(try buildBscTestnetSccpLocalAdmissionSubmission(
+            BscTestnetLocalAdmissionSubmissionInput(
                 proofBytes: Data([1, 2, 3]),
                 publicInputsBytes: Data([4, 5, 6]),
                 bundleBytes: Data([7, 8, 9]),
@@ -14997,7 +15302,8 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceDomain: UInt32 = sccpDomainSora,
         targetDomain: UInt32 = sccpDomainEthereum,
         nonce: UInt64 = 327,
-        recipient: String? = nil
+        recipient: String? = nil,
+        finalityProof: Data = Data([0x01, 0x02, 0x03])
     ) -> SampleEvmBundleFixture {
         let senderCodec: UInt8 = sourceDomain == sccpDomainSora ? 1 : 2
         let sender = sourceDomain == sccpDomainSora
@@ -15011,7 +15317,7 @@ final class SccpSolanaProverTests: XCTestCase {
             nonce: nonce,
             recipient: recipient,
             routeId: targetDomain == sccpDomainBsc ? "sora-bsc-xor" : "sora-eth-xor",
-            finalityProof: Data([0x01, 0x02, 0x03])
+            finalityProof: finalityProof
         )
         return SampleEvmBundleFixture(
             publicInputs: EvmSccpPublicInputsInput(
@@ -15167,7 +15473,8 @@ final class SccpSolanaProverTests: XCTestCase {
 
     private static func sampleTronBundleFixture(
         sourceDomain: UInt32 = sccpDomainSora,
-        nonce: UInt64 = 327
+        nonce: UInt64 = 327,
+        finalityProof: Data = Data([0x01, 0x02, 0x03])
     ) -> SampleTronBundleFixture {
         let senderCodec: UInt8 = sourceDomain == sccpDomainSora ? 1 : 2
         let sender = sourceDomain == sccpDomainSora
@@ -15180,7 +15487,7 @@ final class SccpSolanaProverTests: XCTestCase {
             targetDomain: sccpDomainTron,
             nonce: nonce,
             routeId: "sora-tron-xor",
-            finalityProof: Data([0x01, 0x02, 0x03])
+            finalityProof: finalityProof
         )
         return SampleTronBundleFixture(
             publicInputs: TronSccpPublicInputsInput(
@@ -15193,6 +15500,160 @@ final class SccpSolanaProverTests: XCTestCase {
             ),
             bundleBytes: fixture.bundleBytes
         )
+    }
+
+    private static func testCanonicalSccpSourceProofBytes(
+        sourceDomain: UInt32,
+        targetDomain: UInt32,
+        messageId: String,
+        payloadHash: String,
+        commitmentRoot: String,
+        finalityHeight: UInt64,
+        finalityBlockHash: String
+    ) -> Data {
+        var payload = Data()
+        appendTestNoritoField(Data([1]), to: &payload)
+        var sourceDomainField = Data()
+        appendTestU32Le(sourceDomain, to: &sourceDomainField)
+        appendTestNoritoField(sourceDomainField, to: &payload)
+        var targetDomainField = Data()
+        appendTestU32Le(targetDomain, to: &targetDomainField)
+        appendTestNoritoField(targetDomainField, to: &payload)
+        appendTestNoritoField(testNoritoStringPayload(testSourceChainKey(for: sourceDomain)), to: &payload)
+        var sourceProofPlanField = Data()
+        appendTestU32Le(testSourceProofPlan(for: sourceDomain), to: &sourceProofPlanField)
+        appendTestNoritoField(sourceProofPlanField, to: &payload)
+        var finalityModelField = Data()
+        appendTestU32Le(testFinalityModel(for: sourceDomain), to: &finalityModelField)
+        appendTestNoritoField(finalityModelField, to: &payload)
+        appendTestNoritoField(testHex32Data(messageId), to: &payload)
+        appendTestNoritoField(testHex32Data(payloadHash), to: &payload)
+        appendTestNoritoField(
+            testSccpSourceEventDigest(
+                sourceDomain: sourceDomain,
+                targetDomain: targetDomain,
+                messageId: messageId,
+                payloadHash: payloadHash
+            ),
+            to: &payload
+        )
+        appendTestNoritoField(testHex32Data(commitmentRoot), to: &payload)
+        var finalityHeightField = Data()
+        appendTestU64Le(finalityHeight, to: &finalityHeightField)
+        appendTestNoritoField(finalityHeightField, to: &payload)
+        appendTestNoritoField(testHex32Data(finalityBlockHash), to: &payload)
+        appendTestNoritoField(Data(repeating: 0x55, count: 32), to: &payload)
+        appendTestNoritoField(Data(repeating: 0x66, count: 32), to: &payload)
+        appendTestNoritoField(testNoritoRawByteVecPayload(Data([0x71, 0x72])), to: &payload)
+        appendTestNoritoField(testNoritoRawByteVecPayload(Data([0x73, 0x74])), to: &payload)
+        appendTestNoritoField(
+            testNoritoRawByteVecSequencePayload([Data(repeating: 0x75, count: 32)]),
+            to: &payload
+        )
+        return noritoEncode(typeName: "iroha_sccp::SccpSourceChainProofEnvelopeV1", payload: payload)
+    }
+
+    private static func testSccpSourceEventDigest(
+        sourceDomain: UInt32,
+        targetDomain: UInt32,
+        messageId: String,
+        payloadHash: String
+    ) -> Data {
+        var payload = Data([1])
+        appendTestU32Le(sourceDomain, to: &payload)
+        appendTestU32Le(targetDomain, to: &payload)
+        payload.append(testHex32Data(messageId))
+        payload.append(testHex32Data(payloadHash))
+        var preimage = Data("sccp:source:event:v1".utf8)
+        preimage.append(payload)
+        return Blake2b.hash256(preimage)
+    }
+
+    private static func testSourceChainKey(for domain: UInt32) -> String {
+        switch domain {
+        case sccpDomainEthereum:
+            return "eth"
+        case sccpDomainBsc:
+            return "bsc"
+        case sccpDomainSolana:
+            return "sol"
+        case sccpDomainTon:
+            return "ton"
+        case sccpDomainTron:
+            return "tron"
+        default:
+            preconditionFailure("unsupported source domain")
+        }
+    }
+
+    private static func testSourceProofPlan(for domain: UInt32) -> UInt32 {
+        switch domain {
+        case sccpDomainEthereum:
+            return 1
+        case sccpDomainBsc:
+            return 2
+        case sccpDomainSolana:
+            return 3
+        case sccpDomainTon:
+            return 4
+        case sccpDomainTron:
+            return 5
+        default:
+            preconditionFailure("unsupported source domain")
+        }
+    }
+
+    private static func testFinalityModel(for domain: UInt32) -> UInt32 {
+        switch domain {
+        case sccpDomainEthereum:
+            return 0
+        case sccpDomainBsc:
+            return 1
+        case sccpDomainSolana:
+            return 2
+        case sccpDomainTon:
+            return 3
+        case sccpDomainTron:
+            return 4
+        default:
+            preconditionFailure("unsupported source domain")
+        }
+    }
+
+    private static func appendTestNoritoField(_ fieldPayload: Data, to out: inout Data) {
+        appendTestU64Le(UInt64(fieldPayload.count), to: &out)
+        out.append(fieldPayload)
+    }
+
+    private static func testNoritoStringPayload(_ value: String) -> Data {
+        var out = Data()
+        let bytes = Data(value.utf8)
+        appendTestU64Le(UInt64(bytes.count), to: &out)
+        out.append(bytes)
+        return out
+    }
+
+    private static func testNoritoRawByteVecPayload(_ value: Data) -> Data {
+        var out = Data()
+        appendTestU64Le(UInt64(value.count), to: &out)
+        out.append(value)
+        return out
+    }
+
+    private static func testNoritoRawByteVecSequencePayload(_ values: [Data]) -> Data {
+        var out = Data()
+        appendTestU64Le(UInt64(values.count), to: &out)
+        for value in values {
+            appendTestNoritoField(testNoritoRawByteVecPayload(value), to: &out)
+        }
+        return out
+    }
+
+    private static func testHex32Data(_ value: String) -> Data {
+        let body = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
+        let data = Data(hexString: body)!
+        precondition(data.count == 32)
+        return data
     }
 
     private static func splitTestTonSccpMessageProofBundleBytes(_ bundleBytes: Data)
@@ -15818,6 +16279,7 @@ final class SccpSolanaProverTests: XCTestCase {
         towerReplayHash: String = "0x" + String(repeating: "bb", count: 32),
         fullAccountsdbLatticeHash: String = "0x" + String(repeating: "cc", count: 32),
         bankForkChoiceHash: String = "0x" + String(repeating: "dd", count: 32),
+        deploymentReceiptHash: String = "0x" + String(repeating: "aa", count: 32),
         sourceStateHash: String? = sourceStateVerifierHash(domain: sccpDomainSolana)
     ) throws -> String {
         try sccpSolanaFullLightClientGateHash(
@@ -15825,7 +16287,7 @@ final class SccpSolanaProverTests: XCTestCase {
             consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
             messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
             finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
-            deploymentReceiptHash: "0x" + String(repeating: "aa", count: 32),
+            deploymentReceiptHash: deploymentReceiptHash,
             solanaTowerReplayVerifierHash: towerReplayHash,
             solanaFullAccountsdbLatticeVerifierHash: fullAccountsdbLatticeHash,
             solanaBankForkChoiceVerifierHash: bankForkChoiceHash,
@@ -15836,14 +16298,15 @@ final class SccpSolanaProverTests: XCTestCase {
     private static func sampleTonFullLightClientGateHash(
         masterchainConfigHash: String = "0x" + String(repeating: "bb", count: 32),
         validatorSetTransitionHash: String = "0x" + String(repeating: "cc", count: 32),
-        shardAccountsDictionaryHash: String = "0x" + String(repeating: "dd", count: 32)
+        shardAccountsDictionaryHash: String = "0x" + String(repeating: "dd", count: 32),
+        deploymentReceiptHash: String = "0x" + String(repeating: "aa", count: 32)
     ) throws -> String {
         try sccpTonFullLightClientGateHash(
             sourceTrustAnchorHash: "0x" + String(repeating: "44", count: 32),
             consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
             messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
             finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
-            deploymentReceiptHash: "0x" + String(repeating: "aa", count: 32),
+            deploymentReceiptHash: deploymentReceiptHash,
             tonMasterchainConfigVerifierHash: masterchainConfigHash,
             tonValidatorSetTransitionVerifierHash: validatorSetTransitionHash,
             tonShardAccountsDictionaryVerifierHash: shardAccountsDictionaryHash,

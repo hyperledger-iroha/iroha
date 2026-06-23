@@ -57,6 +57,8 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
   KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
@@ -140,12 +142,15 @@ import {
   EthereumMainnetSccp,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -164,9 +169,12 @@ import {
   verifyBscMainnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifacts,
   BscMainnetSccp,
+  BscMainnetGroth16Bn254ProofAdapter,
   BscMainnetSccpProver,
   BscTestnetSccp,
+  BscTestnetGroth16Bn254ProofAdapter,
   BscTestnetSccpProver,
+  EvmGroth16Bn254ProofAdapter,
   bscMainnetSccpDestinationBinding,
   bscTestnetSccpDestinationBinding,
   buildBscMainnetSccpDestinationProofRequest,
@@ -228,6 +236,7 @@ import {
   encodeKagemushaRecursiveSpendVerifyRequest,
   encodeKagemushaRecursiveSpendRedeemRequest,
   decodeKagemushaRecursiveSpendBundle,
+  decodeKagemushaRecursiveSpendVerifyResult,
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   isPrivacyNativeAvailable,
   privacyCapabilitiesV1,
@@ -429,6 +438,9 @@ import { compileKotodamaProgram as compileDistKotodamaProgram } from "../dist/ko
 import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/kotodamaCompiler/accountLiteral.js";
 import { compileKotodamaProgram as compileSrcKotodamaProgram } from "../src/kotodamaCompiler/index.js";
 
+const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
+  "kagemusha-recursive-spend-lineage-badhop-v1";
+
 function privacyNoritoFrame(schemaByte) {
   const frame = Buffer.alloc(40);
   frame.write("NRT0", 0, "ascii");
@@ -487,6 +499,10 @@ const OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "119f4df38a98ef5848ad0aadb9715779",
   "hex",
 );
+const PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH = Buffer.from(
+  "fe3826328f081771750f24fe110260ca",
+  "hex",
+);
 
 function privacyNoritoFrameFromSchemaHash(schemaHash, payload, flags = 0) {
   const payloadBuffer = Buffer.from(payload);
@@ -521,6 +537,98 @@ function kagemushaNoritoField(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
   return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
 }
 
+function kagemushaReadNoritoLength(payload, offset, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  if ((flags & TEST_NORITO_COMPACT_LEN_FLAG) === 0) {
+    assert.ok(offset + 8 <= payload.length);
+    const value = payload.readBigUInt64LE(offset);
+    assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER));
+    return { value: Number(value), offset: offset + 8 };
+  }
+  let value = 0n;
+  let shift = 0n;
+  let cursor = offset;
+  while (cursor < payload.length) {
+    const byte = payload[cursor];
+    cursor += 1;
+    value |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER));
+      return { value: Number(value), offset: cursor };
+    }
+    shift += 7n;
+  }
+  assert.fail("unterminated Norito compact length");
+}
+
+function kagemushaReadNoritoFields(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const fields = [];
+  let offset = 0;
+  while (offset < payload.length) {
+    const length = kagemushaReadNoritoLength(payload, offset, flags);
+    const end = length.offset + length.value;
+    assert.ok(end <= payload.length);
+    fields.push(payload.subarray(length.offset, end));
+    offset = end;
+  }
+  return fields;
+}
+
+function kagemushaReadSequenceFields(payload) {
+  const buffer = Buffer.from(payload);
+  assert.ok(buffer.length >= 8, "sequence payload must include a u64 count");
+  const count = Number(buffer.readBigUInt64LE(0));
+  assert.ok(Number.isSafeInteger(count), "sequence count must fit in Number");
+  const fields = [];
+  let offset = 8;
+  for (let index = 0; index < count; index += 1) {
+    const length = kagemushaReadNoritoLength(buffer, offset);
+    const end = length.offset + length.value;
+    assert.ok(end <= buffer.length);
+    fields.push(buffer.subarray(length.offset, end));
+    offset = end;
+  }
+  assert.equal(offset, buffer.length);
+  return fields;
+}
+
+function kagemushaEncodeSequenceFields(fields) {
+  return Buffer.concat([u64LE(fields.length), ...fields.map((field) => kagemushaNoritoField(field))]);
+}
+
+function kagemushaU32Payload(value) {
+  const payload = Buffer.alloc(4);
+  payload.writeUInt32LE(value);
+  return payload;
+}
+
+function kagemushaNumericPayload(mantissa, scale = 0) {
+  const mantissaBytes = Buffer.from(mantissa);
+  const mantissaPayload = Buffer.alloc(4 + mantissaBytes.length);
+  mantissaPayload.writeUInt32LE(mantissaBytes.length);
+  mantissaBytes.copy(mantissaPayload, 4);
+  return Buffer.concat([
+    kagemushaNoritoField(mantissaPayload),
+    kagemushaNoritoField(kagemushaU32Payload(scale)),
+  ]);
+}
+
+function kagemushaNumericPayloadWithTrailingField() {
+  return Buffer.concat([
+    kagemushaNumericPayload(Buffer.from([1])),
+    kagemushaNoritoField(kagemushaU32Payload(0x42)),
+  ]);
+}
+
+function kagemushaZeroNumericPayload() {
+  return kagemushaNumericPayload(Buffer.alloc(0));
+}
+
+function kagemushaFixedArrayPayload(value, count) {
+  return Buffer.concat(
+    Array.from({ length: count }, () => kagemushaNoritoField(Buffer.from([value]))),
+  );
+}
+
 function kagemushaNoritoString(value, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
   const bytes = Buffer.from(value, "utf8");
   return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
@@ -540,6 +648,121 @@ function syntheticKagemushaArchive(typeName, seed, flags = TEST_NORITO_COMPACT_L
     Buffer.from([seed]),
     flags,
   );
+}
+
+function syntheticKagemushaRecordBundleArchive(hopCount = 1) {
+  const stepPayload = Buffer.concat(
+    Array.from({ length: 6 }, (_, index) => kagemushaNoritoField(Buffer.from([0xa0 + index]))),
+  );
+  const stepsPayload = Buffer.concat([
+    u64LE(hopCount),
+    ...Array.from({ length: hopCount }, () => kagemushaNoritoField(stepPayload)),
+  ]);
+  const bundlePayload = Buffer.concat([
+    kagemushaNoritoField(Buffer.from([0x41])),
+    kagemushaNoritoField(Buffer.from([0x42])),
+    kagemushaNoritoField(stepsPayload),
+  ]);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME),
+    Buffer.concat([
+      kagemushaNoritoField(bundlePayload),
+      kagemushaNoritoField(Buffer.alloc(0)),
+    ]),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function syntheticPallasOpenEnvelopesArchive(count = 1, options = {}) {
+  const envelope = syntheticPallasOpenEnvelopePayload(options);
+  return privacyNoritoFrameFromSchemaHash(
+    PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH,
+    Buffer.concat([
+      u64LE(count),
+      ...Array.from({ length: count }, () => kagemushaNoritoField(envelope)),
+    ]),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function syntheticPallasOpenEnvelopePayload(options = {}) {
+  const n = options.n ?? 4;
+  const params = Buffer.concat([
+    kagemushaNoritoField(u16LE(1)),
+    kagemushaNoritoField(u16LE(options.paramsCurveId ?? 1)),
+    kagemushaNoritoField(kagemushaU32Payload(n)),
+    kagemushaNoritoField(fixed32Sequence(n, 0x10)),
+    kagemushaNoritoField(fixed32Sequence(n, 0x20)),
+    kagemushaNoritoField(syntheticFixed32(0x30)),
+  ]);
+  const publicValue = Buffer.concat([
+    kagemushaNoritoField(u16LE(1)),
+    kagemushaNoritoField(u16LE(options.publicCurveId ?? 1)),
+    kagemushaNoritoField(kagemushaU32Payload(n)),
+    kagemushaNoritoField(syntheticFixed32(0x31)),
+    kagemushaNoritoField(syntheticFixed32(0x32)),
+    kagemushaNoritoField(syntheticFixed32(0x33)),
+  ]);
+  const proof = Buffer.concat([
+    kagemushaNoritoField(u16LE(1)),
+    kagemushaNoritoField(fixed32Sequence(2, 0x40)),
+    kagemushaNoritoField(fixed32Sequence(2, 0x50)),
+    kagemushaNoritoField(syntheticFixed32(0x60)),
+    kagemushaNoritoField(syntheticFixed32(0x61)),
+  ]);
+  return Buffer.concat([
+    kagemushaNoritoField(params),
+    kagemushaNoritoField(publicValue),
+    kagemushaNoritoField(proof),
+    kagemushaNoritoField(kagemushaNoritoString(options.transcriptLabel ?? "pallas-open")),
+    kagemushaNoritoField(
+      optionRaw(options.includeVkCommitment === false ? null : syntheticFixed32(0x70)),
+    ),
+    kagemushaNoritoField(
+      optionRaw(
+        options.includePublicInputsSchemaHash === false ? null : syntheticFixed32(0x71),
+      ),
+    ),
+    kagemushaNoritoField(
+      optionRaw(options.includeDomainTag === false ? null : syntheticFixed32(0x72)),
+    ),
+  ]);
+}
+
+function u64LE(value) {
+  const out = Buffer.alloc(8);
+  out.writeBigUInt64LE(BigInt(value));
+  return out;
+}
+
+function u16LE(value) {
+  const out = Buffer.alloc(2);
+  out.writeUInt16LE(value);
+  return out;
+}
+
+function syntheticFixed32(seed) {
+  return Buffer.from(Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
+}
+
+function fixed32Sequence(count, seed) {
+  return Buffer.concat([
+    u64LE(count),
+    ...Array.from({ length: count }, (_, index) =>
+      kagemushaNoritoField(syntheticFixed32(seed + index)),
+    ),
+  ]);
+}
+
+function optionRaw(payload) {
+  if (payload == null) {
+    return Buffer.from([0]);
+  }
+  return Buffer.concat([
+    Buffer.from([1]),
+    kagemushaNoritoLength(payload.length, TEST_NORITO_COMPACT_LEN_FLAG),
+    Buffer.from(payload),
+  ]);
 }
 
 function kagemushaNoritoByteVec(value) {
@@ -804,6 +1027,12 @@ function sharedRecursiveSpendAbi7Archive(archiveName) {
   return sharedRecursiveSpendArchive("kagemusha_recursive_spend_abi7", archiveName);
 }
 
+function kagemushaArchivePayload(archive) {
+  const buffer = Buffer.from(archive);
+  const length = Number(buffer.readBigUInt64LE(23));
+  return buffer.subarray(buffer.length - length);
+}
+
 function recursiveSpendBundleWithAccumulatorDomain(domain) {
   const archive = Buffer.from(sharedRecursiveSpendAbi6Archive("init_bundle"));
   const expected = Buffer.from(KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN, "utf8");
@@ -814,6 +1043,368 @@ function recursiveSpendBundleWithAccumulatorDomain(domain) {
   replacement.copy(archive, offset);
   archive.writeBigUInt64LE(testCrc64(archive.subarray(40)), 31);
   return archive;
+}
+
+function recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement) {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const accumulatorFields = kagemushaReadNoritoFields(bundleFields[0]);
+  accumulatorFields[fieldIndex] = Buffer.from(replacement);
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingBundleField() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  bundleFields.push(kagemushaNoritoString("ignored-extra-bundle-field"));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendVerifyResultWithTrailingField() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi7Archive("verify_result")),
+  );
+  fields.push(Buffer.from([0x01]));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingField() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  fields.push(kagemushaNoritoString("ignored-extra-lineage-witness-field"));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingPreviousProofsField() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  fields[3] = Buffer.concat([
+    fields[3],
+    kagemushaNoritoField(kagemushaNoritoString("ignored-extra-previous-proofs-field")),
+  ]);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingPreviousProofField() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  previousProofFields.push(kagemushaNoritoString("ignored-extra-previous-proof-field"));
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField() {
+  const fields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("lineage_witness_append_result")),
+  );
+  const previousProofs = kagemushaReadSequenceFields(fields[3]);
+  assert.ok(previousProofs.length > 0);
+  const previousProofFields = kagemushaReadNoritoFields(previousProofs[0]);
+  const verifierKeyIdFields = kagemushaReadNoritoFields(previousProofFields[0]);
+  verifierKeyIdFields.push(kagemushaNoritoString("ignored-extra-previous-verifier-key-field"));
+  previousProofFields[0] = Buffer.concat(
+    verifierKeyIdFields.map((field) => kagemushaNoritoField(field)),
+  );
+  previousProofs[0] = Buffer.concat(
+    previousProofFields.map((field) => kagemushaNoritoField(field)),
+  );
+  fields[3] = kagemushaEncodeSequenceFields(previousProofs);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME),
+    Buffer.concat(fields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingAccumulatorField() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const accumulatorFields = kagemushaReadNoritoFields(bundleFields[0]);
+  accumulatorFields.push(kagemushaNoritoString("ignored-extra-accumulator-field"));
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithCurrentNoteField(fieldIndex, replacement) {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const accumulatorFields = kagemushaReadNoritoFields(bundleFields[0]);
+  const currentNoteFields = kagemushaReadNoritoFields(accumulatorFields[22]);
+  currentNoteFields[fieldIndex] = Buffer.from(replacement);
+  accumulatorFields[22] = Buffer.concat(
+    currentNoteFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingCurrentNoteField() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const accumulatorFields = kagemushaReadNoritoFields(bundleFields[0]);
+  const currentNoteFields = kagemushaReadNoritoFields(accumulatorFields[22]);
+  currentNoteFields.push(kagemushaNoritoString("ignored-extra-current-note-field"));
+  accumulatorFields[22] = Buffer.concat(
+    currentNoteFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithEqualCurrentNoteNullifier() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const accumulatorFields = kagemushaReadNoritoFields(bundleFields[0]);
+  const currentNoteFields = kagemushaReadNoritoFields(accumulatorFields[22]);
+  currentNoteFields[1] = Buffer.from(currentNoteFields[0]);
+  accumulatorFields[22] = Buffer.concat(
+    currentNoteFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithProofCircuitId(proofCircuitId) {
+  const payload = Buffer.from(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const expected = Buffer.from(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    "utf8",
+  );
+  const replacement = Buffer.from(proofCircuitId, "utf8");
+  assert.equal(replacement.length, expected.length);
+  let offset = 0;
+  let replacements = 0;
+  while ((offset = payload.indexOf(expected, offset)) !== -1) {
+    replacement.copy(payload, offset);
+    offset += replacement.length;
+    replacements += 1;
+  }
+  assert.equal(replacements, 2);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    payload,
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithProofBackend(proofBackend) {
+  const payload = Buffer.from(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const expected = Buffer.from(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "utf8");
+  const replacement = Buffer.from(proofBackend, "utf8");
+  assert.equal(replacement.length, expected.length);
+  let offset = 0;
+  let replacements = 0;
+  while ((offset = payload.indexOf(expected, offset)) !== -1) {
+    replacement.copy(payload, offset);
+    offset += replacement.length;
+    replacements += 1;
+  }
+  assert.equal(replacements, 2);
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    payload,
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithProofBoxBackend(proofBackend) {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  const proofBoxFields = kagemushaReadNoritoFields(proofFields[3]);
+  proofBoxFields[0] = kagemushaNoritoString(proofBackend);
+  proofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingVerifierKeyIdField() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  const verifierKeyIdFields = kagemushaReadNoritoFields(proofFields[0]);
+  verifierKeyIdFields.push(kagemushaNoritoString("ignored-extra-verifier-key-field"));
+  proofFields[0] = Buffer.concat(
+    verifierKeyIdFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingRecursiveProofField() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  proofFields.push(kagemushaNoritoString("ignored-extra-recursive-proof-field"));
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithTrailingProofBoxField() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  const proofBoxFields = kagemushaReadNoritoFields(proofFields[3]);
+  proofBoxFields.push(kagemushaNoritoString("ignored-extra-proof-box-field"));
+  proofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithEmptyProofBytes() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  const proofBoxFields = kagemushaReadNoritoFields(proofFields[3]);
+  proofBoxFields[1] = kagemushaNoritoByteVec(Buffer.alloc(0));
+  proofFields[3] = Buffer.concat(
+    proofBoxFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithEmptyProofPublicInputs() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  proofFields[1] = Buffer.alloc(0);
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithZeroProofPublicInputsHash() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  proofFields[2] = Buffer.alloc(32);
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithMismatchedProofPublicInputsHash() {
+  const bundleFields = kagemushaReadNoritoFields(
+    kagemushaArchivePayload(sharedRecursiveSpendAbi6Archive("init_bundle")),
+  );
+  const proofFields = kagemushaReadNoritoFields(bundleFields[1]);
+  const mismatchedHash = Buffer.from(proofFields[2]);
+  mismatchedHash[0] ^= 0x01;
+  proofFields[2] = mismatchedHash;
+  bundleFields[1] = Buffer.concat(proofFields.map((field) => kagemushaNoritoField(field)));
+  return privacyNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
 }
 
 function recursiveSpendVerifierRecord() {
@@ -2545,12 +3136,618 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
 });
 
-test("package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch", () => {
-  const recordBundle = syntheticKagemushaArchive(
-    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
-    0x61,
+test("package dist Kagemusha recursive spend verify result decodes ABI fixtures", () => {
+  const abi6Result = decodeKagemushaRecursiveSpendVerifyResult(
+    sharedRecursiveSpendAbi6Archive("verify_result"),
   );
-  const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x62);
+  assert.equal(abi6Result.valid, false);
+  assert.equal(abi6Result.hopCount, 2);
+  assert.equal(abi6Result.witnesslessRedeemSupported, false);
+  assert.equal(abi6Result.lineageWitnessRequired, true);
+
+  const abi7Result = decodeKagemushaRecursiveSpendVerifyResult(
+    sharedRecursiveSpendAbi7Archive("verify_result"),
+  );
+  assert.equal(abi7Result.valid, true);
+  assert.equal(abi7Result.witnesslessRedeemSupported, false);
+  assert.equal(abi7Result.lineageWitnessRequired, true);
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendVerifyResult(
+        recursiveSpendVerifyResultWithTrailingField(),
+      ),
+    /verifyResult has trailing bytes/u,
+  );
+});
+
+test("package dist Kagemusha recursive spend helpers dispatch owned archive copies and return Buffers", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const calls = [];
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+  const inputArchive = (seed) => Uint8Array.from(privacyNoritoFrameWithPayload(seed));
+  const cases = [
+    [
+      "kagemushaRecursiveSpendInit",
+      [inputArchive(0x61)],
+      (args) => kagemushaRecursiveSpendInit(args[0]),
+      0x31,
+    ],
+    [
+      "kagemushaRecursiveSpendAppend",
+      [inputArchive(0x62)],
+      (args) => kagemushaRecursiveSpendAppend(args[0]),
+      0x32,
+    ],
+    [
+      "kagemushaRecursiveSpendTransitionProfileInit",
+      [inputArchive(0x63)],
+      (args) => kagemushaRecursiveSpendTransitionProfileInit(args[0]),
+      0x37,
+    ],
+    [
+      "kagemushaRecursiveSpendTransitionProfileAppend",
+      [inputArchive(0x64)],
+      (args) => kagemushaRecursiveSpendTransitionProfileAppend(args[0]),
+      0x38,
+    ],
+    [
+      "kagemushaRecursiveSpendLineageAppendBoundary",
+      [inputArchive(0x65)],
+      (args) => kagemushaRecursiveSpendLineageAppendBoundary(args[0]),
+      0x39,
+    ],
+    [
+      "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+      [inputArchive(0x66), inputArchive(0x67)],
+      (args) => kagemushaRecursiveSpendLineageWitnessFromInitResult(args[0], args[1]),
+      0x33,
+    ],
+    [
+      "kagemushaRecursiveSpendLineageWitnessAppendResult",
+      [inputArchive(0x68), inputArchive(0x69), inputArchive(0x6a)],
+      (args) =>
+        kagemushaRecursiveSpendLineageWitnessAppendResult(
+          args[0],
+          args[1],
+          args[2],
+        ),
+      0x34,
+    ],
+    [
+      "kagemushaRecursiveSpendVerify",
+      [inputArchive(0x6b)],
+      (args) => kagemushaRecursiveSpendVerify(args[0]),
+      0x35,
+    ],
+    [
+      "kagemushaRecursiveSpendRedeem",
+      [inputArchive(0x6c)],
+      (args) => kagemushaRecursiveSpendRedeem(args[0]),
+      0x36,
+    ],
+  ];
+  const nativeOutputs = new Map(
+    cases.map(([methodName, , , outputSeed]) => [
+      methodName,
+      Uint8Array.from(privacyNoritoFrameWithPayload(outputSeed)),
+    ]),
+  );
+  const expectedInputs = cases.map(([, args]) => args.map((arg) => Buffer.from(arg)));
+  const expectedOutputs = new Map(
+    cases.map(([methodName, , , outputSeed]) => [
+      methodName,
+      Buffer.from(privacyNoritoFrameWithPayload(outputSeed)),
+    ]),
+  );
+  const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+  };
+  for (const [methodName] of cases) {
+    binding[methodName] = (...archives) => {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      calls.push([methodName, ...archives]);
+      return nativeOutputs.get(methodName);
+    };
+  }
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = binding;
+    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+    const results = [];
+    for (const [methodName, args, call] of cases) {
+      const result = call(args);
+      assert.ok(Buffer.isBuffer(result), methodName);
+      assert.deepEqual(result, expectedOutputs.get(methodName), methodName);
+      assert.notStrictEqual(result, nativeOutputs.get(methodName), methodName);
+      results.push([methodName, result]);
+    }
+
+    for (const [, args] of cases) {
+      for (const arg of args) {
+        arg[6] ^= 0x7f;
+      }
+    }
+    for (const output of nativeOutputs.values()) {
+      output[6] ^= 0x7f;
+    }
+
+    assert.equal(calls.length, cases.length);
+    for (let index = 0; index < cases.length; index += 1) {
+      const [methodName, args] = cases[index];
+      const call = calls[index];
+      assert.equal(call[0], methodName);
+      for (let argIndex = 0; argIndex < args.length; argIndex += 1) {
+        assert.notStrictEqual(call[argIndex + 1], args[argIndex], methodName);
+        assert.deepEqual(call[argIndex + 1], expectedInputs[index][argIndex], methodName);
+      }
+    }
+    for (const [methodName, result] of results) {
+      assert.deepEqual(result, expectedOutputs.get(methodName), methodName);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha record-backed and Pallas builders dispatch owned archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const calls = [];
+  const recordBundle = Uint8Array.from(privacyNoritoFrameWithPayload(0x91));
+  const pallasOpenEnvelopes = Uint8Array.from(privacyNoritoFrameWithPayload(0x92));
+  const previousBundle = Uint8Array.from(privacyNoritoFrameWithPayload(0x93));
+  const expectedInputs = new Map([
+    ["recordBundle", Buffer.from(recordBundle)],
+    ["pallasOpenEnvelopes", Buffer.from(pallasOpenEnvelopes)],
+    ["previousBundle", Buffer.from(previousBundle)],
+  ]);
+  const outputByMethod = new Map([
+    [
+      "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x94)),
+    ],
+    [
+      "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x95)),
+    ],
+    [
+      "kagemushaBuildPallasOpenEnvelopesArchive",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x96)),
+    ],
+    [
+      "kagemushaBuildPreviousProofOpenEnvelopesArchive",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x97)),
+    ],
+  ]);
+  const expectedOutputs = new Map(
+    Array.from(outputByMethod, ([methodName, output]) => [
+      methodName,
+      Buffer.from(output),
+    ]),
+  );
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+  const dispatch = (methodName, ...archives) => {
+    if (isProbeCall(archives)) {
+      throw new Error("Kagemusha probe archive rejected");
+    }
+    calls.push([methodName, ...archives]);
+    return outputByMethod.get(methodName);
+  };
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaProveVerifiedCompactPaymentTokenWithRecords(record) {
+        return dispatch("kagemushaProveVerifiedCompactPaymentTokenWithRecords", record);
+      },
+      kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        record,
+        pallas,
+      ) {
+        return dispatch(
+          "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+          record,
+          pallas,
+        );
+      },
+      kagemushaBuildPallasOpenEnvelopesArchive(record) {
+        return dispatch("kagemushaBuildPallasOpenEnvelopesArchive", record);
+      },
+      kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive) {
+        return dispatch(
+          "kagemushaBuildPreviousProofOpenEnvelopesArchive",
+          previousBundleArchive,
+        );
+      },
+    };
+
+    assert.equal(isKagemushaCompactPaymentTokenNativeAvailable(), true);
+    assert.equal(isKagemushaRecursiveAggregationProofBundleNativeAvailable(), true);
+    assert.equal(isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(), true);
+
+    const results = [
+      [
+        "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+        kagemushaProveVerifiedCompactPaymentTokenWithRecords(recordBundle),
+      ],
+      [
+        "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+        kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+          recordBundle,
+          pallasOpenEnvelopes,
+        ),
+      ],
+      [
+        "kagemushaBuildPallasOpenEnvelopesArchive",
+        kagemushaBuildPallasOpenEnvelopesArchive(recordBundle),
+      ],
+      [
+        "kagemushaBuildPreviousProofOpenEnvelopesArchive",
+        kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundle),
+      ],
+    ];
+    for (const [methodName, result] of results) {
+      assert.ok(Buffer.isBuffer(result), methodName);
+      assert.deepEqual(result, expectedOutputs.get(methodName), methodName);
+      assert.notStrictEqual(result, outputByMethod.get(methodName), methodName);
+    }
+
+    recordBundle[6] ^= 0x7f;
+    pallasOpenEnvelopes[6] ^= 0x7f;
+    previousBundle[6] ^= 0x7f;
+    for (const output of outputByMethod.values()) {
+      output[6] ^= 0x7f;
+    }
+
+    assert.deepEqual(calls.map((call) => call[0]), [
+      "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+      "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+      "kagemushaBuildPallasOpenEnvelopesArchive",
+      "kagemushaBuildPreviousProofOpenEnvelopesArchive",
+    ]);
+    assert.notStrictEqual(calls[0][1], recordBundle);
+    assert.deepEqual(calls[0][1], expectedInputs.get("recordBundle"));
+    assert.notStrictEqual(calls[1][1], recordBundle);
+    assert.notStrictEqual(calls[1][2], pallasOpenEnvelopes);
+    assert.deepEqual(calls[1][1], expectedInputs.get("recordBundle"));
+    assert.deepEqual(calls[1][2], expectedInputs.get("pallasOpenEnvelopes"));
+    assert.notStrictEqual(calls[2][1], recordBundle);
+    assert.deepEqual(calls[2][1], expectedInputs.get("recordBundle"));
+    assert.notStrictEqual(calls[3][1], previousBundle);
+    assert.deepEqual(calls[3][1], expectedInputs.get("previousBundle"));
+    for (const [methodName, result] of results) {
+      assert.deepEqual(result, expectedOutputs.get(methodName), methodName);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha record-backed and Pallas builders fail closed on invalid archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  let nativeDispatches = 0;
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+  const rejectNativeDispatch = (...archives) => {
+    if (isProbeCall(archives)) {
+      throw new Error("Kagemusha probe archive rejected");
+    }
+    nativeDispatches += 1;
+    throw new Error("native record-backed or Pallas dispatch should not run");
+  };
+  const validArchive = privacyNoritoFrameWithPayload(0x98);
+  const invalidArchives = [
+    [Buffer.alloc(0), "must not be empty"],
+    [Buffer.from([0x01]), "must be a valid Norito archive"],
+    [privacyNoritoFrame(0x98), "must contain a non-empty Norito payload"],
+  ];
+  const completeBinding = (overrides = {}) => ({
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+    kagemushaProveVerifiedCompactPaymentTokenWithRecords(record) {
+      if (isProbeCall([record])) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x99);
+    },
+    kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+      record,
+      pallas,
+    ) {
+      if (isProbeCall([record, pallas])) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x9a);
+    },
+    kagemushaBuildPallasOpenEnvelopesArchive(record) {
+      if (isProbeCall([record])) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x9b);
+    },
+    kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive) {
+      if (isProbeCall([previousBundleArchive])) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x9c);
+    },
+    ...overrides,
+  });
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaProveVerifiedCompactPaymentTokenWithRecords: rejectNativeDispatch,
+      kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes:
+        rejectNativeDispatch,
+      kagemushaBuildPallasOpenEnvelopesArchive: rejectNativeDispatch,
+      kagemushaBuildPreviousProofOpenEnvelopesArchive: rejectNativeDispatch,
+    };
+
+    assert.equal(isKagemushaCompactPaymentTokenNativeAvailable(), true);
+    assert.equal(isKagemushaRecursiveAggregationProofBundleNativeAvailable(), true);
+    assert.equal(isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(), true);
+
+    for (const [invalidArchive, expectedMessage] of invalidArchives) {
+      assert.throws(
+        () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(invalidArchive),
+        new RegExp(`recordBundleArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () =>
+          kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+            invalidArchive,
+            validArchive,
+          ),
+        new RegExp(`recordBundleArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () =>
+          kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+            validArchive,
+            invalidArchive,
+          ),
+        new RegExp(`pallasOpenEnvelopesArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () => kagemushaBuildPallasOpenEnvelopesArchive(invalidArchive),
+        new RegExp(`recordBundleArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () => kagemushaBuildPreviousProofOpenEnvelopesArchive(invalidArchive),
+        new RegExp(`previousBundleArchive ${expectedMessage}`),
+      );
+    }
+    assert.equal(nativeDispatches, 0);
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      kagemushaProveVerifiedCompactPaymentTokenWithRecords(record) {
+        if (isProbeCall([record])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        return Buffer.from([0x01]);
+      },
+    });
+    assert.throws(
+      () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(validArchive),
+      /native kagemushaProveVerifiedCompactPaymentTokenWithRecords returned invalid Norito archive/,
+    );
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        record,
+        pallas,
+      ) {
+        if (isProbeCall([record, pallas])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        return privacyNoritoFrame(0x9d);
+      },
+    });
+    assert.throws(
+      () =>
+        kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+          validArchive,
+          validArchive,
+        ),
+      /native kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes returned empty Norito payload/,
+    );
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      kagemushaBuildPallasOpenEnvelopesArchive(record) {
+        if (isProbeCall([record])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        return Buffer.from([0x01]);
+      },
+      kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive) {
+        if (isProbeCall([previousBundleArchive])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        return privacyNoritoFrame(0x9e);
+      },
+    });
+    assert.throws(
+      () => kagemushaBuildPallasOpenEnvelopesArchive(validArchive),
+      /native kagemushaBuildPallasOpenEnvelopesArchive returned invalid Norito archive/,
+    );
+    assert.throws(
+      () => kagemushaBuildPreviousProofOpenEnvelopesArchive(validArchive),
+      /native kagemushaBuildPreviousProofOpenEnvelopesArchive returned empty Norito payload/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha recursive spend helpers propagate native semantic rejections", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const calls = [];
+  const requests = new Map([
+    [
+      "redeem-over-cap",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x71)),
+    ],
+    [
+      "verify-forged-lineage",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x72)),
+    ],
+    [
+      "redeem-forged-lineage",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x73)),
+    ],
+    [
+      "transition-profile-append-forged-opening",
+      Uint8Array.from(privacyNoritoFrameWithPayload(0x74)),
+    ],
+  ]);
+  const expectedRequests = new Map(
+    Array.from(requests, ([label, request]) => [label, Buffer.from(request)]),
+  );
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+  const rejectProbeOrReturn = (seed) => (...archives) => {
+    if (isProbeCall(archives)) {
+      throw new Error("Kagemusha probe archive rejected");
+    }
+    return privacyNoritoFrameWithPayload(seed);
+  };
+  const nativeMethods = {
+    kagemushaRecursiveSpendInit: rejectProbeOrReturn(0x31),
+    kagemushaRecursiveSpendAppend: rejectProbeOrReturn(0x32),
+    kagemushaRecursiveSpendTransitionProfileInit: rejectProbeOrReturn(0x37),
+    kagemushaRecursiveSpendLineageAppendBoundary: rejectProbeOrReturn(0x39),
+    kagemushaRecursiveSpendLineageWitnessFromInitResult: rejectProbeOrReturn(0x33),
+    kagemushaRecursiveSpendLineageWitnessAppendResult: rejectProbeOrReturn(0x34),
+  };
+  const semanticErrorsBySeed = new Map([
+    [
+      0x71,
+      new Error(
+        "invalid Kagemusha recursive spend request: bundle.accumulator.hop_count exceeds Reserved-lineage cap",
+      ),
+    ],
+    [
+      0x73,
+      new Error(
+        "invalid Kagemusha recursive spend request: lineage_verifier_record.commitment",
+      ),
+    ],
+  ]);
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      ...nativeMethods,
+      kagemushaRecursiveSpendTransitionProfileAppend(request) {
+        if (isProbeCall([request])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["transition-profile-append-forged-opening", request]);
+        throw new Error(
+          "invalid Kagemusha recursive spend request: hop domain metadata mismatch",
+        );
+      },
+      kagemushaRecursiveSpendVerify(request) {
+        if (isProbeCall([request])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["verify-forged-lineage", request]);
+        throw new Error(
+          "invalid Kagemusha recursive spend request: lineage_verifier_record.commitment",
+        );
+      },
+      kagemushaRecursiveSpendRedeem(request) {
+        if (isProbeCall([request])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        const label = request[6] === 0x71 ? "redeem-over-cap" : "redeem-forged-lineage";
+        calls.push([label, request]);
+        throw semanticErrorsBySeed.get(request[6]);
+      },
+    };
+
+    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+    assert.throws(
+      () => kagemushaRecursiveSpendRedeem(requests.get("redeem-over-cap")),
+      /bundle\.accumulator\.hop_count/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendVerify(requests.get("verify-forged-lineage")),
+      /lineage_verifier_record\.commitment/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendRedeem(requests.get("redeem-forged-lineage")),
+      /lineage_verifier_record\.commitment/,
+    );
+    assert.throws(
+      () =>
+        kagemushaRecursiveSpendTransitionProfileAppend(
+          requests.get("transition-profile-append-forged-opening"),
+        ),
+      /hop domain metadata mismatch/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  for (const request of requests.values()) {
+    request[6] ^= 0x7f;
+  }
+  assert.equal(calls.length, 4);
+  for (const [label, archive] of calls) {
+    assert.notStrictEqual(archive, requests.get(label), label);
+    assert.deepEqual(archive, expectedRequests.get(label), label);
+  }
+});
+
+test("package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
   const currentNote = {
     noteCommitment: Buffer.alloc(32, 0x21),
     spendNullifier: Buffer.alloc(32, 0x22),
@@ -2626,6 +3823,43 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         pallasOpenEnvelopes,
         currentNote,
         previousLineageVerifierRecord,
+        previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
+      }),
+    /previousProofOpenEnvelopes are only valid for lineage append output/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        previousLineageVerifierRecord,
+      }),
+    /previousLineageVerifierRecord is only valid for lineage previous bundles/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        previousLineageVerifierRecord: {
+          verifierKeyId: "danglingPreviousLineageRecord",
+          recordBytes: Buffer.from([0]),
+        },
+      }),
+    /previousLineageVerifierRecord is only valid for lineage previous bundles/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        previousLineageVerifierRecord,
         lineageKeyArtifacts: appendArtifacts,
       }),
     /lineageKeyArtifacts are only valid for lineage append output/,
@@ -2639,7 +3873,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         currentNote,
         outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord,
-        previousProofOpenEnvelopes: syntheticKagemushaArchive("test::PreviousOpenings", 0x95),
+        previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
         lineageKeyArtifacts: initArtifacts,
       }),
     /lineageKeyArtifacts/,
@@ -2647,11 +3881,8 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
 });
 
 test("package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch", () => {
-  const recordBundle = syntheticKagemushaArchive(
-    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
-    0x66,
-  );
-  const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x67);
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
   const currentNote = {
     noteCommitment: Buffer.alloc(32, 0x21),
     spendNullifier: Buffer.alloc(32, 0x22),
@@ -2674,10 +3905,128 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
   );
   const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
   const redeemProof = syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x98);
-  const lineageWitness = syntheticKagemushaArchive(
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
-    0x99,
+  const lineageWitness = sharedRecursiveSpendAbi6Archive("lineage_witness_append_result");
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendVerifyRequest({
+        bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+      }),
+    /lineageVerifierRecord is required for reserved-lineage bundles/,
   );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendVerifyRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        lineageVerifierRecord: previousLineageVerifierRecord,
+      }),
+    /lineageVerifierRecord is only valid for reserved-lineage bundles/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendVerifyRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        lineageVerifierRecord: {
+          verifierKeyId: "danglingVerifyLineageRecord",
+          recordBytes: Buffer.from([0]),
+        },
+      }),
+    /lineageVerifierRecord is only valid for reserved-lineage bundles/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageVerifierRecord: previousLineageVerifierRecord,
+      }),
+    /lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageVerifierRecord: {
+          verifierKeyId: "danglingRedeemLineageRecord",
+          recordBytes: Buffer.from([0]),
+        },
+      }),
+    /lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageWitness: sharedRecursiveSpendAbi6Archive("lineage_witness_append_result"),
+      }),
+    /lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageWitness: sharedRecursiveSpendAbi6Archive("lineage_witness_from_init_result"),
+        lineageVerifierRecord: previousLineageVerifierRecord,
+      }),
+    /lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageWitness: syntheticKagemushaArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+          0x9a,
+        ),
+        lineageVerifierRecord: previousLineageVerifierRecord,
+      }),
+    /lineageWitness/,
+  );
+  const malformedLineageWitnesses = [
+    [
+      recursiveSpendLineageWitnessWithTrailingField(),
+      /lineageWitness has trailing bytes/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
+      /lineageWitness\.previousRecursiveProofs/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithTrailingPreviousProofField(),
+      /lineageWitness\.previousRecursiveProofs/,
+    ],
+    [
+      recursiveSpendLineageWitnessWithTrailingPreviousVerifierKeyIdField(),
+      /lineageWitness\.previousRecursiveProofs\.verifierKeyId/,
+    ],
+  ];
+  for (const [lineageWitnessArchive, expectedError] of malformedLineageWitnesses) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recipient: "dist-recipient",
+          publicAmount: "7",
+          redeemProof,
+          lineageWitness: lineageWitnessArchive,
+          lineageVerifierRecord: previousLineageVerifierRecord,
+        }),
+      expectedError,
+    );
+  }
   const blockHeightEncoders = [
     [
       "init",
@@ -2792,6 +4141,24 @@ test("package dist Kagemusha recursive spend redeem rejects invalid change-outpu
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
     0x65,
   );
+  for (const [changeOutput, errorPattern] of [
+    [Buffer.alloc(31, 1), /changeOutput must be 32 bytes/],
+    [Buffer.alloc(32), /changeOutput must be non-zero/],
+  ]) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recipient: "dist-recipient",
+          publicAmount: "7",
+          redeemProof,
+          lineageWitness,
+          changeOutput,
+          lineageVerifierRecord: verifierRecord,
+        }),
+      errorPattern,
+    );
+  }
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendRedeemRequest({
@@ -2840,6 +4207,174 @@ test("package dist Kagemusha recursive spend bundle rejects wrong accumulator do
         ),
       ),
     /bundle\.accumulator\.domain/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects raw accumulator chain ids before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithAccumulatorField(
+          1,
+          kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),
+        ),
+      ),
+    /bundle\.accumulator\.chain_id/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects invalid accumulator hop counts before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingBundleField()),
+    /bundle has trailing bytes/,
+  );
+  for (const hopCount of [
+    0,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 + 1,
+  ]) {
+    assert.throws(
+      () =>
+        decodeKagemushaRecursiveSpendBundle(
+          recursiveSpendBundleWithAccumulatorField(6, kagemushaU32Payload(hopCount)),
+        ),
+      /bundle\.accumulator\.hop_count/,
+    );
+  }
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingAccumulatorField()),
+    /accumulator has trailing bytes/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects unsupported proof circuit ids before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithProofCircuitId(
+          UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID,
+        ),
+      ),
+    /bundle\.proof_circuit_id/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects unsupported proof backends before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithProofBackend("halo2/kzg"),
+      ),
+    /bundle\.proof_backend/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithProofBoxBackend("halo2/kzg"),
+      ),
+    /bundle\.proof_backend/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithTrailingVerifierKeyIdField(),
+      ),
+    /verifierKeyId has trailing bytes/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithTrailingRecursiveProofField(),
+      ),
+    /recursiveProof has trailing bytes/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithTrailingProofBoxField(),
+      ),
+    /proof has trailing bytes/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects empty proof bytes before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithEmptyProofBytes()),
+    /bundle\.proof_bytes/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects malformed proof public inputs before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithEmptyProofPublicInputs()),
+    /bundle\.proof_public_inputs/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithZeroProofPublicInputsHash()),
+    /bundle\.proof_public_inputs_hash/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithMismatchedProofPublicInputsHash()),
+    /bundle\.proof_public_inputs_hash/,
+  );
+});
+
+test("package dist Kagemusha recursive spend bundle rejects malformed current notes before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithCurrentNoteField(0, Buffer.alloc(32)),
+      ),
+    /noteCommitment/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithCurrentNoteField(1, Buffer.alloc(32)),
+      ),
+    /spendNullifier/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithEqualCurrentNoteNullifier(),
+      ),
+    /spendNullifier/,
+  );
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithCurrentNoteField(2, kagemushaZeroNumericPayload()),
+      ),
+    /amount/,
+  );
+  const malformedCurrentNoteFieldLengths = [
+    [0, kagemushaFixedArrayPayload(0x04, 31), /noteCommitment/],
+    [0, kagemushaFixedArrayPayload(0x04, 33), /noteCommitment/],
+    [1, kagemushaFixedArrayPayload(0x05, 31), /spendNullifier/],
+    [1, kagemushaFixedArrayPayload(0x05, 33), /spendNullifier/],
+    [2, kagemushaNumericPayload(Buffer.from([1]), 1), /numeric scale/],
+    [2, kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])])), /amount/],
+    [2, kagemushaNumericPayloadWithTrailingField(), /amount/],
+  ];
+  for (const [fieldIndex, replacement, expectedField] of malformedCurrentNoteFieldLengths) {
+    assert.throws(
+      () =>
+        decodeKagemushaRecursiveSpendBundle(
+          recursiveSpendBundleWithCurrentNoteField(fieldIndex, replacement),
+        ),
+      expectedField,
+    );
+  }
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithTrailingCurrentNoteField()),
+    /currentNote has trailing bytes/,
   );
 });
 
@@ -2948,6 +4483,257 @@ test("package dist Kagemusha recursive compact requires key packages before nati
   assert.notDeepEqual(calls[1][1][1], verifierKeys);
 });
 
+test("package dist Kagemusha recursive spend compact projection helpers dispatch owned archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const calls = [];
+  const bundleArchive = Uint8Array.from(privacyNoritoFrameWithPayload(0x81));
+  const compactTokenArchive = Uint8Array.from(privacyNoritoFrameWithPayload(0x82));
+  const verifierRecordArchive = Uint8Array.from(privacyNoritoFrameWithPayload(0x83));
+  const expectedBundleArchive = Buffer.from(bundleArchive);
+  const expectedCompactTokenArchive = Buffer.from(compactTokenArchive);
+  const expectedVerifierRecordArchive = Buffer.from(verifierRecordArchive);
+  const nativeProjectionOutput = Uint8Array.from(privacyNoritoFrameWithPayload(0x84));
+  const expectedProjectionOutput = Buffer.from(nativeProjectionOutput);
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundle) {
+        if (isProbeCall([bundle])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["project", bundle]);
+        return nativeProjectionOutput;
+      },
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(token, record) {
+        if (isProbeCall([token, record])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["verify", token, record]);
+        return false;
+      },
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+        token,
+        record,
+        blockHeight,
+      ) {
+        if (isProbeCall([token, record])) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["verify-at-height", token, record, blockHeight]);
+        return true;
+      },
+    };
+
+    assert.equal(
+      isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+      true,
+    );
+    assert.equal(
+      isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+      true,
+    );
+
+    const projection = kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
+      bundleArchive,
+    );
+    assert.ok(Buffer.isBuffer(projection));
+    assert.deepEqual(projection, expectedProjectionOutput);
+    assert.notStrictEqual(projection, nativeProjectionOutput);
+
+    assert.equal(
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+        compactTokenArchive,
+        verifierRecordArchive,
+      ),
+      false,
+    );
+    assert.equal(
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+        compactTokenArchive,
+        verifierRecordArchive,
+        2,
+      ),
+      true,
+    );
+    assert.equal(
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+        compactTokenArchive,
+        verifierRecordArchive,
+        0xffff_ffff_ffff_ffffn,
+      ),
+      true,
+    );
+
+    bundleArchive[6] ^= 0x7f;
+    compactTokenArchive[6] ^= 0x7f;
+    verifierRecordArchive[6] ^= 0x7f;
+    nativeProjectionOutput[6] ^= 0x7f;
+
+    assert.deepEqual(calls.map((call) => call[0]), [
+      "project",
+      "verify",
+      "verify-at-height",
+      "verify-at-height",
+    ]);
+    assert.notStrictEqual(calls[0][1], bundleArchive);
+    assert.deepEqual(calls[0][1], expectedBundleArchive);
+    for (const call of calls.slice(1)) {
+      assert.notStrictEqual(call[1], compactTokenArchive);
+      assert.notStrictEqual(call[2], verifierRecordArchive);
+      assert.deepEqual(call[1], expectedCompactTokenArchive);
+      assert.deepEqual(call[2], expectedVerifierRecordArchive);
+    }
+    assert.deepEqual(calls[2].slice(3), [2]);
+    assert.deepEqual(calls[3].slice(3), [0xffff_ffff_ffff_ffffn]);
+    assert.deepEqual(projection, expectedProjectionOutput);
+
+    const callsBeforeInvalidHeights = calls.length;
+    for (const [badHeight, errorPattern] of [
+      [true, /blockHeight must be a number or bigint/],
+      ["1", /blockHeight must be a number or bigint/],
+      [1.5, /blockHeight must be an integer/],
+      [Number.NaN, /blockHeight must be an integer/],
+      [-0, /blockHeight must be non-negative/],
+      [Number.MAX_SAFE_INTEGER + 1, /blockHeight number must be a safe integer/],
+      [0x1_0000_0000_0000_0000n, /blockHeight must fit in u64/],
+    ]) {
+      assert.throws(
+        () =>
+          kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+            expectedCompactTokenArchive,
+            expectedVerifierRecordArchive,
+            badHeight,
+          ),
+        errorPattern,
+      );
+      assert.equal(calls.length, callsBeforeInvalidHeights);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha recursive spend compact projection helpers fail closed on invalid archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  let nativeDispatches = 0;
+  const rejectNativeDispatch = (...archives) => {
+    const probeArchives = archives.length === 3 ? archives.slice(0, 2) : archives;
+    if (
+      probeArchives.length > 0 &&
+      probeArchives.every((archive) => {
+        const bytes = Buffer.from(archive);
+        return bytes.length === 1 && bytes[0] === 0;
+      })
+    ) {
+      throw new Error("Kagemusha probe archive rejected");
+    }
+    nativeDispatches += 1;
+    throw new Error("native compact projection dispatch should not run");
+  };
+  const validArchive = privacyNoritoFrameWithPayload(0x85);
+  const invalidArchives = [
+    [Buffer.alloc(0), "must not be empty"],
+    [Buffer.from([0x01]), "must be a valid Norito archive"],
+    [privacyNoritoFrame(0x85), "must contain a non-empty Norito payload"],
+  ];
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaRecursiveSpendCompactPaymentTokenFromBundle: rejectNativeDispatch,
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection: rejectNativeDispatch,
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight:
+        rejectNativeDispatch,
+    };
+
+    assert.equal(
+      isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+      true,
+    );
+    assert.equal(
+      isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+      true,
+    );
+    for (const [invalidArchive, expectedMessage] of invalidArchives) {
+      assert.throws(
+        () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(invalidArchive),
+        new RegExp(`bundleArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () =>
+          kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+            invalidArchive,
+            validArchive,
+          ),
+        new RegExp(`compactTokenArchive ${expectedMessage}`),
+      );
+      assert.throws(
+        () =>
+          kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+            validArchive,
+            invalidArchive,
+          ),
+        new RegExp(`verifierRecordArchive ${expectedMessage}`),
+      );
+    }
+    assert.equal(nativeDispatches, 0);
+
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundle) {
+        if (Buffer.from(bundle).length === 1) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        return Buffer.from([0x01]);
+      },
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(token, record) {
+        if (Buffer.from(token).length === 1 && Buffer.from(record).length === 1) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        return Buffer.from([0x01]);
+      },
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight() {
+        throw new Error("Kagemusha probe archive rejected");
+      },
+    };
+    assert.throws(
+      () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(validArchive),
+      /returned invalid Norito archive/,
+    );
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          validArchive,
+          validArchive,
+        ),
+      /kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection returned a non-boolean result/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
 test("package dist Kagemusha recursive spend availability rejects coerced ABI versions", () => {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
   try {
@@ -3002,6 +4788,416 @@ test("package dist Kagemusha recursive spend availability rejects coerced ABI ve
         false,
       );
     }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha recursive spend availability rejects broken and permissive native probes", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const acceptedMethods = [
+    "kagemushaRecursiveSpendInit",
+    "kagemushaRecursiveSpendAppend",
+    "kagemushaRecursiveSpendTransitionProfileInit",
+    "kagemushaRecursiveSpendTransitionProfileAppend",
+    "kagemushaRecursiveSpendLineageAppendBoundary",
+    "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+    "kagemushaRecursiveSpendLineageWitnessAppendResult",
+    "kagemushaRecursiveSpendVerify",
+    "kagemushaRecursiveSpendRedeem",
+  ];
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+  const rejectProbe = (...archives) => {
+    if (isProbeCall(archives)) {
+      throw new Error("Kagemusha probe archive rejected");
+    }
+    return privacyNoritoFrameWithPayload(0x31);
+  };
+  const completeBinding = (overrides = {}) => ({
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+    kagemushaRecursiveSpendInit: rejectProbe,
+    kagemushaRecursiveSpendAppend: rejectProbe,
+    kagemushaRecursiveSpendTransitionProfileInit: rejectProbe,
+    kagemushaRecursiveSpendTransitionProfileAppend: rejectProbe,
+    kagemushaRecursiveSpendLineageAppendBoundary: rejectProbe,
+    kagemushaRecursiveSpendLineageWitnessFromInitResult: rejectProbe,
+    kagemushaRecursiveSpendLineageWitnessAppendResult: rejectProbe,
+    kagemushaRecursiveSpendVerify: rejectProbe,
+    kagemushaRecursiveSpendRedeem: rejectProbe,
+    ...overrides,
+  });
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      connectNoritoBridgeAbiVersion() {
+        throw new Error("bridge denied");
+      },
+    });
+    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
+    assert.equal(
+      preferredKagemushaOfflineSpendMode(),
+      KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendInit(privacyNoritoFrameWithPayload(0x41)),
+      /Kagemusha recursive spend helper 'kagemushaRecursiveSpendInit' is unavailable/,
+    );
+
+    for (const acceptedMethod of acceptedMethods) {
+      globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+        [acceptedMethod]() {
+          return Uint8Array.from([0xff]);
+        },
+      });
+      assert.equal(
+        isKagemushaRecursiveSpendNativeAvailable(),
+        false,
+        acceptedMethod,
+      );
+      assert.equal(
+        preferredKagemushaOfflineSpendMode(),
+        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+        acceptedMethod,
+      );
+      assert.throws(
+        () => kagemushaRecursiveSpendVerify(privacyNoritoFrameWithPayload(0x42)),
+        /Kagemusha recursive spend helper 'kagemushaRecursiveSpendVerify' is unavailable/,
+        acceptedMethod,
+      );
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha recursive spend availability rejects partial ABI-6 surfaces", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const requiredMethods = [
+    "kagemushaRecursiveSpendInit",
+    "kagemushaRecursiveSpendAppend",
+    "kagemushaRecursiveSpendTransitionProfileInit",
+    "kagemushaRecursiveSpendTransitionProfileAppend",
+    "kagemushaRecursiveSpendLineageAppendBoundary",
+    "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+    "kagemushaRecursiveSpendLineageWitnessAppendResult",
+    "kagemushaRecursiveSpendVerify",
+    "kagemushaRecursiveSpendRedeem",
+  ];
+  const rejectProbe = (...archives) => {
+    if (
+      archives.length > 0 &&
+      archives.every((archive) => {
+        const bytes = Buffer.from(archive);
+        return bytes.length === 1 && bytes[0] === 0;
+      })
+    ) {
+      throw new Error("Kagemusha probe archive rejected");
+    }
+    return privacyNoritoFrameWithPayload(0x31);
+  };
+  const completeBinding = () => ({
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+    kagemushaRecursiveSpendInit: rejectProbe,
+    kagemushaRecursiveSpendAppend: rejectProbe,
+    kagemushaRecursiveSpendTransitionProfileInit: rejectProbe,
+    kagemushaRecursiveSpendTransitionProfileAppend: rejectProbe,
+    kagemushaRecursiveSpendLineageAppendBoundary: rejectProbe,
+    kagemushaRecursiveSpendLineageWitnessFromInitResult: rejectProbe,
+    kagemushaRecursiveSpendLineageWitnessAppendResult: rejectProbe,
+    kagemushaRecursiveSpendVerify: rejectProbe,
+    kagemushaRecursiveSpendRedeem: rejectProbe,
+  });
+
+  try {
+    for (const missingMethod of requiredMethods) {
+      const binding = completeBinding();
+      delete binding[missingMethod];
+      globalThis.__IROHA_NATIVE_BINDING__ = binding;
+      assert.equal(
+        isKagemushaRecursiveSpendNativeAvailable(),
+        false,
+        missingMethod,
+      );
+      assert.equal(
+        preferredKagemushaOfflineSpendMode(),
+        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+        missingMethod,
+      );
+      assert.throws(
+        () => kagemushaRecursiveSpendVerify(privacyNoritoFrameWithPayload(0x35)),
+        /Kagemusha recursive spend helper 'kagemushaRecursiveSpendVerify' is unavailable/,
+        missingMethod,
+      );
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha recursive spend helpers reject unsafe native outputs", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const request = privacyNoritoFrameWithPayload(0x35);
+  const isProbeCall = (archives) =>
+    archives.length > 0 &&
+    archives.every((archive) => {
+      const bytes = Buffer.from(archive);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+  const nativeMethods = {
+    kagemushaRecursiveSpendInit(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x31);
+    },
+    kagemushaRecursiveSpendAppend(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x32);
+    },
+    kagemushaRecursiveSpendTransitionProfileInit(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x37);
+    },
+    kagemushaRecursiveSpendTransitionProfileAppend(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x38);
+    },
+    kagemushaRecursiveSpendLineageAppendBoundary(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x39);
+    },
+    kagemushaRecursiveSpendLineageWitnessFromInitResult(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x33);
+    },
+    kagemushaRecursiveSpendLineageWitnessAppendResult(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x34);
+    },
+    kagemushaRecursiveSpendVerify(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x35);
+    },
+    kagemushaRecursiveSpendRedeem(...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return privacyNoritoFrameWithPayload(0x36);
+    },
+  };
+  const completeBinding = (methodName, output) => ({
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+    ...nativeMethods,
+    [methodName](...archives) {
+      if (isProbeCall(archives)) {
+        throw new Error("Kagemusha probe archive rejected");
+      }
+      return output;
+    },
+  });
+  const calls = [
+    [
+      "kagemushaRecursiveSpendInit",
+      () => kagemushaRecursiveSpendInit(request),
+    ],
+    [
+      "kagemushaRecursiveSpendAppend",
+      () => kagemushaRecursiveSpendAppend(request),
+    ],
+    [
+      "kagemushaRecursiveSpendTransitionProfileInit",
+      () => kagemushaRecursiveSpendTransitionProfileInit(request),
+    ],
+    [
+      "kagemushaRecursiveSpendTransitionProfileAppend",
+      () => kagemushaRecursiveSpendTransitionProfileAppend(request),
+    ],
+    [
+      "kagemushaRecursiveSpendLineageAppendBoundary",
+      () => kagemushaRecursiveSpendLineageAppendBoundary(request),
+    ],
+    [
+      "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+      () => kagemushaRecursiveSpendLineageWitnessFromInitResult(request, request),
+    ],
+    [
+      "kagemushaRecursiveSpendLineageWitnessAppendResult",
+      () => kagemushaRecursiveSpendLineageWitnessAppendResult(request, request, request),
+    ],
+    [
+      "kagemushaRecursiveSpendVerify",
+      () => kagemushaRecursiveSpendVerify(request),
+    ],
+    [
+      "kagemushaRecursiveSpendRedeem",
+      () => kagemushaRecursiveSpendRedeem(request),
+    ],
+  ];
+  const invalidOutputs = [
+    [Buffer.alloc(0), /returned empty output/],
+    [null, /returned no output/],
+    ["not-bytes", /returned text instead of Norito bytes/],
+    [
+      Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
+      /returned oversized output/,
+    ],
+    [Buffer.from([0x01]), /returned invalid Norito archive/],
+    [privacyNoritoFrame(0x36), /returned empty Norito payload/],
+  ];
+
+  try {
+    for (const [methodName, call] of calls) {
+      for (const [output, expectedError] of invalidOutputs) {
+        globalThis.__IROHA_NATIVE_BINDING__ = completeBinding(methodName, output);
+        assert.throws(call, expectedError, `${methodName} ${expectedError}`);
+      }
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist Kagemusha recursive spend helpers reject invalid request archives before native dispatch", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  let nativeDispatches = 0;
+  const rejectNativeDispatch = () => {
+    nativeDispatches += 1;
+    throw new Error("native dispatch should not run for invalid request archives");
+  };
+  const validArchive = privacyNoritoFrameWithPayload(0x35);
+  const invalidArchives = [
+    [Buffer.alloc(0), "must not be empty"],
+    [
+      new Uint8Array(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1),
+      "must not exceed",
+    ],
+    [Buffer.from([0x01]), "must be a valid Norito archive"],
+    [privacyNoritoFrame(0x35), "must contain a non-empty Norito payload"],
+  ];
+  const helperCases = [
+    [
+      "kagemushaRecursiveSpendInit",
+      ["requestArchive"],
+      (args) => kagemushaRecursiveSpendInit(args[0]),
+    ],
+    [
+      "kagemushaRecursiveSpendAppend",
+      ["requestArchive"],
+      (args) => kagemushaRecursiveSpendAppend(args[0]),
+    ],
+    [
+      "kagemushaRecursiveSpendTransitionProfileInit",
+      ["requestArchive"],
+      (args) => kagemushaRecursiveSpendTransitionProfileInit(args[0]),
+    ],
+    [
+      "kagemushaRecursiveSpendTransitionProfileAppend",
+      ["requestArchive"],
+      (args) => kagemushaRecursiveSpendTransitionProfileAppend(args[0]),
+    ],
+    [
+      "kagemushaRecursiveSpendLineageAppendBoundary",
+      ["profileArchive"],
+      (args) => kagemushaRecursiveSpendLineageAppendBoundary(args[0]),
+    ],
+    [
+      "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+      ["requestArchive", "bundleArchive"],
+      (args) => kagemushaRecursiveSpendLineageWitnessFromInitResult(args[0], args[1]),
+    ],
+    [
+      "kagemushaRecursiveSpendLineageWitnessAppendResult",
+      ["previousWitnessArchive", "requestArchive", "bundleArchive"],
+      (args) =>
+        kagemushaRecursiveSpendLineageWitnessAppendResult(
+          args[0],
+          args[1],
+          args[2],
+        ),
+    ],
+    [
+      "kagemushaRecursiveSpendVerify",
+      ["requestArchive"],
+      (args) => kagemushaRecursiveSpendVerify(args[0]),
+    ],
+    [
+      "kagemushaRecursiveSpendRedeem",
+      ["requestArchive"],
+      (args) => kagemushaRecursiveSpendRedeem(args[0]),
+    ],
+  ];
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaRecursiveSpendInit: rejectNativeDispatch,
+      kagemushaRecursiveSpendAppend: rejectNativeDispatch,
+      kagemushaRecursiveSpendTransitionProfileInit: rejectNativeDispatch,
+      kagemushaRecursiveSpendTransitionProfileAppend: rejectNativeDispatch,
+      kagemushaRecursiveSpendLineageAppendBoundary: rejectNativeDispatch,
+      kagemushaRecursiveSpendLineageWitnessFromInitResult: rejectNativeDispatch,
+      kagemushaRecursiveSpendLineageWitnessAppendResult: rejectNativeDispatch,
+      kagemushaRecursiveSpendVerify: rejectNativeDispatch,
+      kagemushaRecursiveSpendRedeem: rejectNativeDispatch,
+    };
+
+    for (const [helperName, archiveNames, call] of helperCases) {
+      for (let fieldIndex = 0; fieldIndex < archiveNames.length; fieldIndex += 1) {
+        for (const [invalidArchive, expectedMessage] of invalidArchives) {
+          const args = Array.from({ length: archiveNames.length }, () => validArchive);
+          args[fieldIndex] = invalidArchive;
+          assert.throws(
+            () => call(args),
+            new RegExp(`${archiveNames[fieldIndex]} ${expectedMessage}`),
+            `${helperName} ${archiveNames[fieldIndex]} ${expectedMessage}`,
+          );
+        }
+      }
+    }
+    assert.equal(nativeDispatches, 0);
   } finally {
     if (previous === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
@@ -5961,15 +8157,15 @@ test("package declarations use BSC-specific mainnet native prover bundle types",
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type BscTestnetNativeEvmProverBundleInput =\s+NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-testnet";/u,
+    /export type BscTestnetNativeEvmProverBundleInput = Omit<[\s\S]*NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput>,[\s\S]*"crossSdkFixtureParityArtifact"[\s\S]*"cross_sdk_fixture_parity_artifact"[\s\S]*> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-testnet";[\s\S]*auditHashes\?: BscTestnetNativeEvmProverAuditHashesInput;[\s\S]*audit_hashes\?: BscTestnetNativeEvmProverAuditHashesInput;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type BscMainnetNativeEvmProverBundleInput =\s+NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";/u,
+    /export type BscMainnetNativeEvmProverBundleInput = Omit<[\s\S]*NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput>,[\s\S]*"crossSdkFixtureParityArtifact"[\s\S]*"cross_sdk_fixture_parity_artifact"[\s\S]*> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";[\s\S]*auditHashes\?: BscMainnetNativeEvmProverAuditHashesInput;[\s\S]*audit_hashes\?: BscMainnetNativeEvmProverAuditHashesInput;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundle,[\s\S]*"bundleId" \| "chain"[\s\S]*>[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";/u,
+    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundle,[\s\S]*"bundleId" \| "chain" \| "auditHashes" \| "crossSdkFixtureParityArtifact"[\s\S]*>[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";[\s\S]*readonly auditHashes: Readonly<BscMainnetNativeEvmProverAuditHashes>;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -7371,7 +9567,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     torii_submit_payload_hash: `0x${"d4".repeat(32)}`,
   };
   const parityFixture = {
-    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_ETH,
     chain: "eth",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -7818,7 +10014,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         },
         { destinationBinding: ethereumMainnetBinding },
       ),
-    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+    /crossSdkParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
   const tinySelfTestBundle = hashConsistentNativeProverBundle({
@@ -7939,7 +10135,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key: "artifacts/bsc-mainnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     destination_binding_hash: bscMainnetBinding.bindingHash,
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
@@ -7957,12 +10153,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
           : `0x${(index + 0x41).toString(16).padStart(2, "0").repeat(32)}`,
     })),
   };
+  delete bscMainnetNativeProverBundle.cross_sdk_fixture_parity_artifact;
   const bscMainnetParitySdkResult = {
     ...paritySdkResult,
     destination_binding_hash: bscMainnetBinding.bindingHash,
   };
   const bscMainnetParityFixture = {
-    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-mainnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -8007,9 +10204,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     JSON.stringify(bscMainnetSelfTestFixture),
     "utf8",
   );
+  const {
+    cross_sdk_fixture_parity: _ignoredBscMainnetLegacyParityAudit,
+    ...bscMainnetAuditHashes
+  } = bscMainnetNativeProverBundle.audit_hashes;
   bscMainnetNativeProverBundle.audit_hashes = {
-    ...bscMainnetNativeProverBundle.audit_hashes,
-    cross_sdk_fixture_parity: sha256Hex(bscMainnetParityFixtureBytes),
+    ...bscMainnetAuditHashes,
+    cross_sdk_parity: sha256Hex(bscMainnetParityFixtureBytes),
     native_prover_self_test: sha256Hex(bscMainnetSelfTestFixtureBytes),
   };
   const bscMainnetNativeArtifacts = verifyBscMainnetNativeEvmProverArtifacts(
@@ -8018,7 +10219,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: bscMainnetParityFixtureBytes,
+      crossSdkParityBytes: bscMainnetParityFixtureBytes,
       nativeProverSelfTestBytes: bscMainnetSelfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -8063,6 +10264,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     SCCP_DOMAIN_BSC,
   );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class BscMainnetGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
   const bscTestnetBinding = bscTestnetSccpDestinationBinding({
     verifierAddress: `0x${"33".repeat(20)}`,
@@ -8079,7 +10284,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     destination_binding_hash: bscTestnetBinding.bindingHash,
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
@@ -8097,12 +10302,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
           : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
   };
+  delete bscTestnetNativeProverBundle.cross_sdk_fixture_parity_artifact;
   const bscTestnetParitySdkResult = {
     ...paritySdkResult,
     destination_binding_hash: bscTestnetBinding.bindingHash,
   };
   const bscTestnetParityFixture = {
-    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -8147,9 +10353,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     JSON.stringify(bscTestnetSelfTestFixture),
     "utf8",
   );
+  const {
+    cross_sdk_fixture_parity: _ignoredBscTestnetLegacyParityAudit,
+    ...bscTestnetAuditHashes
+  } = bscTestnetNativeProverBundle.audit_hashes;
   bscTestnetNativeProverBundle.audit_hashes = {
-    ...bscTestnetNativeProverBundle.audit_hashes,
-    cross_sdk_fixture_parity: sha256Hex(bscTestnetParityFixtureBytes),
+    ...bscTestnetAuditHashes,
+    cross_sdk_parity: sha256Hex(bscTestnetParityFixtureBytes),
     native_prover_self_test: sha256Hex(bscTestnetSelfTestFixtureBytes),
   };
   const bscTestnetNativeArtifacts = verifyBscTestnetNativeEvmProverArtifacts(
@@ -8158,7 +10368,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: bscTestnetParityFixtureBytes,
+      crossSdkParityBytes: bscTestnetParityFixtureBytes,
       nativeProverSelfTestBytes: bscTestnetSelfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -8234,12 +10444,23 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
   assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class BscTestnetGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class EvmGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
   assert.match(
     DECLARATIONS_TEXT,
     /buildBscTestnetSccpLocalAdmissionSubmission/u,
   );
+  assert.equal(typeof BscMainnetGroth16Bn254ProofAdapter, "function");
+  assert.equal(typeof BscTestnetGroth16Bn254ProofAdapter, "function");
+  assert.equal(typeof EvmGroth16Bn254ProofAdapter, "function");
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
@@ -8620,7 +10841,22 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
       solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
+  );
+  assert.notEqual(
+    sccpSolanaFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_SOL,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+      solanaTowerReplayVerifierHash: `0x${"bb".repeat(32)}`,
+      solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
+      solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
   );
   assert.throws(
     () =>
@@ -8651,7 +10887,22 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
       tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+  );
+  assert.notEqual(
+    sccpTonFullLightClientGateHash({
+      sourceDomain: SCCP_DOMAIN_TON,
+      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
+      consensusVerifierHash: `0x${"55".repeat(32)}`,
+      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
+      finalityPolicyHash: `0x${"88".repeat(32)}`,
+      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      deploymentReceiptHash: `0x${"ab".repeat(32)}`,
+      tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
+      tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
+      tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    }),
+    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
   );
 });
 
