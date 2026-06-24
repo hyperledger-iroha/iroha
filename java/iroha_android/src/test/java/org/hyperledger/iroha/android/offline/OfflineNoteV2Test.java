@@ -48,6 +48,7 @@ public final class OfflineNoteV2Test {
     openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields();
     certificateValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationMatchesRustVectors();
+    offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence();
     offlineDeviceAttestationRegistrationValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationDefensivelyCopiesMutableByteArrays();
     auditBundleRejectsInvalidShapesAndUncommittedOutputs();
@@ -732,6 +733,58 @@ public final class OfflineNoteV2Test {
         string(vector, "norito_base64"),
         base64(registration.noritoEncoded()),
         "device attestation registration norito");
+  }
+
+  private static void offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> vector =
+        obj(obj(fixture, "chain_vectors"), "attestation_registration");
+    final String androidSigningDigestHex =
+        nullableString(vector, "android_signing_certificate_sha256");
+    final OfflineNoteV2.DeviceAttestationRegistrationV2 draft =
+        new OfflineNoteV2.DeviceAttestationRegistrationV2(
+            intValue(vector, "version"),
+            string(vector, "platform"),
+            string(vector, "key_id"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            nullableString(vector, "android_package_name"),
+            androidSigningDigestHex == null ? null : hexBytes(androidSigningDigestHex),
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            base64Bytes(string(vector, "assertion_public_key")),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            null,
+            null,
+            null,
+            null,
+            null,
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
+    final byte[] emptyReportHash = OfflineNoteV2.hash(new byte[0]);
+    final byte[] expectedEvidence = attestationEvidence(emptyReportHash);
+
+    assertEquals(
+        string(vector, "challenge_hash"),
+        hex(draft.canonicalChallengeHash()),
+        "draft device attestation canonical challenge hash");
+    assertEquals(
+        string(vector, "challenge_hash"),
+        hex(draft.challengeHash()),
+        "draft device attestation challenge hash");
+    assertArrayEquals(emptyReportHash, draft.attestationReportHash(), "draft report hash");
+    assertArrayEquals(new byte[0], draft.attestationReport(), "draft report");
+    assertArrayEquals(expectedEvidence, draft.evidence(), "draft evidence");
+    assertArrayEquals(
+        OfflineNoteV2.hash(expectedEvidence), draft.evidenceHash(), "draft evidence hash");
   }
 
   private static void offlineDeviceAttestationRegistrationValidationRejectsMalformedValues()
@@ -2070,6 +2123,14 @@ public final class OfflineNoteV2Test {
   private static void assertEquals(final long expected, final long actual, final String message) {
     if (expected != actual) {
       throw new AssertionError(message + ": expected " + expected + " but got " + actual);
+    }
+  }
+
+  private static void assertArrayEquals(
+      final byte[] expected, final byte[] actual, final String message) {
+    if (!Arrays.equals(expected, actual)) {
+      throw new AssertionError(
+          message + ": expected " + hex(expected) + " but got " + hex(actual));
     }
   }
 

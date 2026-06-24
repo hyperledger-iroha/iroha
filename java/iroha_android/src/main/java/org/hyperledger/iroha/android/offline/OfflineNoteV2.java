@@ -836,7 +836,8 @@ public final class OfflineNoteV2 {
       this.oneUse = oneUse;
       this.attestationReport =
           attestationReport == null ? new byte[0] : Arrays.copyOf(attestationReport, attestationReport.length);
-      this.evidence = evidence == null ? new byte[0] : Arrays.copyOf(evidence, evidence.length);
+      final byte[] submittedEvidence =
+          evidence == null ? new byte[0] : Arrays.copyOf(evidence, evidence.length);
       this.recentBlockHeight = recentBlockHeight;
       this.recentBlockHash = copy(recentBlockHash, "recentBlockHash");
       this.expiresAtMs = expiresAtMs;
@@ -884,6 +885,13 @@ public final class OfflineNoteV2 {
       }
       this.attestationReportHash = resolvedReportHash;
 
+      final byte[] resolvedEvidence =
+          this.attestationReport.length == 0
+                  && submittedEvidence.length == 0
+                  && evidenceHash == null
+              ? deviceAttestationEvidenceEnvelope(resolvedReportHash)
+              : submittedEvidence;
+      this.evidence = resolvedEvidence;
       requireDeviceAttestationEvidenceEnvelope(this.evidence, resolvedReportHash);
       final byte[] expectedEvidenceHash = hash(this.evidence);
       final byte[] resolvedEvidenceHash =
@@ -3349,6 +3357,13 @@ public final class OfflineNoteV2 {
             "device attestation evidence envelope must bind attestation_report_hash");
       }
     }
+  }
+
+  private static byte[] deviceAttestationEvidenceEnvelope(final byte[] reportHash) {
+    final byte[] prefix = DEVICE_ATTESTATION_EVIDENCE_PREFIX_BYTES;
+    final byte[] evidence = Arrays.copyOf(prefix, prefix.length + reportHash.length);
+    System.arraycopy(reportHash, 0, evidence, prefix.length, reportHash.length);
+    return evidence;
   }
 
   private static byte[] canonicalSortKey(final MultisigMemberPayload member) {

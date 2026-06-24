@@ -2,6 +2,31 @@
 
 Last updated: 2026-06-24
 
+## 2026-06-24 Offline Note V2 SDK redemption compatibility
+
+- Restored Torii structured redemption compatibility with SDK-emitted Offline
+  V2 payloads by accepting nested `recipient_account_id` and
+  `asset_definition_id` identity fields and comparing them against the
+  authenticated request before transaction submission.
+- Accepted SDK recursive-proof backend aliases `verifier_key_backend` and
+  `proof_backend` when they match the parsed `backend`, while continuing to
+  reject conflicting aliases and unknown fields.
+- Restored pre-attestation draft construction across Swift, Kotlin/JVM, and
+  Java Android SDKs by synthesizing the deterministic empty-report evidence
+  envelope for default empty draft inputs, so callers can read the challenge
+  hash before platform evidence exists.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii redeem_route_ --lib --features app_api -- --nocapture`
+    (`28` passed)
+  - `GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain`
+  - `swift test --filter OfflineNoteV2Tests`
+    (`25` passed)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+    (no protected-file changes)
+
 ## 2026-06-24 Offline Note V2 attestation evidence envelope
 
 - Hardened direct on-chain `RegisterOfflineDeviceAttestation` admission so the

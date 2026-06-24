@@ -308,6 +308,42 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertNotEqual(changed.evidenceHash, registration.evidenceHash)
     }
 
+    func testOfflineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() throws {
+        let fixture = try Self.loadFixture()
+        let vector = fixture.chainVectors.attestationRegistration
+        let draft = try OfflineDeviceAttestationRegistration(
+            version: vector.version,
+            platform: vector.platform,
+            keyId: vector.keyId,
+            deviceId: vector.deviceId,
+            accountId: vector.accountId,
+            assetDefinitionId: vector.assetDefinitionId,
+            iosTeamId: vector.iosTeamId,
+            iosBundleId: vector.iosBundleId,
+            iosEnvironment: vector.iosEnvironment,
+            androidPackageName: vector.androidPackageName,
+            androidSigningCertificateSha256: try vector.androidSigningCertificateSha256.map(Self.hex),
+            publicKey: try Self.base64(vector.publicKey),
+            assertionScheme: vector.assertionScheme,
+            assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+            assertionPublicKey: try Self.base64(vector.assertionPublicKey),
+            assertionUsageCountLimit: vector.assertionUsageCountLimit,
+            oneUse: vector.oneUse,
+            recentBlockHeight: vector.recentBlockHeight,
+            recentBlockHash: try Self.hex(vector.recentBlockHash),
+            expiresAtMs: vector.expiresAtMs
+        )
+        let emptyReportHash = IrohaHash.hash(Data())
+        let expectedEvidence = Self.attestationEvidence(attestationReportHash: emptyReportHash)
+
+        XCTAssertEqual(try draft.canonicalChallengeHash().hexLowercased(), vector.challengeHash)
+        XCTAssertEqual(draft.challengeHash.hexLowercased(), vector.challengeHash)
+        XCTAssertEqual(draft.attestationReportHash, emptyReportHash)
+        XCTAssertEqual(draft.attestationReport, Data())
+        XCTAssertEqual(draft.evidence, expectedEvidence)
+        XCTAssertEqual(draft.evidenceHash, IrohaHash.hash(expectedEvidence))
+    }
+
     func testOfflineNoteV2TransactionBuildersProduceSignedEnvelopes() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
