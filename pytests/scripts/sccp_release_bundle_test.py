@@ -20679,6 +20679,37 @@ def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_documentat
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_evidence_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the BSC Groth16 material evidence gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("bsc_groth16_material_evidence_guard_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "bsc_groth16_material_evidence_guard_gate"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_missing_ethereum_data_collection_no_proxy_inventory_gate(
     tmp_path: Path,
 ) -> None:
@@ -34579,6 +34610,66 @@ def test_release_bundle_verifier_guards_bsc_groth16_material_documentation(
     assert verified["verified"] is False
     assert any(
         "BSC Groth16 material documentation source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_bsc_groth16_material_evidence_guard(
+    tmp_path: Path,
+) -> None:
+    """Bundle verification must pin BSC Groth16 material evidence guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._bsc_groth16_material_evidence_guard_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-groth16-evidence-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._bsc_groth16_material_evidence_guard_inventory_errors(
+                ((sparse_source, required_markers),),
+            )
+
+            assert any(
+                "BSC Groth16 material evidence guard source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS,
+        0,
+    )
+    verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "BSC Groth16 material evidence guard source inventory" in error
         and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )

@@ -4422,6 +4422,8 @@ pub struct SccpRouteManifest {
     pub circuit_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hash of the normalized deployment evidence used to build this route.
+    pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.
     pub destination_binding_key: String,
     /// Hex-encoded canonical destination binding hash.
@@ -5166,6 +5168,14 @@ impl SccpRouteManifest {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         };
+        let deployment_evidence_sha256 = if strict_route_hashes {
+            Self::normalize_optional_hex32(
+                "deployment_evidence_sha256",
+                self.deployment_evidence_sha256.as_deref(),
+            )
+        } else {
+            self.deployment_evidence_sha256.clone()
+        };
         let post_deploy_source_bridge_config_hash = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "post_deploy_source_bridge_config_hash",
@@ -5275,6 +5285,10 @@ impl SccpRouteManifest {
                 && is_bsc_route
                 && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
             "SCCP BSC route manifest production_ready requires proof_artifact_hash and proving_key_hash"
+        );
+        assert!(
+            !(self.production_ready && is_bsc_route && deployment_evidence_sha256.is_none()),
+            "SCCP BSC route manifest production_ready requires deployment_evidence_sha256"
         );
         let source_bridge_address = self.source_bridge_address(!is_tron_route);
         let destination_verifier_address = self.destination_verifier_address(!is_tron_route);
@@ -5425,6 +5439,7 @@ impl SccpRouteManifest {
             verifier_key_hash,
             proof_artifact_hash,
             proving_key_hash,
+            deployment_evidence_sha256,
             destination_binding_key: self.destination_binding_key,
             destination_binding_hash,
             taira_burn_record_settlement_asset_definition_id: self
@@ -5487,6 +5502,7 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             circuit_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -5572,6 +5588,7 @@ mod sccp_route_manifest_user_config_tests {
             prover_artifact_hash: None,
             circuit_artifact_hash: None,
             proving_key_hash: None,
+            deployment_evidence_sha256: None,
             destination_binding_key,
             destination_binding_hash,
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -5679,6 +5696,10 @@ mod sccp_route_manifest_user_config_tests {
         let actual = manifest.parse();
 
         assert_eq!(actual.chain_id_hex, "0x61");
+        assert_eq!(
+            actual.deployment_evidence_sha256.as_deref(),
+            Some(format!("0x{}", "4f".repeat(32)).as_str())
+        );
     }
 
     #[test]
@@ -5737,6 +5758,24 @@ mod sccp_route_manifest_user_config_tests {
         manifest.prover_artifact_hash = None;
         manifest.circuit_artifact_hash = None;
         manifest.proving_key_hash = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "production_ready requires deployment_evidence_sha256")]
+    fn production_ready_bsc_route_requires_deployment_evidence_hash() {
+        let mut manifest = production_ready_route_manifest();
+        manifest.deployment_evidence_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "deployment_evidence_sha256 must be non-zero")]
+    fn bsc_route_rejects_zero_deployment_evidence_hash() {
+        let mut manifest = route_manifest();
+        manifest.deployment_evidence_sha256 = Some(format!("0x{}", "00".repeat(32)));
 
         let _ = manifest.parse();
     }

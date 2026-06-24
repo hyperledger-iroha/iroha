@@ -6933,6 +6933,10 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+    /// Optional hash of the normalized deployment evidence used to build this route.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub deployment_evidence_sha256: Option<String>,
     /// Hex-encoded destination network id used in destination binding evidence.
     pub network_id_hex: String,
     /// Counterparty TairaXOR token contract address.
@@ -7177,6 +7181,7 @@ fn sccp_route_manifest_dto(
         verifier_target: manifest.verifier_target.clone(),
         production_ready: manifest.production_ready,
         disabled_reason: manifest.disabled_reason.clone(),
+        deployment_evidence_sha256: manifest.deployment_evidence_sha256.clone(),
         network_id_hex: manifest.network_id_hex.clone(),
         taira_xor_token_address: manifest.taira_xor_token_address.clone(),
         taira_xor_bridge_address: manifest.taira_xor_bridge_address.clone(),
@@ -12525,6 +12530,7 @@ mod sccp_message_backend_tests {
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
+            deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -12594,6 +12600,10 @@ mod sccp_message_backend_tests {
         assert!(dto.sccp_tron_source_bridge_address.is_none());
         assert!(dto.tron_verifier_address.is_none());
         assert!(dto.sccp_tron_destination_verifier_address.is_none());
+        assert_eq!(
+            dto.deployment_evidence_sha256.as_deref(),
+            Some(format!("0x{}", "4f".repeat(32)).as_str())
+        );
         let proof_artifact_hash = format!("0x{}", "4c".repeat(32));
         let proving_key_hash = format!("0x{}", "4d".repeat(32));
         assert_eq!(
@@ -61118,10 +61128,20 @@ mod transaction_ingress_overload_tests {
         .await
         .expect("latency-saturated queue should accept fresh ingress until capacity is exhausted");
 
+        let pressure = queue.pressure_snapshot();
+        assert!(
+            pressure.saturated_by_age,
+            "latency saturation must remain visible as queue pressure telemetry"
+        );
+        assert!(
+            !pressure.saturated_by_count,
+            "test setup should exercise age-only saturation before capacity"
+        );
+
         let backpressure = queue.current_backpressure();
         assert!(
-            backpressure.is_saturated(),
-            "latency saturation must remain visible as backpressure telemetry"
+            !backpressure.is_saturated(),
+            "age-only queue pressure must not close ingress before capacity"
         );
         assert_eq!(backpressure.queued(), 2);
         assert_eq!(backpressure.capacity().get(), 32);

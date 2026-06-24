@@ -27,6 +27,7 @@ import {
 import { tmpdir } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
   isAbsolute,
   join,
@@ -78,6 +79,18 @@ export const BSC_GROTH16_ATTESTATION_REQUEST_PACKAGE_SCHEMA =
   "iroha-sccp-bsc-groth16-attestation-request-package/v1";
 export const BSC_GROTH16_PROOF_SELF_TEST_SCHEMA =
   "iroha-sccp-bsc-groth16-proof-self-test/v1";
+export const BSC_GROTH16_TOOLCHAIN_FINGERPRINT_SCHEMA =
+  "iroha-sccp-bsc-groth16-toolchain-fingerprint/v1";
+export const BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA =
+  "iroha-sccp-bsc-groth16-evidence-template-package/v1";
+export const BSC_GROTH16_TRUSTED_SETUP_TRANSCRIPT_SCHEMA =
+  "iroha-sccp-bsc-trusted-setup-transcript/v1";
+export const BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA =
+  "iroha-sccp-bsc-reproducible-build-transcript/v1";
+export const BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA =
+  "iroha-sccp-bsc-groth16-transcript-template-package/v1";
+export const BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA =
+  "iroha-sccp-bsc-groth16-attestation-handoff/v1";
 export const BSC_SIGNAL_BINDING_CIRCUIT_PROFILE =
   "sccp-bsc-signal-binding-v1";
 export const BSC_FULL_SCCP_CIRCUIT_PROFILE = "sccp-bsc-full-message-v1";
@@ -190,6 +203,7 @@ const BSC_GROTH16_SIGNAL_INPUT_NAMES = Object.freeze([
 ]);
 const PRODUCTION_EVIDENCE_FORBIDDEN_WORDS =
   /\b(?:diagnostic|fixture|mock|placeholder|sample|stub|test-fixture|test-only)\b/iu;
+const BSC_GROTH16_EVIDENCE_REPORT_MAX_BYTES = 16 * 1024 * 1024;
 
 const trim = (value) => String(value ?? "").trim();
 
@@ -1048,6 +1062,57 @@ function displayCommandValue(command) {
   return isAbsolute(value) ? repoRelativePath(value) : value;
 }
 
+async function resolveCommandExecutableForHash(command, label) {
+  const value = trim(command);
+  if (!value) {
+    throw new Error(`${label} command is required for binary hashing.`);
+  }
+  const directCommand = isAbsolute(value) || /[\\/]/u.test(value);
+  const candidates = directCommand ? [resolve(value)] : [];
+  if (!directCommand) {
+    const pathEntries = String(process.env.PATH ?? "")
+      .split(delimiter)
+      .map((entry) => trim(entry))
+      .filter(Boolean);
+    const extensions =
+      process.platform === "win32"
+        ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+            .split(";")
+            .map((entry) => trim(entry))
+            .filter(Boolean)
+        : [""];
+    for (const entry of pathEntries) {
+      candidates.push(resolve(entry, value));
+      if (process.platform === "win32") {
+        const lower = value.toLowerCase();
+        for (const extension of extensions) {
+          if (!lower.endsWith(extension.toLowerCase())) {
+            candidates.push(resolve(entry, `${value}${extension}`));
+          }
+        }
+      }
+    }
+  }
+  const uniqueCandidates = [...new Set(candidates)];
+  const errors = [];
+  for (const candidate of uniqueCandidates) {
+    try {
+      await fileSha256(candidate);
+      return candidate;
+    } catch (error) {
+      const code = error && typeof error === "object" ? error.code : "";
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        errors.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  throw new Error(
+    `${label} command ${value} could not be resolved to a readable executable for binary hashing${
+      errors.length > 0 ? `: ${errors.join("; ")}` : "."
+    }`,
+  );
+}
+
 function defaultMaterialOut(profile) {
   return resolve(DEFAULT_GENERATED_MATERIAL_OUT, profile.key);
 }
@@ -1275,6 +1340,38 @@ function publicAttestationReferences(attestations) {
   );
 }
 
+function attestationSignatureShapeBlockers(signature, label) {
+  return [
+    ...unknownFieldBlockers(
+      signature,
+      new Set([
+        "schema",
+        "algorithm",
+        "signerFingerprint",
+        "signer_fingerprint",
+        "publicKeyPem",
+        "public_key_pem",
+        "signedPayloadSha256",
+        "signed_payload_sha256",
+        "signature",
+        "signatureBase64",
+        "signature_base64",
+      ]),
+      label,
+    ),
+    ...aliasFieldBlockers(
+      signature,
+      [
+        ["signerFingerprint", "signer_fingerprint"],
+        ["publicKeyPem", "public_key_pem"],
+        ["signedPayloadSha256", "signed_payload_sha256"],
+        ["signature", "signatureBase64", "signature_base64"],
+      ],
+      label,
+    ),
+  ];
+}
+
 function attestationSignatureBlockers(entry, trustedSignerFingerprints, label) {
   if (!entry || entry.readError || !isRecord(entry.record)) {
     return [];
@@ -1302,6 +1399,9 @@ function attestationSignatureBlockers(entry, trustedSignerFingerprints, label) {
     signedPayloadSha256: sha256Hex(attestationSignaturePayload(entry.record)),
   };
   entry.signatureSummary = summary;
+  blockers.push(
+    ...attestationSignatureShapeBlockers(signature, `${label} signature`),
+  );
   if (
     trim(ownValue(signature, "schema")) !==
     BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA
@@ -1986,6 +2086,13 @@ function hashPresentBlocker(record, keys, label) {
   }
 }
 
+function stringPresentBlocker(record, keys, label) {
+  const value = attestationValue(record, keys);
+  return value === undefined || value === null || trim(value) === ""
+    ? `${label} is required`
+    : "";
+}
+
 function transcriptArrayOrCountAtLeastBlocker(
   record,
   arrayKeys,
@@ -2100,9 +2207,31 @@ async function sourceBuildTranscriptBlockers(record, label, pathName) {
   if (!isRecord(sourceBuildTranscript)) {
     return [`${label} sourceBuildTranscript must be an object when present`];
   }
+  const referenceBlockers = [
+    ...unknownFieldBlockers(
+      sourceBuildTranscript,
+      new Set(["path", "sha256", "hash"]),
+      `${label} sourceBuildTranscript`,
+    ),
+    ...aliasFieldBlockers(
+      sourceBuildTranscript,
+      BSC_GROTH16_SOURCE_BUILD_TRANSCRIPT_ALIAS_GROUPS,
+      `${label} sourceBuildTranscript`,
+    ),
+  ];
   const sourcePath = trim(attestationValue(sourceBuildTranscript, ["path"]));
   if (!sourcePath) {
-    return [`${label} sourceBuildTranscript.path is required`];
+    return [
+      ...referenceBlockers,
+      `${label} sourceBuildTranscript.path is required`,
+    ];
+  }
+  const pathBlockers = evidenceReportPathBlockers(
+    sourcePath,
+    `${label} sourceBuildTranscript`,
+  );
+  if (pathBlockers.length > 0) {
+    return [...referenceBlockers, ...pathBlockers];
   }
   let expectedSha256;
   try {
@@ -2111,26 +2240,58 @@ async function sourceBuildTranscriptBlockers(record, label, pathName) {
       `${label} sourceBuildTranscript.sha256`,
     );
   } catch (error) {
-    return [error instanceof Error ? error.message : String(error)];
+    return [
+      ...referenceBlockers,
+      error instanceof Error ? error.message : String(error),
+    ];
   }
   const candidates = [
-    sourcePath,
-    ...(isAbsolute(sourcePath) ? [] : [resolve(dirname(pathName), sourcePath)]),
+    resolve(dirname(pathName), sourcePath),
+    resolve(REPO_ROOT, sourcePath),
+    resolve(process.cwd(), sourcePath),
   ];
   let lastError = null;
   for (const candidate of [...new Set(candidates)]) {
     try {
-      const actualSha256 = await fileSha256(candidate);
-      return actualSha256 === expectedSha256
+      const resolved = resolve(candidate);
+      const info = await lstat(resolved);
+      if (info.isSymbolicLink()) {
+        return [
+          ...referenceBlockers,
+          `${label} sourceBuildTranscript must not be a symbolic link.`,
+        ];
+      }
+      if (!info.isFile()) {
+        return [
+          ...referenceBlockers,
+          `${label} sourceBuildTranscript must be a regular file.`,
+        ];
+      }
+      if (info.size > BSC_GROTH16_EVIDENCE_REPORT_MAX_BYTES) {
+        return [
+          ...referenceBlockers,
+          `${label} sourceBuildTranscript is ${info.size} bytes; maximum allowed is ${BSC_GROTH16_EVIDENCE_REPORT_MAX_BYTES}`,
+        ];
+      }
+      const actualSha256 = await fileSha256(resolved);
+      const hashBlockers = actualSha256 === expectedSha256
         ? []
         : [
             `${label} sourceBuildTranscript.sha256 must match ${actualSha256}`,
           ];
+      return [...referenceBlockers, ...hashBlockers];
     } catch (error) {
+      if (error?.code !== "ENOENT") {
+        return [
+          ...referenceBlockers,
+          error instanceof Error ? error.message : String(error),
+        ];
+      }
       lastError = error;
     }
   }
   return [
+    ...referenceBlockers,
     `${label} sourceBuildTranscript.path could not be read: ${
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
@@ -2150,6 +2311,645 @@ function materialManifestReferenceBlockers(manifest, label = "material manifest"
     ...(isRecord(attestations)
       ? productionEvidenceTextBlockers(attestations, `${label} attestations`)
       : []),
+  ];
+}
+
+function materialManifestShapeBlockers(manifest, label = "material manifest") {
+  if (!isRecord(manifest)) {
+    return [];
+  }
+  const blockers = [
+    ...unknownFieldBlockers(
+      manifest,
+      new Set([
+        "schema",
+        "generatedAt",
+        "generated_at",
+        "routeId",
+        "route_id",
+        "assetKey",
+        "asset_key",
+        "bscNetwork",
+        "bsc_network",
+        "network",
+        "chain",
+        "chainIdHex",
+        "chain_id_hex",
+        "networkIdHex",
+        "network_id_hex",
+        "proofBackend",
+        "proof_backend",
+        "proofFamily",
+        "proof_family",
+        "sourceDomain",
+        "source_domain",
+        "targetDomain",
+        "target_domain",
+        "circuitProfile",
+        "circuit_profile",
+        "publicInputCount",
+        "public_input_count",
+        "publicSignalNames",
+        "public_signal_names",
+        "verifierKeyHash",
+        "verifier_key_hash",
+        "productionReady",
+        "production_ready",
+        "productionBlockers",
+        "production_blockers",
+        "artifacts",
+        "trustedSetup",
+        "trusted_setup",
+        "selfChecks",
+        "self_checks",
+        "attestationTrustPolicy",
+        "attestation_trust_policy",
+        "attestations",
+        "nextStep",
+        "next_step",
+      ]),
+      label,
+    ),
+    ...aliasFieldBlockers(
+      manifest,
+      [
+        ["generatedAt", "generated_at"],
+        ["routeId", "route_id"],
+        ["assetKey", "asset_key"],
+        ["bscNetwork", "bsc_network", "network"],
+        ["chainIdHex", "chain_id_hex"],
+        ["networkIdHex", "network_id_hex"],
+        ["proofBackend", "proof_backend"],
+        ["proofFamily", "proof_family"],
+        ["sourceDomain", "source_domain"],
+        ["targetDomain", "target_domain"],
+        ["circuitProfile", "circuit_profile"],
+        ["publicInputCount", "public_input_count"],
+        ["publicSignalNames", "public_signal_names"],
+        ["verifierKeyHash", "verifier_key_hash"],
+        ["productionReady", "production_ready"],
+        ["productionBlockers", "production_blockers"],
+        ["trustedSetup", "trusted_setup"],
+        ["selfChecks", "self_checks"],
+        ["attestationTrustPolicy", "attestation_trust_policy"],
+        ["nextStep", "next_step"],
+      ],
+      label,
+    ),
+  ];
+
+  const artifacts = ownValue(manifest, "artifacts");
+  blockers.push(
+    ...unknownFieldBlockers(
+      artifacts,
+      new Set([
+        "circuitSource",
+        "circuit_source",
+        "r1cs",
+        "provingKey",
+        "proving_key",
+        "snarkjsVerificationKey",
+        "snarkjs_verification_key",
+        "bscVerifierKey",
+        "bsc_verifier_key",
+        "witnessWasm",
+        "witness_wasm",
+        "symbols",
+        "powersOfTau",
+        "powers_of_tau",
+        "trustedSetupTranscript",
+        "trusted_setup_transcript",
+        "reproducibleBuildTranscript",
+        "reproducible_build_transcript",
+      ]),
+      `${label} artifacts`,
+    ),
+    ...aliasFieldBlockers(
+      artifacts,
+      [
+        ["circuitSource", "circuit_source"],
+        ["provingKey", "proving_key"],
+        ["snarkjsVerificationKey", "snarkjs_verification_key"],
+        ["bscVerifierKey", "bsc_verifier_key"],
+        ["witnessWasm", "witness_wasm"],
+        ["powersOfTau", "powers_of_tau"],
+        ["trustedSetupTranscript", "trusted_setup_transcript"],
+        ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+      ],
+      `${label} artifacts`,
+    ),
+  );
+  if (isRecord(artifacts)) {
+    for (const [keys, artifactLabel] of [
+      [["circuitSource", "circuit_source"], "circuitSource"],
+      [["r1cs"], "r1cs"],
+      [["provingKey", "proving_key"], "provingKey"],
+      [["snarkjsVerificationKey", "snarkjs_verification_key"], "snarkjsVerificationKey"],
+      [["bscVerifierKey", "bsc_verifier_key"], "bscVerifierKey"],
+      [["witnessWasm", "witness_wasm"], "witnessWasm"],
+      [["symbols"], "symbols"],
+      [["powersOfTau", "powers_of_tau"], "powersOfTau"],
+      [["trustedSetupTranscript", "trusted_setup_transcript"], "trustedSetupTranscript"],
+      [
+        ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+        "reproducibleBuildTranscript",
+      ],
+    ]) {
+      const artifact = keys
+        .map((key) => ownValue(artifacts, key))
+        .find((value) => value !== undefined);
+      blockers.push(
+        ...unknownFieldBlockers(
+          artifact,
+          new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
+          `${label} artifacts.${artifactLabel}`,
+        ),
+        ...aliasFieldBlockers(
+          artifact,
+          [["sha256", "hash", "artifactHash", "artifact_hash"]],
+          `${label} artifacts.${artifactLabel}`,
+        ),
+      );
+    }
+  }
+
+  const trustedSetup = ownValue(manifest, "trustedSetup");
+  blockers.push(
+    ...unknownFieldBlockers(
+      trustedSetup,
+      new Set([
+        "localPowersOfTau",
+        "local_powers_of_tau",
+        "localPhase2Contribution",
+        "local_phase2_contribution",
+        "contributionMaterialPersisted",
+        "contribution_material_persisted",
+      ]),
+      `${label} trustedSetup`,
+    ),
+    ...aliasFieldBlockers(
+      trustedSetup,
+      [
+        ["localPowersOfTau", "local_powers_of_tau"],
+        ["localPhase2Contribution", "local_phase2_contribution"],
+        ["contributionMaterialPersisted", "contribution_material_persisted"],
+      ],
+      `${label} trustedSetup`,
+    ),
+  );
+
+  const selfChecks = ownValue(manifest, "selfChecks");
+  blockers.push(
+    ...unknownFieldBlockers(
+      selfChecks,
+      new Set(["snarkjs", "snark_js", "circuitSource", "circuit_source"]),
+      `${label} selfChecks`,
+    ),
+    ...aliasFieldBlockers(
+      selfChecks,
+      [
+        ["snarkjs", "snark_js"],
+        ["circuitSource", "circuit_source"],
+      ],
+      `${label} selfChecks`,
+    ),
+  );
+  const snarkjs = isRecord(selfChecks) ? ownValue(selfChecks, "snarkjs") : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      snarkjs,
+      new Set([
+        "snarkjsBinary",
+        "snarkjs_binary",
+        "r1csInfo",
+        "r1cs_info",
+        "r1csInfoSource",
+        "r1cs_info_source",
+        "r1csInfoError",
+        "r1cs_info_error",
+        "r1csConstraintCount",
+        "r1cs_constraint_count",
+        "r1csPublicInputCount",
+        "r1cs_public_input_count",
+        "r1csBinaryHeader",
+        "r1cs_binary_header",
+        "zkeyVerify",
+        "zkey_verify",
+        "zkeyVerifyResult",
+        "zkey_verify_result",
+        "zkeyVerifyError",
+        "zkey_verify_error",
+        "zkeyVerificationKeyExport",
+        "zkey_verification_key_export",
+        "verifierKeyHashMatches",
+        "verifier_key_hash_matches",
+        "exportedVerifierKeyHash",
+        "exported_verifier_key_hash",
+      ]),
+      `${label} selfChecks.snarkjs`,
+    ),
+    ...aliasFieldBlockers(
+      snarkjs,
+      [
+        ["snarkjsBinary", "snarkjs_binary"],
+        ["r1csInfo", "r1cs_info"],
+        ["r1csInfoSource", "r1cs_info_source"],
+        ["r1csInfoError", "r1cs_info_error"],
+        ["r1csConstraintCount", "r1cs_constraint_count"],
+        ["r1csPublicInputCount", "r1cs_public_input_count"],
+        ["r1csBinaryHeader", "r1cs_binary_header"],
+        ["zkeyVerify", "zkey_verify"],
+        ["zkeyVerifyResult", "zkey_verify_result"],
+        ["zkeyVerifyError", "zkey_verify_error"],
+        ["zkeyVerificationKeyExport", "zkey_verification_key_export"],
+        ["verifierKeyHashMatches", "verifier_key_hash_matches"],
+        ["exportedVerifierKeyHash", "exported_verifier_key_hash"],
+      ],
+      `${label} selfChecks.snarkjs`,
+    ),
+  );
+  const circuitSource = isRecord(selfChecks)
+    ? ownValue(selfChecks, "circuitSource")
+    : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      circuitSource,
+      new Set([
+        "fullMessageCircuit",
+        "full_message_circuit",
+        "signalBindingFixture",
+        "signal_binding_fixture",
+        "unresolvedPlaceholders",
+        "unresolved_placeholders",
+        "keccakPublicSignalDerivation",
+        "keccak_public_signal_derivation",
+        "digestReductionModuloScalarField",
+        "digest_reduction_modulo_scalar_field",
+        "valueBitBooleanConstraints",
+        "value_bit_boolean_constraints",
+        "publicSignalConstraintCount",
+        "public_signal_constraint_count",
+        "labelBindingCount",
+        "label_binding_count",
+      ]),
+      `${label} selfChecks.circuitSource`,
+    ),
+    ...aliasFieldBlockers(
+      circuitSource,
+      [
+        ["fullMessageCircuit", "full_message_circuit"],
+        ["signalBindingFixture", "signal_binding_fixture"],
+        ["unresolvedPlaceholders", "unresolved_placeholders"],
+        ["keccakPublicSignalDerivation", "keccak_public_signal_derivation"],
+        [
+          "digestReductionModuloScalarField",
+          "digest_reduction_modulo_scalar_field",
+        ],
+        ["valueBitBooleanConstraints", "value_bit_boolean_constraints"],
+        ["publicSignalConstraintCount", "public_signal_constraint_count"],
+        ["labelBindingCount", "label_binding_count"],
+      ],
+      `${label} selfChecks.circuitSource`,
+    ),
+  );
+
+  const trustPolicy = ownValue(manifest, "attestationTrustPolicy");
+  blockers.push(
+    ...unknownFieldBlockers(
+      trustPolicy,
+      new Set([
+        "signatureSchema",
+        "signature_schema",
+        "requiredAlgorithm",
+        "required_algorithm",
+        "trustedSignerFingerprints",
+        "trusted_signer_fingerprints",
+      ]),
+      `${label} attestationTrustPolicy`,
+    ),
+    ...aliasFieldBlockers(
+      trustPolicy,
+      [
+        ["signatureSchema", "signature_schema"],
+        ["requiredAlgorithm", "required_algorithm"],
+        ["trustedSignerFingerprints", "trusted_signer_fingerprints"],
+      ],
+      `${label} attestationTrustPolicy`,
+    ),
+  );
+
+  const attestations = ownValue(manifest, "attestations");
+  blockers.push(
+    ...unknownFieldBlockers(
+      attestations,
+      new Set([
+        "semanticSccpCircuit",
+        "circuitSecurity",
+        "trustedSetup",
+        "reproducibleBuild",
+      ]),
+      `${label} attestations`,
+    ),
+  );
+  if (isRecord(attestations)) {
+    for (const [key, attestationLabel] of [
+      ["semanticSccpCircuit", "semanticSccpCircuit"],
+      ["circuitSecurity", "circuitSecurity"],
+      ["trustedSetup", "trustedSetup"],
+      ["reproducibleBuild", "reproducibleBuild"],
+    ]) {
+      const reference = ownValue(attestations, key);
+      blockers.push(
+        ...unknownFieldBlockers(
+          reference,
+          new Set([
+            "path",
+            "sha256",
+            "attestationHash",
+            "attestation_hash",
+            "schema",
+            "signature",
+            "readError",
+            "read_error",
+          ]),
+          `${label} attestations.${attestationLabel}`,
+        ),
+        ...aliasFieldBlockers(
+          reference,
+          [
+            ["sha256", "attestationHash", "attestation_hash"],
+            ["readError", "read_error"],
+          ],
+          `${label} attestations.${attestationLabel}`,
+        ),
+      );
+      const signature = isRecord(reference) ? ownValue(reference, "signature") : null;
+      blockers.push(
+        ...unknownFieldBlockers(
+          signature,
+          new Set([
+            "verified",
+            "algorithm",
+            "signerFingerprint",
+            "signer_fingerprint",
+            "signedPayloadSha256",
+            "signed_payload_sha256",
+          ]),
+          `${label} attestations.${attestationLabel}.signature`,
+        ),
+        ...aliasFieldBlockers(
+          signature,
+          [
+            ["signerFingerprint", "signer_fingerprint"],
+            ["signedPayloadSha256", "signed_payload_sha256"],
+          ],
+          `${label} attestations.${attestationLabel}.signature`,
+        ),
+      );
+    }
+  }
+
+  return blockers.filter(Boolean);
+}
+
+const BSC_GROTH16_EVIDENCE_COMMON_FIELDS = Object.freeze([
+  "schema",
+  "routeId",
+  "route_id",
+  "assetKey",
+  "asset_key",
+  "bscNetwork",
+  "bsc_network",
+  "network",
+  "chain",
+  "chainIdHex",
+  "chain_id_hex",
+  "networkIdHex",
+  "network_id_hex",
+  "proofBackend",
+  "proof_backend",
+  "proofFamily",
+  "proof_family",
+  "circuitProfile",
+  "circuit_profile",
+  "publicInputCount",
+  "public_input_count",
+  "publicSignalNames",
+  "public_signal_names",
+  "verifierKeyHash",
+  "verifier_key_hash",
+  "circuitSourceSha256",
+  "circuit_source_sha256",
+  "r1csSha256",
+  "r1cs_sha256",
+  "proofArtifactHash",
+  "proof_artifact_hash",
+  "powersOfTauSha256",
+  "powers_of_tau_sha256",
+  "ptauSha256",
+  "ptau_sha256",
+  "provingKeySha256",
+  "proving_key_sha256",
+  "provingKeyHash",
+  "proving_key_hash",
+  "snarkjsVerificationKeySha256",
+  "snarkjs_verification_key_sha256",
+  "bscVerifierKeySha256",
+  "bsc_verifier_key_sha256",
+]);
+
+const BSC_GROTH16_EVIDENCE_REPORT_FIELDS = Object.freeze([
+  "path",
+  "reportPath",
+  "report_path",
+  "sha256",
+  "hash",
+  "reportSha256",
+  "report_sha256",
+]);
+
+function evidenceAllowedFields(expectedSchema, reportKey) {
+  const bySchema = {
+    [BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA]: [
+      "reviewResult",
+      "review_result",
+      "fullSccpMessageSemantics",
+      "full_sccp_message_semantics",
+      "sourceFinalitySemantics",
+      "source_finality_semantics",
+      "destinationBindingSemantics",
+      "destination_binding_semantics",
+      "publicSignalDerivationSemantics",
+      "public_signal_derivation_semantics",
+      "negativeCaseCoverage",
+      "negative_case_coverage",
+      "reviewerSignoffCount",
+      "reviewer_signoff_count",
+      "unresolvedFindings",
+      "unresolved_findings",
+    ],
+    [BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA]: [
+      "auditResult",
+      "audit_result",
+      "approved",
+      "productionApproved",
+      "production_approved",
+      "auditorSignoffCount",
+      "auditor_signoff_count",
+      "criticalFindings",
+      "critical_findings",
+      "highFindings",
+      "high_findings",
+      "unresolvedFindings",
+      "unresolved_findings",
+    ],
+  };
+  return new Set([
+    ...BSC_GROTH16_EVIDENCE_COMMON_FIELDS,
+    reportKey,
+    reportKey.replace(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`),
+    ...(bySchema[expectedSchema] ?? []),
+  ]);
+}
+
+function unknownFieldBlockers(record, allowed, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  return Object.keys(record)
+    .filter((key) => !allowed.has(key))
+    .map((key) => `${label} contains unknown field: ${key}`);
+}
+
+function aliasFieldBlockers(record, groups, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const blockers = [];
+  for (const group of groups) {
+    const present = group.filter((key) => ownValue(record, key) !== undefined);
+    if (present.length > 1) {
+      blockers.push(
+        `${label} ${group[0]} must not use multiple aliases: ${present.join(", ")}`,
+      );
+    }
+  }
+  return blockers;
+}
+
+const BSC_GROTH16_EVIDENCE_COMMON_ALIAS_GROUPS = Object.freeze([
+  Object.freeze(["routeId", "route_id"]),
+  Object.freeze(["assetKey", "asset_key"]),
+  Object.freeze(["bscNetwork", "bsc_network", "network"]),
+  Object.freeze(["chainIdHex", "chain_id_hex"]),
+  Object.freeze(["networkIdHex", "network_id_hex"]),
+  Object.freeze(["proofBackend", "proof_backend"]),
+  Object.freeze(["proofFamily", "proof_family"]),
+  Object.freeze(["circuitProfile", "circuit_profile"]),
+  Object.freeze(["publicInputCount", "public_input_count"]),
+  Object.freeze(["publicSignalNames", "public_signal_names"]),
+  Object.freeze(["verifierKeyHash", "verifier_key_hash"]),
+  Object.freeze(["circuitSourceSha256", "circuit_source_sha256"]),
+  Object.freeze(["r1csSha256", "r1cs_sha256", "proofArtifactHash", "proof_artifact_hash"]),
+  Object.freeze(["powersOfTauSha256", "powers_of_tau_sha256", "ptauSha256", "ptau_sha256"]),
+  Object.freeze(["provingKeySha256", "proving_key_sha256", "provingKeyHash", "proving_key_hash"]),
+  Object.freeze(["snarkjsVerificationKeySha256", "snarkjs_verification_key_sha256"]),
+  Object.freeze(["bscVerifierKeySha256", "bsc_verifier_key_sha256"]),
+]);
+
+const BSC_GROTH16_EVIDENCE_REPORT_ALIAS_GROUPS = Object.freeze([
+  Object.freeze(["path", "reportPath", "report_path"]),
+  Object.freeze(["sha256", "hash", "reportSha256", "report_sha256"]),
+]);
+
+const BSC_GROTH16_SOURCE_BUILD_TRANSCRIPT_ALIAS_GROUPS = Object.freeze([
+  Object.freeze(["sha256", "hash"]),
+]);
+
+function evidenceAliasGroups(expectedSchema, reportKey) {
+  const bySchema = {
+    [BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA]: [
+      Object.freeze(["reviewResult", "review_result"]),
+      Object.freeze(["fullSccpMessageSemantics", "full_sccp_message_semantics"]),
+      Object.freeze(["sourceFinalitySemantics", "source_finality_semantics"]),
+      Object.freeze(["destinationBindingSemantics", "destination_binding_semantics"]),
+      Object.freeze([
+        "publicSignalDerivationSemantics",
+        "public_signal_derivation_semantics",
+      ]),
+      Object.freeze(["negativeCaseCoverage", "negative_case_coverage"]),
+      Object.freeze(["reviewerSignoffCount", "reviewer_signoff_count"]),
+      Object.freeze(["unresolvedFindings", "unresolved_findings"]),
+    ],
+    [BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA]: [
+      Object.freeze(["auditResult", "audit_result"]),
+      Object.freeze(["productionApproved", "production_approved", "approved"]),
+      Object.freeze(["auditorSignoffCount", "auditor_signoff_count"]),
+      Object.freeze(["criticalFindings", "critical_findings"]),
+      Object.freeze(["highFindings", "high_findings"]),
+      Object.freeze(["unresolvedFindings", "unresolved_findings"]),
+    ],
+  };
+  return [
+    ...BSC_GROTH16_EVIDENCE_COMMON_ALIAS_GROUPS,
+    Object.freeze([
+      reportKey,
+      reportKey.replace(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`),
+    ]),
+    ...(bySchema[expectedSchema] ?? []),
+  ];
+}
+
+function attestationBodyAliasGroups(expectedSchema) {
+  const bySchema = {
+    [BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA]: [
+      Object.freeze(["semanticReviewEvidenceSchema", "semantic_review_evidence_schema"]),
+      Object.freeze(["semanticReviewEvidenceSha256", "semantic_review_evidence_sha256"]),
+      Object.freeze(["semanticReviewReportSha256", "semantic_review_report_sha256"]),
+      Object.freeze(["fullSccpMessageSemantics", "full_sccp_message_semantics"]),
+      Object.freeze(["sourceFinalitySemantics", "source_finality_semantics"]),
+      Object.freeze(["destinationBindingSemantics", "destination_binding_semantics"]),
+      Object.freeze([
+        "publicSignalDerivationSemantics",
+        "public_signal_derivation_semantics",
+      ]),
+      Object.freeze(["negativeCaseCoverage", "negative_case_coverage"]),
+    ],
+    [BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA]: [
+      Object.freeze(["circuitSecurityAuditEvidenceSchema", "circuit_security_audit_evidence_schema"]),
+      Object.freeze(["circuitSecurityAuditEvidenceSha256", "circuit_security_audit_evidence_sha256"]),
+      Object.freeze(["circuitSecurityAuditReportSha256", "circuit_security_audit_report_sha256"]),
+      Object.freeze(["auditResult", "audit_result"]),
+      Object.freeze(["approved", "productionApproved", "production_approved"]),
+      Object.freeze(["criticalFindings", "critical_findings"]),
+      Object.freeze(["highFindings", "high_findings"]),
+      Object.freeze(["unresolvedFindings", "unresolved_findings"]),
+    ],
+    [BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA]: [
+      Object.freeze(["ceremonyResult", "ceremony_result"]),
+      Object.freeze(["localSingleContributor", "local_single_contributor"]),
+      Object.freeze(["minimumContributors", "minimum_contributors"]),
+      Object.freeze(["toxicWasteDestroyed", "toxic_waste_destroyed"]),
+      Object.freeze(["contributionTranscriptSha256", "contribution_transcript_sha256"]),
+    ],
+    [BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA]: [
+      Object.freeze(["reproducible", "reproducibleBuild", "reproducible_build"]),
+      Object.freeze(["independentRebuilders", "independent_rebuilders"]),
+      Object.freeze(["buildTranscriptSha256", "build_transcript_sha256"]),
+      Object.freeze(["toolchainSha256", "toolchain_sha256"]),
+      Object.freeze(["r1csInfoSource", "r1cs_info_source"]),
+      Object.freeze(["r1csPublicInputCount", "r1cs_public_input_count"]),
+      Object.freeze(["r1csConstraintCount", "r1cs_constraint_count"]),
+      Object.freeze(["zkeyVerify", "zkey_verify"]),
+      Object.freeze(["zkeyVerifyResult", "zkey_verify_result"]),
+      Object.freeze(["zkeyVerificationKeyExport", "zkey_verification_key_export"]),
+      Object.freeze(["verifierKeyHashMatches", "verifier_key_hash_matches"]),
+      Object.freeze(["exportedVerifierKeyHash", "exported_verifier_key_hash"]),
+    ],
+  };
+  return [
+    ...BSC_GROTH16_EVIDENCE_COMMON_ALIAS_GROUPS,
+    ...(bySchema[expectedSchema] ?? []),
   ];
 }
 
@@ -2283,9 +3083,10 @@ function attestationBodyAllowedFields(expectedSchema) {
 
 function attestationBodyUnknownFieldBlockers(record, expectedSchema, label) {
   const allowed = attestationBodyAllowedFields(expectedSchema);
-  return Object.keys(record)
-    .filter((key) => !allowed.has(key))
-    .map((key) => `${label} contains unknown field: ${key}`);
+  return [
+    ...unknownFieldBlockers(record, allowed, label),
+    ...aliasFieldBlockers(record, attestationBodyAliasGroups(expectedSchema), label),
+  ];
 }
 
 function optionalBooleanFalseBlocker(record, keys, label) {
@@ -2308,6 +3109,17 @@ function optionalIntegerMatchesBlocker(record, keys, expected, label) {
   return attestationValue(record, keys) === undefined
     ? ""
     : integerMatchesBlocker(record, keys, expected, label);
+}
+
+function optionalHashMatchesBlocker(record, keys, expected, label) {
+  const value = attestationValue(record, keys);
+  if (value === undefined || value === null || trim(value) === "") {
+    return "";
+  }
+  if (typeof expected !== "string" || trim(expected) === "") {
+    return `${label} expected hash is unavailable`;
+  }
+  return hashEqualsBlocker(record, keys, expected, label);
 }
 
 function publicSignalsBlocker(record, context, label) {
@@ -2554,6 +3366,7 @@ function validateReproducibleBuildAttestation(entry, context) {
   const record = entry?.record;
   const snarkjsSelfCheck = context.selfChecks?.snarkjs;
   const transcriptArtifact = context.artifacts.reproducibleBuildTranscript;
+  const expectedToolchainSha256 = context.reproducibleBuildToolchainSha256;
   return [
     ...commonAttestationBlockers(
       entry,
@@ -2578,11 +3391,14 @@ function validateReproducibleBuildAttestation(entry, context) {
                 `${label} buildTranscriptSha256`,
               )
             : `${label} transcript artifact is required`,
-          hashPresentBlocker(
-            record,
-            ["toolchainSha256", "toolchain_sha256"],
-            `${label} toolchainSha256`,
-          ),
+          expectedToolchainSha256
+            ? hashEqualsBlocker(
+                record,
+                ["toolchainSha256", "toolchain_sha256"],
+                expectedToolchainSha256,
+                `${label} toolchainSha256`,
+              )
+            : `${label} transcript-derived toolchainSha256 is required`,
           stringMatchesBlocker(
             record,
             ["r1csInfoSource", "r1cs_info_source"],
@@ -2633,6 +3449,563 @@ function validateReproducibleBuildAttestation(entry, context) {
   ];
 }
 
+function trustedSetupTranscriptShapeBlockers(record, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const blockers = [
+    ...unknownFieldBlockers(
+      record,
+      new Set([
+        "schema",
+        "routeId",
+        "route_id",
+        "assetKey",
+        "asset_key",
+        "circuitProfile",
+        "circuit_profile",
+        "generatedAt",
+        "generated_at",
+        "sourceBuildTranscript",
+        "source_build_transcript",
+        "contributors",
+        "participants",
+        "contributions",
+        "minimumContributors",
+        "minimum_contributors",
+        "minimumContributorsObserved",
+        "minimum_contributors_observed",
+        "localSingleContributor",
+        "local_single_contributor",
+        "toxicWasteDestroyed",
+        "toxic_waste_destroyed",
+        "ceremonyResult",
+        "ceremony_result",
+        "productionCeremonyRequired",
+        "production_ceremony_required",
+        "phase1",
+        "phase2",
+        "commands",
+        "commandLog",
+        "command_log",
+        "blocker",
+        "blockers",
+      ]),
+      label,
+    ),
+    ...aliasFieldBlockers(
+      record,
+      [
+        ["routeId", "route_id"],
+        ["assetKey", "asset_key"],
+        ["circuitProfile", "circuit_profile"],
+        ["generatedAt", "generated_at"],
+        ["sourceBuildTranscript", "source_build_transcript"],
+        ["minimumContributors", "minimum_contributors"],
+        ["minimumContributorsObserved", "minimum_contributors_observed"],
+        ["localSingleContributor", "local_single_contributor"],
+        ["toxicWasteDestroyed", "toxic_waste_destroyed"],
+        ["ceremonyResult", "ceremony_result"],
+        ["productionCeremonyRequired", "production_ceremony_required"],
+        ["commandLog", "command_log"],
+      ],
+      label,
+    ),
+  ];
+  const phase1 = isRecord(record.phase1) ? record.phase1 : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      phase1,
+      new Set([
+        "sourceUrl",
+        "source_url",
+        "path",
+        "sizeBytes",
+        "size_bytes",
+        "sha256",
+        "hash",
+        "blake2b512",
+        "snarkjsPowersOfTauVerify",
+        "snarkjs_powers_of_tau_verify",
+      ]),
+      `${label} phase1`,
+    ),
+    ...aliasFieldBlockers(
+      phase1,
+      [
+        ["sourceUrl", "source_url"],
+        ["sizeBytes", "size_bytes"],
+        ["sha256", "hash"],
+        ["snarkjsPowersOfTauVerify", "snarkjs_powers_of_tau_verify"],
+      ],
+      `${label} phase1`,
+    ),
+  );
+  const snarkjsPowersOfTauVerify = phase1
+    ? attestationValue(phase1, [
+        "snarkjsPowersOfTauVerify",
+        "snarkjs_powers_of_tau_verify",
+      ])
+    : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      snarkjsPowersOfTauVerify,
+      new Set(["command", "completed", "result", "verifiedAt", "verified_at"]),
+      `${label} snarkjsPowersOfTauVerify`,
+    ),
+    ...aliasFieldBlockers(
+      snarkjsPowersOfTauVerify,
+      [["verifiedAt", "verified_at"]],
+      `${label} snarkjsPowersOfTauVerify`,
+    ),
+  );
+  const phase2 = isRecord(record.phase2) ? record.phase2 : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      phase2,
+      new Set([
+        "initialZkeyPath",
+        "initial_zkey_path",
+        "finalZkeyPath",
+        "final_zkey_path",
+        "finalZkeySha256",
+        "final_zkey_sha256",
+        "finalZkeySizeBytes",
+        "final_zkey_size_bytes",
+        "circuitHash",
+        "circuit_hash",
+        "contributionHash",
+        "contribution_hash",
+        "snarkjsZkeyVerify",
+        "snarkjs_zkey_verify",
+        "contributionName",
+        "contribution_name",
+      ]),
+      `${label} phase2`,
+    ),
+    ...aliasFieldBlockers(
+      phase2,
+      [
+        ["initialZkeyPath", "initial_zkey_path"],
+        ["finalZkeyPath", "final_zkey_path"],
+        ["finalZkeySha256", "final_zkey_sha256"],
+        ["finalZkeySizeBytes", "final_zkey_size_bytes"],
+        ["circuitHash", "circuit_hash"],
+        ["contributionHash", "contribution_hash"],
+        ["snarkjsZkeyVerify", "snarkjs_zkey_verify"],
+        ["contributionName", "contribution_name"],
+      ],
+      `${label} phase2`,
+    ),
+  );
+  return blockers.filter(Boolean);
+}
+
+function reproducibleBuildTranscriptShapeBlockers(record, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const blockers = [
+    ...unknownFieldBlockers(
+      record,
+      new Set([
+        "schema",
+        "routeId",
+        "route_id",
+        "assetKey",
+        "asset_key",
+        "circuitProfile",
+        "circuit_profile",
+        "generatedAt",
+        "generated_at",
+        "sourceBuildTranscript",
+        "source_build_transcript",
+        "independentRebuilders",
+        "independent_rebuilders",
+        "rebuilders",
+        "independentRebuilderCount",
+        "independent_rebuilder_count",
+        "independentRebuildersObserved",
+        "independent_rebuilders_observed",
+        "reproducible",
+        "reproducibleBuildComplete",
+        "reproducible_build_complete",
+        "productionRebuildRequired",
+        "production_rebuild_required",
+        "toolchain",
+        "commands",
+        "commandLog",
+        "command_log",
+        "circuit",
+        "r1csInfoSource",
+        "r1cs_info_source",
+        "r1csInfoNote",
+        "r1cs_info_note",
+        "originalBuildTranscriptR1csInfoSource",
+        "original_build_transcript_r1cs_info_source",
+        "r1csPublicInputCount",
+        "r1cs_public_input_count",
+        "r1csConstraintCount",
+        "r1cs_constraint_count",
+        "r1cs",
+        "witnessWasm",
+        "witness_wasm",
+        "zkey",
+        "verificationKey",
+        "verification_key",
+        "blocker",
+        "blockers",
+        "zkeyVerify",
+        "zkey_verify",
+        "zkeyVerifyResult",
+        "zkey_verify_result",
+      ]),
+      label,
+    ),
+    ...aliasFieldBlockers(
+      record,
+      [
+        ["routeId", "route_id"],
+        ["assetKey", "asset_key"],
+        ["circuitProfile", "circuit_profile"],
+        ["generatedAt", "generated_at"],
+        ["sourceBuildTranscript", "source_build_transcript"],
+        ["independentRebuilders", "independent_rebuilders", "rebuilders"],
+        ["independentRebuilderCount", "independent_rebuilder_count"],
+        ["independentRebuildersObserved", "independent_rebuilders_observed"],
+        ["productionRebuildRequired", "production_rebuild_required"],
+        ["commandLog", "command_log"],
+        ["r1csInfoSource", "r1cs_info_source"],
+        ["r1csInfoNote", "r1cs_info_note"],
+        [
+          "originalBuildTranscriptR1csInfoSource",
+          "original_build_transcript_r1cs_info_source",
+        ],
+        ["r1csPublicInputCount", "r1cs_public_input_count"],
+        ["r1csConstraintCount", "r1cs_constraint_count"],
+        ["witnessWasm", "witness_wasm"],
+        ["verificationKey", "verification_key"],
+        ["zkeyVerify", "zkey_verify"],
+        ["zkeyVerifyResult", "zkey_verify_result"],
+      ],
+      label,
+    ),
+  ];
+  const toolchain = ownValue(record, "toolchain");
+  blockers.push(
+    ...unknownFieldBlockers(
+      toolchain,
+      new Set(["circom", "snarkjs", "circomDependencies", "circom_dependencies"]),
+      `${label} toolchain`,
+    ),
+    ...aliasFieldBlockers(
+      toolchain,
+      [["circomDependencies", "circom_dependencies"]],
+      `${label} toolchain`,
+    ),
+  );
+  const circom = isRecord(toolchain) ? ownValue(toolchain, "circom") : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      circom,
+      new Set([
+        "source",
+        "tag",
+        "revision",
+        "binary",
+        "binarySha256",
+        "binary_sha256",
+      ]),
+      `${label} toolchain.circom`,
+    ),
+    ...aliasFieldBlockers(
+      circom,
+      [["binarySha256", "binary_sha256"]],
+      `${label} toolchain.circom`,
+    ),
+  );
+  const snarkjs = isRecord(toolchain) ? ownValue(toolchain, "snarkjs") : null;
+  blockers.push(
+    ...unknownFieldBlockers(
+      snarkjs,
+      new Set(["package", "version", "binary", "binarySha256", "binary_sha256"]),
+      `${label} toolchain.snarkjs`,
+    ),
+    ...aliasFieldBlockers(
+      snarkjs,
+      [["binarySha256", "binary_sha256"]],
+      `${label} toolchain.snarkjs`,
+    ),
+  );
+  const circuit = ownValue(record, "circuit");
+  blockers.push(
+    ...unknownFieldBlockers(
+      circuit,
+      new Set([
+        "path",
+        "sha256",
+        "hash",
+        "fullMessageCircuit",
+        "full_message_circuit",
+        "publicInputCount",
+        "public_input_count",
+        "publicSignalConstraintCount",
+        "public_signal_constraint_count",
+        "labelBindingCount",
+        "label_binding_count",
+      ]),
+      `${label} circuit`,
+    ),
+    ...aliasFieldBlockers(
+      circuit,
+      [
+        ["sha256", "hash"],
+        ["fullMessageCircuit", "full_message_circuit"],
+        ["publicInputCount", "public_input_count"],
+        ["publicSignalConstraintCount", "public_signal_constraint_count"],
+        ["labelBindingCount", "label_binding_count"],
+      ],
+      `${label} circuit`,
+    ),
+  );
+  const r1cs = ownValue(record, "r1cs");
+  blockers.push(
+    ...unknownFieldBlockers(
+      r1cs,
+      new Set([
+        "path",
+        "sha256",
+        "hash",
+        "sizeBytes",
+        "size_bytes",
+        "nConstraints",
+        "n_constraints",
+        "nPublicInputs",
+        "n_public_inputs",
+        "nPrivateInputs",
+        "n_private_inputs",
+        "nWires",
+        "n_wires",
+        "nLabels",
+        "n_labels",
+      ]),
+      `${label} r1cs`,
+    ),
+    ...aliasFieldBlockers(
+      r1cs,
+      [
+        ["sha256", "hash"],
+        ["sizeBytes", "size_bytes"],
+        ["nConstraints", "n_constraints"],
+        ["nPublicInputs", "n_public_inputs"],
+        ["nPrivateInputs", "n_private_inputs"],
+        ["nWires", "n_wires"],
+        ["nLabels", "n_labels"],
+      ],
+      `${label} r1cs`,
+    ),
+  );
+  const witnessWasm = attestationValue(record, ["witnessWasm", "witness_wasm"]);
+  blockers.push(
+    ...unknownFieldBlockers(
+      witnessWasm,
+      new Set(["path", "sha256", "hash"]),
+      `${label} witnessWasm`,
+    ),
+    ...aliasFieldBlockers(
+      witnessWasm,
+      [["sha256", "hash"]],
+      `${label} witnessWasm`,
+    ),
+  );
+  const zkey = ownValue(record, "zkey");
+  blockers.push(
+    ...unknownFieldBlockers(
+      zkey,
+      new Set([
+        "initialPath",
+        "initial_path",
+        "finalPath",
+        "final_path",
+        "finalSha256",
+        "final_sha256",
+        "finalSizeBytes",
+        "final_size_bytes",
+        "circuitHash",
+        "circuit_hash",
+        "contributionHash",
+        "contribution_hash",
+        "snarkjsZkeyVerify",
+        "snarkjs_zkey_verify",
+      ]),
+      `${label} zkey`,
+    ),
+    ...aliasFieldBlockers(
+      zkey,
+      [
+        ["initialPath", "initial_path"],
+        ["finalPath", "final_path"],
+        ["finalSha256", "final_sha256"],
+        ["finalSizeBytes", "final_size_bytes"],
+        ["circuitHash", "circuit_hash"],
+        ["contributionHash", "contribution_hash"],
+        ["snarkjsZkeyVerify", "snarkjs_zkey_verify"],
+      ],
+      `${label} zkey`,
+    ),
+  );
+  const verificationKey = attestationValue(record, [
+    "verificationKey",
+    "verification_key",
+  ]);
+  blockers.push(
+    ...unknownFieldBlockers(
+      verificationKey,
+      new Set([
+        "snarkjsPath",
+        "snarkjs_path",
+        "snarkjsSha256",
+        "snarkjs_sha256",
+        "bscTestnetPath",
+        "bsc_testnet_path",
+        "bscTestnetSha256",
+        "bsc_testnet_sha256",
+        "bscMainnetPath",
+        "bsc_mainnet_path",
+        "bscMainnetSha256",
+        "bsc_mainnet_sha256",
+        "verifierKeyHash",
+        "verifier_key_hash",
+      ]),
+      `${label} verificationKey`,
+    ),
+    ...aliasFieldBlockers(
+      verificationKey,
+      [
+        ["snarkjsPath", "snarkjs_path"],
+        ["snarkjsSha256", "snarkjs_sha256"],
+        ["bscTestnetPath", "bsc_testnet_path"],
+        ["bscTestnetSha256", "bsc_testnet_sha256"],
+        ["bscMainnetPath", "bsc_mainnet_path"],
+        ["bscMainnetSha256", "bsc_mainnet_sha256"],
+        ["verifierKeyHash", "verifier_key_hash"],
+      ],
+      `${label} verificationKey`,
+    ),
+  );
+  return blockers.filter(Boolean);
+}
+
+function reproducibleBuildTranscriptToolchainBlockers(record, label) {
+  const toolchain = ownValue(record, "toolchain");
+  if (!isRecord(toolchain)) {
+    return [`${label} toolchain object is required`];
+  }
+  const blockers = [];
+  const circom = ownValue(toolchain, "circom");
+  if (!isRecord(circom)) {
+    blockers.push(`${label} toolchain.circom block is required`);
+  } else {
+    blockers.push(
+      stringPresentBlocker(circom, "binary", `${label} toolchain.circom.binary`),
+      hashPresentBlocker(
+        circom,
+        ["binarySha256", "binary_sha256"],
+        `${label} toolchain.circom.binarySha256`,
+      ),
+    );
+  }
+  const snarkjs = ownValue(toolchain, "snarkjs");
+  if (!isRecord(snarkjs)) {
+    blockers.push(`${label} toolchain.snarkjs block is required`);
+  } else {
+    blockers.push(
+      stringPresentBlocker(snarkjs, "binary", `${label} toolchain.snarkjs.binary`),
+      hashPresentBlocker(
+        snarkjs,
+        ["binarySha256", "binary_sha256"],
+        `${label} toolchain.snarkjs.binarySha256`,
+      ),
+    );
+  }
+  return blockers.filter(Boolean);
+}
+
+function reproducibleBuildTranscriptMaterialBindingBlockers(
+  record,
+  selfCheck,
+  artifacts = {},
+  label = "reproducible build transcript",
+) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const circuit = ownValue(record, "circuit");
+  const r1cs = ownValue(record, "r1cs");
+  const witnessWasm = attestationValue(record, ["witnessWasm", "witness_wasm"]);
+  const zkey = ownValue(record, "zkey");
+  const verificationKey = attestationValue(record, [
+    "verificationKey",
+    "verification_key",
+  ]);
+  return [
+    optionalHashMatchesBlocker(
+      circuit,
+      ["sha256", "hash"],
+      artifacts.circuitSource?.sha256,
+      `${label} circuit.sha256`,
+    ),
+    optionalIntegerMatchesBlocker(
+      circuit,
+      ["publicInputCount", "public_input_count"],
+      9,
+      `${label} circuit.publicInputCount`,
+    ),
+    optionalHashMatchesBlocker(
+      r1cs,
+      ["sha256", "hash"],
+      artifacts.r1cs?.sha256,
+      `${label} r1cs.sha256`,
+    ),
+    optionalIntegerMatchesBlocker(
+      r1cs,
+      ["nConstraints", "n_constraints"],
+      selfCheck?.r1csConstraintCount,
+      `${label} r1cs.nConstraints`,
+    ),
+    optionalIntegerMatchesBlocker(
+      r1cs,
+      ["nPublicInputs", "n_public_inputs"],
+      selfCheck?.r1csPublicInputCount,
+      `${label} r1cs.nPublicInputs`,
+    ),
+    optionalHashMatchesBlocker(
+      witnessWasm,
+      ["sha256", "hash"],
+      artifacts.witnessWasm?.sha256,
+      `${label} witnessWasm.sha256`,
+    ),
+    optionalHashMatchesBlocker(
+      zkey,
+      ["finalSha256", "final_sha256"],
+      artifacts.provingKey?.sha256,
+      `${label} zkey.finalSha256`,
+    ),
+    optionalHashMatchesBlocker(
+      verificationKey,
+      ["snarkjsSha256", "snarkjs_sha256"],
+      artifacts.snarkjsVerificationKey?.sha256,
+      `${label} verificationKey.snarkjsSha256`,
+    ),
+    optionalHashMatchesBlocker(
+      verificationKey,
+      ["verifierKeyHash", "verifier_key_hash"],
+      selfCheck?.exportedVerifierKeyHash,
+      `${label} verificationKey.verifierKeyHash`,
+    ),
+  ].filter(Boolean);
+}
+
 async function validateTrustedSetupTranscript(pathName) {
   const label = "trusted setup transcript";
   if (!pathName) {
@@ -2660,6 +4033,7 @@ async function validateTrustedSetupTranscript(pathName) {
     : undefined;
   const phase2 = isRecord(record.phase2) ? record.phase2 : null;
   return [
+    ...trustedSetupTranscriptShapeBlockers(record, label),
     ...productionEvidenceTextBlockers(record, label),
     ...transcriptMaterializeCommandBlockers(record, label),
     ...(await sourceBuildTranscriptBlockers(record, label, pathName)),
@@ -2711,7 +4085,11 @@ async function validateTrustedSetupTranscript(pathName) {
   ].filter(Boolean);
 }
 
-async function validateReproducibleBuildTranscript(pathName, selfCheck) {
+async function validateReproducibleBuildTranscript(
+  pathName,
+  selfCheck,
+  artifacts = {},
+) {
   const label = "reproducible build transcript";
   if (!pathName) {
     return [`missing ${label} artifact`];
@@ -2730,6 +4108,14 @@ async function validateReproducibleBuildTranscript(pathName, selfCheck) {
     return [secretReason];
   }
   return [
+    ...reproducibleBuildTranscriptShapeBlockers(record, label),
+    ...reproducibleBuildTranscriptToolchainBlockers(record, label),
+    ...reproducibleBuildTranscriptMaterialBindingBlockers(
+      record,
+      selfCheck,
+      artifacts,
+      label,
+    ),
     ...productionEvidenceTextBlockers(record, label),
     ...transcriptMaterializeCommandBlockers(record, label),
     ...(await sourceBuildTranscriptBlockers(record, label, pathName)),
@@ -2791,7 +4177,19 @@ function evidenceReportReference(record, key, label) {
   if (!reportPath) {
     return { reference: null, blockers: [`${label} report path is required`] };
   }
-  const blockers = productionEvidenceTextBlockers(report, `${label} report`);
+  const blockers = [
+    ...unknownFieldBlockers(
+      report,
+      new Set(BSC_GROTH16_EVIDENCE_REPORT_FIELDS),
+      `${label} report`,
+    ),
+    ...aliasFieldBlockers(
+      report,
+      BSC_GROTH16_EVIDENCE_REPORT_ALIAS_GROUPS,
+      `${label} report`,
+    ),
+    ...productionEvidenceTextBlockers(report, `${label} report`),
+  ];
   let sha256 = null;
   try {
     sha256 = normalizeHex32(
@@ -2807,6 +4205,42 @@ function evidenceReportReference(record, key, label) {
   };
 }
 
+function pathHasDecodedParentSegment(pathName) {
+  const normalized = trim(pathName).replace(/\\/gu, "/");
+  const variants = new Set([normalized]);
+  try {
+    variants.add(decodeURIComponent(normalized));
+  } catch (_error) {
+    // Invalid percent-encoding is handled by normal path checks below.
+  }
+  for (const variant of variants) {
+    if (variant.split("/").some((segment) => segment === "..")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function evidenceReportPathBlockers(pathName, label) {
+  const normalized = trim(pathName);
+  if (!normalized) {
+    return [`${label} path is required`];
+  }
+  if (
+    normalized.includes("\0") ||
+    /[\u0000-\u001f\u007f]/u.test(normalized) ||
+    /^[a-z][a-z0-9+.-]*:/iu.test(normalized) ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    isAbsolute(normalized) ||
+    win32.isAbsolute(normalized) ||
+    pathHasDecodedParentSegment(normalized)
+  ) {
+    return [`${label} path must be a safe relative path.`];
+  }
+  return [];
+}
+
 async function validateEvidenceReportFile({
   evidencePath,
   reportReference,
@@ -2815,20 +4249,34 @@ async function validateEvidenceReportFile({
   if (!reportReference) {
     return [];
   }
-  const candidates = [
+  const pathBlockers = evidenceReportPathBlockers(
     reportReference.path,
-    ...(isAbsolute(reportReference.path)
-      ? []
-      : [
-          resolve(dirname(evidencePath), reportReference.path),
-          resolve(REPO_ROOT, reportReference.path),
-          resolve(process.cwd(), reportReference.path),
-        ]),
+    `${label} report`,
+  );
+  if (pathBlockers.length > 0) {
+    return pathBlockers;
+  }
+  const candidates = [
+    resolve(dirname(evidencePath), reportReference.path),
+    resolve(REPO_ROOT, reportReference.path),
+    resolve(process.cwd(), reportReference.path),
   ];
   let lastError = null;
   for (const candidate of [...new Set(candidates)]) {
     try {
-      const resolved = await assertReadableRegularFile(candidate, `${label} report`);
+      const resolved = resolve(candidate);
+      const info = await lstat(resolved);
+      if (info.isSymbolicLink()) {
+        return [`${label} report must not be a symbolic link.`];
+      }
+      if (!info.isFile()) {
+        return [`${label} report must be a regular file.`];
+      }
+      if (info.size > BSC_GROTH16_EVIDENCE_REPORT_MAX_BYTES) {
+        return [
+          `${label} report is ${info.size} bytes; maximum allowed is ${BSC_GROTH16_EVIDENCE_REPORT_MAX_BYTES}`,
+        ];
+      }
       const bytes = await readFile(resolved);
       const actualSha256 = sha256Hex(bytes);
       const text = bytes.toString("utf8");
@@ -2841,6 +4289,9 @@ async function validateEvidenceReportFile({
         ...productionEvidenceTextBlockers(text, `${label} report`),
       ].filter(Boolean);
     } catch (error) {
+      if (error?.code !== "ENOENT") {
+        return [error instanceof Error ? error.message : String(error)];
+      }
       lastError = error;
     }
   }
@@ -2993,6 +4444,16 @@ async function bscGroth16EvidenceReference({
     const { reference: reportReference, blockers: reportReferenceBlockers } =
       evidenceReportReference(record, reportKey, `${label} evidence`);
     blockers.push(
+      ...unknownFieldBlockers(
+        record,
+        evidenceAllowedFields(expectedSchema, reportKey),
+        `${label} evidence`,
+      ),
+      ...aliasFieldBlockers(
+        record,
+        evidenceAliasGroups(expectedSchema, reportKey),
+        `${label} evidence`,
+      ),
       ...evidenceMaterialBindingBlockers({
         record,
         expectedSchema,
@@ -3355,6 +4816,10 @@ async function generateMaterialFromVerificationKey({
   });
   const attestationContext = {
     ...context,
+    reproducibleBuildToolchainSha256:
+      await reproducibleBuildToolchainSha256FromTranscript(
+        reproducibleBuildTranscriptPath,
+      ),
     selfChecks: {
       snarkjs: selfCheck.checks,
       ...(sourceCheck ? { circuitSource: sourceCheck.checks } : {}),
@@ -3377,6 +4842,7 @@ async function generateMaterialFromVerificationKey({
           ...(await validateReproducibleBuildTranscript(
             reproducibleBuildTranscriptPath,
             selfCheck.checks,
+            artifacts,
           )),
         ]
       : [];
@@ -3607,6 +5073,21 @@ export async function materializeBscGroth16Material(options = {}) {
         "Powers of Tau file",
       )
     : null;
+  const witnessWasmInput = optionalPath(options, [
+    "witness-wasm",
+    "witness-wasm-artifact",
+    "wasm",
+  ]);
+  const defaultWitnessWasmPath = defaultWitnessWasmPathFromR1cs(r1csPath);
+  const wasmPath = witnessWasmInput
+    ? await copyPublicFile(
+        witnessWasmInput,
+        join(outDir, basename(witnessWasmInput)),
+        "witness WASM artifact",
+      )
+    : existsSync(defaultWitnessWasmPath)
+      ? defaultWitnessWasmPath
+      : null;
   const circuitSourceInput = optionalPath(options, "circuit-source");
   const circuitProfile = trim(
     ownValue(options, "circuit-profile") ?? BSC_FULL_SCCP_CIRCUIT_PROFILE,
@@ -3655,6 +5136,7 @@ export async function materializeBscGroth16Material(options = {}) {
     snarkjsVerifierKeyPath,
     r1csPath,
     zkeyPath,
+    wasmPath,
     ptauPath,
     circuitSourcePath,
     trustedSetupTranscriptPath,
@@ -3688,6 +5170,49 @@ function materialManifestArtifact(manifest, key, label = key) {
       ownValue(artifact, "sha256"),
       `material manifest ${label} artifact sha256`,
     ),
+  };
+}
+
+function optionalMaterialManifestArtifact(manifest, key, label = key) {
+  const artifacts = ownValue(manifest, "artifacts");
+  if (!isRecord(artifacts) || ownValue(artifacts, key) === undefined) {
+    return null;
+  }
+  return materialManifestArtifact(manifest, key, label);
+}
+
+function materialManifestAttestationArtifacts(manifest) {
+  const witnessWasm = optionalMaterialManifestArtifact(
+    manifest,
+    "witnessWasm",
+    "witnessWasm",
+  );
+  return {
+    circuitSource: materialManifestArtifact(manifest, "circuitSource", "circuitSource"),
+    r1cs: materialManifestArtifact(manifest, "r1cs", "r1cs"),
+    powersOfTau: materialManifestArtifact(manifest, "powersOfTau", "powersOfTau"),
+    provingKey: materialManifestArtifact(manifest, "provingKey", "provingKey"),
+    snarkjsVerificationKey: materialManifestArtifact(
+      manifest,
+      "snarkjsVerificationKey",
+      "snarkjsVerificationKey",
+    ),
+    bscVerifierKey: materialManifestArtifact(
+      manifest,
+      "bscVerifierKey",
+      "bscVerifierKey",
+    ),
+    trustedSetupTranscript: materialManifestArtifact(
+      manifest,
+      "trustedSetupTranscript",
+      "trustedSetupTranscript",
+    ),
+    reproducibleBuildTranscript: materialManifestArtifact(
+      manifest,
+      "reproducibleBuildTranscript",
+      "reproducibleBuildTranscript",
+    ),
+    ...(witnessWasm ? { witnessWasm } : {}),
   };
 }
 
@@ -3765,6 +5290,12 @@ function requireSnarkjsSelfCheck(selfCheck, key, expected, label) {
 function validateMaterialManifestForAttestationRequest(manifest, profile) {
   if (!isRecord(manifest)) {
     throw new Error("material manifest must be a JSON object.");
+  }
+  const shapeBlockers = materialManifestShapeBlockers(manifest);
+  if (shapeBlockers.length > 0) {
+    throw new Error(
+      `material manifest shape is not production-ready: ${shapeBlockers.join("; ")}`,
+    );
   }
   const referenceBlockers = materialManifestReferenceBlockers(manifest);
   if (referenceBlockers.length > 0) {
@@ -4009,6 +5540,12 @@ function requireProofSelfTestValue(report, key, expected, label) {
   if (value !== expected) {
     throw new Error(`${label} must be ${expected}.`);
   }
+}
+
+function proofSelfTestPathBlocker(record, key, expectedPath, label) {
+  const expected = repoRelativePath(expectedPath);
+  const actual = trim(ownValue(record, key));
+  return actual === expected ? "" : `${label} must be ${expected}`;
 }
 
 function validateProofSelfTestAdversarialChecks(report, blockers) {
@@ -4343,6 +5880,8 @@ async function validateProofSelfTestReport({
   circuitProfile,
   manifestPath,
   paths,
+  snarkjsBin,
+  verifyGroth16Proof = true,
 }) {
   const blockers = [];
   let report;
@@ -4424,6 +5963,13 @@ async function validateProofSelfTestReport({
   if (!manifestBlock) {
     blockers.push("proof self-test manifest block is required");
   } else {
+    const pathBlocker = proofSelfTestPathBlocker(
+      manifestBlock,
+      "path",
+      manifestPath,
+      "proof self-test manifest.path",
+    );
+    if (pathBlocker) blockers.push(pathBlocker);
     const expectedManifestSha256 = await fileSha256(manifestPath);
     const blocker = hashEqualsBlocker(
       manifestBlock,
@@ -4470,6 +6016,13 @@ async function validateProofSelfTestReport({
         blockers.push(`proof self-test ${key} artifact is required`);
         continue;
       }
+      const pathBlocker = proofSelfTestPathBlocker(
+        artifact,
+        "path",
+        paths[key],
+        `proof self-test ${label} path`,
+      );
+      if (pathBlocker) blockers.push(pathBlocker);
       const expectedHash = await fileSha256(paths[key]);
       const blocker = hashEqualsBlocker(
         artifact,
@@ -4480,10 +6033,41 @@ async function validateProofSelfTestReport({
       if (blocker) blockers.push(blocker);
     }
   }
+  let normalizedPublicSignals = null;
   const sample = isRecord(ownValue(report, "sample")) ? ownValue(report, "sample") : null;
   if (!sample) {
     blockers.push("proof self-test sample block is required");
   } else {
+    const expectedSample = bscGroth16SelfTestInput(profile);
+    if (ownValue(sample, "id") !== expectedSample.sampleId) {
+      blockers.push(
+        `proof self-test sample.id must be ${expectedSample.sampleId}`,
+      );
+    }
+    const syntheticInputWords = ownValue(sample, "syntheticInputWords");
+    if (
+      !isRecord(syntheticInputWords) ||
+      JSON.stringify(syntheticInputWords) !==
+        JSON.stringify(expectedSample.syntheticInputWords)
+    ) {
+      blockers.push(
+        "proof self-test sample.syntheticInputWords must match deterministic BSC Groth16 self-test input",
+      );
+    }
+    try {
+      const inputSha256 = normalizeManifestHash(
+        ownValue(sample, "inputSha256"),
+        "proof self-test sample.inputSha256",
+      );
+      const expectedInputSha256 = sha256Hex(
+        Buffer.from(canonicalJson(expectedSample.input), "utf8"),
+      );
+      if (inputSha256 !== expectedInputSha256) {
+        blockers.push("proof self-test sample.inputSha256 must match deterministic self-test input");
+      }
+    } catch (error) {
+      blockers.push(error instanceof Error ? error.message : String(error));
+    }
     const publicSignalNames = ownValue(sample, "publicSignalNames");
     if (
       !Array.isArray(publicSignalNames) ||
@@ -4499,10 +6083,18 @@ async function validateProofSelfTestReport({
       expectedSignals = normalizeSnarkjsPublicSignals(
         ownValue(sample, "publicSignalWords"),
       );
+      const mismatch = publicSignalMismatch(
+        expectedSample.publicSignalWords,
+        expectedSignals,
+      );
+      if (mismatch) {
+        blockers.push(
+          `proof self-test sample.publicSignalWords mismatch: ${mismatch}`,
+        );
+      }
     } catch (error) {
       blockers.push(error instanceof Error ? error.message : String(error));
     }
-    let normalizedPublicSignals = null;
     try {
       normalizedPublicSignals = normalizeSnarkjsPublicSignals(
         ownValue(report, "publicSignals"),
@@ -4576,8 +6168,46 @@ async function validateProofSelfTestReport({
       blockers.push(error instanceof Error ? error.message : String(error));
     }
   }
+  if (verifyGroth16Proof && proof && normalizedPublicSignals) {
+    const verifyBlocker = await proofSelfTestGroth16VerificationBlocker({
+      snarkjsBin,
+      verificationKeyPath: paths.snarkjsVerificationKey,
+      publicSignals: normalizedPublicSignals,
+      proof,
+    });
+    if (verifyBlocker) blockers.push(verifyBlocker);
+  }
   validateProofSelfTestAdversarialChecks(report, blockers);
   return blockers.filter(Boolean);
+}
+
+async function proofSelfTestGroth16VerificationBlocker({
+  snarkjsBin,
+  verificationKeyPath,
+  publicSignals,
+  proof,
+}) {
+  const tempRoot = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-verify-"));
+  try {
+    const publicPath = join(tempRoot, "public.json");
+    const proofPath = join(tempRoot, "proof.json");
+    await writePublicJson(publicPath, publicSignals);
+    await writePublicJson(proofPath, proof);
+    await runCommand(snarkjsBin, [
+      "groth16",
+      "verify",
+      verificationKeyPath,
+      publicPath,
+      proofPath,
+    ]);
+    return "";
+  } catch (error) {
+    return `proof self-test embedded Groth16 proof must verify against SnarkJS verification key: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 }
 
 async function expectWitnessCalculationRejection({
@@ -4903,6 +6533,446 @@ function attestationRequestRole({
   };
 }
 
+function firstOwnValueByKeys(record, keys) {
+  for (const key of keys) {
+    const value = ownValue(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function attestationRequestPackageShapeBlockers(
+  request,
+  label = "attestation request package",
+) {
+  if (!isRecord(request)) {
+    return [];
+  }
+  const blockers = [
+    ...unknownFieldBlockers(
+      request,
+      new Set([
+        "schema",
+        "manifest",
+        "routeId",
+        "route_id",
+        "assetKey",
+        "asset_key",
+        "bscNetwork",
+        "bsc_network",
+        "network",
+        "chain",
+        "chainIdHex",
+        "chain_id_hex",
+        "networkIdHex",
+        "network_id_hex",
+        "circuitProfile",
+        "circuit_profile",
+        "proofBackend",
+        "proof_backend",
+        "proofFamily",
+        "proof_family",
+        "publicInputCount",
+        "public_input_count",
+        "publicSignalNames",
+        "public_signal_names",
+        "verifierKeyHash",
+        "verifier_key_hash",
+        "artifacts",
+        "evidence",
+        "evidenceValidation",
+        "evidence_validation",
+        "transcriptValidation",
+        "transcript_validation",
+        "roles",
+        "signingInstructions",
+        "signing_instructions",
+      ]),
+      label,
+    ),
+    ...aliasFieldBlockers(
+      request,
+      [
+        ["routeId", "route_id"],
+        ["assetKey", "asset_key"],
+        ["bscNetwork", "bsc_network", "network"],
+        ["chainIdHex", "chain_id_hex"],
+        ["networkIdHex", "network_id_hex"],
+        ["circuitProfile", "circuit_profile"],
+        ["proofBackend", "proof_backend"],
+        ["proofFamily", "proof_family"],
+        ["publicInputCount", "public_input_count"],
+        ["publicSignalNames", "public_signal_names"],
+        ["verifierKeyHash", "verifier_key_hash"],
+        ["evidenceValidation", "evidence_validation"],
+        ["transcriptValidation", "transcript_validation"],
+        ["signingInstructions", "signing_instructions"],
+      ],
+      label,
+    ),
+  ];
+
+  const manifest = ownValue(request, "manifest");
+  blockers.push(
+    ...unknownFieldBlockers(
+      manifest,
+      new Set([
+        "path",
+        "sha256",
+        "hash",
+        "generatedAt",
+        "generated_at",
+        "productionReady",
+        "production_ready",
+        "productionBlockers",
+        "production_blockers",
+      ]),
+      `${label} manifest`,
+    ),
+    ...aliasFieldBlockers(
+      manifest,
+      [
+        ["sha256", "hash"],
+        ["generatedAt", "generated_at"],
+        ["productionReady", "production_ready"],
+        ["productionBlockers", "production_blockers"],
+      ],
+      `${label} manifest`,
+    ),
+  );
+
+  const artifacts = ownValue(request, "artifacts");
+  blockers.push(
+    ...unknownFieldBlockers(
+      artifacts,
+      new Set([
+        "circuitSource",
+        "circuit_source",
+        "r1cs",
+        "powersOfTau",
+        "powers_of_tau",
+        "provingKey",
+        "proving_key",
+        "snarkjsVerificationKey",
+        "snarkjs_verification_key",
+        "bscVerifierKey",
+        "bsc_verifier_key",
+        "witnessWasm",
+        "witness_wasm",
+        "trustedSetupTranscript",
+        "trusted_setup_transcript",
+        "reproducibleBuildTranscript",
+        "reproducible_build_transcript",
+      ]),
+      `${label} artifacts`,
+    ),
+    ...aliasFieldBlockers(
+      artifacts,
+      [
+        ["circuitSource", "circuit_source"],
+        ["powersOfTau", "powers_of_tau"],
+        ["provingKey", "proving_key"],
+        ["snarkjsVerificationKey", "snarkjs_verification_key"],
+        ["bscVerifierKey", "bsc_verifier_key"],
+        ["witnessWasm", "witness_wasm"],
+        ["trustedSetupTranscript", "trusted_setup_transcript"],
+        ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+      ],
+      `${label} artifacts`,
+    ),
+  );
+  if (isRecord(artifacts)) {
+    for (const [keys, artifactLabel] of [
+      [["circuitSource", "circuit_source"], "circuitSource"],
+      [["r1cs"], "r1cs"],
+      [["powersOfTau", "powers_of_tau"], "powersOfTau"],
+      [["provingKey", "proving_key"], "provingKey"],
+      [["snarkjsVerificationKey", "snarkjs_verification_key"], "snarkjsVerificationKey"],
+      [["bscVerifierKey", "bsc_verifier_key"], "bscVerifierKey"],
+      [["witnessWasm", "witness_wasm"], "witnessWasm"],
+      [["trustedSetupTranscript", "trusted_setup_transcript"], "trustedSetupTranscript"],
+      [
+        ["reproducibleBuildTranscript", "reproducible_build_transcript"],
+        "reproducibleBuildTranscript",
+      ],
+    ]) {
+      const artifact = firstOwnValueByKeys(artifacts, keys);
+      blockers.push(
+        ...unknownFieldBlockers(
+          artifact,
+          new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
+          `${label} artifacts.${artifactLabel}`,
+        ),
+        ...aliasFieldBlockers(
+          artifact,
+          [["sha256", "hash", "artifactHash", "artifact_hash"]],
+          `${label} artifacts.${artifactLabel}`,
+        ),
+      );
+    }
+  }
+
+  const evidence = ownValue(request, "evidence");
+  blockers.push(
+    ...unknownFieldBlockers(
+      evidence,
+      new Set([
+        "semanticReview",
+        "semantic_review",
+        "circuitSecurityAudit",
+        "circuit_security_audit",
+      ]),
+      `${label} evidence`,
+    ),
+    ...aliasFieldBlockers(
+      evidence,
+      [
+        ["semanticReview", "semantic_review"],
+        ["circuitSecurityAudit", "circuit_security_audit"],
+      ],
+      `${label} evidence`,
+    ),
+  );
+  if (isRecord(evidence)) {
+    for (const [keys, evidenceLabel] of [
+      [["semanticReview", "semantic_review"], "semanticReview"],
+      [["circuitSecurityAudit", "circuit_security_audit"], "circuitSecurityAudit"],
+    ]) {
+      const reference = firstOwnValueByKeys(evidence, keys);
+      blockers.push(
+        ...unknownFieldBlockers(
+          reference,
+          new Set(["path", "sha256", "hash", "schema", "report"]),
+          `${label} evidence.${evidenceLabel}`,
+        ),
+        ...aliasFieldBlockers(
+          reference,
+          [["sha256", "hash"]],
+          `${label} evidence.${evidenceLabel}`,
+        ),
+      );
+      const report = isRecord(reference) ? ownValue(reference, "report") : null;
+      blockers.push(
+        ...unknownFieldBlockers(
+          report,
+          new Set(BSC_GROTH16_EVIDENCE_REPORT_FIELDS),
+          `${label} evidence.${evidenceLabel}.report`,
+        ),
+        ...aliasFieldBlockers(
+          report,
+          BSC_GROTH16_EVIDENCE_REPORT_ALIAS_GROUPS,
+          `${label} evidence.${evidenceLabel}.report`,
+        ),
+      );
+    }
+  }
+
+  const evidenceValidation = ownValue(request, "evidenceValidation");
+  blockers.push(
+    ...unknownFieldBlockers(
+      evidenceValidation,
+      new Set([
+        "semanticReview",
+        "semantic_review",
+        "circuitSecurityAudit",
+        "circuit_security_audit",
+      ]),
+      `${label} evidenceValidation`,
+    ),
+    ...aliasFieldBlockers(
+      evidenceValidation,
+      [
+        ["semanticReview", "semantic_review"],
+        ["circuitSecurityAudit", "circuit_security_audit"],
+      ],
+      `${label} evidenceValidation`,
+    ),
+  );
+  if (isRecord(evidenceValidation)) {
+    for (const [keys, evidenceLabel] of [
+      [["semanticReview", "semantic_review"], "semanticReview"],
+      [["circuitSecurityAudit", "circuit_security_audit"], "circuitSecurityAudit"],
+    ]) {
+      const entry = firstOwnValueByKeys(evidenceValidation, keys);
+      blockers.push(
+        ...unknownFieldBlockers(
+          entry,
+          new Set(["path", "sha256", "hash", "blockers"]),
+          `${label} evidenceValidation.${evidenceLabel}`,
+        ),
+        ...aliasFieldBlockers(
+          entry,
+          [["sha256", "hash"]],
+          `${label} evidenceValidation.${evidenceLabel}`,
+        ),
+      );
+    }
+  }
+
+  const transcriptValidation = ownValue(request, "transcriptValidation");
+  blockers.push(
+    ...unknownFieldBlockers(
+      transcriptValidation,
+      new Set([
+        "trustedSetup",
+        "trusted_setup",
+        "reproducibleBuild",
+        "reproducible_build",
+      ]),
+      `${label} transcriptValidation`,
+    ),
+    ...aliasFieldBlockers(
+      transcriptValidation,
+      [
+        ["trustedSetup", "trusted_setup"],
+        ["reproducibleBuild", "reproducible_build"],
+      ],
+      `${label} transcriptValidation`,
+    ),
+  );
+  if (isRecord(transcriptValidation)) {
+    for (const [keys, transcriptLabel] of [
+      [["trustedSetup", "trusted_setup"], "trustedSetup"],
+      [["reproducibleBuild", "reproducible_build"], "reproducibleBuild"],
+    ]) {
+      const entry = firstOwnValueByKeys(transcriptValidation, keys);
+      blockers.push(
+        ...unknownFieldBlockers(
+          entry,
+          new Set(["path", "sha256", "hash", "blockers"]),
+          `${label} transcriptValidation.${transcriptLabel}`,
+        ),
+        ...aliasFieldBlockers(
+          entry,
+          [["sha256", "hash"]],
+          `${label} transcriptValidation.${transcriptLabel}`,
+        ),
+      );
+    }
+  }
+
+  const roles = ownValue(request, "roles");
+  blockers.push(
+    ...unknownFieldBlockers(
+      roles,
+      new Set(BSC_GROTH16_ATTESTATION_ROLE_SPECS.map((spec) => spec.key)),
+      `${label} roles`,
+    ),
+  );
+  if (isRecord(roles)) {
+    for (const spec of BSC_GROTH16_ATTESTATION_ROLE_SPECS) {
+      const role = ownValue(roles, spec.key);
+      blockers.push(
+        ...unknownFieldBlockers(
+          role,
+          new Set([
+            "signerRole",
+            "signer_role",
+            "attestationSchema",
+            "attestation_schema",
+            "readyForSignature",
+            "ready_for_signature",
+            "blockers",
+            "signedPayloadSha256",
+            "signed_payload_sha256",
+            "body",
+            "signatureTemplate",
+            "signature_template",
+          ]),
+          `${label} ${spec.label} role`,
+        ),
+        ...aliasFieldBlockers(
+          role,
+          [
+            ["signerRole", "signer_role"],
+            ["attestationSchema", "attestation_schema"],
+            ["readyForSignature", "ready_for_signature"],
+            ["signedPayloadSha256", "signed_payload_sha256"],
+            ["signatureTemplate", "signature_template"],
+          ],
+          `${label} ${spec.label} role`,
+        ),
+      );
+      const body = isRecord(role) ? ownValue(role, "body") : null;
+      blockers.push(
+        ...attestationBodyUnknownFieldBlockers(
+          body,
+          spec.expectedSchema,
+          `${label} ${spec.label} body`,
+        ),
+      );
+      const signatureTemplate = isRecord(role)
+        ? firstOwnValueByKeys(role, ["signatureTemplate", "signature_template"])
+        : null;
+      blockers.push(
+        ...unknownFieldBlockers(
+          signatureTemplate,
+          new Set([
+            "schema",
+            "algorithm",
+            "signerFingerprint",
+            "signer_fingerprint",
+            "publicKeyPem",
+            "public_key_pem",
+            "signedPayloadSha256",
+            "signed_payload_sha256",
+            "signature",
+          ]),
+          `${label} ${spec.label} signatureTemplate`,
+        ),
+        ...aliasFieldBlockers(
+          signatureTemplate,
+          [
+            ["signerFingerprint", "signer_fingerprint"],
+            ["publicKeyPem", "public_key_pem"],
+            ["signedPayloadSha256", "signed_payload_sha256"],
+          ],
+          `${label} ${spec.label} signatureTemplate`,
+        ),
+      );
+    }
+  }
+
+  const signingInstructions = ownValue(request, "signingInstructions");
+  blockers.push(
+    ...unknownFieldBlockers(
+      signingInstructions,
+      new Set([
+        "signatureSchema",
+        "signature_schema",
+        "algorithm",
+        "payloadEncoding",
+        "payload_encoding",
+        "signedPayloadSha256",
+        "signed_payload_sha256",
+        "finalAttestationShape",
+        "final_attestation_shape",
+        "mustNotSignWhenReadyForSignatureIsFalse",
+        "must_not_sign_when_ready_for_signature_is_false",
+      ]),
+      `${label} signingInstructions`,
+    ),
+    ...aliasFieldBlockers(
+      signingInstructions,
+      [
+        ["signatureSchema", "signature_schema"],
+        ["payloadEncoding", "payload_encoding"],
+        ["signedPayloadSha256", "signed_payload_sha256"],
+        ["finalAttestationShape", "final_attestation_shape"],
+        [
+          "mustNotSignWhenReadyForSignatureIsFalse",
+          "must_not_sign_when_ready_for_signature_is_false",
+        ],
+      ],
+      `${label} signingInstructions`,
+    ),
+  );
+
+  return blockers.filter(Boolean);
+}
+
 function normalizeOptionalToolchainHash(value) {
   if (value === undefined || value === null || trim(value) === "") {
     return null;
@@ -4926,6 +6996,1775 @@ function toolchainSha256FromTranscript(record, options) {
   return sha256Hex(Buffer.from(canonicalJson(toolchain), "utf8"));
 }
 
+async function reproducibleBuildToolchainSha256FromTranscript(pathName) {
+  if (!pathName) {
+    return null;
+  }
+  try {
+    const record = await readJson(pathName, "reproducible build transcript");
+    if (!isRecord(record) || !isRecord(ownValue(record, "toolchain"))) {
+      return null;
+    }
+    return toolchainSha256FromTranscript(record, {});
+  } catch (_error) {
+    return null;
+  }
+}
+
+function withToolchainBinaryHash(block, binary, binarySha256) {
+  const clean = isRecord(block) ? { ...block } : {};
+  delete clean.binary_sha256;
+  return {
+    ...clean,
+    binary,
+    binarySha256,
+  };
+}
+
+async function transcriptToolchainBlock(options = {}) {
+  const circomBin = commandValue(options, "circom-bin", "circom2");
+  const snarkjsBin = commandValue(options, "snarkjs-bin", "snarkjs");
+  const circomResolved = await resolveCommandExecutableForHash(
+    circomBin,
+    "Circom compiler",
+  );
+  const snarkjsResolved = await resolveCommandExecutableForHash(
+    snarkjsBin,
+    "SnarkJS CLI",
+  );
+  return {
+    toolchain: {
+      circom: {
+        binary: circomBin,
+        binarySha256: await fileSha256(circomResolved),
+      },
+      snarkjs: {
+        package: "snarkjs",
+        binary: snarkjsBin,
+        binarySha256: await fileSha256(snarkjsResolved),
+      },
+    },
+    resolvedBinaries: {
+      circom: circomResolved,
+      snarkjs: snarkjsResolved,
+    },
+  };
+}
+
+async function r1csTranscriptSummary(r1csPath, snarkjsBin) {
+  const info = await lstat(r1csPath);
+  let source = "binary-header";
+  let parsed = null;
+  if (info.size <= MAX_SNARKJS_CLI_R1CS_INFO_BYTES) {
+    try {
+      const result = await runCommand(snarkjsBin, ["r1cs", "info", r1csPath]);
+      const cli = parseSnarkjsR1csInfo(`${result.stdout}\n${result.stderr}`);
+      if (
+        Number.isSafeInteger(cli.constraintCount) &&
+        Number.isSafeInteger(cli.publicInputCount)
+      ) {
+        parsed = {
+          nConstraints: cli.constraintCount,
+          nPublicInputs: cli.publicInputCount,
+        };
+        source = "snarkjs-cli";
+      }
+    } catch (_error) {
+      parsed = null;
+    }
+  }
+  if (!parsed) {
+    const header = await readSnarkjsR1csHeader(r1csPath);
+    parsed = {
+      nConstraints: header.nConstraints,
+      nPublicInputs: header.nPubInputs,
+      nPrivateInputs: header.nPrvInputs,
+      nWires: header.nVars,
+      nLabels: header.nLabels,
+    };
+    source = "binary-header-fallback";
+  }
+  return {
+    path: repoRelativePath(r1csPath),
+    sha256: await fileSha256(r1csPath),
+    sizeBytes: info.size,
+    ...parsed,
+    source,
+  };
+}
+
+async function sizedArtifactRecord(pathName) {
+  const info = await lstat(pathName);
+  return {
+    path: repoRelativePath(pathName),
+    sha256: await fileSha256(pathName),
+    sizeBytes: info.size,
+  };
+}
+
+function transcriptMaterializeCommand({
+  profile,
+  r1csPath,
+  zkeyPath,
+  ptauPath,
+  snarkjsVerifierKeyPath,
+  circuitSourcePath,
+  witnessWasmPath,
+  trustedSetupTranscriptPath,
+  reproducibleBuildTranscriptPath,
+  outDir,
+  snarkjsBin,
+}) {
+  return [
+    "node scripts/sccp_bsc_groth16_material.mjs materialize",
+    `--bsc-network ${profile.key}`,
+    `--r1cs ${repoRelativePath(r1csPath)}`,
+    `--zkey ${repoRelativePath(zkeyPath)}`,
+    `--ptau ${repoRelativePath(ptauPath)}`,
+    `--snarkjs-verifier-key ${repoRelativePath(snarkjsVerifierKeyPath)}`,
+    circuitSourcePath ? `--circuit-source ${repoRelativePath(circuitSourcePath)}` : "",
+    witnessWasmPath ? `--witness-wasm ${repoRelativePath(witnessWasmPath)}` : "",
+    `--trusted-setup-transcript ${repoRelativePath(trustedSetupTranscriptPath)}`,
+    `--reproducible-build-transcript ${repoRelativePath(reproducibleBuildTranscriptPath)}`,
+    `--snarkjs-bin ${displayCommandValue(snarkjsBin)}`,
+    `--out-dir ${repoRelativePath(outDir)}`,
+  ].filter(Boolean).join(" ");
+}
+
+export async function writeBscGroth16TranscriptTemplates(options = {}) {
+  const profile = normalizeBscNetworkProfile(
+    ownValue(options, "bsc-network") ?? ownValue(options, "network") ?? "testnet",
+  );
+  const r1csPath = await assertReadableRegularFile(
+    requiredOption(options, "r1cs", "BSC Groth16 transcript template package"),
+    "R1CS artifact",
+  );
+  const zkeyPath = await assertReadableRegularFile(
+    requiredOption(options, "zkey", "BSC Groth16 transcript template package"),
+    "proving key",
+  );
+  const ptauPath = await assertReadableRegularFile(
+    requiredOption(
+      options,
+      ["ptau", "powers-of-tau", "powersoftau"],
+      "BSC Groth16 transcript template package",
+    ),
+    "Powers of Tau file",
+  );
+  const snarkjsVerifierKeyPath = await assertReadableRegularFile(
+    requiredOption(
+      options,
+      ["snarkjs-verifier-key", "verification-key"],
+      "BSC Groth16 transcript template package",
+    ),
+    "SnarkJS verification key",
+  );
+  const circuitSourceInput = optionalPath(options, "circuit-source");
+  const circuitSourcePath = circuitSourceInput
+    ? await assertReadableRegularFile(circuitSourceInput, "circuit source")
+    : await canonicalFullMessageCircuitSourcePath();
+  const witnessWasmInput = optionalPath(options, [
+    "witness-wasm",
+    "witness-wasm-artifact",
+    "wasm",
+  ]);
+  const witnessWasmPath = witnessWasmInput
+    ? await assertReadableRegularFile(witnessWasmInput, "witness WASM artifact")
+    : null;
+  const outDir = resolve(
+    optionalPath(options, ["out-dir", "transcript-dir"]) ??
+      join(DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT, profile.key, "transcripts"),
+  );
+  const overwrite = optionEnabled(options, "overwrite", false);
+  const trustedSetupTranscriptPath = join(outDir, "trusted-setup-transcript.json");
+  const reproducibleBuildTranscriptPath = join(
+    outDir,
+    "reproducible-build-transcript.json",
+  );
+  const indexPath =
+    optionalPath(options, "out") ??
+    join(outDir, `${profile.key}-bsc-groth16-transcript-templates.json`);
+  for (const [pathName, label] of [
+    [trustedSetupTranscriptPath, "trusted setup transcript template"],
+    [reproducibleBuildTranscriptPath, "reproducible build transcript template"],
+    [indexPath, "BSC Groth16 transcript template index"],
+  ]) {
+    assertTemplateOutputAvailable(pathName, overwrite, label);
+  }
+  const snarkjsVerifierKey = await readJson(
+    snarkjsVerifierKeyPath,
+    "SnarkJS verification key",
+  );
+  const verifierKeyHash = snarkjsVerificationKeyToBscVerifierMaterial(
+    snarkjsVerifierKey,
+    { bscNetwork: profile.key },
+  ).verifierKeyHash;
+  const { toolchain, resolvedBinaries } = await transcriptToolchainBlock(options);
+  const snarkjsBin = toolchain.snarkjs.binary;
+  const r1csSummary = await r1csTranscriptSummary(r1csPath, snarkjsBin);
+  const zkeySummary = await sizedArtifactRecord(zkeyPath);
+  const ptauSummary = await sizedArtifactRecord(ptauPath);
+  const verificationKeySummary = await artifactRecord(snarkjsVerifierKeyPath);
+  const circuitAnalysis = await fullCircuitSourceCheck(circuitSourcePath);
+  const circuitSummary = {
+    path: repoRelativePath(circuitSourcePath),
+    sha256: await fileSha256(circuitSourcePath),
+    fullMessageCircuit: circuitAnalysis.checks.fullMessageCircuit,
+    publicInputCount: 9,
+    publicSignalConstraintCount:
+      circuitAnalysis.checks.publicSignalConstraintCount,
+    labelBindingCount: circuitAnalysis.checks.labelBindingCount,
+  };
+  const witnessWasmSummary = witnessWasmPath
+    ? await artifactRecord(witnessWasmPath)
+    : null;
+  const command = transcriptMaterializeCommand({
+    profile,
+    r1csPath,
+    zkeyPath,
+    ptauPath,
+    snarkjsVerifierKeyPath,
+    circuitSourcePath,
+    witnessWasmPath,
+    trustedSetupTranscriptPath,
+    reproducibleBuildTranscriptPath,
+    outDir: dirname(outDir),
+    snarkjsBin,
+  });
+  const generatedAt = new Date().toISOString();
+  const trustedSetupTranscript = {
+    schema: BSC_GROTH16_TRUSTED_SETUP_TRANSCRIPT_SCHEMA,
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    generatedAt,
+    contributors: [],
+    minimumContributorsObserved: 0,
+    localSingleContributor: true,
+    toxicWasteDestroyed: false,
+    ceremonyResult: "pending",
+    productionCeremonyRequired: true,
+    phase1: {
+      path: ptauSummary.path,
+      sizeBytes: ptauSummary.sizeBytes,
+      sha256: ptauSummary.sha256,
+      snarkjsPowersOfTauVerify: {
+        command: `snarkjs powersoftau verify ${repoRelativePath(ptauPath)}`,
+        completed: false,
+        result: "pending",
+      },
+    },
+    phase2: {
+      finalZkeyPath: zkeySummary.path,
+      finalZkeySha256: zkeySummary.sha256,
+      finalZkeySizeBytes: zkeySummary.sizeBytes,
+      snarkjsZkeyVerify: "pending",
+    },
+    commands: [command],
+    blocker:
+      "independent production ceremony attestation is required before signing",
+  };
+  const reproducibleBuildTranscript = {
+    schema: BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA,
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    generatedAt,
+    independentRebuilders: [],
+    independentRebuildersObserved: 0,
+    reproducible: false,
+    reproducibleBuildComplete: false,
+    productionRebuildRequired: true,
+    toolchain,
+    commands: [command],
+    circuit: circuitSummary,
+    r1csInfoSource: r1csSummary.source,
+    r1csPublicInputCount: r1csSummary.nPublicInputs,
+    r1csConstraintCount: r1csSummary.nConstraints,
+    r1cs: r1csSummary,
+    ...(witnessWasmSummary ? { witnessWasm: witnessWasmSummary } : {}),
+    zkey: {
+      finalPath: zkeySummary.path,
+      finalSha256: zkeySummary.sha256,
+      finalSizeBytes: zkeySummary.sizeBytes,
+      snarkjsZkeyVerify: "pending",
+    },
+    verificationKey: {
+      snarkjsPath: verificationKeySummary.path,
+      snarkjsSha256: verificationKeySummary.sha256,
+      verifierKeyHash,
+    },
+    zkeyVerify: false,
+    zkeyVerifyResult: "pending",
+    blocker:
+      "two independent reproducible rebuilds are required before signing",
+  };
+  await writePublicJson(trustedSetupTranscriptPath, trustedSetupTranscript);
+  await writePublicJson(reproducibleBuildTranscriptPath, reproducibleBuildTranscript);
+  const index = {
+    schema: BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA,
+    generatedAt,
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    verifierKeyHash,
+    outputs: {
+      trustedSetupTranscript: {
+        path: repoRelativePath(trustedSetupTranscriptPath),
+        sha256: await fileSha256(trustedSetupTranscriptPath),
+        schema: BSC_GROTH16_TRUSTED_SETUP_TRANSCRIPT_SCHEMA,
+      },
+      reproducibleBuildTranscript: {
+        path: repoRelativePath(reproducibleBuildTranscriptPath),
+        sha256: await fileSha256(reproducibleBuildTranscriptPath),
+        schema: BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA,
+      },
+    },
+    toolchainSha256: toolchainSha256FromTranscript(
+      { toolchain: reproducibleBuildTranscript.toolchain },
+      {},
+    ),
+    resolvedBinaries,
+    nextCommands: {
+      materialize: command,
+    },
+    draftsAreNotProductionReady: true,
+  };
+  await writePublicJson(indexPath, index);
+  return {
+    ok: true,
+    out: indexPath,
+    trustedSetupTranscript: trustedSetupTranscriptPath,
+    reproducibleBuildTranscript: reproducibleBuildTranscriptPath,
+    verifierKeyHash,
+    toolchainSha256: index.toolchainSha256,
+    draftsAreNotProductionReady: true,
+  };
+}
+
+export async function fingerprintBscGroth16Toolchain(options = {}) {
+  const transcriptPath = optionalPath(options, [
+    "transcript",
+    "reproducible-build-transcript",
+    "build-transcript",
+  ]);
+  const transcript = transcriptPath
+    ? await readJson(transcriptPath, "reproducible build transcript")
+    : null;
+  if (transcript) {
+    const secretReason = unsafeSecretReason(transcript, "reproducible build transcript");
+    if (secretReason) {
+      throw new Error(secretReason);
+    }
+  }
+  const currentToolchain = isRecord(transcript)
+    ? ownValue(transcript, "toolchain")
+    : null;
+  const circomBlock = isRecord(currentToolchain)
+    ? ownValue(currentToolchain, "circom")
+    : null;
+  const snarkjsBlock = isRecord(currentToolchain)
+    ? ownValue(currentToolchain, "snarkjs")
+    : null;
+  const circomBin =
+    explicitCommandValue(options, "circom-bin") ||
+    (isRecord(circomBlock) ? trim(ownValue(circomBlock, "binary")) : "") ||
+    commandValue(options, "circom-bin", "circom2");
+  const snarkjsBin =
+    explicitCommandValue(options, "snarkjs-bin") ||
+    (isRecord(snarkjsBlock) ? trim(ownValue(snarkjsBlock, "binary")) : "") ||
+    commandValue(options, "snarkjs-bin", "snarkjs");
+  const circomResolved = await resolveCommandExecutableForHash(
+    circomBin,
+    "Circom compiler",
+  );
+  const snarkjsResolved = await resolveCommandExecutableForHash(
+    snarkjsBin,
+    "SnarkJS CLI",
+  );
+  const toolchain = {
+    ...(isRecord(currentToolchain) ? currentToolchain : {}),
+    circom: withToolchainBinaryHash(
+      circomBlock,
+      circomBin,
+      await fileSha256(circomResolved),
+    ),
+    snarkjs: withToolchainBinaryHash(
+      snarkjsBlock,
+      snarkjsBin,
+      await fileSha256(snarkjsResolved),
+    ),
+  };
+  const toolchainSha256 = toolchainSha256FromTranscript({ toolchain }, {});
+  const body = transcript
+    ? { ...transcript, toolchain }
+    : {
+        schema: BSC_GROTH16_TOOLCHAIN_FINGERPRINT_SCHEMA,
+        generatedAt: new Date().toISOString(),
+        toolchain,
+        toolchainSha256,
+      };
+  const defaultOut = transcriptPath
+    ? join(
+        dirname(transcriptPath),
+        `${basename(transcriptPath, ".json")}.with-toolchain-hashes.json`,
+      )
+    : join(process.cwd(), "bsc-groth16-toolchain-fingerprint.json");
+  const outPath = optionalPath(options, "out") ?? defaultOut;
+  await writePublicJson(outPath, body);
+  return {
+    ok: true,
+    out: outPath,
+    transcript: transcriptPath,
+    toolchainSha256,
+    toolchain,
+    resolvedBinaries: {
+      circom: circomResolved,
+      snarkjs: snarkjsResolved,
+    },
+  };
+}
+
+function evidenceTemplateReportText(kind, commonBody) {
+  const title =
+    kind === "semantic"
+      ? "SCCP BSC Groth16 Semantic Review"
+      : "SCCP BSC Groth16 Circuit Security Audit";
+  const focus =
+    kind === "semantic"
+      ? [
+          "Confirm the full-message circuit constrains all SCCP route fields.",
+          "Confirm finality, destination binding, and public signal derivation match the route specification.",
+          "Confirm negative cases cover wrong routes, wrong domains, wrong finality roots, and altered payload fields.",
+        ]
+      : [
+          "Confirm the BN254 Groth16 circuit and verifier material are suitable for production deployment.",
+          "Confirm there are no unresolved critical or high severity findings.",
+          "Confirm the proving, verifier-key export, and artifact-hash process is reproducible from the recorded inputs.",
+        ];
+  return [
+    `# ${title}`,
+    "",
+    "Status: draft",
+    "",
+    `Route: ${ROUTE_ID}`,
+    `Asset: ${ASSET_KEY}`,
+    `BSC network: ${commonBody.bscNetwork}`,
+    `Circuit profile: ${BSC_FULL_SCCP_CIRCUIT_PROFILE}`,
+    `Verifier key hash: ${commonBody.verifierKeyHash}`,
+    `R1CS SHA-256: ${commonBody.r1csSha256}`,
+    `Proving key SHA-256: ${commonBody.provingKeySha256}`,
+    "",
+    "Reviewer actions:",
+    ...focus.map((line) => `- ${line}`),
+    "",
+    "Completion requirements:",
+    "- Replace this draft with the independent report body.",
+    "- Update the paired evidence JSON only after the report is complete.",
+    "- Run attestation-request and confirm the corresponding role is ready for signature.",
+    "",
+  ].join("\n");
+}
+
+function assertTemplateOutputAvailable(pathName, overwrite, label) {
+  const resolved = resolve(pathName);
+  if (!overwrite && existsSync(resolved)) {
+    throw new Error(`${label} already exists; pass --overwrite true to replace it.`);
+  }
+}
+
+function pendingSemanticEvidence(commonBody, reportPath, reportSha256) {
+  return {
+    schema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+    ...commonBody,
+    reviewResult: "pending",
+    fullSccpMessageSemantics: false,
+    sourceFinalitySemantics: false,
+    destinationBindingSemantics: false,
+    publicSignalDerivationSemantics: false,
+    negativeCaseCoverage: false,
+    reviewerSignoffCount: 0,
+    unresolvedFindings: 1,
+    reviewReport: {
+      path: reportPath,
+      sha256: reportSha256,
+    },
+  };
+}
+
+function pendingCircuitSecurityEvidence(commonBody, reportPath, reportSha256) {
+  return {
+    schema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+    ...commonBody,
+    auditResult: "pending",
+    approved: false,
+    auditorSignoffCount: 0,
+    criticalFindings: 0,
+    highFindings: 0,
+    unresolvedFindings: 1,
+    auditReport: {
+      path: reportPath,
+      sha256: reportSha256,
+    },
+  };
+}
+
+export async function writeBscGroth16EvidenceTemplates(options = {}) {
+  const manifestPath = await assertReadableRegularFile(
+    requiredOption(
+      options,
+      ["manifest", "material-manifest", "groth16-material-manifest"],
+      "BSC Groth16 evidence template package",
+    ),
+    "BSC Groth16 material manifest",
+  );
+  const manifest = await readJson(manifestPath, "BSC Groth16 material manifest");
+  const secretReason = unsafeSecretReason(manifest, "BSC Groth16 material manifest");
+  if (secretReason) {
+    throw new Error(secretReason);
+  }
+  const profile = normalizeBscNetworkProfile(
+    ownValue(options, "bsc-network") ??
+      ownValue(options, "network") ??
+      ownValue(manifest, "bscNetwork"),
+  );
+  validateMaterialManifestForAttestationRequest(manifest, profile);
+  const artifacts = materialManifestAttestationArtifacts(manifest);
+  const commonBody = attestationRequestCommonBody(manifest, artifacts);
+  const outDir = resolve(
+    optionalPath(options, ["out-dir", "evidence-dir"]) ??
+      join(dirname(manifestPath), "review-evidence"),
+  );
+  const overwrite = optionEnabled(options, "overwrite", false);
+  const semanticReportPath = join(outDir, "semantic-review-report.md");
+  const circuitReportPath = join(outDir, "circuit-security-audit-report.md");
+  const semanticEvidencePath = join(outDir, "semantic-review-evidence.json");
+  const circuitEvidencePath = join(outDir, "circuit-security-audit-evidence.json");
+  const indexPath =
+    optionalPath(options, "out") ??
+    join(outDir, `${profile.key}-bsc-groth16-evidence-templates.json`);
+  for (const [pathName, label] of [
+    [semanticReportPath, "semantic review report template"],
+    [circuitReportPath, "circuit security audit report template"],
+    [semanticEvidencePath, "semantic review evidence template"],
+    [circuitEvidencePath, "circuit security audit evidence template"],
+    [indexPath, "BSC Groth16 evidence template index"],
+  ]) {
+    assertTemplateOutputAvailable(pathName, overwrite, label);
+  }
+  const semanticReportText = evidenceTemplateReportText("semantic", commonBody);
+  const circuitReportText = evidenceTemplateReportText("circuit-security", commonBody);
+  await writePublicText(semanticReportPath, semanticReportText);
+  await writePublicText(circuitReportPath, circuitReportText);
+  const semanticReportSha256 = await fileSha256(semanticReportPath);
+  const circuitReportSha256 = await fileSha256(circuitReportPath);
+  await writePublicJson(
+    semanticEvidencePath,
+    pendingSemanticEvidence(commonBody, "semantic-review-report.md", semanticReportSha256),
+  );
+  await writePublicJson(
+    circuitEvidencePath,
+    pendingCircuitSecurityEvidence(
+      commonBody,
+      "circuit-security-audit-report.md",
+      circuitReportSha256,
+    ),
+  );
+  const manifestSha256 = await fileSha256(manifestPath);
+  const index = {
+    schema: BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA,
+    generatedAt: new Date().toISOString(),
+    manifest: {
+      path: repoRelativePath(manifestPath),
+      sha256: manifestSha256,
+      productionReady: ownValue(manifest, "productionReady") === true,
+      productionBlockers: Array.isArray(ownValue(manifest, "productionBlockers"))
+        ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
+        : [],
+    },
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    verifierKeyHash: commonBody.verifierKeyHash,
+    outputs: {
+      semanticReviewEvidence: {
+        path: repoRelativePath(semanticEvidencePath),
+        sha256: await fileSha256(semanticEvidencePath),
+        schema: BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+        report: {
+          path: repoRelativePath(semanticReportPath),
+          sha256: semanticReportSha256,
+        },
+      },
+      circuitSecurityAuditEvidence: {
+        path: repoRelativePath(circuitEvidencePath),
+        sha256: await fileSha256(circuitEvidencePath),
+        schema: BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+        report: {
+          path: repoRelativePath(circuitReportPath),
+          sha256: circuitReportSha256,
+        },
+      },
+    },
+    nextCommands: {
+      attestationRequest:
+        `node scripts/sccp_bsc_groth16_material.mjs attestation-request ` +
+        `--manifest ${repoRelativePath(manifestPath)} ` +
+        `--semantic-review-evidence ${repoRelativePath(semanticEvidencePath)} ` +
+        `--circuit-security-audit-evidence ${repoRelativePath(circuitEvidencePath)} ` +
+        `--out ${repoRelativePath(join(dirname(manifestPath), `${profile.key}-bsc-groth16-attestation-request.json`))}`,
+    },
+    draftsAreNotSignable: true,
+  };
+  await writePublicJson(indexPath, index);
+  return {
+    ok: true,
+    out: indexPath,
+    manifest: manifestPath,
+    manifestSha256,
+    semanticReviewEvidence: semanticEvidencePath,
+    circuitSecurityAuditEvidence: circuitEvidencePath,
+    semanticReviewReport: semanticReportPath,
+    circuitSecurityAuditReport: circuitReportPath,
+    draftsAreNotSignable: true,
+  };
+}
+
+function optionalHandoffPath(options, names, defaultPath) {
+  const explicit = optionalPath(options, names);
+  if (explicit) {
+    return { path: explicit, explicit: true };
+  }
+  return {
+    path: existsSync(resolve(defaultPath)) ? resolve(defaultPath) : null,
+    explicit: false,
+  };
+}
+
+function handoffReferencePath(pathName, handoffDir, label) {
+  const resolved = resolve(pathName);
+  const relativeToHandoff = relative(resolve(handoffDir), resolved)
+    .split(/[\\/]+/u)
+    .join("/");
+  if (
+    relativeToHandoff &&
+    evidenceReportPathBlockers(
+      relativeToHandoff,
+      `${label} handoff reference`,
+    ).length === 0
+  ) {
+    return relativeToHandoff;
+  }
+  const relativeToRepo = repoRelativePath(resolved);
+  if (
+    relativeToRepo !== resolved &&
+    evidenceReportPathBlockers(
+      relativeToRepo,
+      `${label} handoff reference`,
+    ).length === 0
+  ) {
+    return relativeToRepo;
+  }
+  throw new Error(
+    `${label} path must be under the handoff directory or repository root for portable handoff references.`,
+  );
+}
+
+async function handoffJsonReference(pathName, label, expectedSchema, handoffDir) {
+  const resolved = await assertReadableRegularFile(pathName, label);
+  const record = await readJson(resolved, label);
+  if (!isRecord(record)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  const secretReason = unsafeSecretReason(record, label);
+  if (secretReason) {
+    throw new Error(secretReason);
+  }
+  const schema = trim(ownValue(record, "schema"));
+  if (expectedSchema && schema !== expectedSchema) {
+    throw new Error(`${label} schema must be ${expectedSchema}.`);
+  }
+  return {
+    path: handoffReferencePath(resolved, handoffDir, label),
+    sha256: await fileSha256(resolved),
+    schema,
+    record,
+  };
+}
+
+function handoffDraftBlockers(reference, label, flagName) {
+  if (!reference) {
+    return [`${label} is missing; generate it before external handoff.`];
+  }
+  return ownValue(reference.record, flagName) === true
+    ? []
+    : [`${label} ${flagName} must be true for draft handoff packages.`];
+}
+
+function attestationRequestStatusOptions(options, requestPath) {
+  const forwarded = { request: requestPath };
+  for (const key of [
+    "bsc-network",
+    "network",
+    "semantic-attestation",
+    "circuit-security-attestation",
+    "circuit-audit",
+    "trusted-setup-attestation",
+    "ceremony-attestation",
+    "reproducible-build-attestation",
+    "trusted-attestation-signer",
+    "trusted-attestation-signer-fingerprint",
+    "trusted-attestation-signers",
+  ]) {
+    const value = ownValue(options, key);
+    if (value !== undefined && value !== null && trim(value) !== "") {
+      forwarded[key] = value;
+    }
+  }
+  return forwarded;
+}
+
+export async function writeBscGroth16AttestationHandoff(options = {}) {
+  const manifestPath = await assertReadableRegularFile(
+    requiredOption(
+      options,
+      ["manifest", "material-manifest", "groth16-material-manifest"],
+      "BSC Groth16 attestation handoff",
+    ),
+    "BSC Groth16 material manifest",
+  );
+  const manifest = await readJson(manifestPath, "BSC Groth16 material manifest");
+  if (!isRecord(manifest)) {
+    throw new Error("BSC Groth16 material manifest must be a JSON object.");
+  }
+  const secretReason = unsafeSecretReason(manifest, "BSC Groth16 material manifest");
+  if (secretReason) {
+    throw new Error(secretReason);
+  }
+  const profile = normalizeBscNetworkProfile(
+    ownValue(options, "bsc-network") ??
+      ownValue(options, "network") ??
+      ownValue(manifest, "bscNetwork"),
+  );
+  validateMaterialManifestForAttestationRequest(manifest, profile);
+  const materialDir = dirname(manifestPath);
+  const transcriptPackage = optionalHandoffPath(
+    options,
+    [
+      "transcript-template",
+      "transcript-template-package",
+      "transcript-templates",
+      "transcript-package",
+    ],
+    join(
+      materialDir,
+      "transcripts",
+      `${profile.key}-bsc-groth16-transcript-templates.json`,
+    ),
+  );
+  if (!transcriptPackage.path) {
+    const fallback = join(
+      materialDir,
+      "transcript-drafts",
+      `${profile.key}-bsc-groth16-transcript-templates.json`,
+    );
+    if (existsSync(resolve(fallback))) {
+      transcriptPackage.path = resolve(fallback);
+    }
+  }
+  const evidencePackage = optionalHandoffPath(
+    options,
+    ["evidence-template", "evidence-template-package", "evidence-templates"],
+    join(
+      materialDir,
+      "review-evidence",
+      `${profile.key}-bsc-groth16-evidence-templates.json`,
+    ),
+  );
+  const requestPackage = optionalHandoffPath(
+    options,
+    ["request", "attestation-request", "request-package"],
+    join(materialDir, `${profile.key}-bsc-groth16-attestation-request.json`),
+  );
+  const overwrite = optionEnabled(options, "overwrite", false);
+  const outPath =
+    optionalPath(options, "out") ??
+    join(materialDir, `${profile.key}-bsc-groth16-attestation-handoff.json`);
+  assertTemplateOutputAvailable(outPath, overwrite, "BSC Groth16 attestation handoff");
+  const handoffDir = dirname(resolve(outPath));
+
+  const manifestSha256 = await fileSha256(manifestPath);
+  const manifestProductionBlockers = Array.isArray(
+    ownValue(manifest, "productionBlockers"),
+  )
+    ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
+    : [];
+  const packages = {
+    transcriptTemplates: transcriptPackage.path
+      ? await handoffJsonReference(
+          transcriptPackage.path,
+          "BSC Groth16 transcript template package",
+          BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA,
+          handoffDir,
+        )
+      : null,
+    evidenceTemplates: evidencePackage.path
+      ? await handoffJsonReference(
+          evidencePackage.path,
+          "BSC Groth16 evidence template package",
+          BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA,
+          handoffDir,
+        )
+      : null,
+    attestationRequest: requestPackage.path
+      ? await handoffJsonReference(
+          requestPackage.path,
+          "BSC Groth16 attestation request package",
+          BSC_GROTH16_ATTESTATION_REQUEST_PACKAGE_SCHEMA,
+          handoffDir,
+        )
+      : null,
+  };
+  let attestationStatus = null;
+  let attestationStatusError = null;
+  if (requestPackage.path) {
+    try {
+      attestationStatus = await auditBscGroth16AttestationStatus(
+        attestationRequestStatusOptions(options, requestPackage.path),
+      );
+    } catch (error) {
+      attestationStatusError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const handoffBlockers = [
+    ...handoffDraftBlockers(
+      packages.transcriptTemplates,
+      "BSC Groth16 transcript template package",
+      "draftsAreNotProductionReady",
+    ),
+    ...handoffDraftBlockers(
+      packages.evidenceTemplates,
+      "BSC Groth16 evidence template package",
+      "draftsAreNotSignable",
+    ),
+    ...(packages.attestationRequest
+      ? []
+      : ["BSC Groth16 attestation request package is missing; run attestation-request before external handoff."]),
+    ...(attestationStatusError
+      ? [`BSC Groth16 attestation status audit failed: ${attestationStatusError}`]
+      : []),
+  ];
+  const statusProblems = Array.isArray(attestationStatus?.problems)
+    ? attestationStatus.problems
+    : [];
+  const signingReady =
+    Boolean(attestationStatus) &&
+    Object.values(attestationStatus.requestReadyForSignature ?? {}).every(Boolean);
+  const bundle = {
+    schema: BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA,
+    generatedAt: new Date().toISOString(),
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    circuitProfile: BSC_FULL_SCCP_CIRCUIT_PROFILE,
+    proofBackend: "evm-groth16-bn254-v1",
+    verifierKeyHash: trim(ownValue(manifest, "verifierKeyHash")),
+    manifest: {
+      path: handoffReferencePath(
+        manifestPath,
+        handoffDir,
+        "BSC Groth16 material manifest",
+      ),
+      sha256: manifestSha256,
+      productionReady: ownValue(manifest, "productionReady") === true,
+      productionBlockers: manifestProductionBlockers,
+    },
+    packages: {
+      transcriptTemplates: packages.transcriptTemplates
+        ? {
+            path: packages.transcriptTemplates.path,
+            sha256: packages.transcriptTemplates.sha256,
+            schema: packages.transcriptTemplates.schema,
+            draftsAreNotProductionReady: ownValue(
+              packages.transcriptTemplates.record,
+              "draftsAreNotProductionReady",
+            ) === true,
+          }
+        : null,
+      evidenceTemplates: packages.evidenceTemplates
+        ? {
+            path: packages.evidenceTemplates.path,
+            sha256: packages.evidenceTemplates.sha256,
+            schema: packages.evidenceTemplates.schema,
+            draftsAreNotSignable:
+              ownValue(packages.evidenceTemplates.record, "draftsAreNotSignable") ===
+              true,
+          }
+        : null,
+      attestationRequest: packages.attestationRequest
+        ? {
+            path: packages.attestationRequest.path,
+            sha256: packages.attestationRequest.sha256,
+            schema: packages.attestationRequest.schema,
+          }
+        : null,
+    },
+    readiness: {
+      handoffComplete: handoffBlockers.length === 0,
+      productionReady: ownValue(manifest, "productionReady") === true,
+      signingReady,
+      readyToFinalize: attestationStatus?.readyToFinalize === true,
+      requestValid: attestationStatus?.requestValid === true,
+      requestReadyForSignature:
+        attestationStatus?.requestReadyForSignature ?? null,
+      missingSignedRoles: attestationStatus?.missingSignedRoles ?? [],
+      problemCount: handoffBlockers.length + statusProblems.length,
+      handoffBlockers,
+      attestationStatusProblems: statusProblems,
+      productionBlockers: manifestProductionBlockers,
+      nextActions: [
+        ...(attestationStatus?.nextActions ?? []),
+        ...(handoffBlockers.length > 0
+          ? ["Generate or repair the missing handoff package files before sending external review material."]
+          : []),
+      ],
+    },
+    commands: {
+      verifyHandoff:
+        `node scripts/sccp_bsc_groth16_material.mjs verify-handoff --handoff ${repoRelativePath(outPath)} --trusted-attestation-signer <0x...>`,
+      attestationStatus:
+        packages.attestationRequest
+          ? `node scripts/sccp_bsc_groth16_material.mjs attestation-status --request ${packages.attestationRequest.path} --trusted-attestation-signer <0x...>`
+          : `node scripts/sccp_bsc_groth16_material.mjs attestation-status --request ${repoRelativePath(join(materialDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --trusted-attestation-signer <0x...>`,
+      signAttestation:
+        packages.attestationRequest
+          ? `node scripts/sccp_bsc_groth16_material.mjs sign-attestation --request ${packages.attestationRequest.path} --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> --out <signed-role-attestation.json>`
+          : `node scripts/sccp_bsc_groth16_material.mjs sign-attestation --request ${repoRelativePath(join(materialDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> --out <signed-role-attestation.json>`,
+      finalizeAttestations:
+        `node scripts/sccp_bsc_groth16_material.mjs finalize-attestations --request ${packages.attestationRequest?.path ?? repoRelativePath(join(materialDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --semantic-attestation <semantic-sccp-circuit-attestation.json> --circuit-security-attestation <circuit-security-audit.json> --trusted-setup-attestation <trusted-setup-ceremony.json> --reproducible-build-attestation <reproducible-build-attestation.json> --trusted-attestation-signer <0x...> --out-dir ${repoRelativePath(materialDir)}`,
+    },
+  };
+  await writePublicJson(outPath, bundle);
+  return {
+    ok: true,
+    out: outPath,
+    manifest: manifestPath,
+    manifestSha256,
+    handoffComplete: bundle.readiness.handoffComplete,
+    productionReady: bundle.readiness.productionReady,
+    signingReady: bundle.readiness.signingReady,
+    readyToFinalize: bundle.readiness.readyToFinalize,
+    problemCount: bundle.readiness.problemCount,
+  };
+}
+
+async function resolveHandoffReferencedFile(handoffPath, reference, label) {
+  if (!isRecord(reference)) {
+    throw new Error(`${label} reference is required.`);
+  }
+  const rawPath = trim(ownValue(reference, "path"));
+  if (!rawPath) {
+    throw new Error(`${label} path is required.`);
+  }
+  const pathBlockers = evidenceReportPathBlockers(
+    rawPath,
+    `${label} handoff reference`,
+  );
+  if (pathBlockers.length > 0) {
+    throw new Error(pathBlockers[0]);
+  }
+  const candidates = isAbsolute(rawPath)
+    ? [resolve(rawPath)]
+    : [
+        resolve(dirname(handoffPath), rawPath),
+        resolve(REPO_ROOT, rawPath),
+        resolve(process.cwd(), rawPath),
+      ];
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      return await assertReadableRegularFile(candidate, label);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  throw new Error(`${label} could not be resolved from handoff path ${rawPath}.`);
+}
+
+async function verifyHandoffJsonReference({
+  handoffPath,
+  reference,
+  label,
+  expectedSchema,
+  requireReferenceSchema = false,
+}) {
+  const status = {
+    path: isRecord(reference) ? trim(ownValue(reference, "path")) || null : null,
+    sha256: isRecord(reference) ? trim(ownValue(reference, "sha256")) || null : null,
+    schema: isRecord(reference) ? trim(ownValue(reference, "schema")) || null : null,
+    resolvedPath: null,
+    actualSha256: null,
+    valid: false,
+    blockers: [],
+    record: null,
+  };
+  try {
+    const resolved = await resolveHandoffReferencedFile(
+      handoffPath,
+      reference,
+      label,
+    );
+    status.resolvedPath = repoRelativePath(resolved);
+    status.actualSha256 = await fileSha256(resolved);
+    const declaredSha256 = normalizeManifestHash(
+      status.sha256,
+      `${label} sha256`,
+    );
+    if (status.actualSha256 !== declaredSha256) {
+      status.blockers.push(`${label} sha256 must match handoff reference.`);
+    }
+    const record = await readJson(resolved, label);
+    if (!isRecord(record)) {
+      status.blockers.push(`${label} must be a JSON object.`);
+    } else {
+      const secretReason = unsafeSecretReason(record, label);
+      if (secretReason) {
+        status.blockers.push(secretReason);
+      }
+      const actualSchema = trim(ownValue(record, "schema"));
+      if (actualSchema !== expectedSchema) {
+        status.blockers.push(`${label} schema must be ${expectedSchema}.`);
+      }
+      if (
+        (requireReferenceSchema || status.schema) &&
+        status.schema !== expectedSchema
+      ) {
+        status.blockers.push(
+          `${label} handoff schema must be ${expectedSchema}.`,
+        );
+      }
+      status.record = record;
+    }
+  } catch (error) {
+    status.blockers.push(error instanceof Error ? error.message : String(error));
+  }
+  status.valid = status.blockers.length === 0;
+  return status;
+}
+
+function handoffSummaryClaimMatches(actual, expected) {
+  try {
+    return canonicalJson(actual) === canonicalJson(expected);
+  } catch {
+    return false;
+  }
+}
+
+function pushHandoffReadinessClaimBlocker({
+  blockers,
+  readiness,
+  field,
+  expected,
+  message,
+}) {
+  if (!handoffSummaryClaimMatches(ownValue(readiness, field), expected)) {
+    blockers.push(message);
+  }
+}
+
+function pushHandoffPackageFlagBlocker({
+  blockers,
+  packages,
+  packageStatus,
+  key,
+  field,
+  message,
+}) {
+  const summary = ownValue(packages, key);
+  if (!packageStatus.valid || !isRecord(summary)) {
+    return;
+  }
+  const expected = ownValue(packageStatus.record, field) === true;
+  if (ownValue(summary, field) !== expected) {
+    blockers.push(message);
+  }
+}
+
+function materialManifestProductionBlockers(manifestStatus) {
+  return manifestStatus.valid &&
+    Array.isArray(ownValue(manifestStatus.record, "productionBlockers"))
+    ? ownValue(manifestStatus.record, "productionBlockers").map((blocker) =>
+        String(blocker),
+      )
+    : [];
+}
+
+function handoffManifestSummaryBlockers(handoff, manifestStatus) {
+  const summary = ownValue(handoff, "manifest");
+  const blockers = [];
+  if (!manifestStatus.valid || !isRecord(summary)) {
+    return blockers;
+  }
+  const productionReady = ownValue(manifestStatus.record, "productionReady") === true;
+  if (ownValue(summary, "productionReady") !== productionReady) {
+    blockers.push(
+      "BSC Groth16 attestation handoff manifest.productionReady must match material manifest.",
+    );
+  }
+  const productionBlockers = materialManifestProductionBlockers(manifestStatus);
+  if (
+    !handoffSummaryClaimMatches(
+      ownValue(summary, "productionBlockers"),
+      productionBlockers,
+    )
+  ) {
+    blockers.push(
+      "BSC Groth16 attestation handoff manifest.productionBlockers must match material manifest.",
+    );
+  }
+  return blockers;
+}
+
+function handoffSummaryShapeBlockers({
+  record,
+  allowed,
+  aliasGroups = [],
+  label,
+  nullable = false,
+}) {
+  if (record === null && nullable) {
+    return [];
+  }
+  if (record === undefined) {
+    return [];
+  }
+  if (!isRecord(record)) {
+    return [`${label} must be an object${nullable ? " or null" : ""}.`];
+  }
+  return [
+    ...unknownFieldBlockers(record, allowed, label),
+    ...aliasFieldBlockers(record, aliasGroups, label),
+  ];
+}
+
+function handoffShapeBlockers(handoff) {
+  const blockers = [
+    ...unknownFieldBlockers(
+      handoff,
+      new Set([
+        "schema",
+        "generatedAt",
+        "routeId",
+        "assetKey",
+        "bscNetwork",
+        "chain",
+        "chainIdHex",
+        "networkIdHex",
+        "circuitProfile",
+        "proofBackend",
+        "verifierKeyHash",
+        "manifest",
+        "packages",
+        "readiness",
+        "commands",
+      ]),
+      "BSC Groth16 attestation handoff",
+    ),
+    ...aliasFieldBlockers(
+      handoff,
+      [
+        ["routeId", "route_id"],
+        ["assetKey", "asset_key"],
+        ["bscNetwork", "bsc_network", "network"],
+        ["chainIdHex", "chain_id_hex"],
+        ["networkIdHex", "network_id_hex"],
+        ["circuitProfile", "circuit_profile"],
+        ["proofBackend", "proof_backend"],
+        ["verifierKeyHash", "verifier_key_hash"],
+      ],
+      "BSC Groth16 attestation handoff",
+    ),
+    ...handoffSummaryShapeBlockers({
+      record: ownValue(handoff, "manifest"),
+      allowed: new Set([
+        "path",
+        "sha256",
+        "productionReady",
+        "productionBlockers",
+      ]),
+      aliasGroups: [
+        ["sha256", "hash"],
+        ["productionReady", "production_ready"],
+        ["productionBlockers", "production_blockers"],
+      ],
+      label: "BSC Groth16 attestation handoff manifest summary",
+    }),
+  ];
+  const packages = ownValue(handoff, "packages");
+  blockers.push(
+    ...handoffSummaryShapeBlockers({
+      record: packages,
+      allowed: new Set([
+        "transcriptTemplates",
+        "evidenceTemplates",
+        "attestationRequest",
+      ]),
+      label: "BSC Groth16 attestation handoff packages",
+    }),
+  );
+  if (isRecord(packages)) {
+    blockers.push(
+      ...handoffSummaryShapeBlockers({
+        record: ownValue(packages, "transcriptTemplates"),
+        allowed: new Set([
+          "path",
+          "sha256",
+          "schema",
+          "draftsAreNotProductionReady",
+        ]),
+        aliasGroups: [
+          ["sha256", "hash"],
+          ["draftsAreNotProductionReady", "drafts_are_not_production_ready"],
+        ],
+        label: "BSC Groth16 transcript template package handoff summary",
+        nullable: true,
+      }),
+      ...handoffSummaryShapeBlockers({
+        record: ownValue(packages, "evidenceTemplates"),
+        allowed: new Set([
+          "path",
+          "sha256",
+          "schema",
+          "draftsAreNotSignable",
+        ]),
+        aliasGroups: [
+          ["sha256", "hash"],
+          ["draftsAreNotSignable", "drafts_are_not_signable"],
+        ],
+        label: "BSC Groth16 evidence template package handoff summary",
+        nullable: true,
+      }),
+      ...handoffSummaryShapeBlockers({
+        record: ownValue(packages, "attestationRequest"),
+        allowed: new Set(["path", "sha256", "schema"]),
+        aliasGroups: [["sha256", "hash"]],
+        label: "BSC Groth16 attestation request package handoff summary",
+        nullable: true,
+      }),
+    );
+  }
+  blockers.push(
+    ...handoffSummaryShapeBlockers({
+      record: ownValue(handoff, "readiness"),
+      allowed: new Set([
+        "handoffComplete",
+        "productionReady",
+        "signingReady",
+        "readyToFinalize",
+        "requestValid",
+        "requestReadyForSignature",
+        "missingSignedRoles",
+        "problemCount",
+        "handoffBlockers",
+        "attestationStatusProblems",
+        "productionBlockers",
+        "nextActions",
+      ]),
+      aliasGroups: [
+        ["handoffComplete", "handoff_complete"],
+        ["productionReady", "production_ready"],
+        ["signingReady", "signing_ready"],
+        ["readyToFinalize", "ready_to_finalize"],
+        ["requestValid", "request_valid"],
+        ["requestReadyForSignature", "request_ready_for_signature"],
+        ["missingSignedRoles", "missing_signed_roles"],
+        ["problemCount", "problem_count"],
+        ["handoffBlockers", "handoff_blockers"],
+        ["attestationStatusProblems", "attestation_status_problems"],
+        ["productionBlockers", "production_blockers"],
+        ["nextActions", "next_actions"],
+      ],
+      label: "BSC Groth16 attestation handoff readiness",
+    }),
+    ...handoffSummaryShapeBlockers({
+      record: ownValue(handoff, "commands"),
+      allowed: new Set([
+        "verifyHandoff",
+        "attestationStatus",
+        "signAttestation",
+        "finalizeAttestations",
+      ]),
+      aliasGroups: [
+        ["verifyHandoff", "verify_handoff"],
+        ["attestationStatus", "attestation_status"],
+        ["signAttestation", "sign_attestation"],
+        ["finalizeAttestations", "finalize_attestations"],
+      ],
+      label: "BSC Groth16 attestation handoff commands",
+    }),
+  );
+  return blockers;
+}
+
+function pushHandoffCommandFragmentBlocker(blockers, commands, commandName, fragment) {
+  const value = isRecord(commands) ? trim(ownValue(commands, commandName)) : "";
+  if (!value.includes(fragment)) {
+    blockers.push(
+      `BSC Groth16 attestation handoff commands.${commandName} must include ${fragment}.`,
+    );
+  }
+}
+
+function handoffCommandSummaryBlockers(handoff, packageStatus) {
+  const commands = ownValue(handoff, "commands");
+  const blockers = [];
+  if (!isRecord(commands)) {
+    return ["BSC Groth16 attestation handoff commands block is required."];
+  }
+  const requestPath = packageStatus.attestationRequest.path;
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "verifyHandoff",
+    "verify-handoff",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "verifyHandoff",
+    "--handoff",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "verifyHandoff",
+    "--trusted-attestation-signer <0x...>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "attestationStatus",
+    "attestation-status",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "attestationStatus",
+    "--request",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "attestationStatus",
+    "--trusted-attestation-signer <0x...>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "signAttestation",
+    "sign-attestation",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "signAttestation",
+    "--role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "signAttestation",
+    "--private-key-pem <ed25519-private-key.pem>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "signAttestation",
+    "--out <signed-role-attestation.json>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "finalize-attestations",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "--semantic-attestation <semantic-sccp-circuit-attestation.json>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "--circuit-security-attestation <circuit-security-audit.json>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "--trusted-setup-attestation <trusted-setup-ceremony.json>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "--reproducible-build-attestation <reproducible-build-attestation.json>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "--trusted-attestation-signer <0x...>",
+  );
+  pushHandoffCommandFragmentBlocker(
+    blockers,
+    commands,
+    "finalizeAttestations",
+    "--out-dir",
+  );
+  if (requestPath) {
+    for (const commandName of [
+      "attestationStatus",
+      "signAttestation",
+      "finalizeAttestations",
+    ]) {
+      pushHandoffCommandFragmentBlocker(
+        blockers,
+        commands,
+        commandName,
+        requestPath,
+      );
+    }
+  }
+  return blockers;
+}
+
+export async function verifyBscGroth16AttestationHandoff(options = {}) {
+  const handoffPath = await assertReadableRegularFile(
+    requiredOption(
+      options,
+      ["handoff", "handoff-bundle", "attestation-handoff"],
+      "BSC Groth16 attestation handoff verification",
+    ),
+    "BSC Groth16 attestation handoff",
+  );
+  const handoff = await readJson(handoffPath, "BSC Groth16 attestation handoff");
+  if (!isRecord(handoff)) {
+    throw new Error("BSC Groth16 attestation handoff must be a JSON object.");
+  }
+  const secretReason = unsafeSecretReason(handoff, "BSC Groth16 attestation handoff");
+  if (secretReason) {
+    throw new Error(secretReason);
+  }
+  const shapeBlockers = [...handoffShapeBlockers(handoff)];
+  if (trim(ownValue(handoff, "schema")) !== BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA) {
+    shapeBlockers.push(
+      `BSC Groth16 attestation handoff schema must be ${BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA}.`,
+    );
+  }
+  if (trim(ownValue(handoff, "routeId")) !== ROUTE_ID) {
+    shapeBlockers.push(`BSC Groth16 attestation handoff routeId must be ${ROUTE_ID}.`);
+  }
+  if (trim(ownValue(handoff, "assetKey")) !== ASSET_KEY) {
+    shapeBlockers.push(`BSC Groth16 attestation handoff assetKey must be ${ASSET_KEY}.`);
+  }
+  const profile = normalizeBscNetworkProfile(
+    ownValue(options, "bsc-network") ??
+      ownValue(options, "network") ??
+      ownValue(handoff, "bscNetwork"),
+  );
+  if (trim(ownValue(handoff, "chainIdHex")) !== profile.chainIdHex) {
+    shapeBlockers.push(
+      `BSC Groth16 attestation handoff chainIdHex must be ${profile.chainIdHex}.`,
+    );
+  }
+  if (trim(ownValue(handoff, "networkIdHex")) !== profile.networkIdHex) {
+    shapeBlockers.push(
+      `BSC Groth16 attestation handoff networkIdHex must be ${profile.networkIdHex}.`,
+    );
+  }
+  const manifestStatus = await verifyHandoffJsonReference({
+    handoffPath,
+    reference: ownValue(handoff, "manifest"),
+    label: "BSC Groth16 material manifest",
+    expectedSchema: BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA,
+  });
+  if (manifestStatus.valid) {
+    try {
+      validateMaterialManifestForAttestationRequest(
+        manifestStatus.record,
+        profile,
+      );
+      const handoffVerifierKeyHash = trim(ownValue(handoff, "verifierKeyHash"));
+      const manifestVerifierKeyHash = trim(
+        ownValue(manifestStatus.record, "verifierKeyHash"),
+      );
+      if (handoffVerifierKeyHash !== manifestVerifierKeyHash) {
+        manifestStatus.blockers.push(
+          "BSC Groth16 attestation handoff verifierKeyHash must match material manifest.",
+        );
+      }
+    } catch (error) {
+      manifestStatus.blockers.push(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    manifestStatus.valid = manifestStatus.blockers.length === 0;
+  }
+  const packages = isRecord(ownValue(handoff, "packages"))
+    ? ownValue(handoff, "packages")
+    : {};
+  const packageStatus = {
+    transcriptTemplates: await verifyHandoffJsonReference({
+      handoffPath,
+      reference: ownValue(packages, "transcriptTemplates"),
+      label: "BSC Groth16 transcript template package",
+      expectedSchema: BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA,
+      requireReferenceSchema: true,
+    }),
+    evidenceTemplates: await verifyHandoffJsonReference({
+      handoffPath,
+      reference: ownValue(packages, "evidenceTemplates"),
+      label: "BSC Groth16 evidence template package",
+      expectedSchema: BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA,
+      requireReferenceSchema: true,
+    }),
+    attestationRequest: await verifyHandoffJsonReference({
+      handoffPath,
+      reference: ownValue(packages, "attestationRequest"),
+      label: "BSC Groth16 attestation request package",
+      expectedSchema: BSC_GROTH16_ATTESTATION_REQUEST_PACKAGE_SCHEMA,
+      requireReferenceSchema: true,
+    }),
+  };
+  const manifestSummaryBlockers = handoffManifestSummaryBlockers(
+    handoff,
+    manifestStatus,
+  );
+  const commandSummaryBlockers = handoffCommandSummaryBlockers(
+    handoff,
+    packageStatus,
+  );
+  const packageSummaryBlockers = [];
+  pushHandoffPackageFlagBlocker({
+    blockers: packageSummaryBlockers,
+    packages,
+    packageStatus: packageStatus.transcriptTemplates,
+    key: "transcriptTemplates",
+    field: "draftsAreNotProductionReady",
+    message:
+      "BSC Groth16 transcript template package handoff draftsAreNotProductionReady must match referenced package.",
+  });
+  pushHandoffPackageFlagBlocker({
+    blockers: packageSummaryBlockers,
+    packages,
+    packageStatus: packageStatus.evidenceTemplates,
+    key: "evidenceTemplates",
+    field: "draftsAreNotSignable",
+    message:
+      "BSC Groth16 evidence template package handoff draftsAreNotSignable must match referenced package.",
+  });
+  const handoffCompletenessBlockers = [];
+  if (
+    packageStatus.transcriptTemplates.valid &&
+    ownValue(packageStatus.transcriptTemplates.record, "draftsAreNotProductionReady") !== true
+  ) {
+    handoffCompletenessBlockers.push(
+      "BSC Groth16 transcript template package draftsAreNotProductionReady must be true.",
+    );
+  }
+  if (
+    packageStatus.evidenceTemplates.valid &&
+    ownValue(packageStatus.evidenceTemplates.record, "draftsAreNotSignable") !== true
+  ) {
+    handoffCompletenessBlockers.push(
+      "BSC Groth16 evidence template package draftsAreNotSignable must be true.",
+    );
+  }
+  let attestationStatus = null;
+  let attestationStatusError = null;
+  if (packageStatus.attestationRequest.valid) {
+    try {
+      attestationStatus = await auditBscGroth16AttestationStatus(
+        attestationRequestStatusOptions(
+          options,
+          packageStatus.attestationRequest.resolvedPath,
+        ),
+      );
+    } catch (error) {
+      attestationStatusError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const baseReferenceBlockers = [
+    ...shapeBlockers,
+    ...manifestStatus.blockers,
+    ...Object.values(packageStatus).flatMap((status) => status.blockers),
+    ...manifestSummaryBlockers,
+    ...packageSummaryBlockers,
+    ...commandSummaryBlockers,
+    ...handoffCompletenessBlockers,
+    ...(attestationStatusError
+      ? [`BSC Groth16 attestation status audit failed: ${attestationStatusError}`]
+      : []),
+  ];
+  const statusProblems = Array.isArray(attestationStatus?.problems)
+    ? attestationStatus.problems
+    : [];
+  const manifestProductionReady =
+    manifestStatus.valid && ownValue(manifestStatus.record, "productionReady") === true;
+  const signingReady =
+    Boolean(attestationStatus) &&
+    Object.values(attestationStatus.requestReadyForSignature ?? {}).every(Boolean);
+  const readyToFinalize = attestationStatus?.readyToFinalize === true;
+  const requestValid = attestationStatus?.requestValid === true;
+  const requestReadyForSignature =
+    attestationStatus?.requestReadyForSignature ?? null;
+  const missingSignedRoles = attestationStatus?.missingSignedRoles ?? [];
+  const manifestProductionBlockers =
+    materialManifestProductionBlockers(manifestStatus);
+  const expectedProblemCount = baseReferenceBlockers.length + statusProblems.length;
+  const readinessClaimBlockers = [];
+  const readiness = ownValue(handoff, "readiness");
+  if (!isRecord(readiness)) {
+    readinessClaimBlockers.push(
+      "BSC Groth16 attestation handoff readiness block is required.",
+    );
+  } else {
+    if (
+      ownValue(readiness, "handoffComplete") !==
+      (baseReferenceBlockers.length === 0)
+    ) {
+      readinessClaimBlockers.push(
+        "BSC Groth16 attestation handoff readiness.handoffComplete must match verified references.",
+      );
+    }
+    if (ownValue(readiness, "productionReady") !== manifestProductionReady) {
+      readinessClaimBlockers.push(
+        "BSC Groth16 attestation handoff readiness.productionReady must match material manifest.",
+      );
+    }
+    if (ownValue(readiness, "signingReady") !== signingReady) {
+      readinessClaimBlockers.push(
+        "BSC Groth16 attestation handoff readiness.signingReady must match attestation status.",
+      );
+    }
+    if (ownValue(readiness, "readyToFinalize") !== readyToFinalize) {
+      readinessClaimBlockers.push(
+        "BSC Groth16 attestation handoff readiness.readyToFinalize must match attestation status.",
+      );
+    }
+    if (ownValue(readiness, "requestValid") !== requestValid) {
+      readinessClaimBlockers.push(
+        "BSC Groth16 attestation handoff readiness.requestValid must match attestation status.",
+      );
+    }
+    if (ownValue(readiness, "problemCount") !== expectedProblemCount) {
+      readinessClaimBlockers.push(
+        "BSC Groth16 attestation handoff readiness.problemCount must match verified handoff status.",
+      );
+    }
+    pushHandoffReadinessClaimBlocker({
+      blockers: readinessClaimBlockers,
+      readiness,
+      field: "requestReadyForSignature",
+      expected: requestReadyForSignature,
+      message:
+        "BSC Groth16 attestation handoff readiness.requestReadyForSignature must match attestation status.",
+    });
+    pushHandoffReadinessClaimBlocker({
+      blockers: readinessClaimBlockers,
+      readiness,
+      field: "missingSignedRoles",
+      expected: missingSignedRoles,
+      message:
+        "BSC Groth16 attestation handoff readiness.missingSignedRoles must match attestation status.",
+    });
+    pushHandoffReadinessClaimBlocker({
+      blockers: readinessClaimBlockers,
+      readiness,
+      field: "attestationStatusProblems",
+      expected: statusProblems,
+      message:
+        "BSC Groth16 attestation handoff readiness.attestationStatusProblems must match attestation status.",
+    });
+    pushHandoffReadinessClaimBlocker({
+      blockers: readinessClaimBlockers,
+      readiness,
+      field: "productionBlockers",
+      expected: manifestProductionBlockers,
+      message:
+        "BSC Groth16 attestation handoff readiness.productionBlockers must match material manifest.",
+    });
+  }
+  const referenceBlockers = [
+    ...baseReferenceBlockers,
+    ...readinessClaimBlockers,
+  ];
+  const valid = referenceBlockers.length === 0;
+  return {
+    ok: true,
+    valid,
+    handoff: handoffPath,
+    handoffSha256: await fileSha256(handoffPath),
+    bscNetwork: profile.key,
+    manifest: {
+      path: manifestStatus.path,
+      sha256: manifestStatus.sha256,
+      actualSha256: manifestStatus.actualSha256,
+      valid: manifestStatus.valid,
+      productionReady:
+        manifestStatus.valid &&
+        ownValue(manifestStatus.record, "productionReady") === true,
+      productionBlockers: manifestProductionBlockers,
+    },
+    packages: Object.fromEntries(
+      Object.entries(packageStatus).map(([key, status]) => [
+        key,
+        {
+          path: status.path,
+          sha256: status.sha256,
+          actualSha256: status.actualSha256,
+          schema: status.schema,
+          valid: status.valid,
+          blockers: status.blockers,
+        },
+      ]),
+    ),
+    readiness: {
+      handoffComplete: valid,
+      productionReady: valid && manifestProductionReady,
+      signingReady,
+      readyToFinalize,
+      requestValid,
+      requestReadyForSignature,
+      missingSignedRoles,
+    },
+    problems: [...referenceBlockers, ...statusProblems],
+    referenceBlockers,
+    attestationStatusProblems: statusProblems,
+    problemCount: referenceBlockers.length + statusProblems.length,
+    nextActions: valid
+      ? attestationStatus?.nextActions ?? []
+      : [
+          "Regenerate handoff-bundle from the current manifest, transcript package, evidence package, and attestation request.",
+        ],
+  };
+}
+
 export async function generateBscGroth16AttestationRequestPackage(options = {}) {
   const manifestPath = await assertReadableRegularFile(
     requiredOption(
@@ -4946,32 +8785,7 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
       ownValue(manifest, "bscNetwork"),
   );
   validateMaterialManifestForAttestationRequest(manifest, profile);
-  const artifacts = {
-    circuitSource: materialManifestArtifact(manifest, "circuitSource", "circuitSource"),
-    r1cs: materialManifestArtifact(manifest, "r1cs", "r1cs"),
-    powersOfTau: materialManifestArtifact(manifest, "powersOfTau", "powersOfTau"),
-    provingKey: materialManifestArtifact(manifest, "provingKey", "provingKey"),
-    snarkjsVerificationKey: materialManifestArtifact(
-      manifest,
-      "snarkjsVerificationKey",
-      "snarkjsVerificationKey",
-    ),
-    bscVerifierKey: materialManifestArtifact(
-      manifest,
-      "bscVerifierKey",
-      "bscVerifierKey",
-    ),
-    trustedSetupTranscript: materialManifestArtifact(
-      manifest,
-      "trustedSetupTranscript",
-      "trustedSetupTranscript",
-    ),
-    reproducibleBuildTranscript: materialManifestArtifact(
-      manifest,
-      "reproducibleBuildTranscript",
-      "reproducibleBuildTranscript",
-    ),
-  };
+  const artifacts = materialManifestAttestationArtifacts(manifest);
   const trustedSetupTranscript = await readManifestJsonArtifact(
     manifestPath,
     artifacts.trustedSetupTranscript,
@@ -4991,6 +8805,7 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
     await validateReproducibleBuildTranscript(
       reproducibleBuildTranscript.path,
       snarkjsSelfCheck,
+      artifacts,
     );
   const commonBody = attestationRequestCommonBody(manifest, artifacts);
   const evidenceContext = {
@@ -5193,6 +9008,14 @@ function requestPackageArtifact(request, key, label = key) {
   return materialManifestArtifact(request, key, `request package ${label}`);
 }
 
+function optionalRequestPackageArtifact(request, key, label = key) {
+  const artifacts = ownValue(request, "artifacts");
+  if (!isRecord(artifacts) || ownValue(artifacts, key) === undefined) {
+    return null;
+  }
+  return requestPackageArtifact(request, key, label);
+}
+
 function requestRolePayloadHash(role, label) {
   if (!isRecord(role)) {
     throw new Error(`attestation request package ${label} role is required.`);
@@ -5298,6 +9121,12 @@ function validateAttestationRequestCommonFields({
   if (!isRecord(request)) {
     throw new Error("attestation request package must be a JSON object.");
   }
+  const shapeBlockers = attestationRequestPackageShapeBlockers(request);
+  if (shapeBlockers.length > 0) {
+    throw new Error(
+      `attestation request package shape is not production-ready: ${shapeBlockers.join("; ")}`,
+    );
+  }
   requireRequestValue(
     request,
     "schema",
@@ -5373,6 +9202,27 @@ function validateAttestationRequestCommonFields({
   ]) {
     const manifestArtifact = materialManifestArtifact(manifest, key, label);
     const requestArtifact = requestPackageArtifact(request, key, label);
+    if (
+      requestArtifact.path !== manifestArtifact.path ||
+      requestArtifact.sha256 !== manifestArtifact.sha256
+    ) {
+      throw new Error(
+        `attestation request package ${label} artifact must match referenced material manifest.`,
+      );
+    }
+    artifacts[key] = manifestArtifact;
+  }
+  for (const [key, label] of [["witnessWasm", "witnessWasm"]]) {
+    const manifestArtifact = optionalMaterialManifestArtifact(manifest, key, label);
+    const requestArtifact = optionalRequestPackageArtifact(request, key, label);
+    if (!manifestArtifact && !requestArtifact) {
+      continue;
+    }
+    if (!manifestArtifact || !requestArtifact) {
+      throw new Error(
+        `attestation request package ${label} artifact must match referenced material manifest.`,
+      );
+    }
     if (
       requestArtifact.path !== manifestArtifact.path ||
       requestArtifact.sha256 !== manifestArtifact.sha256
@@ -5707,18 +9557,22 @@ function attestationRequestRoleStatus(request, spec) {
       spec.expectedSchema,
       `attestation request package ${spec.label} body`,
     ),
-    ...attestationRequestRoleBodyIntrinsicBlockers(
-      body,
-      spec.expectedSchema,
-      spec.label,
-    ),
-    ...attestationRequestRoleEvidenceReferenceBlockers(
-      request,
-      body,
-      spec.expectedSchema,
-      spec.label,
-    ),
   );
+  if (status.readyForSignature) {
+    status.blockers.push(
+      ...attestationRequestRoleBodyIntrinsicBlockers(
+        body,
+        spec.expectedSchema,
+        spec.label,
+      ),
+      ...attestationRequestRoleEvidenceReferenceBlockers(
+        request,
+        body,
+        spec.expectedSchema,
+        spec.label,
+      ),
+    );
+  }
   status.signedPayloadSha256 = sha256Hex(attestationSignaturePayload(body));
   try {
     status.declaredSignedPayloadSha256 = normalizeManifestHash(
@@ -5975,6 +9829,7 @@ async function transcriptValidationStatus({ manifestPath, artifacts, manifest })
       path: artifact?.path ?? null,
       sha256: artifact?.sha256 ?? null,
       resolvedPath: null,
+      toolchainSha256: null,
       blockers: [],
     };
     if (!artifact) {
@@ -5989,6 +9844,10 @@ async function transcriptValidationStatus({ manifestPath, artifacts, manifest })
       );
       status.resolvedPath = repoRelativePath(resolved);
       status.blockers.push(...(await validator(resolved)));
+      if (key === "reproducibleBuildTranscript") {
+        status.toolchainSha256 =
+          await reproducibleBuildToolchainSha256FromTranscript(resolved);
+      }
     } catch (error) {
       status.blockers.push(error instanceof Error ? error.message : String(error));
     }
@@ -6003,7 +9862,8 @@ async function transcriptValidationStatus({ manifestPath, artifacts, manifest })
     reproducibleBuild: await buildTranscriptStatus(
       "reproducibleBuildTranscript",
       "reproducible build transcript",
-      (pathName) => validateReproducibleBuildTranscript(pathName, snarkjsSelfCheck),
+      (pathName) =>
+        validateReproducibleBuildTranscript(pathName, snarkjsSelfCheck, artifacts),
     ),
   };
 }
@@ -6042,7 +9902,7 @@ function attestationStatusNextActions({
     transcriptBlockers.length > 0
   ) {
     actions.push(
-      "Replace local-only setup/rebuild evidence or rerun attestation-request after publishing production transcript evidence.",
+      "Replace local-only setup/rebuild/review/audit evidence or rerun attestation-request after publishing production transcript and circuit review evidence.",
     );
   }
   if (missingSignedRoles.length > 0) {
@@ -6185,6 +10045,8 @@ export async function auditBscGroth16AttestationStatus(options = {}) {
             "material manifest verifierKeyHash",
           ),
           artifacts: common.artifacts,
+          reproducibleBuildToolchainSha256:
+            transcriptValidation.reproducibleBuild?.toolchainSha256 ?? null,
           selfChecks: ownValue(manifest, "selfChecks"),
         },
         trustedSignerFingerprints,
@@ -6619,6 +10481,8 @@ export async function preflightBscGroth16Material(options = {}) {
         circuitProfile,
         manifestPath: paths.manifest,
         paths,
+        snarkjsBin,
+        verifyGroth16Proof: toolchain.snarkjs.ok,
       });
       if (proofSelfTestBlockers.length > 0) {
         for (const blocker of proofSelfTestBlockers) {
@@ -6692,9 +10556,13 @@ export async function preflightBscGroth16Material(options = {}) {
       r1csInfo: `${displaySnarkjsBin} r1cs info ${repoRelativePath(paths.r1cs)}`,
       setup: `${displaySnarkjsBin} groth16 setup ${repoRelativePath(paths.r1cs)} <powersOfTau28_hez_final_22.ptau> ${repoRelativePath(join(outDir, `${circuitProfile}.0000.zkey`))}`,
       exportVerificationKey: `${displaySnarkjsBin} zkey export verificationkey ${repoRelativePath(paths.provingKey)} ${repoRelativePath(paths.snarkjsVerificationKey)}`,
-      materialize: `node scripts/sccp_bsc_groth16_material.mjs materialize --bsc-network ${profile.key} --r1cs ${repoRelativePath(paths.r1cs)} --zkey ${repoRelativePath(paths.provingKey)} --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key ${repoRelativePath(paths.snarkjsVerificationKey)} --circuit-source ${repoRelativePath(paths.circuitSource)} --out-dir ${repoRelativePath(outDir)} --trusted-setup-transcript <json> --reproducible-build-transcript <json>`,
-      proofSelfTest: `node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest ${repoRelativePath(paths.manifest)} --witness-wasm ${repoRelativePath(paths.witnessWasm)}${profile.key === "testnet" ? " --allow-unready-candidate true" : " --allow-unready-mainnet-candidate true"} --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-proof-self-test.json`))}`,
-      attestationRequest: `node scripts/sccp_bsc_groth16_material.mjs attestation-request --manifest ${repoRelativePath(paths.manifest)} --toolchain-sha256 <0x...> --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))}`,
+      toolchainFingerprint: `node scripts/sccp_bsc_groth16_material.mjs toolchain-fingerprint --circom-bin ${displayCircomBin} --snarkjs-bin ${displaySnarkjsBin} --transcript <reproducible-build-transcript.json> --out <reproducible-build-transcript.with-toolchain-hashes.json>`,
+      transcriptTemplate: `node scripts/sccp_bsc_groth16_material.mjs transcript-template --bsc-network ${profile.key} --r1cs ${repoRelativePath(paths.r1cs)} --zkey ${repoRelativePath(paths.provingKey)} --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key ${repoRelativePath(paths.snarkjsVerificationKey)} --circuit-source ${repoRelativePath(paths.circuitSource)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --circom-bin ${displayCircomBin} --snarkjs-bin ${displaySnarkjsBin} --out-dir ${repoRelativePath(join(outDir, "transcripts"))}`,
+      materialize: `node scripts/sccp_bsc_groth16_material.mjs materialize --bsc-network ${profile.key} --r1cs ${repoRelativePath(paths.r1cs)} --zkey ${repoRelativePath(paths.provingKey)} --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key ${repoRelativePath(paths.snarkjsVerificationKey)} --circuit-source ${repoRelativePath(paths.circuitSource)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --out-dir ${repoRelativePath(outDir)} --trusted-setup-transcript <json> --reproducible-build-transcript <json> --snarkjs-bin ${displaySnarkjsBin}`,
+      proofSelfTest: `node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest ${repoRelativePath(paths.manifest)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --snarkjs-bin ${displaySnarkjsBin}${profile.key === "testnet" ? " --allow-unready-candidate true" : " --allow-unready-mainnet-candidate true"} --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-proof-self-test.json`))}`,
+      evidenceTemplate: `node scripts/sccp_bsc_groth16_material.mjs evidence-template --manifest ${repoRelativePath(paths.manifest)} --out-dir ${repoRelativePath(join(outDir, "review-evidence"))}`,
+      attestationRequest: `node scripts/sccp_bsc_groth16_material.mjs attestation-request --manifest ${repoRelativePath(paths.manifest)} --semantic-review-evidence <semantic-review-evidence.json> --circuit-security-audit-evidence <circuit-security-audit-evidence.json> --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))}`,
+      handoffBundle: `node scripts/sccp_bsc_groth16_material.mjs handoff-bundle --manifest ${repoRelativePath(paths.manifest)} --transcript-template-package <transcript-template-package.json> --evidence-template-package <evidence-template-package.json> --request ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-handoff.json`))}`,
       signAttestation: `node scripts/sccp_bsc_groth16_material.mjs sign-attestation --request ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --role semanticSccpCircuit --private-key-pem <ed25519-private-key.pem> --out <signed-role-attestation.json>`,
       attestationStatus: `node scripts/sccp_bsc_groth16_material.mjs attestation-status --request ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --semantic-attestation <semantic-sccp-circuit-attestation.json> --circuit-security-attestation <circuit-security-audit.json> --trusted-setup-attestation <trusted-setup-ceremony.json> --reproducible-build-attestation <reproducible-build-attestation.json> --trusted-attestation-signer <0x...>`,
       finalizeAttestations: `node scripts/sccp_bsc_groth16_material.mjs finalize-attestations --request ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --semantic-attestation <semantic-sccp-circuit-attestation.json> --circuit-security-attestation <circuit-security-audit.json> --trusted-setup-attestation <trusted-setup-ceremony.json> --reproducible-build-attestation <reproducible-build-attestation.json> --trusted-attestation-signer <0x...> --out-dir ${repoRelativePath(outDir)}`,
@@ -6706,9 +10574,14 @@ function usage() {
   return `Usage:
   node scripts/sccp_bsc_groth16_material.mjs generate --bsc-network testnet --ptau <phase2.ptau> [--circuit-profile ${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE}|${BSC_FULL_SCCP_CIRCUIT_PROFILE}] [--circuit-source <full-message.circom>] [--out-dir ${DEFAULT_GENERATED_MATERIAL_OUT}/testnet] [--toolchain-root ${DEFAULT_GROTH16_TOOLCHAIN_ROOT}] [--circom-bin circom2] [--snarkjs-bin snarkjs]
   node scripts/sccp_bsc_groth16_material.mjs generate --bsc-network testnet --create-local-ptau-power 8 --allow-local-testnet-setup true [--out-dir ${DEFAULT_GENERATED_MATERIAL_OUT}/testnet] [--toolchain-root ${DEFAULT_GROTH16_TOOLCHAIN_ROOT}]
-  node scripts/sccp_bsc_groth16_material.mjs materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
+  node scripts/sccp_bsc_groth16_material.mjs toolchain-fingerprint [--transcript <reproducible-build-transcript.json>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out <json>]
+  node scripts/sccp_bsc_groth16_material.mjs transcript-template --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out-dir <transcript-dir>] [--overwrite true]
+  node scripts/sccp_bsc_groth16_material.mjs materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--snarkjs-bin snarkjs] [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
   node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest <testnet|mainnet-bsc-groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--allow-unready-candidate true|--allow-unready-mainnet-candidate true] [--out <proof-self-test.json>]
-  node scripts/sccp_bsc_groth16_material.mjs attestation-request --manifest <testnet-bsc-groth16-material.manifest.json> [--toolchain-sha256 <0x...>] [--out <request.json>]
+  node scripts/sccp_bsc_groth16_material.mjs evidence-template --manifest <testnet-bsc-groth16-material.manifest.json> [--out-dir <review-evidence-dir>] [--overwrite true]
+  node scripts/sccp_bsc_groth16_material.mjs attestation-request --manifest <testnet-bsc-groth16-material.manifest.json> --semantic-review-evidence <semantic-review-evidence.json> --circuit-security-audit-evidence <circuit-security-audit-evidence.json> [--toolchain-sha256 <0x...>] [--out <request.json>]
+  node scripts/sccp_bsc_groth16_material.mjs handoff-bundle --manifest <testnet-bsc-groth16-material.manifest.json> [--transcript-template-package <json>] [--evidence-template-package <json>] [--request <attestation-request.json>] [--out <handoff.json>]
+  node scripts/sccp_bsc_groth16_material.mjs verify-handoff --handoff <handoff.json> [--trusted-attestation-signer <0x...>]
   node scripts/sccp_bsc_groth16_material.mjs sign-attestation --request <attestation-request.json> --role semanticSccpCircuit|circuitSecurity|trustedSetup|reproducibleBuild --private-key-pem <ed25519-private-key.pem> [--signer-fingerprint <0x...>] [--out <signed-role-attestation.json>]
   node scripts/sccp_bsc_groth16_material.mjs attestation-status --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...>
   node scripts/sccp_bsc_groth16_material.mjs finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir <dir>]
@@ -6723,9 +10596,16 @@ closed unless the source constrains all 9 labeled Keccak public signals.
 Materialize is an unsigned candidate-material step on the CLI. Generated local
 setup material is not production-ready unless the full SCCP circuit semantics
 and ceremony/build evidence are supplied through attestation-request and
-finalize-attestations. Trusted setup and reproducible-build attestations must
-bind to concrete transcript artifacts, and production attestations must carry
-detached Ed25519 signatures from a configured trusted signer fingerprint. The
+finalize-attestations. The toolchain-fingerprint command writes the actual
+Circom/SnarkJS executable SHA-256 values into a public transcript copy or a
+standalone fingerprint artifact. Trusted setup and reproducible-build
+attestations must bind to concrete transcript artifacts, and production
+attestations must carry detached Ed25519 signatures from a configured trusted
+signer fingerprint. The transcript-template command writes public
+artifact-bound trusted-setup and reproducible-build draft transcripts with
+real artifact/toolchain hashes, but keeps contributor, ceremony, rebuild, and
+verification result fields blocked until independent production evidence
+replaces them. The
 proof-self-test command runs a deterministic synthetic witness through SnarkJS
 wtns/prove/verify, checks the prover-returned public signals against the
 Keccak-derived expected values, and verifies adversarial witnesses are rejected.
@@ -6735,6 +10615,16 @@ true is accepted only for testnet candidate evidence refreshes, while
 mainnet candidate evidence refreshes. Both modes still write the manifest
 production blockers into the report. They are evidence only and do not mark
 candidate material production-ready. The
+evidence-template command writes manifest-bound public review/audit draft
+envelopes and report files for external reviewers. These drafts intentionally
+carry pending/false results, are not signable, and are refused by
+attestation-request until real report hashes and pass/finding fields replace
+the draft values. The handoff-bundle command writes one public hash-bound
+operator packet for external reviewers and signers; it separates handoff
+completeness from productionReady/signing/finalization readiness and preserves
+all current blockers. verify-handoff re-hashes every referenced public file,
+checks package schemas, and reruns the attestation-status audit without
+modifying material. The
 attestation-request command emits deterministic unsigned role payloads and
 signedPayloadSha256 values for external review/audit/ceremony/rebuild handoff;
 roles whose backing transcripts still have blockers are marked
@@ -6758,10 +10648,21 @@ export async function main(argv = process.argv.slice(2)) {
   if (!command || command === "--help" || command === "-h" || command === "help") {
     return { help: usage() };
   }
+  if (rest.some((arg) => arg === "--help" || arg === "-h" || arg === "help")) {
+    return { help: usage() };
+  }
   const options = parseArgs(rest);
   switch (command) {
     case "generate":
       return generateBscGroth16Material(options);
+    case "toolchain-fingerprint":
+    case "fingerprint-toolchain":
+    case "toolchain-hashes":
+      return fingerprintBscGroth16Toolchain(options);
+    case "transcript-template":
+    case "transcript-templates":
+    case "transcript-scaffold":
+      return writeBscGroth16TranscriptTemplates(options);
     case "materialize":
       assertUnsignedCliMaterialize(options);
       return materializeBscGroth16Material(options);
@@ -6769,10 +10670,22 @@ export async function main(argv = process.argv.slice(2)) {
     case "proof-test":
     case "prove-self-test":
       return runBscGroth16ProofSelfTest(options);
+    case "evidence-template":
+    case "evidence-templates":
+    case "review-evidence-template":
+      return writeBscGroth16EvidenceTemplates(options);
     case "attestation-request":
     case "attestation-requests":
     case "request-attestations":
       return generateBscGroth16AttestationRequestPackage(options);
+    case "handoff-bundle":
+    case "attestation-handoff":
+    case "handoff":
+      return writeBscGroth16AttestationHandoff(options);
+    case "verify-handoff":
+    case "handoff-status":
+    case "attestation-handoff-status":
+      return verifyBscGroth16AttestationHandoff(options);
     case "sign-attestation":
     case "sign-attestations":
     case "attestation-sign":

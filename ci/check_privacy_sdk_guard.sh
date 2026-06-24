@@ -103,6 +103,7 @@ bridge_header_drift_commands = (
     ),
 )
 bytecode_command = "bash ci/check_no_tracked_python_bytecode.sh"
+mobile_sdk_artifacts_selftest_command = "bash scripts/check_mobile_sdk_artifacts_test.sh"
 main_command = "ci/check_privacy_sdk_guard.sh"
 native_bridge_command = "cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1"
 native_bridge_job = "privacy_native_bridge_tests"
@@ -139,6 +140,10 @@ negative_control_commands = (
     (
         "tracked Python bytecode workflow negative control",
         "ci/check_privacy_sdk_guard.sh --negative-control-bytecode-workflow",
+    ),
+    (
+        "mobile SDK artifact self-test workflow negative control",
+        "ci/check_privacy_sdk_guard.sh --negative-control-mobile-sdk-artifacts-selftest-workflow",
     ),
     (
         "workflow path negative control",
@@ -991,6 +996,8 @@ required_paths = (
     "ci/check_privacy_python_sdk.sh",
     "ci/check_privacy_sdk_guard.sh",
     "ci/check_privacy_swift_sdk.sh",
+    "scripts/check_mobile_sdk_artifacts.sh",
+    "scripts/check_mobile_sdk_artifacts_test.sh",
     "crates/connect_norito_bridge/Cargo.toml",
     "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "crates/connect_norito_bridge/include/NoritoBridge.h",
@@ -6222,6 +6229,7 @@ def check_workflow_commands(errors):
     main_match = re.search(rf"(?m)^\s+run:\s+{re.escape(main_command)}\s*$", workflow)
     bridge_header_match = workflow_command_match(workflow, bridge_header_command)
     bytecode_match = workflow_command_match(workflow, bytecode_command)
+    mobile_sdk_artifacts_selftest_match = workflow_command_match(workflow, mobile_sdk_artifacts_selftest_command)
     main_job_block = workflow_job_block(workflow, main_job)
     require(
         bridge_header_match is not None,
@@ -6236,6 +6244,11 @@ def check_workflow_commands(errors):
     require(
         bytecode_match is not None,
         "Privacy SDK guard workflow must reject tracked Python bytecode artifacts",
+        errors,
+    )
+    require(
+        mobile_sdk_artifacts_selftest_match is not None,
+        "Privacy SDK guard workflow must run mobile SDK artifact readiness checker self-tests",
         errors,
     )
     if main_match is None:
@@ -6971,6 +6984,25 @@ if mode == "--negative-control-bytecode-workflow":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: tracked Python bytecode workflow drift was not detected")
+
+if mode == "--negative-control-mobile-sdk-artifacts-selftest-workflow":
+    original = read(workflow_path)
+    mutated = original.replace(
+        "      - name: Mobile SDK artifact readiness checker self-test\n"
+        f"        run: {mobile_sdk_artifacts_selftest_command}\n",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate mobile SDK artifact self-test workflow command")
+    text_overrides[workflow_path] = mutated
+    try:
+        run_checks()
+    except PrivacyGuardError as error:
+        print("negative control rejected mobile SDK artifact self-test workflow drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile SDK artifact self-test workflow drift was not detected")
 
 if mode == "--negative-control-workflow-path":
     original = read(workflow_path)

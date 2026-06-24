@@ -21,10 +21,7 @@ use tower::ServiceExt as _;
 #[tokio::test]
 async fn vk_list_filters_by_backend_and_status() {
     // Build minimal state
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
-    let mut state = state;
+    let mut world = World::new();
 
     // Insert 3 records: 2 active + 1 proposed
     // Insert via test helper
@@ -53,9 +50,12 @@ async fn vk_list_filters_by_backend_and_status() {
         rec.status = status;
         rec.gas_schedule_id = Some("test_schedule".into());
         let id = VerifyingKeyId::new(backend, name);
-        iroha_core::query::insert_verifying_key_record_for_test(&mut state, id, rec);
+        world.verifying_keys_mut_for_testing().insert(id, rec);
     }
 
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query);
     let state = Arc::new(state);
     let app = Router::new().route(
         "/v1/zk/vk",
