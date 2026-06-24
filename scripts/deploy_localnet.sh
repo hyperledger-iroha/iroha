@@ -695,27 +695,127 @@ if [[ -n "$LOCALNET_GUEST_STACK_BYTES" || -n "$LOCALNET_GAS_TO_STACK_MULTIPLIER"
   echo "Applying IVM stack overrides in peer configs..."
   for cfg in "$OUT_DIR"/peer*.toml; do
     [[ -f "$cfg" ]] || continue
-    cat >> "$cfg" <<EOF
+    "$PYTHON_BIN" - "$cfg" \
+      "$LOCALNET_GUEST_STACK_BYTES" \
+      "$LOCALNET_GAS_TO_STACK_MULTIPLIER" \
+      "$LOCALNET_MEMORY_BUDGET_PROFILE" \
+      "$LOCALNET_MAX_STACK_BYTES" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
 
-[ivm]
-memory_budget_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+path = Path(sys.argv[1])
+guest_stack_bytes = int(sys.argv[2])
+gas_to_stack_multiplier = int(sys.argv[3])
+profile = sys.argv[4]
+max_stack_bytes = int(sys.argv[5])
+profile_header_key = profile.replace("\\", "\\\\").replace('"', '\\"')
 
-[concurrency]
-guest_stack_bytes = $LOCALNET_GUEST_STACK_BYTES
-gas_to_stack_multiplier = $LOCALNET_GAS_TO_STACK_MULTIPLIER
+target_sections = {
+    "[ivm]": {
+        "memory_budget_profile": json.dumps(profile),
+    },
+    "[concurrency]": {
+        "guest_stack_bytes": str(guest_stack_bytes),
+        "gas_to_stack_multiplier": str(gas_to_stack_multiplier),
+    },
+    "[compute]": {
+        "default_resource_profile": json.dumps(profile),
+    },
+    f'[compute.resource_profiles."{profile_header_key}"]': {
+        "max_cycles": "10000000",
+        "max_memory_bytes": "268435456",
+        "max_stack_bytes": str(max_stack_bytes),
+        "max_io_bytes": "25165824",
+        "max_egress_bytes": "12582912",
+        "allow_gpu_hints": "true",
+        "allow_wasi": "true",
+    },
+}
 
-[compute]
-default_resource_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+key_pattern = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=")
+header_pattern = re.compile(r"^\s*\[[^\]]+\]\s*$|^\s*\[\[[^\]]+\]\]\s*$")
 
-[compute.resource_profiles."$LOCALNET_MEMORY_BUDGET_PROFILE"]
-max_cycles = 10000000
-max_memory_bytes = 268435456
-max_stack_bytes = $LOCALNET_MAX_STACK_BYTES
-max_io_bytes = 25165824
-max_egress_bytes = 12582912
-allow_gpu_hints = true
-allow_wasi = true
-EOF
+
+def split_sections(lines):
+    chunks = []
+    current_header = None
+    current = []
+    for line in lines:
+        if header_pattern.match(line):
+            if current or current_header is not None:
+                chunks.append((current_header, current))
+            current_header = line.strip()
+            current = [line]
+        else:
+            current.append(line)
+    if current or current_header is not None:
+        chunks.append((current_header, current))
+    return chunks
+
+
+lines = path.read_text().splitlines()
+chunks = split_sections(lines)
+chunks_by_header = {}
+for header, chunk in chunks:
+    chunks_by_header.setdefault(header, []).append(chunk)
+
+emitted_targets = set()
+result = []
+
+
+def append_blank_if_needed():
+    if result and result[-1] != "":
+        result.append("")
+
+
+def merged_target_section(header):
+    overrides = target_sections[header]
+    preserved = []
+    seen_preserved = set()
+    for chunk in chunks_by_header.get(header, []):
+        for line in chunk[1:]:
+            match = key_pattern.match(line)
+            if match and match.group(1) in overrides:
+                continue
+            identity = line.strip()
+            if identity and identity in seen_preserved:
+                continue
+            if identity:
+                seen_preserved.add(identity)
+            preserved.append(line)
+
+    merged = [header]
+    merged.extend(preserved)
+    if preserved and preserved[-1] != "":
+        merged.append("")
+    for key, value in overrides.items():
+        merged.append(f"{key} = {value}")
+    return merged
+
+
+for header, chunk in chunks:
+    if header in target_sections:
+        if header in emitted_targets:
+            continue
+        append_blank_if_needed()
+        result.extend(merged_target_section(header))
+        emitted_targets.add(header)
+        continue
+    if result and chunk and chunk[0].strip().startswith("[") and result[-1] != "":
+        result.append("")
+    result.extend(chunk)
+
+for header in target_sections:
+    if header in emitted_targets:
+        continue
+    append_blank_if_needed()
+    result.extend(merged_target_section(header))
+    emitted_targets.add(header)
+
+path.write_text("\n".join(result).rstrip() + "\n")
+PY
   done
 fi
 

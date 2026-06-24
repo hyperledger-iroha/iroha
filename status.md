@@ -1,6 +1,311 @@
 # Status
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
+
+## 2026-06-24 Offline Note V2 attestation evidence envelope
+
+- Hardened direct on-chain `RegisterOfflineDeviceAttestation` admission so the
+  stored `evidence` bytes are no longer arbitrary metadata. Consensus now
+  requires `evidence == b"offline-device-attestation-evidence-v1" ||
+  attestation_report_hash_bytes` in addition to `evidence_hash ==
+  Hash::new(evidence)`.
+- Mirrored the same envelope contract in Swift, Kotlin/JVM, and Java Android
+  registration constructors. SDK tests now include adversarial cases where the
+  evidence hash is internally correct but the envelope binds a forged report
+  hash.
+- Regenerated `fixtures/offline/interop_contract_v2.json` and added a vector
+  self-check that decodes the committed evidence bytes and compares them to the
+  report-hash envelope, preserving byte-level fixture compatibility across
+  Rust, Swift, Kotlin/JVM, and Java Android.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation_registration_rejects_forged_evidence_envelope --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation --lib`
+    (`83` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors committed_interop_fixture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_data_model offline_device_attestation --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo run --quiet -j 1 -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --bin offline_v2_vectors --features test-fixtures,transparent_api -- -D warnings`
+  - `swift test --filter OfflineNoteV2Tests`
+    (`24` passed)
+  - `GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+    (no protected-file changes)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))'` across the touched
+    attestation files, SDK files, fixture, docs, roadmap, and status log
+    (no matches)
+
+## 2026-06-24 Offline Note V2 SDK certificate-profile parity
+
+- Mirrored direct chain admission into Swift, Kotlin/JVM, and Java Android key
+  certificate and key-certificate-payload constructors. SDK models now reject
+  unsupported hardware profile tuples, profile-spliced iOS certificates,
+  arbitrary Android usage limits, and off-curve assertion public keys before
+  encoding or signing Offline Note V2 payloads.
+- Added SDK attestation-identity parity for Swift, Kotlin/JVM, and Java
+  Android: device-attestation registrations, key certificates, and
+  key-certificate payloads now reject blank `key_id`/`device_id` values before
+  encoding. On-chain iOS registration helpers additionally reject non-canonical
+  standard-base64 App Attest `key_id` text.
+- Closed the matching consensus gap for iOS App Attest registration: chain
+  execution now re-encodes decoded `key_id` bytes and rejects non-canonical
+  standard-base64 aliases before credential-id, certificate-key-hash, and nonce
+  checks. The regression report is otherwise valid for the aliased credential
+  bytes and challenge, proving the failure is the canonical text contract.
+- Pinned the Android KeyMint `key_id` lowercase-hex contract with stronger
+  adversarial coverage: consensus now has a valid report whose challenge binds
+  an uppercase spelling of the correct SHA-256 digest and still rejects it at
+  the `key_id` check; Swift/Kotlin/Java SDK tests mirror the same uppercase
+  correct-digest rejection.
+- Made the Java Android blank-identity check Unicode-aware without using JDK
+  9+ APIs, and pinned Swift/Kotlin/Java negative tests with non-breaking/EM
+  whitespace-only identities.
+- Kept legacy middleware iOS certificates readable through the explicit
+  `ios-app-attest` / `apple-app-attest-v1` / `ecdsa-p256-sha256` profile while
+  enforcing the canonical `ios-appattest` and `android-keymint` profiles for
+  new on-chain registration payloads.
+- Regenerated `fixtures/offline/interop_contract_v2.json` from
+  `offline_v2_vectors` so the shared iOS registration/certificate vectors use
+  canonical standard-base64 key IDs. This keeps the stricter SDK constructors
+  and the golden Norito byte fixtures on the same byte-level contract.
+- Added direct SDK negative coverage for off-curve uncompressed P-256
+  assertion keys on device-attestation registrations, key certificates, and
+  key-certificate payloads, plus malformed iOS registration key IDs and blank
+  attestation identities. Swift payload tests now use an Android-compatible
+  hash-derived `key_id` when exercising a present assertion usage limit.
+- Added Torii adversarial receipt coverage for request-side assertion-key alias
+  splices: `app_attest_public_key_base64` and `device_public_key` must match
+  the verifier-signed `assertion_public_key_base64`, just like
+  `assertion_public_key`.
+- Added on-chain iOS App Attest `key_id` adversarial coverage for malformed
+  standard-base64 credential identifiers, authenticator-data credential-id
+  mismatch, and reports whose credential id matches the report but not the
+  SHA-256 digest of the attestation certificate assertion public key. Documented
+  that byte-level `key_id` rule in the Offline Note V2 attestation contract.
+- Hardened on-chain X.509 extension lookup for platform-critical attestation
+  extensions: iOS App Attest leaf certificates now reject duplicate nonce
+  extension OIDs, and Android KeyMint leaf certificates reject duplicate
+  KeyMint attestation extension OIDs.
+- Made the Torii middleware receipt contract field-strict: signed
+  `device_binding.attestation_receipt` objects now reject unknown fields even
+  when those fields are covered by an otherwise valid verifier signature.
+- Closed Torii JSON string-normalization gaps for signed middleware receipts
+  and structured redemption key certificates: identity, profile, key-material,
+  and signature strings must be exact non-empty protocol values, with leading
+  or trailing whitespace rejected instead of trimmed before issuance or
+  redemption parsing.
+- Made structured redemption JSON field-strict in Torii: `norito_base64`
+  wrappers, structured redemption objects, nested
+  `sender_key_certificate`/`key_certificate` objects, and nested recursive
+  proof objects now reject unknown fields before interpretation. Legacy alias
+  fields remain accepted when used alone, but ambiguous alias pairs are
+  rejected. The redemption parser still accepts Torii's own issue-response
+  key-certificate envelope fields so wallets can reuse returned
+  `key_certificate` objects directly.
+- Made signed Torii `lineage_state` and nested `authorization` objects
+  field-strict when clients present them back to the issuer, while leaving
+  authorization `device_binding` as the signed opaque sub-object for
+  platform-specific attestation fields.
+- Closed the same signed-string normalization issue for Torii lineage state
+  and authorization payloads: padded state, authorization, and known
+  authorization `device_binding` identity strings now fail before Torii rebuilds
+  signed payloads for verification.
+- Routed Torii JSON signature verification through the canonical signature
+  decoder, so receipt, lineage-state, and authorization signatures must be
+  canonical standard-base64 encodings of exactly 64 bytes before verification.
+- Tightened Offline V2 issuer body-auth proof extraction: present
+  `signature_base64` or `witness_base64` fields must be exact non-empty strings,
+  and null, non-string, empty, or leading/trailing-whitespace proof values fail
+  before canonical request verification. OpenAPI now documents the same rule.
+- Tightened structured redemption proof-material parsing in Torii: the
+  `norito_base64` wrapper, source note commitment, input nullifier hashes,
+  recursive verifier key id, recursive public-input hash, and recursive proof
+  base64 now reject leading or trailing whitespace instead of trimming before
+  hash/proof interpretation.
+- Focused validation passed:
+  - `swift test --filter OfflineNoteV2Tests`
+    (`24` passed)
+  - `GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `cargo clippy -p iroha_data_model --bin offline_v2_vectors --features test-fixtures,transparent_api -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii --test torii_nexus_sorafs offline_v2_readiness_is_mounted_and_legacy_routes_are_absent`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii generated_spec_documents_offline --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii generated_spec_documents_offline_body_auth_schema --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii attestation_receipt --lib`
+    (`31` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii offline_v2_issuer::tests --lib`
+    (`71` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core ios_key_id --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core ios_noncanonical_key_id --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core ios_malformed_key_id --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core ios_credential_id_mismatch --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core duplicate_ --lib`
+    (`106` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation --lib`
+    (`76` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+    (no protected-file changes)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))'` across the touched
+    attestation files, SDK files, docs, and status log
+    (no matches)
+
+## 2026-06-23 Offline Note V2 on-chain attestation strict CBOR, DER, and key identity
+
+- Hardened on-chain `RegisterOfflineDeviceAttestation` parsing so iOS App
+  Attest reports, embedded App Attest COSE public keys, and Android KeyMint
+  certificate-array reports must be fully consumed CBOR values; appended CBOR
+  data is now rejected after the submitted report hash is recomputed over the
+  submitted bytes.
+- Tightened the KeyMint DER reader so attestation extensions reject
+  non-canonical long-form lengths, non-canonical high-tag numbers, and
+  non-minimal INTEGER encodings, including redundant negative padding. Android
+  `attestationApplicationId` package and signing-digest SET contents are now
+  required to be DER-sorted.
+- Canonicalized Android KeyMint registration `key_id` as lowercase hex
+  SHA-256 of `assertion_public_key` in the on-chain verifier and mirrored that
+  constructor rejection in Swift, Kotlin/JVM, and Java Android.
+- Hardened Offline Note V2 registration and key-certificate admission so
+  on-chain registrations reject trim-empty `platform`, `key_id`, `device_id`,
+  `assertion_scheme`, and `assertion_key_algorithm` before verifier execution,
+  and redemption certificates must carry non-empty `platform`, `key_id`,
+  `device_id`, `assertion_scheme`, `assertion_key_algorithm`, and
+  `assertion_public_key` values. The certificate requirement applies to both
+  middleware-issued and on-chain-registered key certificates.
+- Added P-256 SEC1 point validation for on-chain device-attestation assertion
+  public keys, so full-length uncompressed encodings with off-curve coordinates
+  are rejected before platform evidence verification.
+- Hardened direct chain admission for Offline Note V2 key certificates so
+  issue/redeem/audit paths reject unsupported or profile-spliced hardware
+  assertion tuples and off-curve certificate `assertion_public_key` bytes,
+  while retaining the legacy middleware iOS profile and canonical iOS/Android
+  profiles.
+- Added adversarial coverage for iOS report trailing CBOR bytes, Android report
+  trailing CBOR bytes, App Attest COSE-key trailing CBOR bytes, non-canonical
+  DER length encodings, non-canonical DER high-tag encodings, non-canonical DER
+  INTEGER encodings including redundant negative padding, unsorted Android
+  application-id SET elements, and Android KeyMint `key_id` substitution, blank
+  key-certificate hardware attestation identity fields, blank on-chain
+  registration identity fields, and off-curve P-256 assertion public keys.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core key_certificate_rejects_blank_hardware_attestation_identity --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core key_certificate --lib`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation_registration_rejects_blank_identity_fields --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core assertion_key --lib`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation_registration_rejects_ios_report_key_mismatch --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core trailing_cbor --lib`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core non_canonical --lib`
+    (`6` passed; includes two existing non-attestation filtered tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core android_attestation_application_id_rejects_unsorted_der_sets --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core android_key_id --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core android_uppercase_key_id --lib`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation --lib`
+    (`71` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_note --lib`
+    (`42` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `swift test --filter OfflineNoteV2Tests`
+    (`24` passed; existing unrelated deprecation warnings in `ToriiClientTests`)
+  - `GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+    (no protected-file changes)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' crates/iroha_core/src/smartcontracts/isi/offline.rs docs/source/offline_note_v2_attestation.md status.md`
+    (no matches)
+
+## 2026-06-23 Offline Note V2 attestation SDK profile exactness
+
+- Tightened the middleware receipt contract so
+  `assertion_usage_count_limit` is signed by the attestation verifier and must
+  match `device_binding`; Android KeyMint receipts now need signed value `1`,
+  while both iOS App Attest receipt profiles must omit the field.
+- Mirrored the on-chain Offline Note V2 device-attestation profile policy into
+  the Swift, Kotlin/JVM, and Java Android registration constructors so SDKs
+  reject iOS App Attest registrations that carry a usage limit, Android KeyMint
+  registrations without `assertion_usage_count_limit = 1`, legacy Android
+  schemes, and unsupported platform labels before encoding chain instructions.
+- Kept legacy middleware iOS certificates admissible through the explicit
+  `ios-app-attest` profile while documenting and enforcing the supported
+  key-certificate profile table in both Torii and direct chain admission.
+- Hardened Torii redemption parsing so sender key certificates must use one of
+  the supported hardware assertion profile triples after JSON or Norito decode,
+  rejecting profile splices, iOS certificates with usage limits, and Android
+  certificates without usage limit `1`.
+- Hardened Torii middleware receipt and redemption certificate parsing so
+  profile-bound `assertion_public_key` bytes must be a valid uncompressed SEC1
+  P-256 point before Torii mints or forwards an Offline Note V2 key
+  certificate.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii attestation_receipt --lib`
+    (`29` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii offline_v2_issuer::tests --lib`
+    (`46` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+  - `swift test --filter OfflineNoteV2Tests`
+    (`24` passed)
+  - `GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+    (no protected-file changes)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java docs/source/offline_note_v2_attestation.md status.md`
+    (no matches)
+
+## 2026-06-23 Generic validation-fee multisig and inactive attestation roots
+
+- Made validation-fee policy fee-asset generic by moving the charged asset,
+  asset scale, and minor-unit amount into the signed policy and replacing the
+  previous CBSI-specific parameter and signature domains with Iroha-level
+  domains.
+- Charged validation-fee policy per execution context, including fee-asset
+  transfers embedded in `MultisigPropose` instruction bodies, while keeping
+  explicit fee-coordinate metadata limited to top-level transfers.
+- Allowed inactive governed Offline attestation roots to remain staged or
+  expired without failing policy validation solely on X.509 certificate time;
+  active roots still enforce certificate validity at the block timestamp.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model validation_fee -- --nocapture`
+    (`20` passed)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core validation_fee -- --nocapture`
+    (`17` passed across filtered `iroha_core` unit/integration tests)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii torii_raw_fee_asset_transfer_reaches_validator_fee_admission -- --nocapture`
+    (`1` focused Torii ingress test passed)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core offline_device_attestation_policy -- --nocapture`
+    (`11` passed)
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_data_model/src/validation_fee.rs crates/iroha_core/src/validation_fee.rs crates/iroha_core/tests/validation_fee_admission.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_torii/src/routing.rs status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_data_model/src/validation_fee.rs crates/iroha_core/src/validation_fee.rs crates/iroha_core/tests/validation_fee_admission.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_torii/src/routing.rs status.md`
+    (no matches)
 
 ## 2026-06-23 SCCP proof-request SDK deployment-binding mirror negatives
 
@@ -2232,12 +2537,21 @@ Last updated: 2026-06-23
   middleware-signed certificate flow.
 - Hardened the existing Torii Offline V2 middleware receipt path so optional
   client-supplied device-binding profile fields must match the signed receipt,
-  and supplied assertion usage limits must be exactly one before Torii issues a
-  one-use key certificate.
+  and assertion usage-limit fields must match the platform profile before Torii
+  issues a one-use key certificate. Torii now also enforces first-release signed receipt
+  profile triples before it mints a key certificate, accepting the legacy
+  middleware iOS profile plus the canonical on-chain iOS and Android profile
+  names and rejecting unsupported platforms, profile splices, and Android
+  receipts without the one-use usage-limit field. Torii now also rejects iOS
+  App Attest receipts whose request binding carries an Android-style
+  `assertion_usage_count_limit`.
 - Expanded Torii middleware receipt adversarial coverage with freshly signed
   negative receipts for account/device replay, note-key replay, assertion-key
   replay, report-hash replay, expired validity windows, and non-one-use
-  hardware attestations.
+  hardware attestations. Receipt validity coverage now also rejects future
+  `issued_at_ms` windows and inverted signed validity windows; signed malformed
+  receipt fields now cover unsupported versions, malformed assertion keys, and
+  malformed or short attestation-report hashes.
 - The on-chain path now binds a canonical Norito challenge preimage to account,
   asset, key, platform profile, recent block height/hash, and expiry; records
   replay markers for the attested certificate, challenge, report, and evidence;
@@ -2266,7 +2580,13 @@ Last updated: 2026-06-23
   has been stored.
 - Expanded negative coverage for malformed policies, including unsupported
   versions, duplicate trusted roots, zero/duplicate revocation digests, required
-  empty app allowlists, and duplicate Android signer digests.
+  empty app allowlists, duplicate Android signer digests, zero Android signer
+  digests, normalized duplicate iOS app identities, invalid iOS environments,
+  and duplicate Android app identities with signer-order normalization.
+- Added direct replay-marker adversarial coverage that pre-seeds each on-chain
+  attestation replay domain independently (certificate, challenge, report, and
+  evidence) and proves malformed registration attempts do not consume markers
+  before a valid retry.
 - Regenerated the Offline Note V2 interop fixture with an
   `attestation_registration` vector that pins the registration Norito archive,
   canonical challenge hash, report/evidence hashes, derived certificate payload
@@ -2276,6 +2596,14 @@ Last updated: 2026-06-23
   registrations while preserving the middleware certificate flow as an optional
   path. The SDK constructors recompute the same challenge preimage hash and
   reject mismatched report/evidence digests before callers submit bytes.
+- Aligned the Swift Offline Note V2 transaction encoder with the Rust
+  `RegisterOfflineDeviceAttestation` instruction vector by emitting the concrete
+  instruction archive with compact Norito lengths and the compact-length header
+  flag.
+- Aligned Swift and Kotlin compact certificate compatibility defaults with the
+  first-release canonical attestation profile names (`apple-appattest-counter-v1`
+  and `android-keymint-ecdsa-p256-usage-limit-v1`) while preserving explicit
+  legacy assertion-scheme fields from decoded certificates.
 - Expanded SDK adversarial coverage for malformed attestation registrations:
   challenge/report/evidence hash mismatches, short Android signing digests,
   short note public keys, malformed recent-block hashes, non-one-use
@@ -2290,12 +2618,18 @@ Last updated: 2026-06-23
   - `cargo test -p iroha_data_model offline::offline_note_tests::offline_device_attestation_challenge_binds_registration_preimage --lib`
   - `cargo test -p iroha_data_model isi::offline::tests::offline_note --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core offline_device_attestation --lib`
+    (`66` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core offline_device_attestation_policy --lib`
+    (`15` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core on_chain_attested_certificate_authorizes_without_issuer_signature --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core middleware_signed_certificate_authorization_still_works_without_attestation_marker --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii attestation_receipt --lib`
+    (`26` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii offline_v2_issuer::tests --lib`
+    (`38` passed)
   - `cargo fmt --all -- --check`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
@@ -2303,13 +2637,16 @@ Last updated: 2026-06-23
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core offline_device_attestation --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model offline_device_attestation --lib`
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
+  - `GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.wallet.BearerOfflineWalletModelsTest --console=plain` from `kotlin`
+    (the first attempt without explicit heap failed in `:core-jvm:compileKotlin`
+    with Kotlin daemon `OutOfMemoryError`; the heap-pinned retry passed)
   - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain` from `java/iroha_android`
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift` after generating
+    the local untracked `dist/NoritoBridge.xcframework` artifact
+  - `swift test --filter ToriiOfflineCashAPIModelsTests` from `IrohaSwift`
   - `git diff --check -- docs/source/offline_note_v2_attestation.md docs/source/README.md status.md crates/iroha_torii/src/offline_v2_issuer.rs`
   - `git diff --check`
-- Swift `swift test --filter OfflineNoteV2Tests` is still blocked locally at
-  package-manifest evaluation until `dist/NoritoBridge.xcframework` exists; the
-  checked-in Swift package symlink points there and no bridge artifact is
-  tracked.
+
 ## 2026-06-23 Soracloud BFV Full-Bootstrap Schema Fixture Alignment
 
 - Re-aligned the Soracloud full-bootstrap material profile gate so it compares
@@ -216574,4 +216911,63 @@ Last updated: 2026-06-23
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.client.JsonParserTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.JsonParserTests,org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check`
+
+## 2026-06-24 - Offline Note V2 SDK Attestation Exactness
+
+- Hardened Torii Offline V2 issuer request parsing so top-level protocol
+  strings, body-auth `account_id`/`nonce`, `existing_lineage_id`, note-issue
+  `lineage_id`, and known attestation `device_binding` material reject
+  leading or trailing whitespace instead of being trimmed. Optional iOS
+  metadata copied into returned key-certificate JSON is now exact when present.
+  The optional `X-Device-Id` header is exact as well: blank or padded header
+  values are rejected instead of being trimmed before comparison with the JSON
+  `device_id`.
+- Tightened Swift, Kotlin/JVM, and Java Android Offline Note V2 attestation
+  identity validation so device attestation `key_id` and `device_id` reject
+  leading or trailing whitespace across registration and key-certificate
+  models, matching the strict Torii/core protocol string handling.
+- Hardened on-chain Offline device-attestation registration and all three SDK
+  constructors so optional app identity metadata (`ios_team_id`,
+  `ios_bundle_id`, `ios_environment`, and `android_package_name`) rejects
+  empty or leading/trailing-whitespace values when present, keeping challenge
+  preimage bytes and consensus-side app identity checks exact.
+- Tightened core direct key-certificate admission and
+  `RegisterOfflineDeviceAttestation` validation so required attestation
+  identity/profile strings (`platform`, `key_id`, `device_id`,
+  `assertion_scheme`, and `assertion_key_algorithm`) reject surrounding
+  whitespace before profile-specific checks. This closes the direct-chain gap
+  where an issuer-signed certificate or on-chain registration could carry a
+  padded `device_id` even though Torii and SDK constructors already rejected it.
+- Tightened governed on-chain attestation policy allowlists so iOS Team ID,
+  iOS bundle ID, iOS environment, and Android package names must be exact
+  non-empty ASCII values with no surrounding whitespace. Case-insensitive iOS
+  Team ID/environment matching remains intentional, while bundle IDs and
+  Android package names now match byte-for-byte after policy validation.
+- Moved the Kotlin/JVM and Java Android `ToriiOfflineNoteIssuerClient`
+  endpoints to Torii's maintained Offline V2 issuer routes:
+  `/v1/offline/v2/keys/refill` and `/v1/offline/v2/notes/issue`. The route
+  assertions and test issuer stubs now match the Swift client and the mounted
+  Torii V2 surface.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii offline_v2_issuer::tests --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii body_auth_rejects_non_exact_optional_device_header --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core padded_hardware_attestation_identity --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation_registration_rejects_padded_identity_fields --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation_registration_rejects_padded_app_metadata --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core offline_device_attestation_policy --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_core key_certificate --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_data_model offline_device_attestation --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_data_model offline_note_decode_from_slice_roundtrips --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_data_model offline_note_registry_decodes_type_names --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii generated_spec_documents_offline_body_auth_schema --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii generated_spec_includes_documented_paths --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-offline-attestation-target CARGO_INCREMENTAL=0 cargo test --quiet -j 1 -p iroha_torii --test torii_nexus_sorafs offline_v2_readiness_is_mounted_and_legacy_routes_are_absent`
+  - `cd IrohaSwift && swift test --filter OfflineNoteV2Tests`
+  - `cd kotlin && GRADLE_OPTS="-Xmx4g" ./gradlew -Dkotlin.daemon.jvm.options=-Xmx4096m :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test,org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --console=plain`
+  - `cargo fmt --all`
   - `git diff --check`

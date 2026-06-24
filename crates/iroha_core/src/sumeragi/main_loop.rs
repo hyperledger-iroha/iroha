@@ -21696,6 +21696,10 @@ impl Actor {
                 || self.retry_known_block_commit_qc_requests(now, tick_deadline);
             (progress, step_start.elapsed())
         };
+        let pending_rbc_ttl_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.prune_pending_rbc");
+            self.prune_expired_pending_rbc()
+        };
         let (reschedule_progress, reschedule_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.reschedule_pending");
             let step_start = Instant::now();
@@ -21778,6 +21782,7 @@ impl Actor {
             || known_block_qc_progress
             || vnext_progress
             || missing_block_progress
+            || pending_rbc_ttl_progress
             || reschedule_progress
             || idle_view_progress
             || round_liveness_progress

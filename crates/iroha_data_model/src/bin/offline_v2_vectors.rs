@@ -38,8 +38,10 @@ const FIXTURE_PATH: &str = concat!(
 );
 const TOKEN_ID_LABEL: &str = "offline-v2-token-fixture-1";
 const INVOICE_ID: &str = "invoice-fixture-1";
-const SENDER_KEY_ID: &str = "sender-key-v2-1";
-const RECIPIENT_KEY_ID: &str = "recipient-key-v2-1";
+// iOS App Attest registration key IDs are credential bytes encoded as
+// canonical standard base64, matching the on-chain registration contract.
+const SENDER_KEY_ID: &str = "c2VuZGVyLWtleS12Mi0x";
+const RECIPIENT_KEY_ID: &str = "cmVjaXBpZW50LWtleS12Mi0x";
 const SENDER_DEVICE_ID: &str = "sender-device-v2-1";
 const RECIPIENT_DEVICE_ID: &str = "recipient-device-v2-1";
 const AMOUNT: &str = "5";
@@ -98,7 +100,6 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         &sender_certificate,
         &asset_definition_id,
         b"offline-v2-vector-ios-appattest-report",
-        b"offline-v2-vector-ios-appattest-evidence",
     )?;
 
     let token_id = Hash::new(TOKEN_ID_LABEL);
@@ -609,8 +610,9 @@ fn attestation_registration(
     certificate: &VectorCertificate,
     asset_definition_id: &AssetDefinitionId,
     attestation_report: &[u8],
-    evidence: &[u8],
 ) -> Result<OfflineDeviceAttestationRegistration, Box<dyn Error>> {
+    let attestation_report_hash = Hash::new(attestation_report);
+    let evidence = device_attestation_evidence(&attestation_report_hash);
     let mut registration = OfflineDeviceAttestationRegistration {
         version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: certificate.model.platform.clone(),
@@ -630,10 +632,10 @@ fn attestation_registration(
         assertion_usage_count_limit: certificate.model.assertion_usage_count_limit,
         one_use: certificate.model.one_use,
         challenge_hash: Hash::new(b"offline-v2-attestation-challenge-placeholder"),
-        attestation_report_hash: Hash::new(attestation_report),
+        attestation_report_hash,
         attestation_report: attestation_report.to_vec(),
-        evidence_hash: Hash::new(evidence),
-        evidence: evidence.to_vec(),
+        evidence_hash: Hash::new(&evidence),
+        evidence,
         recent_block_height: 42,
         recent_block_hash: Hash::new(b"offline-v2-vector-recent-block"),
         expires_at_ms: GENERATED_AT_MS + 300_000,
@@ -642,11 +644,17 @@ fn attestation_registration(
     Ok(registration)
 }
 
+fn device_attestation_evidence(attestation_report_hash: &Hash) -> Vec<u8> {
+    let mut evidence = b"offline-device-attestation-evidence-v1".to_vec();
+    evidence.extend_from_slice(attestation_report_hash.as_ref());
+    evidence
+}
+
 fn attestation_registration_json(
     registration: &OfflineDeviceAttestationRegistration,
     asset_definition_id: &str,
 ) -> Result<Value, Box<dyn Error>> {
-    Ok(object(vec![
+    let mut entries = vec![
         ("version", Value::from(registration.version)),
         ("platform", Value::from(registration.platform.clone())),
         ("key_id", Value::from(registration.key_id.clone())),
@@ -660,44 +668,27 @@ fn attestation_registration_json(
             registration
                 .asset_definition_id
                 .as_ref()
-                .map(|_| Value::from(asset_definition_id.to_owned()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |_| Value::from(asset_definition_id.to_owned())),
         ),
         (
             "ios_team_id",
-            registration
-                .ios_team_id
-                .clone()
-                .map_or(Value::Null, Value::from),
+            optional_string_value(registration.ios_team_id.as_deref()),
         ),
         (
             "ios_bundle_id",
-            registration
-                .ios_bundle_id
-                .clone()
-                .map_or(Value::Null, Value::from),
+            optional_string_value(registration.ios_bundle_id.as_deref()),
         ),
         (
             "ios_environment",
-            registration
-                .ios_environment
-                .clone()
-                .map_or(Value::Null, Value::from),
+            optional_string_value(registration.ios_environment.as_deref()),
         ),
         (
             "android_package_name",
-            registration
-                .android_package_name
-                .clone()
-                .map_or(Value::Null, Value::from),
+            optional_string_value(registration.android_package_name.as_deref()),
         ),
         (
             "android_signing_certificate_sha256",
-            registration
-                .android_signing_certificate_sha256
-                .as_ref()
-                .map(|digest| Value::from(BASE64_STANDARD.encode(digest)))
-                .unwrap_or(Value::Null),
+            optional_base64_value(registration.android_signing_certificate_sha256.as_ref()),
         ),
         (
             "public_key",
@@ -752,6 +743,15 @@ fn attestation_registration_json(
             Value::from(registration.recent_block_hash.to_string()),
         ),
         ("expires_at_ms", Value::from(registration.expires_at_ms)),
+    ];
+    entries.extend(attestation_registration_wire_json_entries(registration)?);
+    Ok(object(entries))
+}
+
+fn attestation_registration_wire_json_entries(
+    registration: &OfflineDeviceAttestationRegistration,
+) -> Result<Vec<(&'static str, Value)>, Box<dyn Error>> {
+    Ok(vec![
         (
             "key_certificate_payload_hash",
             Value::from(registration.key_certificate_payload_hash()?.to_string()),
@@ -768,7 +768,17 @@ fn attestation_registration_json(
                 ))?),
             ),
         ),
-    ]))
+    ])
+}
+
+fn optional_string_value(value: Option<&str>) -> Value {
+    value.map_or(Value::Null, Value::from)
+}
+
+fn optional_base64_value(value: Option<&Vec<u8>>) -> Value {
+    value.map_or(Value::Null, |bytes| {
+        Value::from(BASE64_STANDARD.encode(bytes))
+    })
 }
 
 fn sign_offline_certificate_payload(
@@ -1218,6 +1228,19 @@ mod tests {
         );
         assert!(!string(field(field(chain, "audit"), "public_inputs_hash")).is_empty());
         assert!(!string(field(field(chain, "redeem"), "public_inputs_hash")).is_empty());
+        let registration = field(chain, "attestation_registration");
+        let evidence = BASE64_STANDARD
+            .decode(string(field(registration, "evidence_base64")))
+            .expect("decode attestation evidence");
+        let mut expected_evidence = b"offline-device-attestation-evidence-v1".to_vec();
+        let report_hash = hex::decode(string(field(registration, "attestation_report_hash")))
+            .expect("valid attestation report hash");
+        assert_eq!(report_hash.len(), Hash::LENGTH);
+        expected_evidence.extend_from_slice(&report_hash);
+        assert_eq!(
+            evidence, expected_evidence,
+            "attestation evidence must bind the platform report hash"
+        );
         assert_eq!(array(field(&fixture, "bad_variants")).len(), 3);
     }
 

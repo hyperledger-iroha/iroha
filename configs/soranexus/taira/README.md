@@ -532,9 +532,10 @@ Nexus/Torii deployments should keep the same `/v1/mcp` path and be added as
 user-local MCP servers with the exact public root under test.
 
 For final public rollout, do not stop at MCP discovery. Run the repo smoke with
-both the public endpoint and a runtime-only canary signer config:
+both the public endpoint, the expected deployment git SHA, and a runtime-only
+canary signer config:
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
 
 Then gate the SoraFS path on the same public node:
 
@@ -817,16 +818,16 @@ away from the shipped MCP-enabled config:
      `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
 8. After the public node is back, prove the direct hostname is healthy before
    any convenience host or client cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - if contract deploy/view health still fails after the route checks pass,
      redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow
      before blaming the frontend
 9. Before declaring public Codex/Torii rollout complete, require the SoraSwap
    gate to pass behind the same runtime candidate:
    - probe-only:
-     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
    - full gate:
-     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
    - the wrapper runs the focused `iroha_core` SoraSwap deploy-route router
      regression and three-hop nested transfer canary, `check_mcp_rollout.sh`,
      `check_sorafs_rollout.sh`, the trader app-api CID probe when a bundle is
@@ -992,10 +993,10 @@ From `../iroha2-block-explorer-web`:
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}"`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - when you are validating edge-local SNI before public DNS or TLS is fully
      live, pin the public host to the edge IP explicitly:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --resolve-host taira.sora.org:443:127.0.0.1`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
   - the public check now defaults to
     `/run/secrets/taira-canary-client.toml` and auto-bootstraps it when the
     file is missing or still contains placeholders, unless you explicitly opt

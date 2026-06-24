@@ -336,8 +336,8 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
     }
 
     companion object {
-        private const val KEYS_REFILL_PATH = "/v1/offline/keys/refill"
-        private const val NOTES_ISSUE_PATH = "/v1/offline/notes/issue"
+        private const val KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill"
+        private const val NOTES_ISSUE_PATH = "/v1/offline/v2/notes/issue"
     }
 }
 

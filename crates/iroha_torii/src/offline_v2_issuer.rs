@@ -25,6 +25,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 use norito::json::{self, Map, Value};
+use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
 
 use crate::{AppState, Error, SharedAppState, app_auth, json_ok, routing};
@@ -37,6 +38,90 @@ const PATH_KEYS_REFILL: &str = "/v1/offline/v2/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/v2/notes/issue";
 const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";
 const PATH_AUDIT: &str = "/v1/offline/v2/audit";
+const OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN: usize = 65;
+const ATTESTATION_RECEIPT_FIELDS: &[&str] = &[
+    "version",
+    "platform",
+    "account_id",
+    "device_id",
+    "offline_public_key_base64",
+    "assertion_public_key_base64",
+    "assertion_scheme",
+    "assertion_key_algorithm",
+    "assertion_usage_count_limit",
+    "attestation_key_id",
+    "hardware_one_use",
+    "attestation_report_hash_hex",
+    "issued_at_ms",
+    "expires_at_ms",
+    "signature_base64",
+];
+const KEY_CERTIFICATE_FIELDS: &[&str] = &[
+    "version",
+    "platform",
+    "key_id",
+    "device_id",
+    "account_id",
+    "public_key",
+    "assertion_scheme",
+    "assertion_key_algorithm",
+    "assertion_public_key",
+    "assertion_usage_count_limit",
+    "one_use",
+    "issued_at_ms",
+    "expires_at_ms",
+    "app_attest_public_key_base64",
+    "ios_team_id",
+    "ios_bundle_id",
+    "ios_environment",
+    "issuer_signature_base64",
+    "issuer_signature_payload_base64",
+];
+const REDEMPTION_NORITO_FIELDS: &[&str] = &["norito_base64"];
+const REDEMPTION_FIELDS: &[&str] = &[
+    "source_note_commitment",
+    "input_nullifiers",
+    "sender_key_certificate",
+    "key_certificate",
+    "amount",
+    "recursive_proof",
+];
+const RECURSIVE_PROOF_FIELDS: &[&str] = &[
+    "backend",
+    "verifier_key_id",
+    "verifier_key_name",
+    "public_inputs_hash_hex",
+    "public_inputs_hash",
+    "proof_bytes_base64",
+];
+const LINEAGE_STATE_FIELDS: &[&str] = &[
+    "lineage_id",
+    "account_id",
+    "device_id",
+    "offline_public_key",
+    "asset_definition_id",
+    "balance",
+    "locked_balance",
+    "server_revision",
+    "server_state_hash",
+    "pending_local_revision",
+    "authorization",
+    "issuer_signature_base64",
+];
+const LINEAGE_AUTHORIZATION_FIELDS: &[&str] = &[
+    "authorization_id",
+    "lineage_id",
+    "account_id",
+    "verdict_id",
+    "max_balance",
+    "max_tx_value",
+    "issued_at_ms",
+    "refresh_at_ms",
+    "expires_at_ms",
+    "device_binding",
+    "key_certificate",
+    "issuer_signature_base64",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineV2IssuerRuntime {
@@ -107,6 +192,7 @@ struct VerifiedDeviceAttestation {
     assertion_key_algorithm: String,
     assertion_public_key: Vec<u8>,
     assertion_public_key_base64: String,
+    assertion_usage_count_limit: Option<u32>,
 }
 
 struct VerifiedLineageState {
@@ -137,9 +223,13 @@ pub(crate) async fn handle_key_refill(
     )?;
     let now_ms = now_ms();
     let attestation = verify_device_attestation(&issuer, &parsed, now_ms)?;
-    let existing_lineage_id = optional_string(&parsed.value, "existing_lineage_id")
-        .map(ToOwned::to_owned)
-        .filter(|value| !value.trim().is_empty());
+    let existing_lineage_id = optional_exact_protocol_string(
+        &parsed.value,
+        "existing_lineage_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?
+    .map(ToOwned::to_owned);
     let lineage_state = existing_lineage_id
         .as_deref()
         .map(|lineage_id| verify_existing_lineage_state(&issuer, &parsed, lineage_id, now_ms))
@@ -204,7 +294,12 @@ pub(crate) async fn handle_notes_issue(
         body.as_ref(),
         ENDPOINT_NOTES_ISSUE,
     )?;
-    let lineage_id = required_string(&parsed.value, "lineage_id")?;
+    let lineage_id = required_exact_protocol_string(
+        &parsed.value,
+        "lineage_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?;
     let amount = parse_positive_amount(required_string(&parsed.value, "amount")?, "amount")?;
     if amount > issuer.max_tx_value.clone() {
         return Err(validation(
@@ -513,7 +608,13 @@ fn parse_and_authorize(
         )
     })?;
     let (body_auth, unsigned_body) = extract_body_auth(&value)?;
-    let account_literal = required_string(&value, "account_id")?.to_string();
+    let account_literal = required_exact_protocol_string(
+        &value,
+        "account_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?
+    .to_string();
     let (account_id, canonical_account) = routing::parse_account_literal_with_state(
         &app.state,
         &account_literal,
@@ -539,13 +640,14 @@ fn parse_and_authorize(
         message: app_auth_error_message(err),
     })?;
 
-    let device_id = required_string(&value, "device_id")?.to_string();
-    if let Some(header_device_id) = headers
-        .get("X-Device-Id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    let device_id = required_exact_protocol_string(
+        &value,
+        "device_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?
+    .to_string();
+    if let Some(header_device_id) = optional_exact_header_string(headers, "X-Device-Id")? {
         if header_device_id != device_id {
             return Err(validation(
                 "OFFLINE_V2_DEVICE_MISMATCH",
@@ -559,26 +661,56 @@ fn parse_and_authorize(
             "device_binding is required.",
         )
     })?;
-    if optional_string(&device_binding, "device_id")
-        .is_some_and(|binding_device| binding_device != device_id)
+    if optional_exact_protocol_string(
+        &device_binding,
+        "device_id",
+        "OFFLINE_V2_INVALID_DEVICE_BINDING",
+        "Offline Notes V2 device_binding",
+    )?
+    .is_some_and(|binding_device| binding_device != device_id)
     {
         return Err(validation(
             "OFFLINE_V2_DEVICE_BINDING_MISMATCH",
             "device_binding.device_id does not match device_id.",
         ));
     }
-    let offline_public_key = required_string(&value, "offline_public_key")
-        .or_else(|_| required_string(&device_binding, "offline_public_key"))?
-        .to_string();
-    if optional_string(&device_binding, "offline_public_key")
-        .is_some_and(|binding_key| binding_key != offline_public_key)
+    let offline_public_key = optional_exact_protocol_string(
+        &value,
+        "offline_public_key",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?
+    .map(ToOwned::to_owned)
+    .map(Ok)
+    .unwrap_or_else(|| {
+        required_exact_protocol_string(
+            &device_binding,
+            "offline_public_key",
+            "OFFLINE_V2_MISSING_FIELD",
+            "Offline Notes V2 device_binding",
+        )
+        .map(ToOwned::to_owned)
+    })?;
+    if optional_exact_protocol_string(
+        &device_binding,
+        "offline_public_key",
+        "OFFLINE_V2_INVALID_DEVICE_BINDING",
+        "Offline Notes V2 device_binding",
+    )?
+    .is_some_and(|binding_key| binding_key != offline_public_key)
     {
         return Err(validation(
             "OFFLINE_V2_DEVICE_BINDING_KEY_MISMATCH",
             "device_binding.offline_public_key does not match offline_public_key.",
         ));
     }
-    let asset_literal = required_string(&value, "asset_definition_id")?.to_string();
+    let asset_literal = required_exact_protocol_string(
+        &value,
+        "asset_definition_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?
+    .to_string();
     let world = app.state.world_view();
     let now = routing::asset_alias_observation_time_ms(app.state.as_ref());
     let asset_definition_id =
@@ -588,7 +720,13 @@ fn parse_and_authorize(
                 format!("Unknown or invalid asset_definition_id `{asset_literal}`."),
             )
         })?;
-    let operation_id = required_string(&value, "operation_id")?.to_string();
+    let operation_id = required_exact_protocol_string(
+        &value,
+        "operation_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?
+    .to_string();
 
     Ok(ParsedOfflineRequest {
         value,
@@ -624,12 +762,22 @@ fn reject_legacy_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
 fn extract_body_auth(
     value: &Value,
 ) -> Result<(app_auth::CanonicalRequestBodyAuth<'_>, Vec<u8>), Error> {
-    let account_id = required_string(value, "account_id")?;
+    let account_id = required_exact_protocol_string(
+        value,
+        "account_id",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?;
     let timestamp_ms =
         required_u64_with_code(value, "timestamp_ms", "OFFLINE_V2_SIGNATURE_REQUIRED")?;
-    let nonce = required_string(value, "nonce")?;
-    let signature_base64 = optional_string(value, "signature_base64");
-    let witness_base64 = optional_string(value, "witness_base64");
+    let nonce = required_exact_protocol_string(
+        value,
+        "nonce",
+        "OFFLINE_V2_MISSING_FIELD",
+        "Offline Notes V2 request",
+    )?;
+    let signature_base64 = optional_body_auth_proof_string(value, "signature_base64")?;
+    let witness_base64 = optional_body_auth_proof_string(value, "witness_base64")?;
     let proof = match (signature_base64, witness_base64) {
         (Some(signature), None) => app_auth::CanonicalRequestBodyProof::SignatureBase64(signature),
         (None, Some(witness)) => app_auth::CanonicalRequestBodyProof::WitnessBase64(witness),
@@ -671,6 +819,68 @@ fn extract_body_auth(
     ))
 }
 
+fn optional_body_auth_proof_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+) -> Result<Option<&'a str>, Error> {
+    let Some(raw) = value.get(field) else {
+        return Ok(None);
+    };
+    let Some(raw) = raw.as_str() else {
+        return Err(Error::AppForbidden {
+            code: "OFFLINE_V2_SIGNATURE_INVALID",
+            message: format!("Offline Notes V2 body proof field `{field}` must be a string."),
+        });
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::AppForbidden {
+            code: "OFFLINE_V2_SIGNATURE_INVALID",
+            message: format!("Offline Notes V2 body proof field `{field}` must not be empty."),
+        });
+    }
+    if raw != trimmed {
+        return Err(Error::AppForbidden {
+            code: "OFFLINE_V2_SIGNATURE_INVALID",
+            message: format!(
+                "Offline Notes V2 body proof field `{field}` must not include leading or trailing whitespace."
+            ),
+        });
+    }
+    Ok(Some(raw))
+}
+
+fn optional_exact_header_string<'a>(
+    headers: &'a HeaderMap,
+    name: &'static str,
+) -> Result<Option<&'a str>, Error> {
+    let Some(value) = headers.get(name) else {
+        return Ok(None);
+    };
+    let value = value.to_str().map_err(|_| {
+        validation_owned(
+            "OFFLINE_V2_INVALID_HEADER",
+            format!("Offline Notes V2 header `{name}` must be valid UTF-8."),
+        )
+    })?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(validation_owned(
+            "OFFLINE_V2_INVALID_HEADER",
+            format!("Offline Notes V2 header `{name}` must not be empty when present."),
+        ));
+    }
+    if value != trimmed {
+        return Err(validation_owned(
+            "OFFLINE_V2_INVALID_HEADER",
+            format!(
+                "Offline Notes V2 header `{name}` must not include leading or trailing whitespace."
+            ),
+        ));
+    }
+    Ok(Some(value))
+}
+
 fn app_auth_error_message(error: Error) -> String {
     match error {
         Error::Query(ValidationFail::NotPermitted(message)) => message,
@@ -693,7 +903,18 @@ fn verify_device_attestation(
             )
         })?;
     let receipt_object = value_object_ref(receipt, "OFFLINE_V2_INVALID_ATTESTATION_RECEIPT")?;
-    let signature = required_string(receipt, "signature_base64")?;
+    ensure_json_object_fields(
+        receipt_object,
+        ATTESTATION_RECEIPT_FIELDS,
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?;
+    let signature = required_exact_protocol_string(
+        receipt,
+        "signature_base64",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?;
     let mut unsigned_object = receipt_object.clone();
     unsigned_object.remove("signature_base64");
     let unsigned = Value::Object(unsigned_object);
@@ -713,13 +934,25 @@ fn verify_device_attestation(
             "Offline Notes V2 attestation receipt version is unsupported.",
         ));
     }
-    if required_string(receipt, "account_id")? != request.account_literal {
+    if required_exact_protocol_string(
+        receipt,
+        "account_id",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )? != request.account_literal
+    {
         return Err(validation(
             "OFFLINE_V2_ATTESTATION_ACCOUNT_MISMATCH",
             "Offline Notes V2 attestation receipt account_id does not match request account_id.",
         ));
     }
-    if required_string(receipt, "device_id")? != request.device_id {
+    if required_exact_protocol_string(
+        receipt,
+        "device_id",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )? != request.device_id
+    {
         return Err(validation(
             "OFFLINE_V2_ATTESTATION_DEVICE_MISMATCH",
             "Offline Notes V2 attestation receipt device_id does not match request device_id.",
@@ -731,10 +964,18 @@ fn verify_device_attestation(
             "Offline Notes V2 attestation receipt does not certify hardware one-use semantics.",
         ));
     }
-    if assertion_usage_limit(request)?.is_some_and(|limit| limit != 1) {
+    let device_binding_usage_limit = assertion_usage_limit(request)?;
+    let receipt_usage_limit = signed_assertion_usage_limit(receipt)?;
+    if device_binding_usage_limit.is_some_and(|limit| limit != 1) {
         return Err(validation(
             "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT",
             "Offline Notes V2 assertion_usage_count_limit must be one when present.",
+        ));
+    }
+    if device_binding_usage_limit != receipt_usage_limit {
+        return Err(validation(
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            "Offline Notes V2 device_binding.assertion_usage_count_limit does not match attestation receipt.",
         ));
     }
     let issued_at = required_u64(receipt, "issued_at_ms")?;
@@ -747,7 +988,12 @@ fn verify_device_attestation(
     }
 
     let request_public_key = decode_note_public_key(&request.offline_public_key)?;
-    let public_key_base64 = required_string(receipt, "offline_public_key_base64")?;
+    let public_key_base64 = required_exact_protocol_string(
+        receipt,
+        "offline_public_key_base64",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?;
     let public_key = decode_canonical_base64(
         public_key_base64,
         "offline_public_key_base64",
@@ -760,7 +1006,12 @@ fn verify_device_attestation(
         ));
     }
 
-    let assertion_public_key_base64 = required_string(receipt, "assertion_public_key_base64")?;
+    let assertion_public_key_base64 = required_exact_protocol_string(
+        receipt,
+        "assertion_public_key_base64",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?;
     let assertion_public_key = decode_canonical_base64(
         assertion_public_key_base64,
         "assertion_public_key_base64",
@@ -774,7 +1025,12 @@ fn verify_device_attestation(
     }
     verify_optional_assertion_public_key(request, &assertion_public_key)?;
 
-    let attestation_report_hash = required_string(receipt, "attestation_report_hash_hex")?;
+    let attestation_report_hash = required_exact_protocol_string(
+        receipt,
+        "attestation_report_hash_hex",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?;
     let report_hash_bytes = hex::decode(attestation_report_hash).map_err(|_| {
         validation(
             "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH",
@@ -787,7 +1043,12 @@ fn verify_device_attestation(
             "Offline Notes V2 attestation_report_hash_hex must encode 32 bytes.",
         ));
     }
-    if let Some(report) = optional_string(&request.device_binding, "attestation_report_base64") {
+    if let Some(report) = optional_exact_protocol_string(
+        &request.device_binding,
+        "attestation_report_base64",
+        "OFFLINE_V2_INVALID_ATTESTATION_REPORT",
+        "Offline Notes V2 device_binding",
+    )? {
         let report_bytes = decode_base64_material(report).ok_or_else(|| {
             validation(
                 "OFFLINE_V2_INVALID_ATTESTATION_REPORT",
@@ -802,38 +1063,142 @@ fn verify_device_attestation(
         }
     }
 
-    let platform = required_string(receipt, "platform")?.to_string();
+    let platform = required_exact_protocol_string(
+        receipt,
+        "platform",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?
+    .to_string();
     verify_optional_attestation_binding(
         request,
         "platform",
         &platform,
         "Offline Notes V2 device_binding.platform does not match attestation receipt.",
     )?;
-    let assertion_scheme = required_string(receipt, "assertion_scheme")?.to_string();
+    let assertion_scheme = required_exact_protocol_string(
+        receipt,
+        "assertion_scheme",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?
+    .to_string();
     verify_optional_attestation_binding(
         request,
         "assertion_scheme",
         &assertion_scheme,
         "Offline Notes V2 device_binding.assertion_scheme does not match attestation receipt.",
     )?;
-    let assertion_key_algorithm = required_string(receipt, "assertion_key_algorithm")?.to_string();
+    let assertion_key_algorithm = required_exact_protocol_string(
+        receipt,
+        "assertion_key_algorithm",
+        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+        "Offline Notes V2 attestation receipt",
+    )?
+    .to_string();
     verify_optional_attestation_binding(
         request,
         "assertion_key_algorithm",
         &assertion_key_algorithm,
         "Offline Notes V2 device_binding.assertion_key_algorithm does not match attestation receipt.",
     )?;
+    verify_attestation_receipt_profile(
+        &platform,
+        &assertion_scheme,
+        &assertion_key_algorithm,
+        receipt_usage_limit,
+    )?;
+    validate_p256_assertion_public_key(&assertion_public_key)?;
 
     Ok(VerifiedDeviceAttestation {
         platform,
-        key_id: required_string(receipt, "attestation_key_id")?.to_string(),
+        key_id: required_exact_protocol_string(
+            receipt,
+            "attestation_key_id",
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+            "Offline Notes V2 attestation receipt",
+        )?
+        .to_string(),
         public_key,
         public_key_base64: BASE64_STANDARD.encode(&request_public_key),
         assertion_scheme,
         assertion_key_algorithm,
         assertion_public_key_base64: BASE64_STANDARD.encode(&assertion_public_key),
         assertion_public_key,
+        assertion_usage_count_limit: receipt_usage_limit,
     })
+}
+
+fn verify_attestation_receipt_profile(
+    platform: &str,
+    assertion_scheme: &str,
+    assertion_key_algorithm: &str,
+    usage_limit: Option<u32>,
+) -> Result<(), Error> {
+    match platform {
+        "ios-app-attest" => {
+            if assertion_scheme == "apple-app-attest-v1"
+                && assertion_key_algorithm == "ecdsa-p256-sha256"
+                && usage_limit.is_none()
+            {
+                Ok(())
+            } else {
+                Err(validation(
+                    "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+                    "Offline Notes V2 iOS App Attest receipt uses an unsupported assertion profile.",
+                ))
+            }
+        }
+        "ios-appattest" => {
+            if assertion_scheme == "apple-appattest-counter-v1"
+                && assertion_key_algorithm == "app-attest-p256"
+                && usage_limit.is_none()
+            {
+                Ok(())
+            } else {
+                Err(validation(
+                    "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+                    "Offline Notes V2 canonical iOS App Attest receipt uses an unsupported assertion profile.",
+                ))
+            }
+        }
+        "android-keymint" => {
+            if assertion_scheme == "android-keymint-ecdsa-p256-usage-limit-v1"
+                && assertion_key_algorithm == "ecdsa-p256-sha256"
+                && usage_limit == Some(1)
+            {
+                Ok(())
+            } else {
+                Err(validation(
+                    "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+                    "Offline Notes V2 Android KeyMint receipt must use the canonical one-use P-256 profile.",
+                ))
+            }
+        }
+        _ => Err(validation(
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            "Offline Notes V2 attestation receipt platform is unsupported.",
+        )),
+    }
+}
+
+fn validate_p256_assertion_public_key(public_key: &[u8]) -> Result<(), Error> {
+    if public_key.len() != OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
+        || public_key.first() != Some(&0x04)
+    {
+        return Err(validation(
+            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
+            "Offline Notes V2 assertion public key must be an uncompressed P-256 SEC1 key.",
+        ));
+    }
+    P256PublicKey::from_sec1_bytes(public_key)
+        .map(|_| ())
+        .map_err(|_| {
+            validation(
+                "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
+                "Offline Notes V2 assertion public key must be a valid uncompressed P-256 SEC1 point.",
+            )
+        })
 }
 
 fn verify_lineage_state(
@@ -879,28 +1244,56 @@ fn verify_lineage_state_with_key_policy(
             "Signed Offline Notes V2 lineage_state is required.",
         )
     })?;
-    value_object_ref(state, "OFFLINE_V2_INVALID_LINEAGE_STATE")?;
+    let state_object = value_object_ref(state, "OFFLINE_V2_INVALID_LINEAGE_STATE")?;
+    ensure_json_object_fields(
+        state_object,
+        LINEAGE_STATE_FIELDS,
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )?;
 
-    let lineage_id = required_string(state, "lineage_id")?;
+    let lineage_id = required_exact_protocol_string(
+        state,
+        "lineage_id",
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )?;
     if lineage_id != expected_lineage_id {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_MISMATCH",
             "Offline Notes V2 lineage_state.lineage_id does not match lineage_id.",
         ));
     }
-    if required_string(state, "account_id")? != request.account_literal {
+    if required_exact_protocol_string(
+        state,
+        "account_id",
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )? != request.account_literal
+    {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_ACCOUNT_MISMATCH",
             "Offline Notes V2 lineage_state.account_id does not match account_id.",
         ));
     }
-    if required_string(state, "device_id")? != request.device_id {
+    if required_exact_protocol_string(
+        state,
+        "device_id",
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )? != request.device_id
+    {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_DEVICE_MISMATCH",
             "Offline Notes V2 lineage_state.device_id does not match device_id.",
         ));
     }
-    let state_offline_public_key = required_string(state, "offline_public_key")?;
+    let state_offline_public_key = required_exact_protocol_string(
+        state,
+        "offline_public_key",
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )?;
     if matches!(key_policy, LineageKeyPolicy::MatchRequest)
         && state_offline_public_key != request.offline_public_key
     {
@@ -909,16 +1302,35 @@ fn verify_lineage_state_with_key_policy(
             "Offline Notes V2 lineage_state.offline_public_key does not match offline_public_key.",
         ));
     }
-    if required_string(state, "asset_definition_id")? != request.asset_definition_literal {
+    if required_exact_protocol_string(
+        state,
+        "asset_definition_id",
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )? != request.asset_definition_literal
+    {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_ASSET_MISMATCH",
             "Offline Notes V2 lineage_state.asset_definition_id does not match asset_definition_id.",
         ));
     }
 
-    let balance = parse_amount(required_string(state, "balance")?, "lineage_state.balance")?;
+    let balance = parse_amount(
+        required_exact_protocol_string(
+            state,
+            "balance",
+            "OFFLINE_V2_INVALID_LINEAGE_STATE",
+            "Offline Notes V2 lineage_state",
+        )?,
+        "lineage_state.balance",
+    )?;
     let locked_balance = parse_amount(
-        required_string(state, "locked_balance")?,
+        required_exact_protocol_string(
+            state,
+            "locked_balance",
+            "OFFLINE_V2_INVALID_LINEAGE_STATE",
+            "Offline Notes V2 lineage_state",
+        )?,
         "lineage_state.locked_balance",
     )?;
     if locked_balance != Numeric::zero() {
@@ -944,7 +1356,13 @@ fn verify_lineage_state_with_key_policy(
         &locked_balance.to_string(),
         revision,
     )?;
-    if required_string(state, "server_state_hash")? != expected_hash {
+    if required_exact_protocol_string(
+        state,
+        "server_state_hash",
+        "OFFLINE_V2_INVALID_LINEAGE_STATE",
+        "Offline Notes V2 lineage_state",
+    )? != expected_hash
+    {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_STATE_HASH_MISMATCH",
             "Offline Notes V2 lineage_state hash is invalid.",
@@ -957,18 +1375,50 @@ fn verify_lineage_state_with_key_policy(
             "Offline Notes V2 lineage_state.authorization is required.",
         )
     })?;
-    value_object_ref(authorization, "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION")?;
-    let authorization_id = required_string(authorization, "authorization_id")?;
-    if required_string(authorization, "account_id")? != request.account_literal
-        || required_string(authorization, "lineage_id")? != lineage_id
+    let authorization_object =
+        value_object_ref(authorization, "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION")?;
+    ensure_json_object_fields(
+        authorization_object,
+        LINEAGE_AUTHORIZATION_FIELDS,
+        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+        "Offline Notes V2 lineage authorization",
+    )?;
+    let authorization_id = required_exact_protocol_string(
+        authorization,
+        "authorization_id",
+        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+        "Offline Notes V2 lineage authorization",
+    )?;
+    if required_exact_protocol_string(
+        authorization,
+        "account_id",
+        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+        "Offline Notes V2 lineage authorization",
+    )? != request.account_literal
+        || required_exact_protocol_string(
+            authorization,
+            "lineage_id",
+            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+            "Offline Notes V2 lineage authorization",
+        )? != lineage_id
     {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_AUTHORIZATION_MISMATCH",
             "Offline Notes V2 lineage authorization does not match lineage state.",
         ));
     }
-    if required_string(authorization, "max_balance")? != issuer.max_balance.to_string()
-        || required_string(authorization, "max_tx_value")? != issuer.max_tx_value.to_string()
+    if required_exact_protocol_string(
+        authorization,
+        "max_balance",
+        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+        "Offline Notes V2 lineage authorization",
+    )? != issuer.max_balance.to_string()
+        || required_exact_protocol_string(
+            authorization,
+            "max_tx_value",
+            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+            "Offline Notes V2 lineage authorization",
+        )? != issuer.max_tx_value.to_string()
     {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_AUTHORIZATION_POLICY_MISMATCH",
@@ -993,10 +1443,20 @@ fn verify_lineage_state_with_key_policy(
                 "Offline Notes V2 lineage authorization device_binding is required.",
             )
         })?;
-    if optional_string(&auth_device_binding, "device_id")
-        .is_some_and(|device_id| device_id != request.device_id)
-        || optional_string(&auth_device_binding, "offline_public_key")
-            .is_some_and(|key| key != state_offline_public_key)
+    if optional_exact_protocol_string(
+        &auth_device_binding,
+        "device_id",
+        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+        "Offline Notes V2 lineage authorization device_binding",
+    )?
+    .is_some_and(|device_id| device_id != request.device_id)
+        || optional_exact_protocol_string(
+            &auth_device_binding,
+            "offline_public_key",
+            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+            "Offline Notes V2 lineage authorization device_binding",
+        )?
+        .is_some_and(|key| key != state_offline_public_key)
     {
         return Err(validation(
             "OFFLINE_V2_LINEAGE_AUTHORIZATION_DEVICE_MISMATCH",
@@ -1007,7 +1467,12 @@ fn verify_lineage_state_with_key_policy(
         &request.account_literal,
         authorization_id,
         lineage_id,
-        required_string(authorization, "verdict_id")?,
+        required_exact_protocol_string(
+            authorization,
+            "verdict_id",
+            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+            "Offline Notes V2 lineage authorization",
+        )?,
         &issuer.max_balance.to_string(),
         &issuer.max_tx_value.to_string(),
         auth_issued_at,
@@ -1018,7 +1483,12 @@ fn verify_lineage_state_with_key_policy(
     verify_json_signature(
         issuer.key_pair.public_key(),
         &auth_unsigned,
-        required_string(authorization, "issuer_signature_base64")?,
+        required_exact_protocol_string(
+            authorization,
+            "issuer_signature_base64",
+            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+            "Offline Notes V2 lineage authorization",
+        )?,
         "offline_v2_authorization",
         "OFFLINE_V2_LINEAGE_AUTHORIZATION_SIGNATURE_INVALID",
         "Offline Notes V2 lineage authorization signature is invalid.",
@@ -1038,7 +1508,12 @@ fn verify_lineage_state_with_key_policy(
     verify_json_signature(
         issuer.key_pair.public_key(),
         &state_unsigned,
-        required_string(state, "issuer_signature_base64")?,
+        required_exact_protocol_string(
+            state,
+            "issuer_signature_base64",
+            "OFFLINE_V2_INVALID_LINEAGE_STATE",
+            "Offline Notes V2 lineage_state",
+        )?,
         "offline_v2_lineage_state",
         "OFFLINE_V2_LINEAGE_STATE_SIGNATURE_INVALID",
         "Offline Notes V2 lineage state signature is invalid.",
@@ -1179,7 +1654,6 @@ fn build_key_certificate(
         })?;
     let signature = chain.issuer_signature.payload();
     let expires_at = now_ms.saturating_add(duration_ms(issuer.certificate_ttl));
-    let usage_limit = assertion_usage_limit(request)?;
     Ok(json_object(vec![
         (
             "version",
@@ -1204,7 +1678,8 @@ fn build_key_certificate(
         ),
         (
             "assertion_usage_count_limit",
-            usage_limit
+            attestation
+                .assertion_usage_count_limit
                 .map(|value| number_value(u64::from(value)))
                 .unwrap_or(Value::Null),
         ),
@@ -1217,21 +1692,36 @@ fn build_key_certificate(
         ),
         (
             "ios_team_id",
-            optional_string(&request.device_binding, "ios_team_id")
-                .map(string_value)
-                .unwrap_or(Value::Null),
+            optional_exact_protocol_string(
+                &request.device_binding,
+                "ios_team_id",
+                "OFFLINE_V2_INVALID_DEVICE_BINDING",
+                "Offline Notes V2 device_binding",
+            )?
+            .map(string_value)
+            .unwrap_or(Value::Null),
         ),
         (
             "ios_bundle_id",
-            optional_string(&request.device_binding, "ios_bundle_id")
-                .map(string_value)
-                .unwrap_or(Value::Null),
+            optional_exact_protocol_string(
+                &request.device_binding,
+                "ios_bundle_id",
+                "OFFLINE_V2_INVALID_DEVICE_BINDING",
+                "Offline Notes V2 device_binding",
+            )?
+            .map(string_value)
+            .unwrap_or(Value::Null),
         ),
         (
             "ios_environment",
-            optional_string(&request.device_binding, "ios_environment")
-                .map(string_value)
-                .unwrap_or(Value::Null),
+            optional_exact_protocol_string(
+                &request.device_binding,
+                "ios_environment",
+                "OFFLINE_V2_INVALID_DEVICE_BINDING",
+                "Offline Notes V2 device_binding",
+            )?
+            .map(string_value)
+            .unwrap_or(Value::Null),
         ),
         (
             "issuer_signature_base64",
@@ -1249,7 +1739,6 @@ fn build_chain_certificate(
     request: &ParsedOfflineRequest,
     attestation: &VerifiedDeviceAttestation,
 ) -> Result<OfflineNoteKeyCertificate, Error> {
-    let usage_limit = assertion_usage_limit(request)?;
     let mut certificate = OfflineNoteKeyCertificate {
         version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: attestation.platform.clone(),
@@ -1260,7 +1749,7 @@ fn build_chain_certificate(
         assertion_scheme: attestation.assertion_scheme.clone(),
         assertion_key_algorithm: attestation.assertion_key_algorithm.clone(),
         assertion_public_key: attestation.assertion_public_key.clone(),
-        assertion_usage_count_limit: usage_limit,
+        assertion_usage_count_limit: attestation.assertion_usage_count_limit,
         one_use: true,
         issuer_signature: Signature::from_bytes(&[0_u8; 64]),
     };
@@ -1283,7 +1772,20 @@ fn parse_redemption(request: &ParsedOfflineRequest) -> Result<OfflineNoteRedeem,
             "Offline Notes V2 redemption requires a recursive proof payload.",
         )
     })?;
-    let redemption = if let Some(encoded) = optional_string(value, "norito_base64") {
+    let redemption_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    let redemption = if value.get("norito_base64").is_some() {
+        ensure_json_object_fields(
+            redemption_object,
+            REDEMPTION_NORITO_FIELDS,
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 Norito redemption",
+        )?;
+        let encoded = required_exact_protocol_string(
+            value,
+            "norito_base64",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 Norito redemption",
+        )?;
         let bytes = decode_canonical_base64(
             encoded,
             "redemption.norito_base64",
@@ -1306,7 +1808,20 @@ fn parse_redemption_object(
     value: &Value,
     request: &ParsedOfflineRequest,
 ) -> Result<OfflineNoteRedeem, Error> {
-    value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    let redemption_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    ensure_json_object_fields(
+        redemption_object,
+        REDEMPTION_FIELDS,
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 redemption",
+    )?;
+    ensure_exclusive_json_fields(
+        redemption_object,
+        "sender_key_certificate",
+        "key_certificate",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 redemption",
+    )?;
     let source_note_commitment = parse_hash_field(value, "source_note_commitment")?;
     let input_nullifiers = required_string_array(value, "input_nullifiers")?
         .into_iter()
@@ -1400,11 +1915,35 @@ fn validate_redemption_certificate(certificate: &OfflineNoteKeyCertificate) -> R
             "Offline Notes V2 key certificate hardware usage limit must be one when present.",
         ));
     }
+    verify_attestation_receipt_profile(
+        &certificate.platform,
+        &certificate.assertion_scheme,
+        &certificate.assertion_key_algorithm,
+        certificate.assertion_usage_count_limit,
+    )
+    .map_err(|_| {
+        validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate uses an unsupported hardware assertion profile.",
+        )
+    })?;
+    validate_p256_assertion_public_key(&certificate.assertion_public_key).map_err(|_| {
+        validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate assertion_public_key is not a valid uncompressed P-256 SEC1 point.",
+        )
+    })?;
     Ok(())
 }
 
 fn parse_key_certificate(value: &Value) -> Result<OfflineNoteKeyCertificate, Error> {
-    value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    let certificate_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    ensure_json_object_fields(
+        certificate_object,
+        KEY_CERTIFICATE_FIELDS,
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 key certificate",
+    )?;
     let version = required_u64(value, "version")?;
     let version = u16::try_from(version).map_err(|_| {
         validation(
@@ -1418,7 +1957,12 @@ fn parse_key_certificate(value: &Value) -> Result<OfflineNoteKeyCertificate, Err
             "Offline Notes V2 key certificate version is unsupported.",
         ));
     }
-    let account_literal = required_string(value, "account_id")?;
+    let account_literal = required_exact_protocol_string(
+        value,
+        "account_id",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 key certificate",
+    )?;
     let parsed_account = AccountId::parse_encoded(account_literal).map_err(|err| {
         validation_owned(
             "OFFLINE_V2_REDEMPTION_INVALID",
@@ -1444,25 +1988,70 @@ fn parse_key_certificate(value: &Value) -> Result<OfflineNoteKeyCertificate, Err
         }
     };
     let issuer_signature = decode_signature_base64(
-        required_string(value, "issuer_signature_base64")?,
+        required_exact_protocol_string(
+            value,
+            "issuer_signature_base64",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate",
+        )?,
         "OFFLINE_V2_REDEMPTION_INVALID",
         "Offline Notes V2 issuer_signature_base64 is invalid.",
     )?;
     let certificate = OfflineNoteKeyCertificate {
         version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-        platform: required_string(value, "platform")?.to_string(),
-        key_id: required_string(value, "key_id")?.to_string(),
-        device_id: required_string(value, "device_id")?.to_string(),
+        platform: required_exact_protocol_string(
+            value,
+            "platform",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate",
+        )?
+        .to_string(),
+        key_id: required_exact_protocol_string(
+            value,
+            "key_id",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate",
+        )?
+        .to_string(),
+        device_id: required_exact_protocol_string(
+            value,
+            "device_id",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate",
+        )?
+        .to_string(),
         account_id,
         public_key: decode_canonical_base64(
-            required_string(value, "public_key")?,
+            required_exact_protocol_string(
+                value,
+                "public_key",
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "Offline Notes V2 key certificate",
+            )?,
             "public_key",
             "OFFLINE_V2_REDEMPTION_INVALID",
         )?,
-        assertion_scheme: required_string(value, "assertion_scheme")?.to_string(),
-        assertion_key_algorithm: required_string(value, "assertion_key_algorithm")?.to_string(),
+        assertion_scheme: required_exact_protocol_string(
+            value,
+            "assertion_scheme",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate",
+        )?
+        .to_string(),
+        assertion_key_algorithm: required_exact_protocol_string(
+            value,
+            "assertion_key_algorithm",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate",
+        )?
+        .to_string(),
         assertion_public_key: decode_canonical_base64(
-            required_string(value, "assertion_public_key")?,
+            required_exact_protocol_string(
+                value,
+                "assertion_public_key",
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "Offline Notes V2 key certificate",
+            )?,
             "assertion_public_key",
             "OFFLINE_V2_REDEMPTION_INVALID",
         )?,
@@ -1486,17 +2075,62 @@ fn parse_key_certificate(value: &Value) -> Result<OfflineNoteKeyCertificate, Err
 }
 
 fn parse_recursive_proof(value: &Value) -> Result<OfflineNoteRecursiveProof, Error> {
-    value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
-    let backend = optional_string(value, "backend").unwrap_or("halo2/ipa");
-    let verifier_key_id = VerifyingKeyId::new(
-        backend,
-        required_string(value, "verifier_key_id")
-            .or_else(|_| required_string(value, "verifier_key_name"))?,
-    );
-    let public_inputs_hash = parse_hash_field(value, "public_inputs_hash_hex")
-        .or_else(|_| parse_hash_field(value, "public_inputs_hash"))?;
+    let proof_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    ensure_json_object_fields(
+        proof_object,
+        RECURSIVE_PROOF_FIELDS,
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 recursive proof",
+    )?;
+    ensure_exclusive_json_fields(
+        proof_object,
+        "verifier_key_id",
+        "verifier_key_name",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 recursive proof",
+    )?;
+    ensure_exclusive_json_fields(
+        proof_object,
+        "public_inputs_hash_hex",
+        "public_inputs_hash",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 recursive proof",
+    )?;
+    let backend = optional_exact_protocol_string(
+        value,
+        "backend",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 recursive proof",
+    )?
+    .unwrap_or("halo2/ipa");
+    let verifier_key_name = if value.get("verifier_key_id").is_some() {
+        required_exact_protocol_string(
+            value,
+            "verifier_key_id",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 recursive proof",
+        )?
+    } else {
+        required_exact_protocol_string(
+            value,
+            "verifier_key_name",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 recursive proof",
+        )?
+    };
+    let verifier_key_id = VerifyingKeyId::new(backend, verifier_key_name);
+    let public_inputs_hash = if value.get("public_inputs_hash_hex").is_some() {
+        parse_hash_field(value, "public_inputs_hash_hex")?
+    } else {
+        parse_hash_field(value, "public_inputs_hash")?
+    };
     let proof_bytes = decode_canonical_base64(
-        required_string(value, "proof_bytes_base64")?,
+        required_exact_protocol_string(
+            value,
+            "proof_bytes_base64",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 recursive proof",
+        )?,
         "proof_bytes_base64",
         "OFFLINE_V2_REDEMPTION_INVALID",
     )?;
@@ -1514,7 +2148,15 @@ fn parse_recursive_proof(value: &Value) -> Result<OfflineNoteRecursiveProof, Err
 }
 
 fn parse_hash_field(value: &Value, field: &'static str) -> Result<Hash, Error> {
-    parse_hash_literal(required_string(value, field)?, field)
+    parse_hash_literal(
+        required_exact_protocol_string(
+            value,
+            field,
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 hash field",
+        )?,
+        field,
+    )
 }
 
 fn parse_hash_literal(raw: &str, field: &'static str) -> Result<Hash, Error> {
@@ -1536,17 +2178,26 @@ fn required_string_array<'a>(value: &'a Value, field: &'static str) -> Result<Ve
     items
         .iter()
         .map(|item| {
-            item.as_str()
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .ok_or_else(|| {
-                    validation_owned(
-                        "OFFLINE_V2_REDEMPTION_INVALID",
-                        format!(
-                            "Offline Notes V2 field `{field}` must contain only non-empty strings."
-                        ),
-                    )
-                })
+            let raw = item.as_str().ok_or_else(|| {
+                validation_owned(
+                    "OFFLINE_V2_REDEMPTION_INVALID",
+                    format!("Offline Notes V2 field `{field}` must contain only strings."),
+                )
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(validation_owned(
+                    "OFFLINE_V2_REDEMPTION_INVALID",
+                    format!("Offline Notes V2 field `{field}` must contain only non-empty strings."),
+                ));
+            }
+            if raw != trimmed {
+                return Err(validation_owned(
+                    "OFFLINE_V2_REDEMPTION_INVALID",
+                    format!("Offline Notes V2 field `{field}` strings must not include leading or trailing whitespace."),
+                ));
+            }
+            Ok(raw)
         })
         .collect()
 }
@@ -1798,6 +2449,66 @@ fn required_string<'a>(value: &'a Value, field: &'static str) -> Result<&'a str,
         })
 }
 
+fn required_exact_protocol_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+    code: &'static str,
+    label: &'static str,
+) -> Result<&'a str, Error> {
+    let raw = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| validation_owned(code, format!("{label} field `{field}` is required.")))?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(validation_owned(
+            code,
+            format!("{label} field `{field}` must not be empty."),
+        ));
+    }
+    if raw != trimmed {
+        return Err(validation_owned(
+            code,
+            format!("{label} field `{field}` must not include leading or trailing whitespace."),
+        ));
+    }
+    Ok(raw)
+}
+
+fn optional_exact_protocol_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+    code: &'static str,
+    label: &'static str,
+) -> Result<Option<&'a str>, Error> {
+    let Some(raw) = value.get(field) else {
+        return Ok(None);
+    };
+    if matches!(raw, Value::Null) {
+        return Ok(None);
+    }
+    let raw = raw.as_str().ok_or_else(|| {
+        validation_owned(
+            code,
+            format!("{label} field `{field}` must be a string when present."),
+        )
+    })?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(validation_owned(
+            code,
+            format!("{label} field `{field}` must not be empty when present."),
+        ));
+    }
+    if raw != trimmed {
+        return Err(validation_owned(
+            code,
+            format!("{label} field `{field}` must not include leading or trailing whitespace."),
+        ));
+    }
+    Ok(Some(raw))
+}
+
 fn required_u64(value: &Value, field: &'static str) -> Result<u64, Error> {
     value.get(field).and_then(Value::as_u64).ok_or_else(|| {
         validation_owned(
@@ -1875,6 +2586,24 @@ fn assertion_usage_limit(request: &ParsedOfflineRequest) -> Result<Option<u32>, 
     })
 }
 
+fn signed_assertion_usage_limit(receipt: &Value) -> Result<Option<u32>, Error> {
+    let Some(value) = receipt.get("assertion_usage_count_limit") else {
+        return Ok(None);
+    };
+    let raw = value.as_u64().ok_or_else(|| {
+        validation(
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+            "Offline Notes V2 attestation receipt assertion_usage_count_limit must be an unsigned integer.",
+        )
+    })?;
+    u32::try_from(raw).map(Some).map_err(|_| {
+        validation(
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+            "Offline Notes V2 attestation receipt assertion_usage_count_limit exceeds u32.",
+        )
+    })
+}
+
 fn decode_note_public_key(raw: &str) -> Result<Vec<u8>, Error> {
     let public_key = decode_key_material(raw).ok_or_else(|| {
         validation(
@@ -1940,7 +2669,12 @@ fn verify_optional_assertion_public_key(
         "app_attest_public_key_base64",
         "device_public_key",
     ] {
-        if let Some(raw) = optional_string(&request.device_binding, field) {
+        if let Some(raw) = optional_exact_protocol_string(
+            &request.device_binding,
+            field,
+            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
+            "Offline Notes V2 device_binding",
+        )? {
             let bytes = decode_key_material(raw)
                 .filter(|bytes| !bytes.is_empty())
                 .ok_or_else(|| {
@@ -1966,8 +2700,12 @@ fn verify_optional_attestation_binding(
     expected: &str,
     message: &'static str,
 ) -> Result<(), Error> {
-    if let Some(actual) = optional_string(&request.device_binding, field)
-        && actual != expected
+    if let Some(actual) = optional_exact_protocol_string(
+        &request.device_binding,
+        field,
+        "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+        "Offline Notes V2 device_binding",
+    )? && actual != expected
     {
         return Err(validation(
             "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
@@ -2006,6 +2744,40 @@ fn value_object_ref<'a>(value: &'a Value, code: &'static str) -> Result<&'a Map,
     }
 }
 
+fn ensure_json_object_fields(
+    object: &Map,
+    allowed: &[&str],
+    code: &'static str,
+    label: &'static str,
+) -> Result<(), Error> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(validation_owned(
+            code,
+            format!("{label} contains unsupported field `{field}`."),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_exclusive_json_fields(
+    object: &Map,
+    first: &'static str,
+    second: &'static str,
+    code: &'static str,
+    label: &'static str,
+) -> Result<(), Error> {
+    if object.contains_key(first) && object.contains_key(second) {
+        return Err(validation_owned(
+            code,
+            format!("{label} must not contain both `{first}` and `{second}`."),
+        ));
+    }
+    Ok(())
+}
+
 fn verify_json_signature(
     public_key: &PublicKey,
     payload: &Value,
@@ -2016,10 +2788,8 @@ fn verify_json_signature(
 ) -> Result<(), Error> {
     let bytes =
         json::to_vec(payload).map_err(|source| Error::SerializationFailure { context, source })?;
-    let signature_bytes = BASE64_STANDARD
-        .decode(signature_base64)
-        .map_err(|_| validation(code, message))?;
-    Signature::from_bytes(&signature_bytes)
+    let signature = decode_signature_base64(signature_base64, code, message)?;
+    signature
         .verify(public_key, &bytes)
         .map_err(|_| validation(code, message))
 }
@@ -2073,6 +2843,30 @@ mod tests {
 
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-v2-platform-attestation";
+
+    fn sample_p256_assertion_key() -> Vec<u8> {
+        hex::decode(concat!(
+            "04",
+            "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+        ))
+        .expect("sample P-256 base point decodes")
+    }
+
+    fn alternate_p256_assertion_key() -> Vec<u8> {
+        hex::decode(concat!(
+            "04",
+            "7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978",
+            "07775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1",
+        ))
+        .expect("alternate P-256 point decodes")
+    }
+
+    fn off_curve_p256_assertion_key() -> Vec<u8> {
+        let mut key = vec![0; 65];
+        key[0] = 0x04;
+        key
+    }
 
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2149,7 +2943,6 @@ mod tests {
             ("device_id", string_value("device-1")),
             ("offline_public_key", string_value(&offline_public_key)),
             ("assertion_public_key", string_value(assertion_key_hex)),
-            ("assertion_usage_count_limit", number_value(1)),
             (
                 "attestation_report_base64",
                 string_value(BASE64_STANDARD.encode(REPORT_BYTES)),
@@ -2248,8 +3041,41 @@ mod tests {
         Value::Object(map)
     }
 
+    fn resign_attestation_receipt(verifier: &KeyPair, mut receipt: Value) -> Value {
+        let Value::Object(map) = &mut receipt else {
+            panic!("expected receipt object");
+        };
+        map.remove("signature_base64");
+
+        let signature = {
+            let bytes = json::to_vec(&receipt).expect("receipt json");
+            checked_signature(verifier, &bytes)
+        };
+        let Value::Object(map) = &mut receipt else {
+            panic!("expected receipt object");
+        };
+        map.insert(
+            "signature_base64".to_string(),
+            string_value(BASE64_STANDARD.encode(signature.payload())),
+        );
+        receipt
+    }
+
     fn replace_attestation_receipt(request: &mut ParsedOfflineRequest, receipt: Value) {
         insert_field(&mut request.device_binding, "attestation_receipt", receipt);
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
+    }
+
+    fn insert_device_binding_field(
+        request: &mut ParsedOfflineRequest,
+        field: &str,
+        field_value: Value,
+    ) {
+        insert_field(&mut request.device_binding, field, field_value);
         insert_field(
             &mut request.value,
             "device_binding",
@@ -2262,6 +3088,23 @@ mod tests {
             panic!("expected object");
         };
         map.insert(field.to_string(), field_value);
+    }
+
+    fn remove_field(value: &mut Value, field: &str) {
+        let Value::Object(map) = value else {
+            panic!("expected object");
+        };
+        map.remove(field);
+    }
+
+    fn rename_field(value: &mut Value, from: &str, to: &str) {
+        let Value::Object(map) = value else {
+            panic!("expected object");
+        };
+        let field_value = map
+            .remove(from)
+            .unwrap_or_else(|| panic!("missing field {from}"));
+        map.insert(to.to_string(), field_value);
     }
 
     fn offline_v2_fixture() -> Value {
@@ -2476,6 +3319,46 @@ mod tests {
     }
 
     #[test]
+    fn redeem_route_rejects_norito_redemption_unknown_field() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![
+                ("norito_base64", string_value(&encoded)),
+                ("debug_trace", string_value("must-not-be-ignored")),
+            ]),
+        );
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_norito_redemption_surrounding_whitespace() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![(
+                "norito_base64",
+                string_value(format!("\n{encoded}\t")),
+            )]),
+        );
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
     fn redeem_route_rejects_stale_fixture_certificate_version() {
         let mut request = fixture_redeem_request();
         let mut model = fixture_redeem_model();
@@ -2509,6 +3392,274 @@ mod tests {
     }
 
     #[test]
+    fn redeem_route_accepts_structured_redemption_legacy_aliases() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        rename_field(&mut redemption, "sender_key_certificate", "key_certificate");
+        let proof = redemption
+            .get_mut("recursive_proof")
+            .expect("recursive proof");
+        rename_field(proof, "verifier_key_id", "verifier_key_name");
+        rename_field(proof, "public_inputs_hash_hex", "public_inputs_hash");
+        insert_field(&mut request.value, "redemption", redemption);
+
+        let parsed = parse_redemption(&request).expect("legacy structured redemption parses");
+
+        assert_eq!(parsed, model);
+    }
+
+    #[test]
+    fn redeem_route_accepts_issuer_key_certificate_json_envelope() {
+        let (issuer, _) = sample_issuer();
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let assertion_key = sample_p256_assertion_key();
+        let public_key = decode_canonical_base64(
+            &request.offline_public_key,
+            "offline_public_key",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+        )
+        .expect("fixture offline public key");
+        let attestation = VerifiedDeviceAttestation {
+            platform: "ios-app-attest".to_string(),
+            key_id: "issuer-envelope-key".to_string(),
+            public_key,
+            public_key_base64: request.offline_public_key.clone(),
+            assertion_scheme: "apple-app-attest-v1".to_string(),
+            assertion_key_algorithm: "ecdsa-p256-sha256".to_string(),
+            assertion_public_key: assertion_key.clone(),
+            assertion_public_key_base64: BASE64_STANDARD.encode(&assertion_key),
+            assertion_usage_count_limit: None,
+        };
+        let certificate =
+            build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
+        let mut redemption = redemption_json(&model);
+        insert_field(&mut redemption, "sender_key_certificate", certificate);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        let parsed = parse_redemption(&request).expect("issuer envelope certificate parses");
+
+        assert_eq!(parsed.sender_key_certificate.account_id, request.account_id);
+        assert_eq!(
+            parsed.sender_key_certificate.assertion_public_key,
+            assertion_key
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_redemption_unknown_field() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        insert_field(
+            &mut redemption,
+            "debug_trace",
+            string_value("must-not-be-ignored"),
+        );
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_redemption_hash_surrounding_whitespace() {
+        for field in ["source_note_commitment", "input_nullifiers"] {
+            let mut request = fixture_redeem_request();
+            let model = chain_admissible_fixture_redeem_model();
+            let mut redemption = redemption_json(&model);
+            if field == "source_note_commitment" {
+                let original = required_string(&redemption, field)
+                    .expect("source note commitment")
+                    .to_string();
+                insert_field(&mut redemption, field, string_value(format!(" {original}")));
+            } else {
+                let nullifiers = redemption
+                    .get_mut(field)
+                    .and_then(Value::as_array_mut)
+                    .expect("input nullifiers");
+                let original = nullifiers
+                    .first()
+                    .and_then(Value::as_str)
+                    .expect("input nullifier")
+                    .to_string();
+                nullifiers[0] = string_value(format!("{original}\n"));
+            }
+            insert_field(&mut request.value, "redemption", redemption);
+
+            assert_eq!(
+                validation_code(parse_redemption(&request)),
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "structured redemption field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_certificate_alias_ambiguity() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let certificate = redemption
+            .get("sender_key_certificate")
+            .expect("sender key certificate")
+            .clone();
+        insert_field(&mut redemption, "key_certificate", certificate);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_certificate_unknown_field() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let certificate = redemption
+            .get_mut("sender_key_certificate")
+            .expect("sender key certificate");
+        insert_field(
+            certificate,
+            "verifier_debug_trace",
+            string_value("must-not-be-ignored"),
+        );
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_certificate_surrounding_whitespace() {
+        for field in [
+            "platform",
+            "key_id",
+            "device_id",
+            "public_key",
+            "assertion_scheme",
+            "assertion_key_algorithm",
+            "assertion_public_key",
+            "issuer_signature_base64",
+        ] {
+            let mut request = fixture_redeem_request();
+            let model = chain_admissible_fixture_redeem_model();
+            let mut redemption = redemption_json(&model);
+            let certificate = redemption
+                .get_mut("sender_key_certificate")
+                .expect("sender key certificate");
+            let original = required_string(certificate, field)
+                .unwrap_or_else(|_| panic!("missing certificate field {field}"))
+                .to_string();
+            insert_field(certificate, field, string_value(format!(" {original}\t")));
+            insert_field(&mut request.value, "redemption", redemption);
+
+            assert_eq!(
+                validation_code(parse_redemption(&request)),
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "key certificate field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_recursive_proof_unknown_field() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let proof = redemption
+            .get_mut("recursive_proof")
+            .expect("recursive proof");
+        insert_field(proof, "debug_trace", string_value("must-not-be-ignored"));
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_recursive_proof_surrounding_whitespace() {
+        for field in [
+            "backend",
+            "verifier_key_id",
+            "public_inputs_hash_hex",
+            "proof_bytes_base64",
+        ] {
+            let mut request = fixture_redeem_request();
+            let model = chain_admissible_fixture_redeem_model();
+            let mut redemption = redemption_json(&model);
+            let proof = redemption
+                .get_mut("recursive_proof")
+                .expect("recursive proof");
+            if proof.get(field).is_none() {
+                insert_field(proof, "backend", string_value("halo2/ipa"));
+            }
+            let original = required_string(proof, field)
+                .unwrap_or_else(|_| panic!("missing recursive proof field {field}"))
+                .to_string();
+            insert_field(proof, field, string_value(format!("\t{original}")));
+            insert_field(&mut request.value, "redemption", redemption);
+
+            assert_eq!(
+                validation_code(parse_redemption(&request)),
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "recursive proof field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_recursive_proof_verifier_alias_ambiguity() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let proof = redemption
+            .get_mut("recursive_proof")
+            .expect("recursive proof");
+        let verifier_key_id = proof
+            .get("verifier_key_id")
+            .expect("verifier key id")
+            .clone();
+        insert_field(proof, "verifier_key_name", verifier_key_id);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_recursive_proof_public_input_alias_ambiguity() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let proof = redemption
+            .get_mut("recursive_proof")
+            .expect("recursive proof");
+        let public_inputs_hash = proof
+            .get("public_inputs_hash_hex")
+            .expect("public inputs hash")
+            .clone();
+        insert_field(proof, "public_inputs_hash", public_inputs_hash);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
     fn redeem_route_accepts_legacy_structured_certificate_json_version_two() {
         let mut request = fixture_redeem_request();
         let model = chain_admissible_fixture_redeem_model();
@@ -2528,6 +3679,118 @@ mod tests {
         assert_eq!(
             parsed.sender_key_certificate.version,
             OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_ios_certificate_with_usage_limit() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let certificate = redemption
+            .get_mut("sender_key_certificate")
+            .expect("sender key certificate");
+        insert_field(certificate, "assertion_usage_count_limit", number_value(1));
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_android_certificate_without_usage_limit() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let certificate = redemption
+            .get_mut("sender_key_certificate")
+            .expect("sender key certificate");
+        insert_field(certificate, "platform", string_value("android-keymint"));
+        insert_field(
+            certificate,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            certificate,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        insert_field(certificate, "assertion_usage_count_limit", Value::Null);
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_certificate_profile_splice() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let certificate = redemption
+            .get_mut("sender_key_certificate")
+            .expect("sender key certificate");
+        insert_field(certificate, "platform", string_value("ios-appattest"));
+        insert_field(
+            certificate,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            certificate,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        insert_field(certificate, "assertion_usage_count_limit", number_value(1));
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_structured_certificate_off_curve_assertion_key() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let certificate = redemption
+            .get_mut("sender_key_certificate")
+            .expect("sender key certificate");
+        insert_field(
+            certificate,
+            "assertion_public_key",
+            string_value(BASE64_STANDARD.encode(off_curve_p256_assertion_key())),
+        );
+        insert_field(&mut request.value, "redemption", redemption);
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_norito_certificate_profile_mismatch() {
+        let mut request = fixture_redeem_request();
+        let mut model = chain_admissible_fixture_redeem_model();
+        model.sender_key_certificate.assertion_usage_count_limit = Some(1);
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![("norito_base64", string_value(&encoded))]),
+        );
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
         );
     }
 
@@ -2553,7 +3816,7 @@ mod tests {
     fn verified_attestation_canonicalizes_certificate_key_bytes() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let request = sample_request(&verifier, note_key, assertion_key.clone());
 
         let attestation =
@@ -2590,9 +3853,31 @@ mod tests {
     }
 
     #[test]
+    fn build_key_certificate_rejects_padded_ios_metadata() {
+        for field in ["ios_team_id", "ios_bundle_id", "ios_environment"] {
+            let (issuer, verifier) = sample_issuer();
+            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+            insert_field(&mut request.device_binding, field, string_value(" value "));
+            let attestation =
+                verify_device_attestation(&issuer, &request, NOW_MS).expect("attestation");
+
+            assert_eq!(
+                validation_code(build_key_certificate(
+                    &issuer,
+                    &request,
+                    &attestation,
+                    NOW_MS
+                )),
+                "OFFLINE_V2_INVALID_DEVICE_BINDING",
+                "iOS metadata field {field} must be exact when present"
+            );
+        }
+    }
+
+    #[test]
     fn attestation_receipt_rejects_wrong_verifier_signature() {
         let (mut issuer, verifier) = sample_issuer();
-        let request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         issuer.attestation_verifier_public_key = checked_seed_keypair(0x23).public_key().clone();
 
         assert_eq!(
@@ -2602,10 +3887,170 @@ mod tests {
     }
 
     #[test]
+    fn attestation_receipt_rejects_request_device_binding_surrounding_whitespace() {
+        for (field, value, expected_code) in [
+            (
+                "attestation_report_base64",
+                BASE64_STANDARD.encode(REPORT_BYTES),
+                "OFFLINE_V2_INVALID_ATTESTATION_REPORT",
+            ),
+            (
+                "assertion_public_key",
+                hex::encode(sample_p256_assertion_key()),
+                "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
+            ),
+            (
+                "platform",
+                "ios-app-attest".to_string(),
+                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            ),
+            (
+                "assertion_scheme",
+                "apple-app-attest-v1".to_string(),
+                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            ),
+            (
+                "assertion_key_algorithm",
+                "ecdsa-p256-sha256".to_string(),
+                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            ),
+        ] {
+            let (issuer, verifier) = sample_issuer();
+            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+            insert_field(
+                &mut request.device_binding,
+                field,
+                string_value(format!("\t{value} ")),
+            );
+
+            assert_eq!(
+                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+                expected_code,
+                "device_binding field {field} must be exact when present"
+            );
+        }
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_short_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(
+            &mut receipt,
+            "signature_base64",
+            string_value(BASE64_STANDARD.encode([0_u8; 63])),
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_unsupported_version() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "version", number_value(2));
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_unknown_field() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(
+            &mut receipt,
+            "debug_verifier_trace",
+            string_value("must-not-be-signed-into-receipts"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_surrounding_whitespace() {
+        for field in [
+            "account_id",
+            "device_id",
+            "platform",
+            "attestation_key_id",
+            "offline_public_key_base64",
+        ] {
+            let (issuer, verifier) = sample_issuer();
+            let note_key = [0xA5; 32];
+            let assertion_key = sample_p256_assertion_key();
+            let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+            let mut receipt = signed_attestation_receipt(
+                &verifier,
+                &request.account_literal,
+                &request.device_id,
+                &note_key,
+                &assertion_key,
+                true,
+            );
+            let original = required_string(&receipt, field)
+                .unwrap_or_else(|_| panic!("missing receipt field {field}"))
+                .to_string();
+            insert_field(&mut receipt, field, string_value(format!("\t{original}\n")));
+            let receipt = resign_attestation_receipt(&verifier, receipt);
+            replace_attestation_receipt(&mut request, receipt);
+
+            assert_eq!(
+                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+                "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
+                "signed receipt field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
     fn attestation_receipt_rejects_signed_account_replay() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
         let receipt = signed_attestation_receipt(
             &verifier,
@@ -2627,7 +4072,7 @@ mod tests {
     fn attestation_receipt_rejects_signed_device_replay() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
         let receipt = signed_attestation_receipt(
             &verifier,
@@ -2649,7 +4094,7 @@ mod tests {
     fn attestation_receipt_rejects_signed_note_key_replay() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
         let replayed_note_key = [0xC7; 32];
         let receipt = signed_attestation_receipt(
@@ -2672,9 +4117,9 @@ mod tests {
     fn attestation_receipt_rejects_signed_assertion_key_replay() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let replayed_assertion_key = vec![0xD8; 65];
+        let replayed_assertion_key = alternate_p256_assertion_key();
         let receipt = signed_attestation_receipt(
             &verifier,
             &request.account_literal,
@@ -2692,10 +4137,419 @@ mod tests {
     }
 
     #[test]
+    fn attestation_receipt_rejects_mismatched_assertion_public_key_aliases() {
+        for field in ["app_attest_public_key_base64", "device_public_key"] {
+            let (issuer, verifier) = sample_issuer();
+            let assertion_key = sample_p256_assertion_key();
+            let mut request = sample_request(&verifier, [0xA5; 32], assertion_key);
+            insert_device_binding_field(
+                &mut request,
+                field,
+                string_value(BASE64_STANDARD.encode(alternate_p256_assertion_key())),
+            );
+
+            assert_eq!(
+                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+                "OFFLINE_V2_ASSERTION_PUBLIC_KEY_MISMATCH",
+                "mismatched {field} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_malformed_assertion_public_key() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_public_key_base64",
+            string_value("!!!!"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_off_curve_assertion_public_key() {
+        let (issuer, verifier) = sample_issuer();
+        let request = sample_request(&verifier, [0xA5; 32], off_curve_p256_assertion_key());
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_accepts_signed_canonical_ios_profile() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("apple-appattest-counter-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("app-attest-p256"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        let attestation =
+            verify_device_attestation(&issuer, &request, NOW_MS).expect("canonical iOS profile");
+        assert_eq!(attestation.platform, "ios-appattest");
+        assert_eq!(attestation.assertion_scheme, "apple-appattest-counter-v1");
+        assert_eq!(attestation.assertion_key_algorithm, "app-attest-p256");
+    }
+
+    #[test]
+    fn attestation_receipt_accepts_signed_android_keymint_profile() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        insert_field(
+            &mut request.device_binding,
+            "assertion_usage_count_limit",
+            number_value(1),
+        );
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("android-keymint"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        insert_field(&mut receipt, "assertion_usage_count_limit", number_value(1));
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        let attestation = verify_device_attestation(&issuer, &request, NOW_MS)
+            .expect("canonical Android KeyMint profile");
+        assert_eq!(attestation.platform, "android-keymint");
+        assert_eq!(
+            attestation.assertion_scheme,
+            "android-keymint-ecdsa-p256-usage-limit-v1"
+        );
+        assert_eq!(attestation.assertion_key_algorithm, "ecdsa-p256-sha256");
+        assert_eq!(attestation.assertion_usage_count_limit, Some(1));
+        let certificate =
+            build_chain_certificate(&issuer, &request, &attestation).expect("chain certificate");
+        assert_eq!(certificate.assertion_usage_count_limit, Some(1));
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_ios_profile_with_usage_limit() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        insert_field(
+            &mut request.device_binding,
+            "assertion_usage_count_limit",
+            number_value(1),
+        );
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
+        let receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_canonical_ios_profile_with_usage_limit() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        insert_field(
+            &mut request.device_binding,
+            "assertion_usage_count_limit",
+            number_value(1),
+        );
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("apple-appattest-counter-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("app-attest-p256"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_unsupported_platform() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("browser-webauthn"));
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_profile_splice() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_android_profile_without_usage_limit() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        insert_field(
+            &mut request.device_binding,
+            "assertion_usage_count_limit",
+            number_value(1),
+        );
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("android-keymint"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_android_request_missing_signed_usage_limit() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("android-keymint"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        insert_field(&mut receipt, "assertion_usage_count_limit", number_value(1));
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_malformed_usage_limit() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        insert_field(
+            &mut request.device_binding,
+            "assertion_usage_count_limit",
+            number_value(1),
+        );
+        insert_field(
+            &mut request.value,
+            "device_binding",
+            request.device_binding.clone(),
+        );
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("android-keymint"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("ecdsa-p256-sha256"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_usage_count_limit",
+            string_value("1"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
     fn attestation_receipt_rejects_signed_non_one_use_hardware() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
         let receipt = signed_attestation_receipt(
             &verifier,
@@ -2717,7 +4571,7 @@ mod tests {
     fn attestation_receipt_rejects_expired_signed_receipt() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
         let receipt = signed_attestation_receipt_with_validity(
             &verifier,
@@ -2739,10 +4593,60 @@ mod tests {
     }
 
     #[test]
+    fn attestation_receipt_rejects_not_yet_valid_signed_receipt() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt_with_validity(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+            REPORT_BYTES,
+            NOW_MS + 1,
+            NOW_MS + 60_000,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_inverted_signed_validity_window() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let receipt = signed_attestation_receipt_with_validity(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+            REPORT_BYTES,
+            NOW_MS - 1_000,
+            NOW_MS - 2_000,
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED"
+        );
+    }
+
+    #[test]
     fn attestation_receipt_rejects_signed_report_hash_replay() {
         let (issuer, verifier) = sample_issuer();
         let note_key = [0xA5; 32];
-        let assertion_key = vec![0xB6; 65];
+        let assertion_key = sample_p256_assertion_key();
         let mut request = sample_request(&verifier, note_key, assertion_key.clone());
         let receipt = signed_attestation_receipt_with_validity(
             &verifier,
@@ -2764,9 +4668,65 @@ mod tests {
     }
 
     #[test]
+    fn attestation_receipt_rejects_signed_malformed_report_hash() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(
+            &mut receipt,
+            "attestation_report_hash_hex",
+            string_value("not-hex"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_signed_short_report_hash() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(
+            &mut receipt,
+            "attestation_report_hash_hex",
+            string_value("aa"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH"
+        );
+    }
+
+    #[test]
     fn attestation_receipt_rejects_mismatched_device_binding_profile() {
         let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         insert_field(
             &mut request.device_binding,
             "assertion_scheme",
@@ -2782,7 +4742,7 @@ mod tests {
     #[test]
     fn attestation_receipt_rejects_non_one_assertion_usage_limit() {
         let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         insert_field(
             &mut request.device_binding,
             "assertion_usage_count_limit",
@@ -2798,7 +4758,7 @@ mod tests {
     #[test]
     fn attestation_receipt_is_required_before_one_use_certification() {
         let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         let Value::Object(binding) = &mut request.device_binding else {
             panic!("expected binding object");
         };
@@ -2813,7 +4773,7 @@ mod tests {
     #[test]
     fn malformed_assertion_key_is_rejected_instead_of_falling_back() {
         let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         insert_field(
             &mut request.device_binding,
             "assertion_public_key",
@@ -2829,7 +4789,7 @@ mod tests {
     #[test]
     fn issue_lineage_state_uses_signed_balance_and_rejects_tampering() {
         let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         let lineage_id = "lineage-signed-balance";
         let state = build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
             .expect("lineage state");
@@ -2853,9 +4813,206 @@ mod tests {
     }
 
     #[test]
+    fn issue_lineage_state_rejects_unknown_field() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+        let lineage_id = "lineage-unknown-state-field";
+        let mut state =
+            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                .expect("lineage state");
+        insert_field(
+            &mut state,
+            "debug_trace",
+            string_value("must-not-be-ignored"),
+        );
+        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+        insert_field(&mut request.value, "lineage_state", state);
+
+        assert_eq!(
+            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+            "OFFLINE_V2_INVALID_LINEAGE_STATE"
+        );
+    }
+
+    #[test]
+    fn issue_lineage_state_rejects_signed_surrounding_whitespace() {
+        for field in [
+            "lineage_id",
+            "account_id",
+            "device_id",
+            "offline_public_key",
+            "asset_definition_id",
+            "balance",
+            "locked_balance",
+            "server_state_hash",
+            "issuer_signature_base64",
+        ] {
+            let (issuer, verifier) = sample_issuer();
+            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+            let lineage_id = "lineage-state-whitespace";
+            let mut state =
+                build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                    .expect("lineage state");
+            let original = required_string(&state, field)
+                .unwrap_or_else(|_| panic!("missing lineage_state field {field}"))
+                .to_string();
+            insert_field(&mut state, field, string_value(format!("\n{original}\t")));
+            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+            insert_field(&mut request.value, "lineage_state", state);
+
+            assert_eq!(
+                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+                "OFFLINE_V2_INVALID_LINEAGE_STATE",
+                "lineage_state field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn issue_lineage_state_rejects_short_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+        let lineage_id = "lineage-state-short-signature";
+        let mut state =
+            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                .expect("lineage state");
+        insert_field(
+            &mut state,
+            "issuer_signature_base64",
+            string_value(BASE64_STANDARD.encode([0_u8; 63])),
+        );
+        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+        insert_field(&mut request.value, "lineage_state", state);
+
+        assert_eq!(
+            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+            "OFFLINE_V2_LINEAGE_STATE_SIGNATURE_INVALID"
+        );
+    }
+
+    #[test]
+    fn issue_lineage_authorization_rejects_unknown_field() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+        let lineage_id = "lineage-unknown-authorization-field";
+        let mut state =
+            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                .expect("lineage state");
+        let authorization = state
+            .get_mut("authorization")
+            .expect("lineage authorization");
+        insert_field(
+            authorization,
+            "debug_trace",
+            string_value("must-not-be-ignored"),
+        );
+        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+        insert_field(&mut request.value, "lineage_state", state);
+
+        assert_eq!(
+            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION"
+        );
+    }
+
+    #[test]
+    fn issue_lineage_authorization_rejects_signed_surrounding_whitespace() {
+        for field in [
+            "authorization_id",
+            "lineage_id",
+            "account_id",
+            "verdict_id",
+            "max_balance",
+            "max_tx_value",
+            "issuer_signature_base64",
+        ] {
+            let (issuer, verifier) = sample_issuer();
+            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+            let lineage_id = "lineage-authorization-whitespace";
+            let mut state =
+                build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                    .expect("lineage state");
+            let authorization = state
+                .get_mut("authorization")
+                .expect("lineage authorization");
+            let original = required_string(authorization, field)
+                .unwrap_or_else(|_| panic!("missing lineage authorization field {field}"))
+                .to_string();
+            insert_field(authorization, field, string_value(format!(" {original}\n")));
+            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+            insert_field(&mut request.value, "lineage_state", state);
+
+            assert_eq!(
+                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+                "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+                "lineage authorization field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn issue_lineage_authorization_rejects_short_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+        let lineage_id = "lineage-authorization-short-signature";
+        let mut state =
+            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                .expect("lineage state");
+        let authorization = state
+            .get_mut("authorization")
+            .expect("lineage authorization");
+        insert_field(
+            authorization,
+            "issuer_signature_base64",
+            string_value(BASE64_STANDARD.encode([0_u8; 63])),
+        );
+        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+        insert_field(&mut request.value, "lineage_state", state);
+
+        assert_eq!(
+            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+            "OFFLINE_V2_LINEAGE_AUTHORIZATION_SIGNATURE_INVALID"
+        );
+    }
+
+    #[test]
+    fn issue_lineage_authorization_device_binding_rejects_surrounding_whitespace() {
+        for field in ["device_id", "offline_public_key"] {
+            let (issuer, verifier) = sample_issuer();
+            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
+            let lineage_id = "lineage-authorization-device-binding-whitespace";
+            let mut state =
+                build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+                    .expect("lineage state");
+            let authorization = state
+                .get_mut("authorization")
+                .expect("lineage authorization");
+            let device_binding = authorization
+                .get_mut("device_binding")
+                .expect("authorization device_binding");
+            let original = required_string(device_binding, field)
+                .unwrap_or_else(|_| panic!("missing authorization device_binding field {field}"))
+                .to_string();
+            insert_field(
+                device_binding,
+                field,
+                string_value(format!("\t{original} ")),
+            );
+            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+            insert_field(&mut request.value, "lineage_state", state);
+
+            assert_eq!(
+                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+                "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
+                "lineage authorization device_binding field {field} must not be whitespace-normalized"
+            );
+        }
+    }
+
+    #[test]
     fn refill_existing_lineage_accepts_signed_old_key_state() {
         let (issuer, verifier) = sample_issuer();
-        let old_request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let old_request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
         let lineage_id = "lineage-rekey";
         let state = build_lineage_state(
             &issuer,
@@ -2868,7 +5025,7 @@ mod tests {
             None,
         )
         .expect("lineage state");
-        let mut new_request = sample_request(&verifier, [0xC7; 32], vec![0xD8; 65]);
+        let mut new_request = sample_request(&verifier, [0xC7; 32], alternate_p256_assertion_key());
         insert_field(&mut new_request.value, "lineage_state", state);
 
         assert_eq!(
@@ -2898,6 +5055,36 @@ mod tests {
             app_error_code(reject_legacy_auth_headers(&headers)),
             "OFFLINE_V2_HEADER_AUTH_REJECTED"
         );
+    }
+
+    #[test]
+    fn body_auth_rejects_non_exact_optional_device_header() {
+        let empty = HeaderMap::new();
+        assert_eq!(
+            optional_exact_header_string(&empty, "X-Device-Id").expect("missing header"),
+            None
+        );
+
+        let mut exact = HeaderMap::new();
+        exact.insert(
+            "X-Device-Id",
+            axum::http::HeaderValue::from_static("device-1"),
+        );
+        assert_eq!(
+            optional_exact_header_string(&exact, "X-Device-Id").expect("exact header"),
+            Some("device-1")
+        );
+
+        for value in [" device-1", "device-1 ", "   "] {
+            let mut headers = HeaderMap::new();
+            headers.insert("X-Device-Id", axum::http::HeaderValue::from_static(value));
+
+            assert_eq!(
+                validation_code(optional_exact_header_string(&headers, "X-Device-Id")),
+                "OFFLINE_V2_INVALID_HEADER",
+                "X-Device-Id header value `{value}` must be exact"
+            );
+        }
     }
 
     #[test]
@@ -2945,6 +5132,65 @@ mod tests {
             nested.get("witness_base64").and_then(Value::as_str),
             Some("nested-witness")
         );
+    }
+
+    #[test]
+    fn body_auth_rejects_non_exact_body_proof_fields() {
+        for (field, field_value) in [
+            ("signature_base64", string_value("\tAA==\n")),
+            ("witness_base64", string_value(" AA==")),
+            ("signature_base64", string_value("")),
+            ("witness_base64", Value::Null),
+            ("signature_base64", number_value(1)),
+        ] {
+            let value = json_object(vec![
+                ("account_id", string_value("account-1")),
+                ("timestamp_ms", number_value(NOW_MS)),
+                ("nonce", string_value("nonce-1")),
+                (field, field_value),
+            ]);
+
+            assert_eq!(
+                app_error_code(extract_body_auth(&value)),
+                "OFFLINE_V2_SIGNATURE_INVALID",
+                "body proof field {field} must be exact when present"
+            );
+        }
+    }
+
+    #[test]
+    fn body_auth_rejects_non_exact_account_and_nonce() {
+        for (field, field_value) in [
+            ("account_id", string_value(" account-1 ")),
+            ("nonce", string_value("\tnonce-1\n")),
+        ] {
+            let value = json_object(vec![
+                (
+                    "account_id",
+                    if field == "account_id" {
+                        field_value.clone()
+                    } else {
+                        string_value("account-1")
+                    },
+                ),
+                ("timestamp_ms", number_value(NOW_MS)),
+                (
+                    "nonce",
+                    if field == "nonce" {
+                        field_value
+                    } else {
+                        string_value("nonce-1")
+                    },
+                ),
+                ("signature_base64", string_value("top-level-signature")),
+            ]);
+
+            assert_eq!(
+                app_error_code(extract_body_auth(&value)),
+                "OFFLINE_V2_MISSING_FIELD",
+                "body auth field {field} must be exact"
+            );
+        }
     }
 
     #[test]

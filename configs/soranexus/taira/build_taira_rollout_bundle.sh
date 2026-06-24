@@ -223,8 +223,13 @@ payload = {
         "render and install the shared-edge nginx config from the same validator roster before public cutover, preferably with "
         "configs/soranexus/taira/install_taira_edge_nginx_conf.sh and local-roster [[soracloud_alias_routes]] entries for dedicated runtime aliases such as solswap-indexer.sora",
         "restart the validator with the shipped taira-irohad.service or equivalent",
+        "run configs/soranexus/taira/check_mcp_rollout.sh --public-root https://<public-torii-root> --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "
+        + os.environ["GIT_HEAD"]
+        + " after the node is back, so stale public edges fail before live scenario acceptance",
         "run configs/soranexus/taira/check_sorafs_rollout.sh after the node is back",
-        "run configs/soranexus/taira/verify_soraswap_rollout.sh with its default local SoraSwap regressions enabled after the node is back",
+        "run configs/soranexus/taira/verify_soraswap_rollout.sh --expected-git-sha "
+        + os.environ["GIT_HEAD"]
+        + " with its default local SoraSwap regressions enabled after the node is back",
     ],
 }
 print(json.dumps(payload, indent=2, sort_keys=True))
