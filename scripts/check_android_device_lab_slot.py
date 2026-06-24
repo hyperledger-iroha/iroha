@@ -1292,6 +1292,45 @@ def _summary_release_d2d_payment_transports(
     return []
 
 
+def _summary_release_d2d_payment_transport_coverage_by_family(
+    reports: list[dict],
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> dict[str, list[str]]:
+    """Return complete release D2D transport coverage by standard device family."""
+
+    coverage: dict[str, set[str]] = {
+        family: set() for family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    }
+    for report in reports:
+        family = _summary_release_device_family(
+            report,
+            trusted_signer_public_key_sha256,
+        )
+        if family is None:
+            continue
+        coverage[family].update(
+            _summary_release_d2d_payment_transports(
+                report,
+                trusted_signer_public_key_sha256,
+            )
+        )
+    return {family: sorted(transports) for family, transports in coverage.items()}
+
+
+def _missing_summary_release_d2d_payment_transport_pairs(
+    coverage_by_family: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Return required standard-family D2D transport pairs without evidence."""
+
+    missing: list[dict[str, str]] = []
+    for family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+        covered = set(coverage_by_family.get(family, []))
+        for transport in sorted(D2D_PAYMENT_TRANSPORTS):
+            if transport not in covered:
+                missing.append({"device_family": family, "transport": transport})
+    return missing
+
+
 def _summary_reports_for_release_output(
     reports: list[dict],
     *,
@@ -1316,6 +1355,38 @@ def _summary_reports_for_release_output(
                 summary["kagemusha"] = {}
         pruned_reports.append(summary)
     return pruned_reports
+
+
+def _summary_duplicate_matrix_values(
+    kagemusha: dict[str, Any],
+    field: str,
+) -> set[str]:
+    """Return canonical duplicate-binding values from a release Kagemusha report."""
+
+    values: set[str] = set()
+    value = kagemusha.get(field)
+    if (
+        isinstance(value, str)
+        and SHA256_HEX_RE.fullmatch(value)
+        and value != "0" * 64
+    ):
+        values.add(value)
+    if field != "d2d_payment_transcript_sha256":
+        return values
+    transcripts = kagemusha.get(D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if not isinstance(transcripts, dict):
+        return values
+    for entry in transcripts.values():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("sha256")
+        if (
+            isinstance(digest, str)
+            and SHA256_HEX_RE.fullmatch(digest)
+            and digest != "0" * 64
+        ):
+            values.add(digest)
+    return values
 
 
 def infer_kagemusha_device_family(
@@ -5228,6 +5299,17 @@ def build_summary(
             for transport in sorted(D2D_PAYMENT_TRANSPORTS)
             if transport not in covered_d2d_payment_transports
         ]
+        covered_d2d_payment_transports_by_family = (
+            _summary_release_d2d_payment_transport_coverage_by_family(
+                summary_reports,
+                trusted_signer_public_key_sha256,
+            )
+        )
+        missing_d2d_payment_transport_pairs = (
+            _missing_summary_release_d2d_payment_transport_pairs(
+                covered_d2d_payment_transports_by_family,
+            )
+        )
         summary["kagemusha"] = {
             "production_evidence_required": require_kagemusha_production_evidence,
             "standard_matrix_required": require_kagemusha_standard_matrix,
@@ -5237,6 +5319,8 @@ def build_summary(
             "required_d2d_payment_transports": sorted(D2D_PAYMENT_TRANSPORTS),
             "covered_d2d_payment_transports": covered_d2d_payment_transports,
             "missing_d2d_payment_transports": missing_d2d_payment_transports,
+            "covered_d2d_payment_transports_by_family": covered_d2d_payment_transports_by_family,
+            "missing_d2d_payment_transport_pairs": missing_d2d_payment_transport_pairs,
             "duplicate_bindings": kagemusha_duplicate_matrix_bindings(
                 summary_reports,
                 require_complete_signed_evidence=require_complete_kagemusha,
@@ -5259,11 +5343,15 @@ def kagemusha_duplicate_matrix_bindings(
     require_complete_signed_evidence: bool = False,
     trusted_signer_public_key_sha256: frozenset[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return duplicated physical-device bindings without exposing raw values."""
+    """Return duplicated release matrix bindings without exposing raw values."""
 
     duplicates: dict[str, list[dict[str, Any]]] = {}
-    for field in ("device_fingerprint_sha256", "attestation_challenge_sha256"):
-        seen: dict[str, list[str]] = {}
+    for field in (
+        "device_fingerprint_sha256",
+        "attestation_challenge_sha256",
+        "d2d_payment_transcript_sha256",
+    ):
+        seen: dict[str, set[str]] = {}
         for report in reports:
             if report.get("status") != "ok":
                 continue
@@ -5278,15 +5366,10 @@ def kagemusha_duplicate_matrix_bindings(
             )
             if kagemusha is None:
                 continue
-            value = kagemusha.get(field)
-            if (
-                not isinstance(slot, str)
-                or not isinstance(value, str)
-                or not SHA256_HEX_RE.fullmatch(value)
-                or value == "0" * 64
-            ):
+            if not isinstance(slot, str):
                 continue
-            seen.setdefault(value, []).append(_display_slot_name(slot))
+            for value in _summary_duplicate_matrix_values(kagemusha, field):
+                seen.setdefault(value, set()).add(_display_slot_name(slot))
         for value, slots in sorted(seen.items()):
             if len(slots) <= 1:
                 continue
@@ -5879,6 +5962,17 @@ def main(argv: list[str] | None = None) -> int:
             for transport in sorted(D2D_PAYMENT_TRANSPORTS)
             if transport not in covered_d2d_payment_transports
         ]
+        covered_d2d_payment_transports_by_family = (
+            _summary_release_d2d_payment_transport_coverage_by_family(
+                reports,
+                trusted_signer_public_key_sha256,
+            )
+        )
+        missing_d2d_payment_transport_pairs = (
+            _missing_summary_release_d2d_payment_transport_pairs(
+                covered_d2d_payment_transports_by_family,
+            )
+        )
         if missing:
             failures += 1
             print(
@@ -5886,12 +5980,15 @@ def main(argv: list[str] | None = None) -> int:
                 + ", ".join(missing),
                 file=sys.stderr,
             )
-        if missing_d2d_payment_transports:
+        if missing_d2d_payment_transports or missing_d2d_payment_transport_pairs:
             failures += 1
             print(
-                "[device-lab] missing Kagemusha production evidence for D2D "
-                "payment transports: "
-                + ", ".join(missing_d2d_payment_transports),
+                "[device-lab] missing Kagemusha production evidence for "
+                "standard-family D2D payment transports: "
+                + ", ".join(
+                    f"{item['device_family']}={item['transport']}"
+                    for item in missing_d2d_payment_transport_pairs
+                ),
                 file=sys.stderr,
             )
     if require_kagemusha:

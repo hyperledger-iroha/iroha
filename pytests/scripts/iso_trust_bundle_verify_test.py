@@ -155,6 +155,31 @@ def run_verify(argv):
 
 
 class IsoTrustBundleVerifyTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-trust-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                VERIFIER._write_text_output(
+                    link / "summary.json",
+                    "{}\n",
+                    display_label="summary_out",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("summary_out", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_trust_unknown_secret", "trust_unknown_secret"),
@@ -907,7 +932,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     root,
                     emit_profile_json=root / "nested" / ".." / "profiles.json",
                 ),
-                "output path must not contain dot or parent segments",
+                "emit_profile_json must not contain dot or parent segments",
             ),
             (
                 "summary leading dash",
@@ -915,7 +940,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     root,
                     summary_out=root / "nested" / "-trust.summary.json",
                 ),
-                "output path must not contain leading-dash path segments",
+                "summary_out must not contain leading-dash path segments",
             ),
         )
         for name, make_args, message in cases:
@@ -1085,8 +1110,9 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
+                    label = "summary_out" if flag == "--summary-out" else "emit_profile_json"
                     self.assertIn(
-                        "output path must not point to checked-in ISO fixture artifacts",
+                        f"{label} must not point to checked-in ISO fixture artifacts",
                         stderr,
                     )
                     self.assertNotIn("does not exist", stderr)
@@ -1411,6 +1437,26 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("must decode to no more than", stderr)
+
+    def test_too_many_der_objects_are_rejected_before_entry_parsing(self):
+        for key in (
+            "x509_trust_anchors",
+            "revoked_certificates",
+            "x509_crls",
+            "x509_ocsp_responses",
+        ):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle[key] = ["not-an-object"] * (VERIFIER.MAX_DER_BLOBS + 1)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{key} must not contain more than", stderr)
+                    self.assertNotIn("must be a JSON object", stderr)
 
     def test_absent_der_labels_are_omitted_from_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:

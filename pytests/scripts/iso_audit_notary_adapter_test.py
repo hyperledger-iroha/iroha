@@ -265,6 +265,31 @@ def capture_redirect_server(body=b"redirect"):
 
 
 class IsoAuditNotaryAdapterTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-audit-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER._write_text_output(
+                    link / "receipt.json",
+                    "{}\n",
+                    display_label="receipt output",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("receipt output", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
     def test_persisted_record_sources_require_records_array(self):
         with self.assertRaisesRegex(
             ADAPTER.AdapterError,
@@ -1464,6 +1489,54 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             summary = json.loads(stdout)
             self.assertEqual(summary["record_count"], [index["record_count"]])
 
+    def test_latest_anchor_missing_digest_peer_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-notary-peer-export"
+            export_dir = root / hidden
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = write_export(export_dir)
+            digest_anchor.unlink()
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--export-dir",
+                    str(export_dir),
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("anchor source latest anchor has no digest-addressed peer", stderr)
+            self.assertNotIn(str(export_dir), stderr)
+            self.assertNotIn(str(digest_anchor), stderr)
+            self.assertNotIn(hidden, stderr)
+
+    def test_latest_anchor_digest_peer_mismatch_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-notary-peer-export"
+            export_dir = root / hidden
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = write_export(export_dir)
+            digest_anchor.write_text("{\"different\": true}\n", encoding="utf-8")
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--export-dir",
+                    str(export_dir),
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("anchor source latest anchor differs from digest-addressed peer", stderr)
+            self.assertNotIn(str(export_dir), stderr)
+            self.assertNotIn(str(digest_anchor), stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_malformed_anchor_store_dir_is_rejected_before_network_delivery(self):
         def rewrite_anchor_store_dir(export_dir, store_dir):
             latest = export_dir / ADAPTER.LATEST_ANCHOR_FILE
@@ -2098,6 +2171,34 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertFalse((export_dir / "receipts").exists())
 
+    def test_receipt_output_dir_path_diagnostics_do_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            receipt_file = export_dir / "receipt-dir-as-file"
+            receipt_file.write_text("not a directory\n", encoding="utf-8")
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_file),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("receipt_dir", stderr)
+            self.assertIn("must be a directory", stderr)
+            self.assertNotIn(str(receipt_file), stderr)
+            self.assertNotIn(receipt_file.name, stderr)
+
     def test_symlinked_receipt_output_paths_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -2124,7 +2225,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt_dir), stderr)
+            self.assertNotIn(receipt_dir.name, stderr)
 
             receipt_dir.unlink()
             receipt_dir.mkdir()
@@ -2156,7 +2260,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_output[0]", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt), stderr)
+            self.assertNotIn(receipt.name, stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
 
     def test_receipt_output_paths_reject_smuggled_segments_before_network_delivery(self):
@@ -2227,7 +2334,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_output[0]", stderr)
             self.assertIn("must not be hard-linked", stderr)
+            self.assertNotIn(str(receipt_path), stderr)
+            self.assertNotIn(receipt_path.name, stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
 
     def test_symlinked_receipt_output_ancestor_is_rejected_before_network_delivery(self):
@@ -2258,7 +2368,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
+            self.assertIn("receipt_dir", stderr)
             self.assertIn("must not be a symlink", stderr)
+            self.assertNotIn(str(receipt_dir), stderr)
+            self.assertNotIn(ancestor.name, stderr)
             self.assertFalse((target_dir / "nested").exists())
 
     def test_export_dir_discovery_path_diagnostics_do_not_echo_path(self):

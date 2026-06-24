@@ -21,11 +21,11 @@ summary: SFM-4a implementation status for moderation reproducibility, honey-audi
 SFM-4a defines deterministic AI pre-screening before public SoraFS gateway
 publication. The repository currently ships the reproducibility, corpus, local
 model-registry admission/checkpointing, local deterministic screening-result
-and pending-quarantine evidence checkpointing, gateway-policy, honey-audit, and
-observability foundations. It does not yet ship the persistent production
-model-registry service, production AI runner service, committee runner,
-encrypted quarantine object store, operator review panel, or release workflow
-as runnable services.
+and quarantine review/release evidence checkpointing, gateway-policy,
+honey-audit, and observability foundations. It does not yet ship the
+persistent production model-registry service, production AI runner service,
+committee runner, encrypted quarantine object store, operator review panel, CLI
+queue commands, or end-to-end release workflow as runnable services.
 
 Implemented locally:
 
@@ -53,13 +53,17 @@ Implemented locally:
   authentication.
 - `sorafs_node::NodeHandle` records deterministic local screening-result
   evidence with BLAKE3 record digests, creates pending local quarantine records
-  for `quarantine` and `escalate` verdicts, exports/restores validated
-  duplicate-checked snapshots, and checkpoints them under
+  for `quarantine` and `escalate` verdicts, advances those records through
+  reviewed and released states with operator metadata, exports/restores
+  validated duplicate-checked snapshots, and checkpoints them under
   `moderation-screening/screening-snapshot.to` when SoraFS storage is enabled.
 - Torii exposes the local screening/quarantine evidence surface through
   canonical-authenticated `POST /v1/sorafs/moderation/screening-results`,
   bounded `GET /v1/sorafs/moderation/screening-results?limit=N`, and bounded
-  `GET /v1/sorafs/moderation/quarantine?limit=N`.
+  `GET /v1/sorafs/moderation/quarantine?limit=N`. Canonical-authenticated
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review` and
+  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release` advance
+  local queue state.
 - `sorafs_cli moderation honey-audit` probes configured gateways with
   denylisted digests and emits JSON/Markdown evidence for policy enforcement.
 - `docs/examples/ai_moderation_calibration_manifest_202602.json`,
@@ -82,7 +86,7 @@ Not shipped locally:
 - A persistent production `ai_model_registry` service.
 - A deterministic `sorafs_ai_runner` HTTP/gRPC service.
 - An `ai_committee_service` that executes models and emits screening verdicts.
-- Encrypted quarantine object storage and review/release queue state.
+- Encrypted quarantine object storage.
 - `list-quarantine`, `review`, or `release` CLI commands.
 - A moderation operator web panel.
 - End-to-end ingest -> quarantine -> appeal -> transparency workflow services.
@@ -96,7 +100,7 @@ The production service remains a staged rollout target:
 | Model registry | Stores model artifacts, reproducibility manifests, calibration datasets, and hashes. | Local Torii admission/readback plus node snapshot/checkpoint foundation exists; persistent registry service not shipped. |
 | AI runner | Executes approved models deterministically and emits model scores. | Runner contract documented; service not shipped. |
 | Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, and local screening-result admission exist; orchestrator not shipped. |
-| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local pending-quarantine evidence records exist; encrypted object storage and review/release service are not shipped. |
+| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records and authenticated review/release API transitions exist; encrypted object storage, CLI commands, and operator panel are not shipped. |
 | Moderation bridge | Hands escalations to appeal and transparency workflows. | Appeal finance CLI exists separately; bridge service not shipped. |
 
 ## Data Model
@@ -135,9 +139,10 @@ they do not execute models or store quarantined payloads.
 
 The local screening checkpoint stores metadata and digests for gateway or
 runner-supplied screening outcomes. It does not execute models or persist the
-quarantined content bytes; `quarantine` and `escalate` verdicts only enqueue
-pending local evidence records until the encrypted object store and review
-workflow ship.
+quarantined content bytes; `quarantine` and `escalate` verdicts enqueue local
+evidence records that can be reviewed and released through authenticated Torii
+endpoints until the encrypted object store, CLI commands, and panel workflow
+ship.
 
 ## Gateway Policy Integration
 
@@ -193,8 +198,8 @@ Reserved production metrics:
 
 Dashboards may keep reserved panels for production rollout, but release
 evidence must distinguish shipped validation/honey-audit tooling and local
-screening/quarantine evidence checkpoints from a live AI runner and production
-quarantine workflow.
+screening/quarantine evidence checkpoints plus review/release API state from a
+live AI runner and production quarantine workflow.
 
 ## Remaining Production Gates
 
@@ -204,8 +209,8 @@ quarantine workflow.
   governance-approved manifests.
 - Promote local screening/quarantine evidence into the production runner and
   committee workflow with live governance evidence.
-- Ship encrypted quarantine storage, review/release queue state, and role-based
-  operator access for the quarantined payloads.
+- Ship encrypted quarantine storage, role-based operator access, CLI commands,
+  and panel workflow for the quarantined payloads.
 - Add operator panel and CLI commands for queue listing, review, release, and
   appeal handoff.
 - Append quarantine/escalation evidence to the Governance DAG and transparency
@@ -228,6 +233,8 @@ Completed local foundations:
 - Persist deterministic local screening-result and pending-quarantine evidence
   snapshots, with Torii admission/readback endpoints for screening results and
   quarantine records.
+- Advance local quarantine records through authenticated reviewed and released
+  states with checkpointed operator metadata.
 - Provide moderation validation CLI commands.
 - Provide honey-audit gateway probing.
 - Provide calibration fixtures, report, dashboards, and alert rules.
@@ -236,5 +243,5 @@ Completed local foundations:
 Remaining rollout work is service implementation and live evidence, not the
 local manifest/corpus validators, model-registry admission/checkpoint
 foundation, Torii registry endpoints, local screening/quarantine evidence
-checkpointing and readback, honey-audit tool, GAR policy plumbing, or
-observability fixtures.
+checkpointing, readback, and review/release API transitions, honey-audit tool,
+GAR policy plumbing, or observability fixtures.

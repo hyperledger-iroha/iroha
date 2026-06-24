@@ -11,6 +11,7 @@ LOCAL_TORII_ROOT="${LOCAL_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
 IROHA_BIN="${IROHA_BIN:-}"
+EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 TRADER_APP_API_PROBE_ATTEMPTS="${TRADER_APP_API_PROBE_ATTEMPTS:-6}"
 TRADER_APP_API_PROBE_INTERVAL_SECS="${TRADER_APP_API_PROBE_INTERVAL_SECS:-1}"
 RUN_DEPLOY=0
@@ -19,7 +20,7 @@ RUN_RELEASE_CHECKLIST=0
 ALLOW_TESTNET_MUTATIONS=0
 SKIP_MCP_CHECK=0
 SKIP_SORAFS_CHECK=0
-SKIP_ROUTER_REGRESSION=0
+SKIP_LOCAL_REGRESSIONS=0
 SKIP_NESTED_CALL=0
 SKIP_TRADER_APP_API_CHECK=0
 
@@ -30,19 +31,21 @@ Usage: verify_soraswap_rollout.sh --public-root URL --write-config PATH
                                   [--soraswap-root PATH]
                                   [--soraswap-client-config PATH]
                                   [--iroha-bin PATH]
+                                  [--expected-git-sha 7_TO_40_HEX_SHA]
                                   [--run-deploy]
                                   [--run-smoke]
                                   [--run-release-checklist]
                                   [--allow-testnet-mutations]
                                   [--skip-mcp-check]
                                   [--skip-sorafs-check]
+                                  [--skip-local-regressions]
                                   [--skip-router-regression]
                                   [--skip-nested-call]
                                   [--skip-trader-app-api-check]
 
 Run the post-upgrade public-Taira validation chain in the canonical order:
-  1. local `iroha_core` router regression for SoraSwap universal deploy routing
-  2. `check_mcp_rollout.sh` on the chosen public node
+  1. local `iroha_core` regressions for SoraSwap universal deploy routing and three-hop nested transfers
+  2. `check_mcp_rollout.sh` on the chosen public node, optionally pinned with `--expected-git-sha`
   3. `check_sorafs_rollout.sh` on the chosen public node
   4. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
   5. `make testnet-nested-call-probe` in `../soraswap`
@@ -51,7 +54,8 @@ Run the post-upgrade public-Taira validation chain in the canonical order:
   8. optional `make release-checklist`
 
 `--run-smoke` implies deploy. `--run-release-checklist` implies both deploy
-and smoke. Mutating smoke requires `--allow-testnet-mutations`.
+and smoke. The nested-call probe, deploy, and mutating smoke are public
+SoraSwap mutation paths and require `--allow-testnet-mutations`.
 EOF
 }
 
@@ -105,6 +109,14 @@ while [[ $# -gt 0 ]]; do
       IROHA_BIN="$2"
       shift 2
       ;;
+    --expected-git-sha)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --expected-git-sha" >&2
+        exit 1
+      }
+      EXPECTED_TAIRA_GIT_SHA="$2"
+      shift 2
+      ;;
     --run-deploy)
       RUN_DEPLOY=1
       shift
@@ -129,8 +141,8 @@ while [[ $# -gt 0 ]]; do
       SKIP_SORAFS_CHECK=1
       shift
       ;;
-    --skip-router-regression)
-      SKIP_ROUTER_REGRESSION=1
+    --skip-local-regressions|--skip-router-regression)
+      SKIP_LOCAL_REGRESSIONS=1
       shift
       ;;
     --skip-nested-call)
@@ -159,6 +171,18 @@ if [[ $RUN_RELEASE_CHECKLIST -eq 1 ]]; then
 fi
 if [[ $RUN_SMOKE -eq 1 ]]; then
   RUN_DEPLOY=1
+fi
+
+if [[ $SKIP_LOCAL_REGRESSIONS -eq 1 \
+  && $SKIP_MCP_CHECK -eq 1 \
+  && $SKIP_SORAFS_CHECK -eq 1 \
+  && $SKIP_TRADER_APP_API_CHECK -eq 1 \
+  && $SKIP_NESTED_CALL -eq 1 \
+  && $RUN_DEPLOY -ne 1 \
+  && $RUN_SMOKE -ne 1 \
+  && $RUN_RELEASE_CHECKLIST -ne 1 ]]; then
+  echo "no SoraSwap rollout verification steps selected; remove at least one --skip-* flag or enable --run-deploy, --run-smoke, or --run-release-checklist" >&2
+  exit 1
 fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
@@ -195,8 +219,9 @@ if [[ $SKIP_NESTED_CALL -ne 1 || $RUN_DEPLOY -eq 1 || $RUN_SMOKE -eq 1 || $RUN_R
   fi
 fi
 
-if [[ $RUN_SMOKE -eq 1 && $ALLOW_TESTNET_MUTATIONS -ne 1 ]]; then
-  echo "--run-smoke requires --allow-testnet-mutations" >&2
+if [[ $ALLOW_TESTNET_MUTATIONS -ne 1 \
+  && ( $SKIP_NESTED_CALL -ne 1 || $RUN_DEPLOY -eq 1 || $RUN_SMOKE -eq 1 ) ]]; then
+  echo "SoraSwap nested-call probe, deploy, and smoke steps require --allow-testnet-mutations" >&2
   exit 1
 fi
 
@@ -207,15 +232,16 @@ run_step() {
   "$@"
 }
 
-run_router_regression() {
+run_local_soraswap_regressions() {
   if [[ ! -f "${IROHA_ROOT}/Cargo.toml" ]]; then
-    echo "router regression requires a full iroha source checkout at ${IROHA_ROOT}" >&2
-    echo "rerun from the source checkout, or pass --skip-router-regression only after validating this exact runtime bundle elsewhere" >&2
+    echo "SoraSwap local regressions require a full iroha source checkout at ${IROHA_ROOT}" >&2
+    echo "rerun from the source checkout, or pass --skip-local-regressions only after validating this exact runtime bundle elsewhere" >&2
     exit 1
   fi
   (
     cd "$IROHA_ROOT"
     cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
+    cargo test -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib
   )
 }
 
@@ -297,8 +323,8 @@ PY
   rm -f "$probe_body"
 }
 
-if [[ $SKIP_ROUTER_REGRESSION -ne 1 ]]; then
-  run_step "Iroha SoraSwap deploy-route router regression" run_router_regression
+if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
+  run_step "Iroha SoraSwap local runtime regressions" run_local_soraswap_regressions
 fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
@@ -314,6 +340,9 @@ if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
   fi
   if [[ -n "$IROHA_BIN" ]]; then
     mcp_cmd+=(--iroha-bin "$IROHA_BIN")
+  fi
+  if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
+    mcp_cmd+=(--expected-git-sha "$EXPECTED_TAIRA_GIT_SHA")
   fi
   run_step "public Taira MCP + write canary" "${mcp_cmd[@]}"
 fi
@@ -337,13 +366,13 @@ fi
 if [[ $SKIP_NESTED_CALL -ne 1 ]]; then
   run_step \
     "SoraSwap nested call probe" \
-    env SORASWAP_CLIENT_CONFIG="$SORASWAP_CLIENT_CONFIG" make -C "$SORASWAP_ROOT" testnet-nested-call-probe
+    env SORASWAP_CLIENT_CONFIG="$SORASWAP_CLIENT_CONFIG" SORASWAP_ALLOW_TESTNET_MUTATIONS=1 make -C "$SORASWAP_ROOT" testnet-nested-call-probe
 fi
 
 if [[ $RUN_DEPLOY -eq 1 ]]; then
   run_step \
     "SoraSwap deploy-testnet" \
-    env SORASWAP_CLIENT_CONFIG="$SORASWAP_CLIENT_CONFIG" make -C "$SORASWAP_ROOT" deploy-testnet
+    env SORASWAP_CLIENT_CONFIG="$SORASWAP_CLIENT_CONFIG" SORASWAP_ALLOW_TESTNET_MUTATIONS=1 make -C "$SORASWAP_ROOT" deploy-testnet
 fi
 
 if [[ $RUN_SMOKE -eq 1 ]]; then

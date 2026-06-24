@@ -423,6 +423,52 @@ impl Actor {
         Some(pending_entry)
     }
 
+    pub(super) fn prune_expired_pending_rbc(&mut self) -> bool {
+        let ttl = self.config.rbc.pending_ttl;
+        if ttl == Duration::ZERO || self.subsystems.da_rbc.rbc.pending.is_empty() {
+            return false;
+        }
+        let housekeeping_key = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .keys()
+            .next()
+            .copied()
+            .expect("pending RBC map checked as non-empty");
+        let evictions = Self::apply_pending_rbc_housekeeping(
+            &mut self.subsystems.da_rbc.rbc.pending,
+            Some(&self.subsystems.da_rbc.rbc.sessions),
+            housekeeping_key,
+            0,
+            ttl,
+            Instant::now(),
+        );
+        if evictions.is_empty() {
+            return false;
+        }
+
+        for eviction in evictions {
+            warn!(
+                ?eviction.key,
+                ttl_ms = ttl.as_millis(),
+                pending_chunks = eviction.removed.pending_chunks(),
+                pending_bytes = eviction.removed.pending_bytes(),
+                "evicting pending RBC stash after TTL elapsed without INIT"
+            );
+            self.release_pending_rbc_dedup(&eviction.removed);
+            Self::record_pending_drop(self.telemetry_handle(), eviction.reason, &eviction.removed);
+            self.request_missing_block_after_rbc_drop(
+                eviction.key,
+                eviction.reason,
+                "pending_rbc_ttl_sweep",
+            );
+        }
+        self.publish_rbc_backlog_snapshot();
+        true
+    }
+
     pub(super) fn clear_pending_rbc(&mut self, key: &SessionKey) {
         if let Some(pending) = self.subsystems.da_rbc.rbc.pending.remove(key) {
             self.release_pending_rbc_dedup(&pending);

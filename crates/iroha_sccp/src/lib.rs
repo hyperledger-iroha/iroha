@@ -12687,6 +12687,7 @@ pub fn sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
 ) -> Option<SccpSourceVerifierMaterialV1> {
     if !address20_is_nonzero(&source_bridge_emitter_address)
         || !address20_is_nonzero(&source_bridge_owner_address)
+        || source_bridge_owner_address == source_bridge_emitter_address
     {
         return None;
     }
@@ -13545,6 +13546,23 @@ pub fn build_sccp_source_verifier_evidence_with_material_and_deployment(
     )
 }
 
+fn source_verifier_evidence_role_hashes_are_separated(
+    evidence: &SccpSourceVerifierEvidenceV1,
+) -> bool {
+    sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        evidence.source_trust_anchor_hash,
+        evidence.consensus_verifier_hash,
+        evidence.message_inclusion_verifier_hash,
+        evidence.finality_policy_hash,
+        evidence.source_state_verifier_hash,
+        evidence.source_bridge_emitter_code_hash,
+        evidence.source_bridge_network_id,
+        evidence.source_bridge_config_hash,
+        evidence.source_adapter_deployment_hash,
+        evidence.source_adapter_deployment_receipt_hash,
+    ])
+}
+
 fn source_verifier_evidence_has_common_valid_shape(
     evidence: &SccpSourceVerifierEvidenceV1,
 ) -> bool {
@@ -13610,6 +13628,7 @@ fn source_verifier_evidence_has_common_valid_shape(
         && h256_is_nonzero(&evidence.consensus_verifier_hash)
         && h256_is_nonzero(&evidence.message_inclusion_verifier_hash)
         && h256_is_nonzero(&evidence.finality_policy_hash)
+        && source_verifier_evidence_role_hashes_are_separated(evidence)
         && deployment_fields_are_consistent
         && source_state_shape_is_consistent
         && source_bridge_emitter_shape_is_consistent
@@ -18413,6 +18432,7 @@ pub fn sccp_eth_source_bridge_config_hash_v1(
         || target_domain != SCCP_DOMAIN_SORA
         || !address20_is_nonzero(&source_bridge_address)
         || !h256_is_nonzero(&source_bridge_code_hash)
+        || source_bridge_code_hash == network_id
     {
         return None;
     }
@@ -18440,6 +18460,7 @@ pub fn sccp_tron_source_bridge_config_hash_v1(
         || target_domain != SCCP_DOMAIN_SORA
         || !address20_is_nonzero(&source_bridge_address)
         || !address20_is_nonzero(&owner_address)
+        || owner_address == source_bridge_address
     {
         return None;
     }
@@ -24935,6 +24956,9 @@ fn canonical_sccp_tron_transaction_source_proof_bytes_internal(
     }
     if expected_contract_address.is_some_and(|address| !address20_is_nonzero(&address))
         || expected_owner_address.is_some_and(|address| !address20_is_nonzero(&address))
+        || expected_contract_address
+            .zip(expected_owner_address)
+            .is_some_and(|(contract, owner)| contract == owner)
     {
         return None;
     }
@@ -25337,9 +25361,11 @@ fn sccp_tron_trigger_source_call_owner_address(
     {
         return None;
     }
-    if expected_contract_address
-        .is_some_and(|expected| &contract_address[1..] != expected.as_slice())
-    {
+    let contract_address20 = <[u8; 20]>::try_from(&contract_address[1..]).ok()?;
+    if !address20_is_nonzero(&contract_address20) || contract_address20 == owner_address20 {
+        return None;
+    }
+    if expected_contract_address.is_some_and(|expected| contract_address20 != expected) {
         return None;
     }
 
@@ -25663,6 +25689,12 @@ fn verify_sccp_tron_transaction_source_proof_binding(
         return false;
     }
     if expected_owner_address.is_some_and(|address| !address20_is_nonzero(&address)) {
+        return false;
+    }
+    if expected_contract_address
+        .zip(expected_owner_address)
+        .is_some_and(|(contract, owner)| contract == owner)
+    {
         return false;
     }
     if !verify_sccp_tron_transaction_bytes_source_call(
@@ -40487,6 +40519,20 @@ mod tests {
         .expect("sample TRON source bridge config hash")
     }
 
+    fn legacy_tron_source_bridge_config_hash_allowing_owner_reuse(
+        source_bridge_address: [u8; 20],
+        owner_address: [u8; 20],
+    ) -> H256 {
+        let mut payload = Vec::with_capacity(32 * 6);
+        payload.extend_from_slice(&keccak256_bytes(SCCP_TRON_SOURCE_BRIDGE_CONFIG_PREFIX_V1));
+        payload.extend_from_slice(&abi_word_bytes20(&source_bridge_address));
+        payload.extend_from_slice(&sample_tron_source_bridge_network_id());
+        payload.extend_from_slice(&abi_word_u32(SCCP_DOMAIN_TRON));
+        payload.extend_from_slice(&abi_word_u32(SCCP_DOMAIN_SORA));
+        payload.extend_from_slice(&abi_word_bytes20(&owner_address));
+        keccak256_bytes(&payload)
+    }
+
     fn legacy_bsc_source_material_component_hash_without_certificate_prefixes(
         component_id: &str,
         component_kind: &str,
@@ -53205,17 +53251,20 @@ mod tests {
             Some(owner_address),
         ));
 
-        let source_call_trigger = || {
-            let mut trigger = Vec::new();
-            let mut trigger_owner_address = vec![0x41];
-            trigger_owner_address.extend_from_slice(&owner_address);
-            let mut trigger_contract_address = vec![0x41];
-            trigger_contract_address.extend_from_slice(&contract_address);
-            push_protobuf_bytes(&mut trigger, 1, &trigger_owner_address);
-            push_protobuf_bytes(&mut trigger, 2, &trigger_contract_address);
-            push_protobuf_bytes(&mut trigger, 4, &expected_call_data);
-            trigger
-        };
+        let source_call_trigger_with_addresses =
+            |trigger_owner_address20: [u8; 20], trigger_contract_address20: [u8; 20]| {
+                let mut trigger = Vec::new();
+                let mut trigger_owner_address = vec![0x41];
+                trigger_owner_address.extend_from_slice(&trigger_owner_address20);
+                let mut trigger_contract_address = vec![0x41];
+                trigger_contract_address.extend_from_slice(&trigger_contract_address20);
+                push_protobuf_bytes(&mut trigger, 1, &trigger_owner_address);
+                push_protobuf_bytes(&mut trigger, 2, &trigger_contract_address);
+                push_protobuf_bytes(&mut trigger, 4, &expected_call_data);
+                trigger
+            };
+        let source_call_trigger =
+            || source_call_trigger_with_addresses(owner_address, contract_address);
         let source_call_any = |trigger: &[u8]| {
             let mut any = Vec::new();
             push_protobuf_bytes(&mut any, 1, SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
@@ -53303,6 +53352,43 @@ mod tests {
         };
 
         let source_call = source_call_contract(&source_call_any(&source_call_trigger()));
+        let reused_address_source_call = source_call_contract(&source_call_any(
+            &source_call_trigger_with_addresses(owner_address, owner_address),
+        ));
+        let reused_address_raw_data = source_call_raw_data(&reused_address_source_call);
+        let reused_address_signature = sample_tron_transaction_signature(&reused_address_raw_data);
+        let reused_address_transaction = sample_tron_source_trigger_transaction_from_raw_data(
+            reused_address_raw_data,
+            1,
+            &reused_address_signature,
+        );
+        assert!(
+            !verify_sccp_tron_transaction_bytes_source_call(
+                &reused_address_transaction,
+                SCCP_DOMAIN_TRON,
+                SCCP_DOMAIN_SORA,
+                source_event_digest,
+                Some(owner_address),
+                Some(owner_address),
+            ),
+            "TRON source-call proofs must reject source bridge contract/owner address reuse"
+        );
+        assert!(
+            canonical_sccp_tron_transaction_source_proof_bytes_with_source_bridge(
+                source_event_digest,
+                [0x55; 32],
+                sha256_bytes(&reused_address_transaction),
+                0,
+                1,
+                &reused_address_transaction,
+                &[],
+                &[vec![0xAA; 32]],
+                owner_address,
+                owner_address,
+            )
+            .is_none(),
+            "bound TRON transaction-source helpers must reject source bridge contract/owner address reuse"
+        );
         accepts_source_call_raw_data(
             source_call_raw_data_with_fields(
                 &source_call,
@@ -57091,7 +57177,7 @@ mod tests {
                 );
             }
 
-            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 5] = [
+            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 7] = [
                 ("unpaired deployment hash", |evidence| {
                     evidence.source_adapter_deployment_hash = [0x44; 32];
                     evidence.source_adapter_deployment_receipt_hash = [0; 32];
@@ -57111,6 +57197,18 @@ mod tests {
                     |evidence| {
                         evidence.source_adapter_deployment_hash = [0x46; 32];
                         evidence.source_adapter_deployment_receipt_hash = [0x47; 32];
+                    },
+                ),
+                (
+                    "source verifier evidence reused trust-anchor/consensus hashes",
+                    |evidence| {
+                        evidence.consensus_verifier_hash = evidence.source_trust_anchor_hash;
+                    },
+                ),
+                (
+                    "source verifier evidence reused message/finality hashes",
+                    |evidence| {
+                        evidence.finality_policy_hash = evidence.message_inclusion_verifier_hash;
                     },
                 ),
             ];
@@ -58379,6 +58477,28 @@ mod tests {
         );
         assert!(sccp_source_adapter_deployment_binding_hash(&valid).is_some());
 
+        let mut missing_receipt = valid.clone();
+        missing_receipt.source_adapter_deployment_receipt_hash = [0u8; 32];
+        assert!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&missing_receipt).is_none(),
+            "source-adapter deployment binding bytes must reject deployment hashes without receipt hashes"
+        );
+
+        let mut missing_deployment = valid.clone();
+        missing_deployment.source_adapter_deployment_hash = [0u8; 32];
+        assert!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&missing_deployment).is_none(),
+            "source-adapter deployment binding bytes must reject receipt hashes without deployment hashes"
+        );
+
+        let mut self_replayed_receipt = valid.clone();
+        self_replayed_receipt.source_adapter_deployment_receipt_hash =
+            self_replayed_receipt.source_adapter_deployment_hash;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&self_replayed_receipt).is_none(),
+            "source-adapter deployment binding hashes must reject deployment hash replay as receipt hash"
+        );
+
         let zero_diagnostic = SccpSourceAdapterDeploymentBindingV1 {
             source_adapter_deployment_hash: [0u8; 32],
             source_adapter_deployment_receipt_hash: [0u8; 32],
@@ -59332,6 +59452,60 @@ mod tests {
                 .iter()
                 .all(|blocker| !blocker.contains("all-lanes-at-once"))
         );
+    }
+
+    #[test]
+    fn launch_lanes_report_exact_external_source_verifier_blockers() {
+        for (domain, expected_blocker) in [
+            (
+                SCCP_DOMAIN_ETH,
+                "Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path",
+            ),
+            (
+                SCCP_DOMAIN_BSC,
+                "BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path",
+            ),
+            (
+                SCCP_DOMAIN_SOL,
+                "Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path",
+            ),
+            (
+                SCCP_DOMAIN_TON,
+                "TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path",
+            ),
+            (
+                SCCP_DOMAIN_TRON,
+                "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
+            ),
+        ] {
+            let readiness =
+                sccp_lane_production_readiness_for_domain(domain).expect("launch lane readiness");
+            assert_eq!(
+                sccp_source_proof_blocker_for_domain(domain),
+                Some(expected_blocker),
+                "domain {domain} must keep its lane-specific source verifier blocker"
+            );
+            assert!(
+                !readiness.source_adapter_ready,
+                "domain {domain} must not open source readiness without governed source verifier evidence"
+            );
+            assert!(
+                !readiness.source_adapter_engine.production_ready,
+                "domain {domain} source adapter engine must stay blocked"
+            );
+            assert!(
+                !readiness.production_ready,
+                "domain {domain} must not become production-ready with default source verifier material"
+            );
+            assert!(
+                readiness
+                    .blockers
+                    .iter()
+                    .any(|blocker| blocker == expected_blocker),
+                "domain {domain} readiness must report exact blocker {expected_blocker:?}: {:?}",
+                readiness.blockers
+            );
+        }
     }
 
     #[test]
@@ -63706,6 +63880,11 @@ mod tests {
             |deployment| deployment.adapter_circuit_id.push_str("-fork"),
             "source-adapter deployments must keep the governed adapter circuit id",
         );
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| deployment.deployment_receipt_hash = deployment.source_trust_anchor_hash,
+            "source-adapter deployments must keep deployment receipt hashes role-separated from source roles",
+        );
         let readiness =
             sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
                 SCCP_DOMAIN_ETH,
@@ -63956,6 +64135,49 @@ mod tests {
             &deployment_bound_proof,
             &deployment,
         ));
+
+        let assert_deployment_bound_evidence_replay_rejected =
+            |mut replayed_proof: SccpSourceChainProofEnvelopeV1,
+             mutate: fn(&mut SccpSourceVerifierEvidenceV1),
+             label: &str| {
+                mutate_source_verifier_evidence(&mut replayed_proof, mutate);
+                let replayed_consensus =
+                    decode_sccp_source_consensus_proof(&replayed_proof.consensus_proof)
+                        .expect("decode replayed deployment-bound source consensus proof");
+                assert!(
+                    !source_verifier_evidence_has_common_valid_shape(
+                        &replayed_consensus.verifier_evidence,
+                    ),
+                    "deployment-bound verifier evidence must reject role replay before wrapper rebuild: {label}",
+                );
+                rebuild_source_adapter_verification_proof_for_current_evidence(&mut replayed_proof);
+                assert!(
+                    sccp_source_chain_proof_adapter_verifier_commitment(&replayed_proof).is_none(),
+                    "adapter verifier commitment helper must reject deployment-bound verifier evidence role replay after OpenVerify rebuild: {label}",
+                );
+                assert!(
+                    !sccp_source_chain_proof_matches_adapter_deployment(
+                        &replayed_proof,
+                        &deployment,
+                    ),
+                    "deployment matching must reject deployment-bound verifier evidence role replay: {label}",
+                );
+            };
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.source_adapter_deployment_hash = evidence.source_trust_anchor_hash;
+            },
+            "source role as deployment hash",
+        );
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.source_adapter_deployment_receipt_hash =
+                    evidence.source_adapter_deployment_hash;
+            },
+            "deployment hash as deployment receipt",
+        );
 
         let legacy_receipt_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 8803);
         assert!(
@@ -65686,6 +65908,9 @@ mod tests {
             let material = sample_production_source_verifier_material(source_domain);
             let deployment = sample_production_source_adapter_deployment(&material);
             let template = source_verifier_material_template(source_domain);
+            let placeholder =
+                sccp_source_verifier_material_for_domain(source_domain).expect("placeholder");
+            assert!(placeholder.placeholder_material);
             assert!(
                 source_adapter_deployment_has_standalone_valid_shape(&deployment),
                 "domain {source_domain} fixture must start as a standalone-valid deployment"
@@ -65756,6 +65981,94 @@ mod tests {
                         &replayed_deployment,
                     ),
                     "domain {source_domain} readiness must reject template {label} replay"
+                );
+            }
+
+            let mut placeholder_replay_cases: Vec<(&str, SccpSourceAdapterEngineDeploymentV1)> =
+                Vec::new();
+            let mut replay = deployment.clone();
+            replay.source_trust_anchor_id = placeholder.source_trust_anchor_id.clone();
+            placeholder_replay_cases.push(("source_trust_anchor_id", replay));
+            let mut replay = deployment.clone();
+            replay.source_trust_anchor_hash = placeholder.source_trust_anchor_hash;
+            placeholder_replay_cases.push(("source_trust_anchor_hash", replay));
+            let mut replay = deployment.clone();
+            replay.consensus_verifier_id = placeholder.consensus_verifier_id.clone();
+            placeholder_replay_cases.push(("consensus_verifier_id", replay));
+            let mut replay = deployment.clone();
+            replay.consensus_verifier_hash = placeholder.consensus_verifier_hash;
+            placeholder_replay_cases.push(("consensus_verifier_hash", replay));
+            let mut replay = deployment.clone();
+            replay.message_inclusion_verifier_id =
+                placeholder.message_inclusion_verifier_id.clone();
+            placeholder_replay_cases.push(("message_inclusion_verifier_id", replay));
+            let mut replay = deployment.clone();
+            replay.message_inclusion_verifier_hash = placeholder.message_inclusion_verifier_hash;
+            placeholder_replay_cases.push(("message_inclusion_verifier_hash", replay));
+            let mut replay = deployment.clone();
+            replay.finality_policy_id = placeholder.finality_policy_id.clone();
+            placeholder_replay_cases.push(("finality_policy_id", replay));
+            let mut replay = deployment.clone();
+            replay.finality_policy_hash = placeholder.finality_policy_hash;
+            placeholder_replay_cases.push(("finality_policy_hash", replay));
+
+            if sccp_source_state_verifier_required(source_domain) {
+                let mut replay = deployment.clone();
+                replay.source_state_verifier_id = placeholder.source_state_verifier_id.clone();
+                placeholder_replay_cases.push(("source_state_verifier_id", replay));
+                let mut replay = deployment.clone();
+                replay.source_state_verifier_hash = placeholder.source_state_verifier_hash;
+                placeholder_replay_cases.push(("source_state_verifier_hash", replay));
+            }
+
+            if sccp_source_bridge_emitter_binding_required(source_domain) {
+                let mut replay = deployment.clone();
+                replay.source_bridge_emitter_id = placeholder.source_bridge_emitter_id.clone();
+                placeholder_replay_cases.push(("source_bridge_emitter_id", replay));
+                let mut replay = deployment.clone();
+                replay.source_bridge_emitter_address =
+                    placeholder.source_bridge_emitter_address.clone();
+                placeholder_replay_cases.push(("source_bridge_emitter_address", replay));
+                let mut replay = deployment.clone();
+                replay.source_bridge_emitter_code_hash =
+                    placeholder.source_bridge_emitter_code_hash;
+                placeholder_replay_cases.push(("source_bridge_emitter_code_hash", replay));
+            }
+
+            if sccp_source_bridge_config_hash_required(source_domain) {
+                let mut replay = deployment.clone();
+                replay.source_bridge_network_id = placeholder.source_bridge_network_id;
+                placeholder_replay_cases.push(("source_bridge_network_id", replay));
+                let mut replay = deployment.clone();
+                replay.source_bridge_config_hash = placeholder.source_bridge_config_hash;
+                placeholder_replay_cases.push(("source_bridge_config_hash", replay));
+                if source_domain == SCCP_DOMAIN_TRON {
+                    let mut replay = deployment.clone();
+                    replay.source_bridge_owner_address =
+                        placeholder.source_bridge_owner_address.clone();
+                    placeholder_replay_cases.push(("source_bridge_owner_address", replay));
+                }
+            }
+
+            for (label, replayed_deployment) in placeholder_replay_cases {
+                assert!(
+                    !source_adapter_deployment_has_standalone_valid_shape(&replayed_deployment),
+                    "domain {source_domain} standalone deployment shape must reject built-in placeholder {label} replay"
+                );
+                assert!(
+                    !sccp_source_adapter_engine_deployment_matches_material(
+                        &material,
+                        &replayed_deployment,
+                    ),
+                    "domain {source_domain} deployment/material matching must reject built-in placeholder {label} replay"
+                );
+                assert!(
+                    !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                        source_domain,
+                        &material,
+                        &replayed_deployment,
+                    ),
+                    "domain {source_domain} readiness must reject built-in placeholder {label} replay"
                 );
             }
         }
@@ -65925,6 +66238,19 @@ mod tests {
                 )
                 .is_none(),
                 "ETH source material constructors must reject source bridge network-id role reuse"
+            );
+            assert!(
+                sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                    source_domain,
+                    deployed_hashes[0],
+                    deployed_hashes[1],
+                    deployed_hashes[2],
+                    deployed_hashes[3],
+                    sample_evm_message_emitter_address(source_domain),
+                    sccp_eth_mainnet_network_id_word_v1(),
+                )
+                .is_none(),
+                "ETH source material constructors must reject source bridge code-hash/network-id role reuse"
             );
             let expected_config_hash = sccp_eth_source_bridge_config_hash_v1(
                 sccp_eth_mainnet_network_id_word_v1(),
@@ -68504,6 +68830,36 @@ mod tests {
             .is_none(),
             "TRON source material must bind a non-zero source bridge owner"
         );
+        let reused_owner_config_hash = legacy_tron_source_bridge_config_hash_allowing_owner_reuse(
+            sample_tron_message_emitter_address(),
+            sample_tron_message_emitter_address(),
+        );
+        assert!(
+            sccp_tron_source_bridge_config_hash_v1(
+                sample_tron_source_bridge_network_id(),
+                SCCP_DOMAIN_TRON,
+                SCCP_DOMAIN_SORA,
+                sample_tron_message_emitter_address(),
+                sample_tron_message_emitter_address(),
+            )
+            .is_none(),
+            "TRON source bridge config hashes must reject owner/emitter address reuse"
+        );
+        assert!(
+            sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                sample_tron_witness_schedule_hash(),
+                [0x32; 32],
+                [0x33; 32],
+                sample_tron_message_emitter_address(),
+                sample_tron_source_bridge_code_hash(),
+                sample_tron_source_bridge_network_id(),
+                sample_tron_message_emitter_address(),
+                reused_owner_config_hash,
+                [0x34; 32],
+            )
+            .is_none(),
+            "TRON source material must not reuse source bridge emitter address as owner"
+        );
         assert!(
             sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
                 sample_tron_witness_schedule_hash(),
@@ -68550,6 +68906,14 @@ mod tests {
         assert!(
             !sccp_source_verifier_material_is_production_ready(&reused_bridge_hash),
             "TRON source bridge code hashes must stay separated from finality role hashes"
+        );
+        let mut reused_owner_material = material.clone();
+        reused_owner_material.source_bridge_owner_address =
+            reused_owner_material.source_bridge_emitter_address.clone();
+        reused_owner_material.source_bridge_config_hash = reused_owner_config_hash;
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&reused_owner_material),
+            "TRON source material readiness must reject owner/emitter address reuse"
         );
         assert_eq!(
             material.source_bridge_emitter_address,
@@ -69344,6 +69708,17 @@ mod tests {
                 [0u8; 32],
             )
             .is_none()
+        );
+        assert!(
+            sccp_eth_source_bridge_config_hash_v1(
+                network_id,
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                source_bridge_address,
+                network_id,
+            )
+            .is_none(),
+            "ETH source bridge config hash must reject network-id/code-hash role reuse"
         );
     }
 

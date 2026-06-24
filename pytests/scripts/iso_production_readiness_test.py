@@ -286,6 +286,31 @@ def add_archive_receipt_verification(path, receipt_kind=None, *, verified_receip
 
 
 class IsoProductionReadinessTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-readiness-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(READINESS.ReadinessError) as caught:
+                READINESS._write_text_output(
+                    link / "summary.json",
+                    "{}\n",
+                    display_label="summary_out",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("summary_out", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
     def test_receipt_metadata_helper_rejects_unsupported_kind_without_echo(self):
         secret_kind = "token=readiness-receipt-kind-secret"
         receipt = {
@@ -951,7 +976,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertIn(
-                "output path must not point to checked-in ISO fixture artifacts",
+                "summary_out must not point to checked-in ISO fixture artifacts",
                 stderr,
             )
             self.assertNotIn("does not exist", stderr)
@@ -1941,7 +1966,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     root,
                     summary_out=root / "nested" / "-readiness.summary.json",
                 ),
-                "output path must not contain leading-dash path segments",
+                "summary_out must not contain leading-dash path segments",
             ),
         )
         for name, make_args, message in cases:
@@ -3010,7 +3035,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(
                 {blocker["code"] for blocker in diagnostic["blockers"]},
-                {"xsd.missing_profile_schema_versions"},
+                {
+                    "xsd.repository_fixture_manifest",
+                    "xsd.missing_profile_schema_versions",
+                },
             )
             unreviewed_versions = {
                 entry["message_def_id"]
@@ -3029,7 +3057,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(
                 {warning["code"] for warning in diagnostic["warnings"]},
                 {
-                    "xsd.repository_fixture_manifest",
                     "xsd.strict_schema_backed_not_proven",
                     "xsd.profile_schema_backed_not_proven",
                     "xsd.missing_schema_fixtures",
@@ -5142,7 +5169,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
-    def test_repository_xsd_fixture_manifest_paths_are_diagnostic_only(self):
+    def test_repository_xsd_fixture_manifest_paths_remain_blockers(self):
         checked_in_manifest = REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json"
         cases = (
             "fixtures/iso20022/xsd/fixture_manifest.json",
@@ -5189,14 +5216,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                         ]
                     )
 
-                    self.assertEqual(rc, 0, stderr)
-                    diagnostic = json.loads(stdout)
-                    self.assertTrue(diagnostic["ok"])
-                    self.assertEqual(diagnostic["blockers"], [])
-                    self.assertEqual(
-                        {warning["code"] for warning in diagnostic["warnings"]},
-                        {"xsd.repository_fixture_manifest"},
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "requires at least one reviewed XSD gap warning",
+                        stderr,
                     )
+                    self.assertNotIn(str(manifest), stderr)
 
     def test_repository_xsd_profile_catalog_paths_block_readiness(self):
         checked_in_catalog = REPO_ROOT / "fixtures" / "iso20022" / "profiles.rs"
@@ -5339,6 +5365,44 @@ class IsoProductionReadinessTest(unittest.TestCase):
             duplicate_version["profile_schema_backed_versions"] += 1
             cases.append((duplicate_version, "xsd.profile_version_duplicate"))
 
+            schema_backed_without_fixture = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            schema_backed_without_fixture["profile_catalog"]["versions"][0][
+                "message_def_id"
+            ] = "fooo.001.001.02"
+            cases.append(
+                (
+                    schema_backed_without_fixture,
+                    "xsd.profile_version_schema_backing_mismatch",
+                )
+            )
+
+            fixture_backed_marked_missing = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            missing_version = dict(
+                fixture_backed_marked_missing["profile_catalog"]["versions"][0]
+            )
+            missing_version.pop("schema_backed")
+            fixture_backed_marked_missing["profile_catalog"]["versions"][0][
+                "schema_backed"
+            ] = False
+            fixture_backed_marked_missing["profile_schema_backed_versions"] = 0
+            fixture_backed_marked_missing["profile_catalog"]["schema_backed_versions"] = 0
+            fixture_backed_marked_missing["missing_profile_schema_versions"].append(
+                missing_version
+            )
+            fixture_backed_marked_missing["profile_catalog"][
+                "missing_schema_versions"
+            ].append(missing_version)
+            cases.append(
+                (
+                    fixture_backed_marked_missing,
+                    "xsd.profile_version_schema_backing_mismatch",
+                )
+            )
+
             missing_mismatch = json.loads(xsd_summary.read_text(encoding="utf-8"))
             missing_mismatch["missing_profile_schema_versions"].append(
                 {
@@ -5349,6 +5413,23 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 }
             )
             cases.append((missing_mismatch, "xsd.missing_profile_schema_versions_mismatch"))
+
+            missing_message_mismatch = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            missing_message_mismatch["missing_profile_schema_message_ids"].append(
+                {
+                    "message_def_id": "fooo.001.001.02",
+                    "profile_version_count": 1,
+                    "reviewed_missing_schema_fixture": False,
+                    "reviewed_schema_only": False,
+                    "blocked_source": False,
+                }
+            )
+            cases.append(
+                (
+                    missing_message_mismatch,
+                    "xsd.missing_profile_schema_message_ids_mismatch",
+                )
+            )
 
             catalog_missing_mismatch = json.loads(xsd_summary.read_text(encoding="utf-8"))
             catalog_missing_mismatch["profile_catalog"]["missing_schema_versions"].append(
@@ -9168,6 +9249,38 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "missing-crl-der",
                     lambda profile: profile.pop("x509_crl_der"),
                     "x509_crl_der must be a JSON array",
+                ),
+                (
+                    "too-many-anchor-der",
+                    lambda profile: profile.__setitem__(
+                        "x509_trust_anchor_der",
+                        ["not-an-object"] * (READINESS.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "x509_trust_anchor_der must not contain more than",
+                ),
+                (
+                    "too-many-revoked-der",
+                    lambda profile: profile.__setitem__(
+                        "revoked_certificate_der",
+                        ["not-an-object"] * (READINESS.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "revoked_certificate_der must not contain more than",
+                ),
+                (
+                    "too-many-crl-der",
+                    lambda profile: profile.__setitem__(
+                        "x509_crl_der",
+                        ["not-an-object"] * (READINESS.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "x509_crl_der must not contain more than",
+                ),
+                (
+                    "too-many-ocsp-der",
+                    lambda profile: profile.__setitem__(
+                        "x509_ocsp_response_der",
+                        ["not-an-object"] * (READINESS.MAX_TRUST_DER_BLOBS + 1),
+                    ),
+                    "x509_ocsp_response_der must not contain more than",
                 ),
                 (
                     "bad-crl-digest",

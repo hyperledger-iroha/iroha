@@ -4,6 +4,7 @@ import http.server
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -155,6 +156,52 @@ def capture_redirect_server(body=b"redirect"):
 
 
 class IsoRailGatewayAdapterTest(unittest.TestCase):
+    def test_text_output_symlink_ancestor_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target = root / "target"
+            target.mkdir()
+            hidden = "hidden-rail-output-link"
+            link = root / hidden
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER._write_text_output(
+                    link / "receipt.json",
+                    "{}\n",
+                    display_label="receipt output",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("receipt output", message)
+            self.assertIn("must not be a symlink", message)
+            self.assertNotIn(str(link), message)
+            self.assertNotIn(hidden, message)
+
+    def test_text_output_hardlinked_leaf_diagnostic_does_not_echo_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-rail-output.json"
+            output = root / hidden
+            output.write_text("old\n", encoding="utf-8")
+            os.link(output, root / "peer.json")
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER._write_text_output(
+                    output,
+                    "{}\n",
+                    display_label="receipt output",
+                )
+
+            message = str(caught.exception)
+            self.assertIn("receipt output", message)
+            self.assertIn("must not be hard-linked", message)
+            self.assertNotIn(str(output), message)
+            self.assertNotIn(hidden, message)
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_rail_unknown_secret", "rail_unknown_secret"),
@@ -1097,6 +1144,29 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             )
             self.assertFalse((inbox / "receipts").exists())
             self.assertFalse(receipt_dir.exists())
+
+    def test_checked_in_xml_fixture_diagnostic_does_not_echo_message_path(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "hidden-rail-fixture-path"
+            xml_path = root / hidden / "fixtures" / "iso20022" / "rail-status.xml"
+            xml_path.parent.mkdir(parents=True)
+
+            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                ADAPTER.verify_message_file(
+                    xml_path,
+                    max_payload_bytes=1024,
+                    allow_default_profile=False,
+                    allow_legacy_colr007=False,
+                )
+
+            message = str(caught.exception)
+            self.assertIn(
+                "message XML payload must not point to checked-in ISO XML fixtures",
+                message,
+            )
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(str(xml_path), message)
 
     def test_duplicate_rail_message_ids_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2164,7 +2234,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 )
 
             self.assertEqual(rc, 2)
-            self.assertIn("--message path", stderr)
+            self.assertIn("--message path must stay under --inbox-dir", stderr)
+            self.assertNotIn(str(outside_xml), stderr)
+            self.assertNotIn(str(inbox), stderr)
             self.assertEqual(requests, [])
 
     def test_explicit_message_paths_reject_smuggling_before_network_delivery(self):

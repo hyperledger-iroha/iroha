@@ -1732,12 +1732,39 @@ impl Actor {
             .or_else(|| {
                 let roster_hint = roster_hint?;
                 let height = header.height().get();
-                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                let roster = super::roster::canonicalize_roster_for_mode(
+                let (consensus_mode, mode_tag, prf_seed) =
+                    self.consensus_context_for_height(height);
+                let mut roster_candidates = Vec::new();
+                for candidate in [
                     roster_hint.to_vec(),
-                    consensus_mode,
-                );
-                if roster.is_empty() {
+                    super::roster::canonicalize_roster_for_mode(
+                        roster_hint.to_vec(),
+                        consensus_mode,
+                    ),
+                    super::topology_for_view(
+                        &super::network_topology::Topology::new(
+                            super::roster::canonicalize_roster_for_mode(
+                                roster_hint.to_vec(),
+                                consensus_mode,
+                            ),
+                        ),
+                        height,
+                        key.2,
+                        mode_tag,
+                        prf_seed,
+                    )
+                    .as_ref()
+                    .to_vec(),
+                ] {
+                    if !candidate.is_empty()
+                        && !roster_candidates
+                            .iter()
+                            .any(|existing: &Vec<PeerId>| existing == &candidate)
+                    {
+                        roster_candidates.push(candidate);
+                    }
+                }
+                if roster_candidates.is_empty() {
                     return None;
                 }
                 let epoch = proposal.header.epoch;
@@ -1752,18 +1779,22 @@ impl Actor {
                 let chunk_root = session
                     .expected_chunk_root
                     .or_else(|| session.chunk_root())?;
-                let leader_signature = block
-                    .signatures()
-                    .find(|signature| {
-                        self.rbc_leader_signature_matches_roster(
-                            &roster,
-                            key.1,
-                            key.2,
-                            block.header(),
-                            signature,
-                        )
-                    })
-                    .cloned()?;
+                let proposer_index = usize::try_from(proposal.header.proposer).ok()?;
+                let (roster, leader_signature) =
+                    roster_candidates.into_iter().find_map(|roster| {
+                        let proposer = roster.get(proposer_index)?;
+                        let signature = block
+                            .signatures()
+                            .find(|signature| {
+                                usize::try_from(signature.index()).ok() == Some(proposer_index)
+                                    && signature
+                                        .signature()
+                                        .verify_hash(proposer.public_key(), block.header().hash())
+                                        .is_ok()
+                            })
+                            .cloned()?;
+                        Some((roster, signature))
+                    })?;
                 Some(RbcInit {
                     block_hash: key.0,
                     height: key.1,
@@ -2313,12 +2344,14 @@ impl Actor {
             && height == committed_height.saturating_add(1);
         let certified_frontier_recovery = recovery_mode.observed_commit_qc_epoch().is_some();
         let frontier_highest_qc = frontier.as_ref().map(|frontier| frontier.highest_qc);
+        let block_created_highest_qc =
+            frontier_highest_qc.or_else(|| self.cached_new_view_qc_highest_for_slot(height, view));
         let local_conflicting_same_height_vote =
             self.local_conflicting_frontier_vote(height, block_hash);
         let new_view_qc_supersedes_local_vote = local_conflicting_same_height_vote
             .as_ref()
             .is_some_and(|vote| {
-                frontier_highest_qc.is_some_and(|highest_qc| {
+                block_created_highest_qc.is_some_and(|highest_qc| {
                     self.new_view_qc_supersedes_same_height_vote_conflict(
                         height,
                         view,
@@ -2342,7 +2375,7 @@ impl Actor {
         let new_view_qc_supersedes_local_owner = conflicting_same_height_owner
             .as_ref()
             .is_some_and(|(owner_hash, owner_view)| {
-                frontier_highest_qc.is_some_and(|highest_qc| {
+                block_created_highest_qc.is_some_and(|highest_qc| {
                     self.new_view_qc_supersedes_same_height_vote_conflict(
                         height,
                         view,
@@ -2377,7 +2410,7 @@ impl Actor {
         let same_height_vote_lock =
             self.same_height_vote_lock_blocking_candidate(height, view, Some(block_hash));
         let new_view_qc_supersedes_vote_lock = same_height_vote_lock.as_ref().is_some_and(|lock| {
-            frontier_highest_qc.is_some_and(|highest_qc| {
+            block_created_highest_qc.is_some_and(|highest_qc| {
                 self.new_view_qc_supersedes_same_height_vote_lock(height, view, highest_qc, lock)
             })
         });
@@ -2995,6 +3028,42 @@ impl Actor {
                 sender.as_ref(),
                 Instant::now(),
             );
+            let duplicate_validation_payload_hash = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .filter(|pending| {
+                    pending.height == height
+                        && pending.view == view
+                        && !pending.aborted
+                        && matches!(pending.validation_status, ValidationStatus::Pending)
+                })
+                .map(|pending| pending.payload_hash);
+            if let Some(payload_hash) = duplicate_validation_payload_hash {
+                let validation_started_after_cached_new_view = self
+                    .maybe_start_validation_for_block_created_after_cached_new_view_qc(
+                        height,
+                        view,
+                        block_hash,
+                        "duplicate_block_created_payload_ready",
+                    );
+                if !validation_started_after_cached_new_view
+                    && contiguous_frontier_extends_tip
+                    && self.drive_vnext_validation_for_pending(
+                        block_hash,
+                        height,
+                        view,
+                        payload_hash,
+                    )
+                {
+                    debug!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "started validation for duplicate BlockCreated payload"
+                    );
+                }
+            }
             debug!(
                 height,
                 view,
@@ -3009,6 +3078,30 @@ impl Actor {
             self.clear_missing_block_request(
                 &block_hash,
                 MissingBlockClearReason::PayloadAvailable,
+            );
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let commit_topology =
+                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            if !commit_topology.is_empty() {
+                self.replay_cached_precommit_qc_for_valid_block(
+                    block_hash,
+                    height,
+                    view,
+                    &commit_topology,
+                    "duplicate_block_created_payload_ready",
+                );
+                let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                    block_hash,
+                    height,
+                    view,
+                    &commit_topology,
+                    "duplicate_block_created_payload_ready",
+                );
+            }
+            self.request_commit_pipeline_for_pending(
+                block_hash,
+                super::status::RoundEventCauseTrace::BlockAvailable,
+                None,
             );
             return Ok(());
         }
@@ -4300,9 +4393,11 @@ impl Actor {
             if let Some(hint) = inline_hint {
                 self.subsystems.propose.proposal_cache.insert_hint(hint);
             }
+            let block_created_evidence_for_validation = contiguous_frontier_extends_tip;
             let proposal_evidence_for_validation = inline_proposal.is_some()
                 || cached_proposal.is_some()
-                || self.slot_tracker.proposals_seen.contains(&(height, view));
+                || self.slot_tracker.proposals_seen.contains(&(height, view))
+                || block_created_evidence_for_validation;
             if let Some(proposal) = inline_proposal {
                 self.subsystems
                     .propose
@@ -4313,8 +4408,15 @@ impl Actor {
             self.note_authoritative_slot_owner(height, view, block_hash);
             self.drive_vnext_proposal_accepted_for_block(block_hash, height, view, payload_hash);
             self.drive_vnext_availability_ready_for_block(block_hash, height, view);
-            let should_start_validation =
-                self.pending
+            let validation_started_after_cached_new_view = self
+                .maybe_start_validation_for_pending_after_cached_new_view_qc(
+                    height,
+                    view,
+                    "block_created_payload_ready",
+                );
+            let should_start_validation = !validation_started_after_cached_new_view
+                && self
+                    .pending
                     .pending_blocks
                     .get(&block_hash)
                     .is_some_and(|pending| {
@@ -4573,6 +4675,21 @@ impl Actor {
             }
             let _ = self.try_replay_deferred_qcs();
             let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+            let completed = self.maybe_emit_local_vote_to_complete_stalled_pending_quorum(
+                block_hash,
+                height,
+                view,
+                "block_created_payload_ready",
+            );
+            if !completed {
+                let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                    block_hash,
+                    height,
+                    view,
+                    &commit_topology,
+                    "block_created_payload_ready",
+                );
+            }
         }
         let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.request_commit_pipeline_for_pending(

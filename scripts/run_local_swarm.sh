@@ -52,6 +52,130 @@ P2PS=(
   "$((BASE_P2P_PORT + 3))"
 )
 
+pid_matches_local_swarm_peer() {
+  local pid="$1"
+  local config_path="$2"
+  local command_line
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 1
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$command_line" ]] || return 1
+  printf '%s' "$command_line" | grep -F -- "--config $config_path" >/dev/null \
+    || printf '%s' "$command_line" | grep -F -- "--config=$config_path" >/dev/null
+}
+
+pid_is_running() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+write_stop_script() {
+  cat > "$BASE/stop.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+pid_matches_peer() {
+  local pid="$1"
+  local config="$2"
+  local command_line
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 1
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$command_line" ]] || return 1
+  printf '%s' "$command_line" | grep -F -- "--config $config" >/dev/null \
+    || printf '%s' "$command_line" | grep -F -- "--config=$config" >/dev/null
+}
+
+pid_is_running() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+for pidfile in "$DIR"/peer*.pid; do
+  [[ -f "$pidfile" ]] || continue
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  if [[ -z "$pid" ]]; then
+    rm -f "$pidfile"
+    continue
+  fi
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    echo "removing malformed pidfile $pidfile (pid=$pid)" >&2
+    rm -f "$pidfile"
+    continue
+  fi
+  if ! pid_is_running "$pid"; then
+    rm -f "$pidfile"
+    continue
+  fi
+  peer_name="$(basename "$pidfile" .pid)"
+  config="$DIR/${peer_name}.toml"
+  if ! pid_matches_peer "$pid" "$config"; then
+    echo "leaving $pidfile in place: live pid $pid does not match $config" >&2
+    continue
+  fi
+  kill "$pid" 2>/dev/null || true
+  for _ in {1..40}; do
+    if pid_is_running "$pid"; then
+      sleep 0.25
+    else
+      break
+    fi
+  done
+  if pid_is_running "$pid"; then
+    echo "leaving $pidfile in place: local-swarm peer $peer_name pid $pid is still running" >&2
+    continue
+  fi
+  rm -f "$pidfile"
+done
+EOF
+  chmod 700 "$BASE/stop.sh"
+}
+
+preflight_existing_pidfiles() {
+  local found_live=0
+  local pidfile pid peer_name config_path
+
+  for pidfile in "$BASE"/peer*.pid; do
+    [[ -f "$pidfile" ]] || continue
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -z "$pid" ]]; then
+      rm -f "$pidfile"
+      continue
+    fi
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      echo "Removing malformed pidfile $pidfile (pid=$pid)" >&2
+      rm -f "$pidfile"
+      continue
+    fi
+    if ! pid_is_running "$pid"; then
+      rm -f "$pidfile"
+      continue
+    fi
+    peer_name="$(basename "$pidfile" .pid)"
+    config_path="$BASE/${peer_name}.toml"
+    if pid_matches_local_swarm_peer "$pid" "$config_path"; then
+      echo "Refusing to overwrite live local-swarm peer $peer_name pid $pid; run $BASE/stop.sh first." >&2
+    else
+      echo "Leaving $pidfile in place: live pid $pid does not match $config_path." >&2
+    fi
+    found_live=1
+  done
+
+  if [[ "$found_live" -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 addr_literal() {
   python3 - <<'PY' "$1"
 import sys
@@ -98,7 +222,9 @@ PY
 }
 
 mkdir -p "$BASE"
-rm -f "$BASE"/peer*.pid
+BASE="$(cd "$BASE" && pwd)"
+write_stop_script
+preflight_existing_pidfiles
 if [ "${RESET_STORAGE:-1}" -ne 0 ]; then
   rm -rf "$BASE/storage"
 fi
@@ -244,4 +370,4 @@ $IROHA --config "$CLIENT_CONFIG" asset transfer --id "$ASSET#$SENDER" --to "$REC
 $IROHA --config "$CLIENT_CONFIG" asset get --id "$ASSET#$RECIP"
 
 echo "Logs: $BASE/peer*.log  PIDs: $BASE/peer*.pid"
-echo "To stop: xargs kill < $BASE/peer0.pid $BASE/peer1.pid $BASE/peer2.pid $BASE/peer3.pid 2>/dev/null || true"
+echo "To stop safely: cd $BASE && ./stop.sh"

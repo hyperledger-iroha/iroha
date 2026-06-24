@@ -21,6 +21,7 @@ import {
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_EVM_CHAIN_ID,
   SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
@@ -82,6 +83,7 @@ import {
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaOfflineSpendModeForCapabilities,
+  buildKagemushaRecursiveSpendableNoteDescriptor,
   buildKagemushaRecursiveSpendVerifierRecordRef,
   kagemushaRecursiveSpendLineageKeyArtifacts,
   kagemushaRecursiveSpendLineageKeyArtifactsForAppend,
@@ -127,6 +129,7 @@ import {
   SCCP_SOLANA_VOTE_PROGRAM_ID,
   bscCommitMessageHash,
   bscCommitSealHash,
+  bscGroth16VerifierKeyHash,
   bscValidatorSetHashFromPayload,
   bscValidatorSetMetadataProofHash,
   bscValidatorSetPayloadFromHeaderRlp,
@@ -154,6 +157,8 @@ import {
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  SCCP_TAIRA_XOR_ASSET_KEY_V1,
   SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   ethereumMainnetSccpDestinationBinding,
@@ -1417,6 +1422,67 @@ function recursiveSpendVerifierRecord() {
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
+const canonicalJson = (value) => {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+};
+const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = Object.freeze([
+  "message_id",
+  "payload_hash",
+  "target_domain",
+  "commitment_root",
+  "finality_height",
+  "finality_block_hash",
+  "source_domain",
+  "statement_hash",
+  "destination_binding_hash",
+]);
+const sampleBscGroth16ProofSelfTestAdversarialChecks = () => ({
+  publicSignalMismatch: {
+    attempted: 9,
+    rejected: 9,
+    cases: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.map((name, index) => ({
+      index,
+      name,
+      phase: "wtnsCalculate",
+      rejected: true,
+    })),
+  },
+  nonBooleanValueBit: {
+    attempted: 1,
+    rejected: 1,
+    case: {
+      signalName: "message_id",
+      inputName: "messageIdBits",
+      bitIndex: 0,
+      phase: "wtnsCalculate",
+      rejected: true,
+    },
+  },
+});
+const bscNativeProverReportProductionAttestationHash = (
+  kind,
+  materialManifestHash,
+) => {
+  const role =
+    kind === "cross-sdk-parity"
+      ? "cross-sdk-parity"
+      : "native-prover-self-test";
+  return sha256Hex(
+    Buffer.from(
+      `iroha-sccp-bsc-native-prover-report-production-attestation/v1:${role}:${materialManifestHash}`,
+      "utf8",
+    ),
+  );
+};
 const PRIVACY_PACKAGE_PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
 const PRIVACY_PACKAGE_PRODUCTION_REVIEW_SCOPE_VERSION =
   "privacy-production-review-scope-v1";
@@ -1692,6 +1758,57 @@ const BN254_G2_GENERATOR_WORDS = [
   abiWord(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
   abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
 ];
+const BN254_BASE_FIELD_MODULUS =
+  21888242871839275222246405745257275088696311157297823662689037894645226208583n;
+const BSC_TEST_G1 = Object.freeze(["1", "2"]);
+const BSC_TEST_G1_NEGATED = Object.freeze([
+  "1",
+  (BN254_BASE_FIELD_MODULUS - 2n).toString(),
+]);
+const BSC_TEST_G2 = Object.freeze([
+  "10857046999023057135944570762232829481370756359578518086990519993285655852781",
+  "11559732032986387107991004021392285783925812861821192530917403151452391805634",
+  "8495653923123431417604973247489272438418190587263600148770280649306958101930",
+  "4082367875863433681332203403145435568316851327593401208105741076214120093531",
+]);
+const BSC_TEST_G2_NEGATED = Object.freeze([
+  BSC_TEST_G2[0],
+  BSC_TEST_G2[1],
+  (BN254_BASE_FIELD_MODULUS - BigInt(BSC_TEST_G2[2])).toString(),
+  (BN254_BASE_FIELD_MODULUS - BigInt(BSC_TEST_G2[3])).toString(),
+]);
+
+function bscVerifierKeyMaterial(chain) {
+  const material = {
+    schema: "iroha-sccp-bsc-groth16-verifier-key/v1",
+    routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    bscNetwork: chain === "bsc-mainnet" ? "mainnet" : "testnet",
+    chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    sourceDomain: SCCP_DOMAIN_SORA,
+    targetDomain: SCCP_DOMAIN_BSC,
+    publicInputCount: 9,
+    alpha1: [...BSC_TEST_G1],
+    beta2: [...BSC_TEST_G2],
+    gamma2: [...BSC_TEST_G2_NEGATED],
+    delta2: [...BSC_TEST_G2],
+    ic: Array.from({ length: 10 }, (_, index) =>
+      index === 9 ? BSC_TEST_G1_NEGATED : BSC_TEST_G1,
+    ).flat(),
+  };
+  const verifierKeyHash = bscGroth16VerifierKeyHash(material);
+  return {
+    ...material,
+    expectedVerifierKeyHash: verifierKeyHash,
+    verifierKeyHash,
+  };
+}
+
+function bscVerifierKeyMaterialBytes(chain) {
+  return Buffer.from(`${JSON.stringify(bscVerifierKeyMaterial(chain))}\n`);
+}
 
 function sampleGroth16ProofBytes(publicInputs = undefined) {
   const out = new Uint8Array(384);
@@ -1713,6 +1830,97 @@ function sampleGroth16ProofBytes(publicInputs = undefined) {
     abiWord(2),
   ].forEach((word, index) => out.set(word, index * 32));
   return out;
+}
+
+function sampleBscGroth16ProofSelfTestBytes({
+  nativeProverBundle,
+  materialManifestHash,
+  chain,
+  chainIdHex,
+  networkIdHex,
+}) {
+  const publicSignalWords = Array.from({ length: 9 }, (_, index) =>
+    String(index + 1),
+  );
+  const proof = {
+    pi_a: [...BSC_TEST_G1, "1"],
+    pi_b: [
+      [BSC_TEST_G2[1], BSC_TEST_G2[0]],
+      [BSC_TEST_G2[3], BSC_TEST_G2[2]],
+      ["1", "0"],
+    ],
+    pi_c: [...BSC_TEST_G1, "1"],
+    protocol: "groth16",
+    curve: "bn128",
+  };
+  return Buffer.from(
+    JSON.stringify({
+      schema: SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1,
+      routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+      assetKey: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+      bscNetwork: chain === "bsc-mainnet" ? "mainnet" : "testnet",
+      chain,
+      chainIdHex,
+      networkIdHex,
+      circuitProfile: "sccp-bsc-full-message-v1",
+      proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+      proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+      manifest: {
+        path: "groth16-material.manifest.json",
+        sha256: materialManifestHash,
+        productionReady: true,
+        productionBlockers: [],
+      },
+      artifacts: {
+        circuitSource: {
+          path: "circuit/sccp-bsc-full-message-v1.circom",
+          sha256: fixtureHash(`dist ${chain} groth16 circuit source`),
+        },
+        r1cs: {
+          path: nativeProverBundle.proof_artifact,
+          sha256: nativeProverBundle.proof_artifact_hash,
+        },
+        provingKey: {
+          path: nativeProverBundle.proving_key,
+          sha256: nativeProverBundle.proving_key_hash,
+        },
+        snarkjsVerificationKey: {
+          path: `artifacts/${chain}/snarkjs-verification-key.json`,
+          sha256: fixtureHash(
+            `dist ${chain} groth16 snarkjs verification key`,
+          ),
+        },
+        bscVerifierKey: {
+          path: nativeProverBundle.verifier_key,
+          sha256: nativeProverBundle.verifier_key_artifact_hash,
+        },
+        witnessWasm: {
+          path: `artifacts/${chain}/witness.wasm`,
+          sha256: fixtureHash(`dist ${chain} groth16 witness wasm`),
+        },
+      },
+      sample: {
+        id: `dist-${chain}-groth16-self-test`,
+        publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
+        publicSignalWords,
+      },
+      snarkjs: {
+        binary: "snarkjs",
+        wtnsCalculate: true,
+        groth16Prove: true,
+        groth16Verify: true,
+      },
+      adversarialChecks: sampleBscGroth16ProofSelfTestAdversarialChecks(),
+      witnessHash: fixtureHash(`dist ${chain} groth16 witness`),
+      proofHash: sha256Hex(Buffer.from(canonicalJson(proof), "utf8")),
+      publicSignalsHash: sha256Hex(
+        Buffer.from(JSON.stringify(publicSignalWords), "utf8"),
+      ),
+      proof,
+      publicSignals: publicSignalWords,
+    }),
+    "utf8",
+  );
 }
 
 function sampleEvmFamilyProofBundleFixture(targetDomain, nonce = 1n) {
@@ -3877,6 +4085,338 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         lineageKeyArtifacts: initArtifacts,
       }),
     /lineageKeyArtifacts/,
+  );
+});
+
+test("package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const previousProofOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  const initVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0xa1,
+  );
+  const initProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    initVerifierKey,
+    0xa2,
+  );
+  const appendVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    0xa3,
+  );
+  const appendProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    appendVerifierKey,
+    0xa4,
+  );
+  const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  assert.ok(
+    Buffer.isBuffer(
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageVerifierKey: initVerifierKey,
+        lineageProvingKeyArchive: initProvingKey,
+      }),
+    ),
+  );
+  assert.ok(
+    Buffer.isBuffer(
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageVerifierKey: appendVerifierKey,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    ),
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageProvingKeyArchive: initProvingKey,
+      }),
+    /lineageVerifierKey/,
+    "package dist accepted init raw lineage proving key without verifier key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageVerifierKey: initVerifierKey,
+      }),
+    /lineageProvingKeyArchive/,
+    "package dist accepted init raw lineage verifier key without proving key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        lineageVerifierKey: initVerifierKey,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    /lineageKeyArtifacts/,
+    "package dist accepted init raw lineage key profile mismatch",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        lineageVerifierKey: appendVerifierKey,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    /previousProofOpenEnvelopes/,
+    "package dist accepted append raw lineage keys without previous proof openings",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageProvingKeyArchive: appendProvingKey,
+      }),
+    /lineageVerifierKey/,
+    "package dist accepted append raw lineage proving key without verifier key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageVerifierKey: appendVerifierKey,
+      }),
+    /lineageProvingKeyArchive/,
+    "package dist accepted append raw lineage verifier key without proving key",
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+        previousProofOpenEnvelopes,
+        lineageVerifierKey: appendVerifierKey,
+        lineageProvingKeyArchive: initProvingKey,
+      }),
+    /lineageKeyArtifacts/,
+    "package dist accepted append raw lineage key profile mismatch",
+  );
+});
+
+test("package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord: {
+          verifierKeyId: "malformedPreviousLineageRecordBeforeOpeningsPackageDist",
+          recordBytes: Buffer.from([0]),
+        },
+        previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2),
+      }),
+    /previousLineageVerifierRecord/,
+    "package dist checked previous-proof openings before parsing previous lineage record",
+  );
+});
+
+test("package dist Kagemusha recursive spend typed requests reject malformed Pallas opening archives before native dispatch", () => {
+  const recordBundle = syntheticKagemushaRecordBundleArchive();
+  const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const previousProofOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  const initVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0x95,
+  );
+  const initProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    initVerifierKey,
+    0x96,
+  );
+  const appendVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    0x97,
+  );
+  const appendProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    appendVerifierKey,
+    0x98,
+  );
+  const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  const malformedPallasOpenEnvelopes = [
+    Buffer.from([1, 2, 3]),
+    syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72),
+    syntheticPallasOpenEnvelopesArchive(2),
+    syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false }),
+  ];
+  for (const malformedPallasOpenEnvelopesArchive of malformedPallasOpenEnvelopes) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendInitRequest({
+          recordBundle,
+          pallasOpenEnvelopes: malformedPallasOpenEnvelopesArchive,
+          currentNote,
+          lineageVerifierKey: initVerifierKey,
+          lineageProvingKeyArchive: initProvingKey,
+        }),
+      /pallasOpenEnvelopes/,
+      "package dist accepted malformed init Pallas open-envelope archive",
+    );
+  }
+  for (const malformedPallasOpenEnvelopesArchive of malformedPallasOpenEnvelopes) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes: malformedPallasOpenEnvelopesArchive,
+          currentNote,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes,
+          lineageVerifierKey: appendVerifierKey,
+          lineageProvingKeyArchive: appendProvingKey,
+        }),
+      /pallasOpenEnvelopes/,
+      "package dist accepted malformed append Pallas open-envelope archive",
+    );
+  }
+  for (const malformedPreviousProofOpenEnvelopes of malformedPallasOpenEnvelopes) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes,
+          lineageVerifierKey: appendVerifierKey,
+          lineageProvingKeyArchive: appendProvingKey,
+        }),
+      /previousProofOpenEnvelopes/,
+      "package dist accepted malformed previous-proof Pallas open-envelope archive",
+    );
+  }
+});
+
+test("package dist Kagemusha recursive spend typed requests reject malformed amount vectors before native dispatch", () => {
+  const packageDistInvalidPositiveU128Amounts = [
+    "",
+    "0",
+    "00",
+    "01",
+    "0007",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    "7 ",
+    " 7",
+    String(1n << 128n),
+  ];
+  for (const amount of packageDistInvalidPositiveU128Amounts) {
+    assert.throws(
+      () =>
+        buildKagemushaRecursiveSpendableNoteDescriptor({
+          noteCommitment: Buffer.alloc(32, 0x21),
+          spendNullifier: Buffer.alloc(32, 0x22),
+          amount,
+        }),
+      /amount|u128|positive decimal/,
+      `package dist accepted malformed note amount ${JSON.stringify(amount)}`,
+    );
+  }
+
+  const redeemProof = syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x98);
+  const packageDistInvalidPublicAmounts = [
+    "",
+    "0",
+    "00",
+    "01",
+    "0007",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    "7 ",
+    " 7",
+    String(1n << 128n),
+  ];
+  for (const publicAmount of packageDistInvalidPublicAmounts) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recipient: "dist-recipient",
+          publicAmount,
+          redeemProof,
+        }),
+      /publicAmount|u128|positive decimal/,
+      `package dist accepted malformed publicAmount ${JSON.stringify(publicAmount)}`,
+    );
+  }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recipient: "dist-recipient",
+        public_amount: "0007",
+        redeemProof,
+      }),
+    /publicAmount|positive decimal/,
   );
 });
 
@@ -7622,7 +8162,7 @@ test("package declarations keep accumulator digests native-owned", () => {
   const accumulatorDigestDeclarationPattern =
     /\b[A-Za-z0-9_]*(?:lineageDigest|LineageDigest|lineage_digest|aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|proofChainDigest|ProofChainDigest|proof_chain_digest|transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|accumulatorDigest|AccumulatorDigest|accumulator_digest)/u;
   const accumulatorMaterialDeclarationPattern =
-    /\b[A-Za-z0-9_]*(?:lineageAccumulator|LineageAccumulator|lineage_accumulator|recursiveProofChain|RecursiveProofChain|recursive_proof_chain|proofChain|ProofChain|proof_chain|appendAccumulator|AppendAccumulator|append_accumulator|recursiveAccumulator|RecursiveAccumulator|recursive_accumulator|terminalAccumulator|TerminalAccumulator|terminal_accumulator|walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain|accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot|recursiveProofState|RecursiveProofState|recursive_proof_state|lineageProofState|LineageProofState|lineage_proof_state|accumulatorState|AccumulatorState|accumulator_state)/u;
+    /\b[A-Za-z0-9_]*(?:lineageAccumulator|LineageAccumulator|lineage_accumulator|aggregationTranscript|AggregationTranscript|aggregation_transcript|fixedWindowTableSchedule|FixedWindowTableSchedule|fixed_window_table_schedule|fixedWindowSharedTableManifest|FixedWindowSharedTableManifest|fixed_window_shared_table_manifest|fixedWindowTableBase|FixedWindowTableBase|fixed_window_table_base|verifierWitnessBatch|VerifierWitnessBatch|verifier_witness_batch|recursiveProofChain|RecursiveProofChain|recursive_proof_chain|proofChain|ProofChain|proof_chain|appendAccumulator|AppendAccumulator|append_accumulator|recursiveAccumulator|RecursiveAccumulator|recursive_accumulator|terminalAccumulator|TerminalAccumulator|terminal_accumulator|walletRecursiveProofChain|WalletRecursiveProofChain|wallet_recursive_proof_chain|transitionProfileBinding|TransitionProfileBinding|transition_profile_binding|appendOpeningPreflight|AppendOpeningPreflight|append_opening_preflight|recursiveVerifierScalarProjection|RecursiveVerifierScalarProjection|recursive_verifier_scalar_projection|previousAccumulator|PreviousAccumulator|previous_accumulator|resultingAccumulator|ResultingAccumulator|resulting_accumulator|accumulatorSnapshot|AccumulatorSnapshot|accumulator_snapshot|recursiveSnapshot|RecursiveSnapshot|recursive_snapshot|lineageSnapshot|LineageSnapshot|lineage_snapshot|proofState|ProofState|proof_state|recursiveProofState|RecursiveProofState|recursive_proof_state|lineageProofState|LineageProofState|lineage_proof_state|accumulatorState|AccumulatorState|accumulator_state)/u;
   for (const forbiddenName of [
     "lineageDigestV1",
     "LineageDigestBytes",
@@ -7697,12 +8237,28 @@ test("package declarations keep accumulator digests native-owned", () => {
     "WalletRecursiveProofChainBytes",
     "wallet_recursive_proof_chain",
     "wallet_recursive_proof_chain_bytes",
+    "recursiveProofChainBytes",
     "inputTerminalAccumulator",
     "staleWalletRecursiveProofChain",
     "nativeAppendAccumulatorState",
     "publicProofChainBytes",
     "privateAccumulatorState",
     "externalRecursiveAccumulatorBytes",
+    "aggregationTranscript",
+    "AggregationTranscriptBytes",
+    "aggregation_transcript_v1",
+    "fixedWindowTableSchedule",
+    "FixedWindowTableScheduleBytes",
+    "fixed_window_table_schedule_v1",
+    "fixedWindowSharedTableManifest",
+    "FixedWindowSharedTableManifestBytes",
+    "fixed_window_shared_table_manifest_v1",
+    "fixedWindowTableBase",
+    "FixedWindowTableBaseBytes",
+    "fixed_window_table_base_v1",
+    "verifierWitnessBatch",
+    "VerifierWitnessBatchBytes",
+    "verifier_witness_batch_v1",
     "proofChain",
     "ProofChainState",
     "proof_chain_bytes",
@@ -7712,6 +8268,21 @@ test("package declarations keep accumulator digests native-owned", () => {
     "recursiveAccumulator",
     "recursiveAccumulatorV1",
     "recursive_accumulator_bytes",
+    "transitionProfileBinding",
+    "TransitionProfileBindingBytes",
+    "transition_profile_binding_v1",
+    "appendOpeningPreflight",
+    "AppendOpeningPreflightBytes",
+    "append_opening_preflight_v1",
+    "recursiveVerifierScalarProjection",
+    "RecursiveVerifierScalarProjectionBytes",
+    "recursive_verifier_scalar_projection_v1",
+    "previousAccumulator",
+    "PreviousAccumulatorBytes",
+    "previous_accumulator_v1",
+    "resultingAccumulator",
+    "ResultingAccumulatorBytes",
+    "resulting_accumulator_v1",
     "lineageAccumulatorState",
     "LineageAccumulatorState",
     "lineage_accumulator_state",
@@ -7723,6 +8294,15 @@ test("package declarations keep accumulator digests native-owned", () => {
     "accumulatorSnapshot",
     "AccumulatorSnapshotBytes",
     "accumulator_snapshot_v1",
+    "recursiveSnapshot",
+    "RecursiveSnapshotBytes",
+    "recursive_snapshot_v1",
+    "lineageSnapshot",
+    "LineageSnapshotBytes",
+    "lineage_snapshot_v1",
+    "proofState",
+    "ProofStateBytes",
+    "proof_state_v1",
     "recursiveProofState",
     "RecursiveProofStateBytes",
     "recursive_proof_state_v1",
@@ -8142,7 +8722,10 @@ function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
   const forbidden = [
     /\bWebAssembly\b/u,
     /\bwasm\b/iu,
-    /\bsnarkjs\b/iu,
+    /(?:^|[;\s])import\s+(?:[^'"]+\s+from\s+)?["']snarkjs["']/imu,
+    /\bimport\(\s*["']snarkjs["']\s*\)/iu,
+    /\brequire\(\s*["']snarkjs["']\s*\)/iu,
+    /["']snarkjs["']\s*:/iu,
     /\bremoteProver\b/u,
     /\bremote prover\b/iu,
     /\bremote_prover\b/iu,
@@ -8182,7 +8765,10 @@ test("browser SCCP no-WASM guard catches remote-prover identifier variants", () 
   const forbidden = [
     /\bWebAssembly\b/u,
     /\bwasm\b/iu,
-    /\bsnarkjs\b/iu,
+    /(?:^|[;\s])import\s+(?:[^'"]+\s+from\s+)?["']snarkjs["']/imu,
+    /\bimport\(\s*["']snarkjs["']\s*\)/iu,
+    /\brequire\(\s*["']snarkjs["']\s*\)/iu,
+    /["']snarkjs["']\s*:/iu,
     /\bremoteProver\b/u,
     /\bremote prover\b/iu,
     /\bremote_prover\b/iu,
@@ -10094,7 +10680,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         },
         { destinationBinding: ethereumMainnetBinding },
       ),
-    /crossSdkParityBytes must be at least 128 bytes/u,
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
   );
   const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
   const tinySelfTestBundle = hashConsistentNativeProverBundle({
@@ -10195,11 +10781,18 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     /destinationBinding|targetDomain|Ethereum mainnet/u,
   );
   assert.match(DECLARATIONS_TEXT, /export class EthereumMainnetSccp/u);
+  const bscMainnetVerifierKeyBytes =
+    bscVerifierKeyMaterialBytes("bsc-mainnet");
+  const bscMainnetVerifierKeyHash =
+    bscVerifierKeyMaterial("bsc-mainnet").verifierKeyHash;
+  const bscMainnetVerifierKeyArtifactHash = sha256Hex(
+    bscMainnetVerifierKeyBytes,
+  );
   const bscMainnetBinding = bscMainnetSccpDestinationBinding({
     verifierAddress: `0x${"11".repeat(20)}`,
     bridgeAddress: `0x${"22".repeat(20)}`,
     verifierCodeHash: `0x${"bb".repeat(32)}`,
-    verifierKeyHash,
+    verifierKeyHash: bscMainnetVerifierKeyHash,
   });
   const bscFixture = sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_BSC);
   const bscPublicInputs = bscFixture.publicInputs;
@@ -10213,12 +10806,16 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     chain: "bsc-mainnet",
     proof_artifact: "artifacts/bsc-mainnet/proof-artifact.r1cs",
     proving_key: "artifacts/bsc-mainnet/proving-key.zkey",
-    verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
+    verifier_key: "artifacts/bsc-mainnet/verifier-key.json",
+    verifier_key_hash: bscMainnetVerifierKeyHash,
+    verifier_key_artifact_hash: bscMainnetVerifierKeyArtifactHash,
     destination_binding_hash: bscMainnetBinding.bindingHash,
     cross_sdk_parity_artifact:
       "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
+    groth16_proof_self_test_artifact:
+      "artifacts/bsc-mainnet/groth16-proof-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
     ).map(([sdk, implementation], index) => ({
@@ -10234,6 +10831,20 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     })),
   };
   delete bscMainnetNativeProverBundle.cross_sdk_fixture_parity_artifact;
+  const bscMainnetGroth16MaterialManifestHash = fixtureHash(
+    "dist bsc mainnet groth16 material manifest",
+  );
+  const bscMainnetGroth16ProofSelfTestFixtureBytes =
+    sampleBscGroth16ProofSelfTestBytes({
+      nativeProverBundle: bscMainnetNativeProverBundle,
+      materialManifestHash: bscMainnetGroth16MaterialManifestHash,
+      chain: "bsc-mainnet",
+      chainIdHex: "0x38",
+      networkIdHex: SCCP_BSC_MAINNET_NETWORK_ID,
+    });
+  bscMainnetNativeProverBundle.groth16_proof_self_test_hash = sha256Hex(
+    bscMainnetGroth16ProofSelfTestFixtureBytes,
+  );
   const bscMainnetParitySdkResult = {
     ...paritySdkResult,
     destination_binding_hash: bscMainnetBinding.bindingHash,
@@ -10245,11 +10856,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
     proof_artifact_hash: proofArtifactHash,
     proving_key_hash: provingKeyHash,
-    verifier_key_hash: verifierKeyHash,
+    verifier_key_hash: bscMainnetVerifierKeyHash,
     destination_binding_hash: bscMainnetBinding.bindingHash,
-    production_attestation_hash: fixtureHash(
-      "dist bsc mainnet native prover parity production attestation",
-    ),
+    production_attestation_hash:
+      bscNativeProverReportProductionAttestationHash(
+        "cross-sdk-parity",
+        bscMainnetGroth16MaterialManifestHash,
+      ),
     ...bscMainnetParitySdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
@@ -10268,11 +10881,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
     proof_artifact_hash: proofArtifactHash,
     proving_key_hash: provingKeyHash,
-    verifier_key_hash: verifierKeyHash,
+    verifier_key_hash: bscMainnetVerifierKeyHash,
     destination_binding_hash: bscMainnetBinding.bindingHash,
-    production_attestation_hash: fixtureHash(
-      "dist bsc mainnet native prover self-test production attestation",
-    ),
+    production_attestation_hash:
+      bscNativeProverReportProductionAttestationHash(
+        "native-prover-self-test",
+        bscMainnetGroth16MaterialManifestHash,
+      ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
@@ -10298,9 +10913,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       nativeProverBundle: bscMainnetNativeProverBundle,
       proofArtifactBytes,
       provingKeyBytes,
-      verifierKeyBytes,
+      verifierKeyBytes: bscMainnetVerifierKeyBytes,
       crossSdkParityBytes: bscMainnetParityFixtureBytes,
       nativeProverSelfTestBytes: bscMainnetSelfTestFixtureBytes,
+      groth16ProofSelfTestBytes: bscMainnetGroth16ProofSelfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
     },
@@ -10349,11 +10965,18 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     /export class BscMainnetGroth16Bn254ProofAdapter/u,
   );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
+  const bscTestnetVerifierKeyBytes =
+    bscVerifierKeyMaterialBytes("bsc-testnet");
+  const bscTestnetVerifierKeyHash =
+    bscVerifierKeyMaterial("bsc-testnet").verifierKeyHash;
+  const bscTestnetVerifierKeyArtifactHash = sha256Hex(
+    bscTestnetVerifierKeyBytes,
+  );
   const bscTestnetBinding = bscTestnetSccpDestinationBinding({
     verifierAddress: `0x${"33".repeat(20)}`,
     bridgeAddress: `0x${"44".repeat(20)}`,
     verifierCodeHash: `0x${"dd".repeat(32)}`,
-    verifierKeyHash,
+    verifierKeyHash: bscTestnetVerifierKeyHash,
   });
   const bscTestnetNativeProverBundle = {
     ...nativeProverBundle,
@@ -10362,12 +10985,16 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     chain: "bsc-testnet",
     proof_artifact: "artifacts/bsc-testnet/proof-artifact.r1cs",
     proving_key: "artifacts/bsc-testnet/proving-key.zkey",
-    verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
+    verifier_key: "artifacts/bsc-testnet/verifier-key.json",
+    verifier_key_hash: bscTestnetVerifierKeyHash,
+    verifier_key_artifact_hash: bscTestnetVerifierKeyArtifactHash,
     destination_binding_hash: bscTestnetBinding.bindingHash,
     cross_sdk_parity_artifact:
       "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
+    groth16_proof_self_test_artifact:
+      "artifacts/bsc-testnet/groth16-proof-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
     ).map(([sdk, implementation], index) => ({
@@ -10383,6 +11010,20 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     })),
   };
   delete bscTestnetNativeProverBundle.cross_sdk_fixture_parity_artifact;
+  const bscTestnetGroth16MaterialManifestHash = fixtureHash(
+    "dist bsc testnet groth16 material manifest",
+  );
+  const bscTestnetGroth16ProofSelfTestFixtureBytes =
+    sampleBscGroth16ProofSelfTestBytes({
+      nativeProverBundle: bscTestnetNativeProverBundle,
+      materialManifestHash: bscTestnetGroth16MaterialManifestHash,
+      chain: "bsc-testnet",
+      chainIdHex: "0x61",
+      networkIdHex: SCCP_BSC_TESTNET_NETWORK_ID,
+    });
+  bscTestnetNativeProverBundle.groth16_proof_self_test_hash = sha256Hex(
+    bscTestnetGroth16ProofSelfTestFixtureBytes,
+  );
   const bscTestnetParitySdkResult = {
     ...paritySdkResult,
     destination_binding_hash: bscTestnetBinding.bindingHash,
@@ -10394,11 +11035,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
     proof_artifact_hash: proofArtifactHash,
     proving_key_hash: provingKeyHash,
-    verifier_key_hash: verifierKeyHash,
+    verifier_key_hash: bscTestnetVerifierKeyHash,
     destination_binding_hash: bscTestnetBinding.bindingHash,
-    production_attestation_hash: fixtureHash(
-      "dist bsc testnet native prover parity production attestation",
-    ),
+    production_attestation_hash:
+      bscNativeProverReportProductionAttestationHash(
+        "cross-sdk-parity",
+        bscTestnetGroth16MaterialManifestHash,
+      ),
     ...bscTestnetParitySdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
@@ -10417,11 +11060,13 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
     proof_artifact_hash: proofArtifactHash,
     proving_key_hash: provingKeyHash,
-    verifier_key_hash: verifierKeyHash,
+    verifier_key_hash: bscTestnetVerifierKeyHash,
     destination_binding_hash: bscTestnetBinding.bindingHash,
-    production_attestation_hash: fixtureHash(
-      "dist bsc testnet native prover self-test production attestation",
-    ),
+    production_attestation_hash:
+      bscNativeProverReportProductionAttestationHash(
+        "native-prover-self-test",
+        bscTestnetGroth16MaterialManifestHash,
+      ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
@@ -10447,9 +11092,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       nativeProverBundle: bscTestnetNativeProverBundle,
       proofArtifactBytes,
       provingKeyBytes,
-      verifierKeyBytes,
+      verifierKeyBytes: bscTestnetVerifierKeyBytes,
       crossSdkParityBytes: bscTestnetParityFixtureBytes,
       nativeProverSelfTestBytes: bscTestnetSelfTestFixtureBytes,
+      groth16ProofSelfTestBytes: bscTestnetGroth16ProofSelfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
     },
@@ -10841,6 +11487,14 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
         networkId: `0x${"33".repeat(32)}`,
       }),
     /sourceBridgeNetworkId must be Ethereum mainnet chain id/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        sourceBridgeEmitterCodeHash: SCCP_ETH_MAINNET_NETWORK_ID,
+      }),
+    /sourceBridgeEmitterCodeHash must not match sourceBridgeNetworkId/u,
   );
   assert.throws(
     () =>

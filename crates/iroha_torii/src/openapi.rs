@@ -683,22 +683,22 @@ fn offline_paths() -> Map {
         (
             "/v1/offline/v2/keys/refill",
             "Refill Offline V2 issuer keys.",
-            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/issue",
             "Issue an Offline V2 note.",
-            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/audit",
             "Submit an Offline V2 audit request.",
-            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -9292,7 +9292,7 @@ fn openapi_schemas() -> Map {
         "OfflineIssuerBodyAuthRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
+            "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
             "required": ["account_id", "timestamp_ms", "nonce"],
             "additionalProperties": true,
             "properties": {
@@ -9311,11 +9311,11 @@ fn openapi_schemas() -> Map {
                 },
                 "signature_base64": {
                     "type": "string",
-                    "description": "Base64 single-account signature over the body-auth canonical request."
+                    "description": "Non-empty exact base64 single-account signature over the body-auth canonical request; leading or trailing whitespace is rejected."
                 },
                 "witness_base64": {
                     "type": "string",
-                    "description": "Base64 Norito CanonicalRequestWitnessV1 for multisig accounts."
+                    "description": "Non-empty exact base64 Norito CanonicalRequestWitnessV1 for multisig accounts; leading or trailing whitespace is rejected."
                 }
             },
             "oneOf": [
@@ -13085,6 +13085,7 @@ mod tests {
         assert!(!paths.contains_key("/v1/offline/policy"));
         assert!(!paths.contains_key("/v1/offline/revocations"));
         assert!(!paths.contains_key("/v1/offline/revocations/bundle"));
+        assert!(!paths.contains_key("/v1/attestation/issue"));
         let refill_post = paths
             .get("/v1/offline/v2/keys/refill")
             .and_then(Value::as_object)
@@ -13142,8 +13143,21 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("schema description");
-        assert!(description.contains("exactly one proof field"));
+        assert!(description.contains("exactly one non-empty exact proof field"));
         assert!(description.contains("nested fields with those names remain signed"));
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("schema properties");
+        for field in ["signature_base64", "witness_base64"] {
+            let description = properties
+                .get(field)
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("description"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(description.contains("leading or trailing whitespace is rejected"));
+        }
     }
 
     #[test]

@@ -149,7 +149,7 @@ run_cmd() {
   "$@"
 }
 
-run_in_dir() {
+print_in_dir_cmd() {
   local dir="$1"
   shift
   printf '+ (cd %q &&' "$dir"
@@ -158,10 +158,34 @@ run_in_dir() {
     printf ' %q' "$arg"
   done
   printf ')\n'
+}
+
+run_in_dir() {
+  local dir="$1"
+  shift
+  print_in_dir_cmd "$dir" "$@"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
   (cd "$dir" && "$@")
+}
+
+run_capture_in_dir() {
+  local result_var="$1"
+  local dir="$2"
+  shift 2
+  print_in_dir_cmd "$dir" "$@"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf -v "$result_var" ''
+    return 0
+  fi
+  local output
+  if ! output="$(cd "$dir" && "$@" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
+  printf '%s\n' "$output"
+  printf -v "$result_var" '%s' "$output"
 }
 
 ensure_swift_bridge_artifact() {
@@ -409,21 +433,139 @@ phase_java_android() {
 phase_dotnet_sdk() {
   local dotnet_cli
   local dotnet_root
+  local dotnet_trx_display
+  local dotnet_trx_path
+  local dotnet_trx_paths
+  local dotnet_version
+  local dotnet_info
+  local dotnet_rid
+  local dotnet_arch
+  local dotnet_arch_lc
   dotnet_cli="$(resolve_dotnet)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dotnet_root="$(dirname "$dotnet_cli")"
   else
     dotnet_root="$(cd "$(dirname "$dotnet_cli")" && pwd)"
   fi
+  local dotnet_env=(
+    env
+    "DOTNET_ROOT=$dotnet_root"
+    "DOTNET_CLI_TELEMETRY_OPTOUT=1"
+    "DOTNET_CLI_UI_LANGUAGE=en"
+  )
+  run_capture_in_dir dotnet_version "$ROOT/csharp" \
+    "${dotnet_env[@]}" "$dotnet_cli" --version
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    dotnet_version="${dotnet_version//$'\r'/}"
+    dotnet_version="${dotnet_version%%$'\n'*}"
+    if [[ ! "$dotnet_version" =~ ^8\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9_.-]*)?$ ]]; then
+      echo "SCCP .NET SDK validation requires a canonical .NET 8 SDK version; found: $dotnet_version" >&2
+      return 1
+    fi
+    printf 'SCCP .NET SDK version: %s\n' "$dotnet_version"
+  fi
+  run_capture_in_dir dotnet_info "$ROOT/csharp" \
+    "${dotnet_env[@]}" "$dotnet_cli" --info
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    if ! grep -Eq '^[[:space:]]*OS (Name|Platform):[[:space:]]*Windows[[:space:]]*$' <<<"$dotnet_info"; then
+      echo "SCCP .NET SDK validation must be captured on Windows." >&2
+      return 1
+    fi
+    dotnet_rid="$(
+      awk -F: '
+        /^[[:space:]]*RID:/ {
+          value = $2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          print value
+          exit
+        }
+      ' <<<"$dotnet_info"
+    )"
+    if [[ ! "$dotnet_rid" =~ ^win-(x64|x86|arm64|arm)$ ]]; then
+      echo "SCCP .NET SDK validation requires a canonical Windows RID; found: $dotnet_rid" >&2
+      return 1
+    fi
+    dotnet_arch="$(
+      awk -F: '
+        /^[[:space:]]*OS Architecture:/ {
+          value = $2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          print value
+          exit
+        }
+      ' <<<"$dotnet_info"
+    )"
+    if [[ -z "$dotnet_arch" ]]; then
+      dotnet_arch="$(
+        awk -F: '
+          /^[[:space:]]*Architecture:/ {
+            value = $2
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            print value
+            exit
+          }
+        ' <<<"$dotnet_info"
+      )"
+    fi
+    dotnet_arch_lc="$(printf '%s' "$dotnet_arch" | tr '[:upper:]' '[:lower:]')"
+    if [[ ! "$dotnet_arch_lc" =~ ^(x64|x86|arm64|arm)$ ]]; then
+      echo "SCCP .NET SDK validation requires a canonical architecture; found: $dotnet_arch" >&2
+      return 1
+    fi
+    printf 'SCCP .NET SDK OS: Windows\n'
+    printf 'SCCP .NET SDK RID: %s\n' "$dotnet_rid"
+    printf 'SCCP .NET SDK Architecture: %s\n' "$dotnet_arch_lc"
+  fi
   run_in_dir "$ROOT/csharp" \
-    env "DOTNET_ROOT=$dotnet_root" "DOTNET_CLI_TELEMETRY_OPTOUT=1" "DOTNET_CLI_UI_LANGUAGE=en" \
+    "${dotnet_env[@]}" \
+    "$dotnet_cli" restore Hyperledger.Iroha.Sdk.sln
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    while IFS= read -r -d '' dotnet_trx_path; do
+      rm -f "$dotnet_trx_path"
+    done < <(
+      find "$ROOT/csharp/tests/Hyperledger.Iroha.Sdk.Tests" \
+        -path '*/TestResults/sccp-dotnet-sdk.trx' \
+        -type f \
+        -print0 2>/dev/null
+    )
+  fi
+  run_in_dir "$ROOT/csharp" \
+    "${dotnet_env[@]}" \
     "$dotnet_cli" test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-    --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" \
-    --nologo
+    --filter "FullyQualifiedName~Sccp" \
+    --nologo \
+    --logger "trx;LogFileName=sccp-dotnet-sdk.trx"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    dotnet_trx_paths=()
+    while IFS= read -r -d '' dotnet_trx_path; do
+      dotnet_trx_paths+=("$dotnet_trx_path")
+    done < <(
+      find "$ROOT/csharp/tests/Hyperledger.Iroha.Sdk.Tests" \
+        -path '*/TestResults/sccp-dotnet-sdk.trx' \
+        -type f \
+        -print0 2>/dev/null
+    )
+    if [[ "${#dotnet_trx_paths[@]}" -ne 1 ]]; then
+      echo "SCCP .NET SDK validation requires exactly one .NET TRX result; found: ${#dotnet_trx_paths[@]}" >&2
+      return 1
+    fi
+    dotnet_trx_path="${dotnet_trx_paths[0]}"
+    dotnet_trx_display="${dotnet_trx_path#$ROOT/}"
+    case "$dotnet_trx_display" in
+      csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx | \
+      csharp/tests/Hyperledger.Iroha.Sdk.Tests/*/TestResults/*sccp-dotnet-sdk.trx)
+        ;;
+      *)
+        echo "SCCP .NET SDK validation produced an unexpected TRX path: $dotnet_trx_path" >&2
+        return 1
+        ;;
+    esac
+    printf 'SCCP .NET SDK TRX: %s\n' "$dotnet_trx_display"
+  fi
 }
 
 phase_contract_smoke() {
-  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/sccp_bsc_groth16_material.test.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
 }

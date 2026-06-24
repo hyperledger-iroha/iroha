@@ -713,15 +713,27 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "==> SCCP production corridor: dotnet-sdk" in completed.stdout
     assert "DOTNET_CLI_TELEMETRY_OPTOUT=1" in completed.stdout
     assert "DOTNET_CLI_UI_LANGUAGE=en" in completed.stdout
+    assert "dotnet --version" in completed.stdout
+    assert "dotnet --info" in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" in completed.stdout
     assert (
         "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
         "Hyperledger.Iroha.Sdk.Tests.csproj"
     ) in completed.stdout
-    assert (
-        "FullyQualifiedName~SccpEthereumMainnetTests\\|"
-        "FullyQualifiedName~SccpBscMainnetTests"
-    ) in completed.stdout
+    assert "FullyQualifiedName~Sccp" in completed.stdout
+    assert "FullyQualifiedName~SccpEthereumMainnetTests|" not in completed.stdout
+    assert "sccp-dotnet-sdk.trx" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
+
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "canonical .NET 8 SDK version" in script
+    assert "OS Architecture:" in script
+    assert "canonical Windows RID" in script
+    assert "SCCP .NET SDK Architecture:" in script
+    assert "canonical architecture" in script
+    assert "^(x64|x86|arm64|arm)$" in script
+    assert "requires exactly one .NET TRX result" in script
+    assert "SCCP .NET SDK TRX:" in script
 
 
 def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:

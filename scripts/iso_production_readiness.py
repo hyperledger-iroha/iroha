@@ -43,7 +43,7 @@ EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
-XSD_SUMMARY_VERSION = 1
+XSD_SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
@@ -295,6 +295,7 @@ XSD_SUMMARY_KEYS = {
     "missing_schema_fixtures",
     "schema_only_entries",
     "missing_profile_schema_versions",
+    "missing_profile_schema_message_ids",
     "blocked_schema_source_count",
     "blocked_schema_sources",
     "schemas",
@@ -389,6 +390,13 @@ XSD_PROFILE_MISSING_VERSION_KEYS = {
     "message_type",
     "direction",
     "message_def_id",
+}
+XSD_PROFILE_MISSING_MESSAGE_KEYS = {
+    "message_def_id",
+    "profile_version_count",
+    "reviewed_missing_schema_fixture",
+    "reviewed_schema_only",
+    "blocked_source",
 }
 XSD_PROFILE_SKIPPED_VERSION_KEYS = {
     "profile_id",
@@ -950,35 +958,36 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str) -> None:
-    _reject_output_path_smuggling(path, "output path")
-    _reject_repository_output_path(path, "output path")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
-        raise ReadinessError(f"{path.parent} must be a directory") from error
+        raise ReadinessError(f"{label} must be a directory") from error
     parent_mode = path.parent.lstat().st_mode
     if stat.S_ISLNK(parent_mode):
-        raise ReadinessError(f"{path.parent} must not be a symlink")
+        raise ReadinessError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
-        raise ReadinessError(f"{path.parent} must be a directory")
+        raise ReadinessError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise ReadinessError(f"{path} must not be a symlink")
+            raise ReadinessError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
-            raise ReadinessError(f"{path} must be a regular file")
+            raise ReadinessError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
-            raise ReadinessError(f"{path} must not be hard-linked")
+            raise ReadinessError(f"{label} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(path.parent, parent_flags | nofollow)
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise ReadinessError(f"{path.parent} must not be a symlink") from error
-        raise ReadinessError(f"{path.parent} must be a directory") from error
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        raise ReadinessError(f"{label} must be a directory") from error
 
     fd = -1
     leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
@@ -991,15 +1000,15 @@ def _write_text_output(path: Path, text: str) -> None:
             tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise ReadinessError(f"{path} temp file must not be a symlink") from error
+                raise ReadinessError(f"{label} temp file must not be a symlink") from error
             raise ReadinessError(
-                f"cannot open temporary output for {path}: {error.strerror}"
+                f"cannot open temporary output for {label}: {error.strerror}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise ReadinessError(f"{path} temp file must be a regular file")
+            raise ReadinessError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
-            raise ReadinessError(f"{path} temp file must not be hard-linked")
+            raise ReadinessError(f"{label} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
@@ -2947,6 +2956,7 @@ def _verify_xsd_summary_entries(
     fixture_paths: list[str] = []
     fixture_digests: list[str] = []
     backed_schema_paths: set[str] = set()
+    schema_backed_message_ids: set[str] = set()
     computed_missing_schema_entries: list[tuple[str, str, str]] = []
     computed_schema_backed = 0
     computed_schema_validated = 0
@@ -2973,6 +2983,7 @@ def _verify_xsd_summary_entries(
         )
         if schema_backed:
             computed_schema_backed += 1
+            schema_backed_message_ids.add(fixture_message_def_id)
             if schema_validated:
                 computed_schema_validated += 1
             if missing_reason is not None:
@@ -3157,6 +3168,7 @@ def _verify_xsd_summary_entries(
     summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
     summary["_validated_fixture_paths"] = fixture_paths
     summary["_validated_fixture_digests"] = fixture_digests
+    summary["_validated_schema_backed_message_ids"] = schema_backed_message_ids
 
 
 def _xsd_gap_entry_key(
@@ -3225,6 +3237,7 @@ def _verify_xsd_profile_catalog_entries(
     profile_checked_versions: int,
     profile_schema_backed_versions: int,
     missing_profile_schema_versions: list[Any],
+    schema_backed_message_ids: set[str],
     blockers: list[dict[str, Any]],
 ) -> dict[str, str] | None:
     if "profile_catalog" not in summary:
@@ -3374,6 +3387,14 @@ def _verify_xsd_profile_catalog_entries(
         else:
             seen_versions[key] = offset
         schema_backed = _require_bool(version, "schema_backed", label)
+        expected_schema_backed = key[3] in schema_backed_message_ids
+        if schema_backed != expected_schema_backed:
+            _blocker(
+                blockers,
+                "xsd.profile_version_schema_backing_mismatch",
+                "XSD profile catalog version schema_backed flag does not match schema-backed fixtures",
+                path,
+            )
         if schema_backed:
             computed_schema_backed += 1
         else:
@@ -3430,6 +3451,77 @@ def _verify_xsd_profile_catalog_entries(
         "catalog_json_sha256": profile_catalog_json_sha256,
         "profiles": catalog_profiles,
     }
+
+
+def _verify_missing_profile_schema_message_ids(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    missing_profile_schema_versions: list[Any],
+    missing_schema_message_ids: set[str],
+    schema_only_message_ids: set[str],
+    blocked_schema_message_ids: set[str],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Verify the unique missing-message aggregate against raw profile gaps."""
+
+    raw_entries = _require_list(
+        summary.get("missing_profile_schema_message_ids"),
+        f"{path}.missing_profile_schema_message_ids",
+    )
+    counts: dict[str, int] = {}
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        message_def_id = _require_message_def_id(missing, "message_def_id", label)
+        counts[message_def_id] = counts.get(message_def_id, 0) + 1
+
+    expected = sorted(
+        (
+            message_def_id,
+            count,
+            message_def_id in missing_schema_message_ids,
+            message_def_id in schema_only_message_ids,
+            message_def_id in blocked_schema_message_ids,
+        )
+        for message_def_id, count in counts.items()
+    )
+    actual: list[tuple[str, int, bool, bool, bool]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(raw_entries):
+        label = f"{path}.missing_profile_schema_message_ids[{offset}]"
+        entry = _require_object(raw_entry, label)
+        _reject_unknown_keys(entry, XSD_PROFILE_MISSING_MESSAGE_KEYS, label)
+        message_def_id = _require_message_def_id(entry, "message_def_id", label)
+        if message_def_id in seen:
+            _blocker(
+                blockers,
+                "xsd.missing_profile_schema_message_id_duplicate",
+                (
+                    f"{label}.message_def_id duplicates "
+                    f"{path}.missing_profile_schema_message_ids"
+                    f"[{seen[message_def_id]}].message_def_id"
+                ),
+                path,
+            )
+        else:
+            seen[message_def_id] = offset
+        actual.append(
+            (
+                message_def_id,
+                _require_positive_int(entry, "profile_version_count", label),
+                _require_bool(entry, "reviewed_missing_schema_fixture", label),
+                _require_bool(entry, "reviewed_schema_only", label),
+                _require_bool(entry, "blocked_source", label),
+            )
+        )
+    if sorted(actual) != expected:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_message_ids_mismatch",
+            "XSD summary missing_profile_schema_message_ids does not match profile gaps",
+            path,
+        )
 
 
 def _block_xsd_profile_catalog_digest_role_confusion(
@@ -3980,6 +4072,7 @@ def verify_xsd_summary(
         profile_checked_versions=profile_checked_versions,
         profile_schema_backed_versions=profile_schema_backed_versions,
         missing_profile_schema_versions=missing_profile_schema_versions,
+        schema_backed_message_ids=summary["_validated_schema_backed_message_ids"],
         blockers=blockers,
     )
     if profile_catalog_summary is not None:
@@ -4000,10 +4093,20 @@ def verify_xsd_summary(
         if isinstance(entry, dict)
     }
     current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
-    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | {
+    blocked_schema_message_ids = {
         blocked["message_def_id"]
         for blocked in summary["_validated_blocked_schema_sources"]
     }
+    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | blocked_schema_message_ids
+    _verify_missing_profile_schema_message_ids(
+        summary,
+        path,
+        missing_profile_schema_versions=missing_profile_schema_versions,
+        missing_schema_message_ids=missing_schema_message_ids,
+        schema_only_message_ids=schema_only_message_ids,
+        blocked_schema_message_ids=blocked_schema_message_ids,
+        blockers=blockers,
+    )
     blocked_gap_message_ids = missing_schema_message_ids | {
         _require_message_def_id(
             entry,
@@ -4024,8 +4127,7 @@ def verify_xsd_summary(
             )
 
     has_reviewed_xsd_gap = (
-        repository_fixture_manifest
-        or bool(missing_schema_fixtures)
+        bool(missing_schema_fixtures)
         or bool(schema_only_entries)
         or bool(blocked_schema_sources)
     )
@@ -4034,7 +4136,7 @@ def verify_xsd_summary(
         return warnings if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap else blockers
 
     if repository_fixture_manifest:
-        reviewed_gap_target().append(
+        blockers.append(
             {
                 "code": "xsd.repository_fixture_manifest",
                 "message": (
@@ -5861,8 +5963,8 @@ def run(args: argparse.Namespace) -> int:
     xsd_summary_paths = list(args.xsd_summary or [])
     evidence_summary_paths = list(args.evidence_summary or [])
     if args.summary_out is not None:
-        _reject_output_path_smuggling(args.summary_out, "output path")
-        _reject_repository_output_path(args.summary_out, "output path")
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
     for offset, path in enumerate(xsd_summary_paths):
         _reject_output_path_smuggling(path, f"--xsd-summary[{offset}]")
     for offset, path in enumerate(evidence_summary_paths):
@@ -5962,7 +6064,7 @@ def run(args: argparse.Namespace) -> int:
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
-        _write_text_output(args.summary_out, text)
+        _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
     return 0 if output["ok"] else 1
 

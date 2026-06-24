@@ -3460,6 +3460,8 @@ public final class HttpClientTransportTests {
                     .setCreationTimeMs(123L)
                     .setFeeSponsor("fee-sponsor")
                     .setMemo("QR invoice 42")
+                    .setValidationFeePolicyVersion(7L)
+                    .setValidationFeePolicyHash("AB".repeat(32))
                     .build())
             .join();
 
@@ -3484,6 +3486,10 @@ public final class HttpClientTransportTests {
     assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
     assert "fee-sponsor".equals(payload.get("fee_sponsor")) : "fee_sponsor mismatch";
     assert "QR invoice 42".equals(payload.get("memo")) : "memo mismatch";
+    assert "7".equals(payload.get("validation_fee_policy_version"))
+        : "validation_fee_policy_version mismatch";
+    assert "ab".repeat(32).equals(payload.get("validation_fee_policy_hash"))
+        : "validation_fee_policy_hash mismatch";
     assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
         : "creation_time_ms mismatch";
     @SuppressWarnings("unchecked")
@@ -3556,6 +3562,48 @@ public final class HttpClientTransportTests {
                     .setCreationTimeMs(-1L)
                     .build()),
         "negative creation time must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyVersion(1L)
+                    .build()),
+        "validation fee policy version without hash must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .build()),
+        "validation fee policy hash without version must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyVersion(-1L)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .build()),
+        "negative validation fee policy version must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("not-hex")
+                    .build()),
+        "malformed validation fee policy hash must be rejected");
   }
 
   private static void multisigResponseParserRejectsMalformedFields() {

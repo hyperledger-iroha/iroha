@@ -168,29 +168,41 @@ def phase_command_lines(fragments) -> list[str]:
         return lines
 
     if any(
-        fragment.startswith("dotnet test ") or fragment.startswith("FullyQualifiedName")
+        fragment.startswith("dotnet ")
+        or fragment.startswith("FullyQualifiedName")
+        or fragment == "sccp-dotnet-sdk.trx"
         for fragment in fragments
     ):
+        if "dotnet --version" in fragments:
+            lines.append("+ dotnet --version")
+        if "dotnet --info" in fragments:
+            lines.append("+ dotnet --info")
+        if "dotnet restore Hyperledger.Iroha.Sdk.sln" in fragments:
+            lines.append("+ dotnet restore Hyperledger.Iroha.Sdk.sln")
         test_command = next(
             (
                 fragment
                 for fragment in fragments
                 if fragment.startswith("dotnet test ")
             ),
-            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
-        )
-        filter_fragment = next(
-            (
-                fragment
-                for fragment in fragments
-                if fragment.startswith("FullyQualifiedName")
-            ),
             None,
         )
-        if filter_fragment is not None:
-            test_command += " --filter " + filter_fragment
-        test_command += " --nologo"
-        return [f"+ {test_command}"]
+        if test_command is not None:
+            filter_fragment = next(
+                (
+                    fragment
+                    for fragment in fragments
+                    if fragment.startswith("FullyQualifiedName")
+                ),
+                None,
+            )
+            if filter_fragment is not None:
+                test_command += " --filter " + filter_fragment
+            test_command += " --nologo"
+            if "sccp-dotnet-sdk.trx" in fragments:
+                test_command += " --logger trx;LogFileName=sccp-dotnet-sdk.trx"
+            lines.append(f"+ {test_command}")
+        return lines
 
     if any(
         fragment.endswith(".test.mjs")
@@ -214,6 +226,87 @@ def phase_command_lines(fragments) -> list[str]:
         return lines
 
     return [f"+ {fragment}" for fragment in fragments]
+
+
+def phase_success_lines(report, phase: str) -> list[str]:
+    """Render success fragments as realistic production-corridor output."""
+
+    lines: list[str] = []
+    for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase]:
+        if phase == "dotnet-sdk" and fragment == "SCCP .NET SDK version: 8.":
+            lines.append("SCCP .NET SDK version: 8.0.204")
+            continue
+        if phase == "dotnet-sdk" and fragment == "SCCP .NET SDK RID: win-":
+            lines.append("SCCP .NET SDK RID: win-x64")
+            continue
+        if phase == "dotnet-sdk" and fragment == "SCCP .NET SDK Architecture:":
+            lines.append("SCCP .NET SDK Architecture: x64")
+            continue
+        if phase == "dotnet-sdk" and fragment == "Passed!":
+            lines.append(
+                "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+                "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+            )
+            continue
+        if phase == "dotnet-sdk" and fragment == "SCCP .NET SDK TRX:":
+            lines.append(
+                "SCCP .NET SDK TRX: "
+                "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/"
+                "sccp-dotnet-sdk.trx"
+            )
+            continue
+        lines.append(fragment)
+    return lines
+
+
+def phase_successful_lines(report, phase: str) -> list[str]:
+    """Render a successful phase transcript with output in each command window."""
+
+    commands = phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+    success = phase_success_lines(report, phase)
+    lines: list[str] = []
+    if phase == "swift-sdk":
+        for command in commands:
+            lines.extend((command, success[0]))
+        return lines
+    if phase == "kotlin-sdk":
+        for command in commands:
+            lines.append(command)
+            if command == "+ java -version":
+                lines.append(success[0])
+            elif "./gradlew :core-jvm:test" in command:
+                lines.append(success[1])
+        return lines
+    if phase == "java-android":
+        for command in commands:
+            lines.append(command)
+            if command == "+ java -version":
+                lines.append(success[0])
+            elif "./gradlew :core:test" in command:
+                lines.append(success[1])
+        return lines
+    if phase == "dotnet-sdk":
+        for command in commands:
+            lines.append(command)
+            if command == "+ dotnet --version":
+                lines.append(success[0])
+            elif command == "+ dotnet --info":
+                lines.extend(success[1:4])
+            elif command.startswith("+ dotnet test "):
+                lines.extend(success[4:])
+        return lines
+    if phase == "contract-smoke":
+        node_success = [
+            marker for marker in success if marker != "sccp_message_bridge_smoke: ok"
+        ]
+        for command in commands:
+            lines.append(command)
+            if command.startswith("+ node --test "):
+                lines.extend(node_success)
+            elif command.startswith("+ bash scripts/"):
+                lines.append("sccp_message_bridge_smoke: ok")
+        return lines
+    return [*commands, *success]
 
 
 def corridor_evidence_script_tests() -> tuple[str, ...]:
@@ -376,12 +469,148 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         "block_receipts_root": fixed_hex32(0xA4),
         "message_id": fixed_hex32(0xA5),
         "receipt_block_number": 1,
+        "message_proof_used": True,
         "receipt_block_finalized": True,
     }
     assert verifier._active_launch_route_canary_metadata_blockers(
         label,
         valid_canary,
     ) == []
+
+    route_canary_blocker_cases = (
+        (
+            "scalar",
+            "operator says route canary is ready",
+            "route canary blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            "empty",
+            [""],
+            "route canary blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "padded",
+            [" route canary still pending"],
+            "route canary blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "numeric",
+            [123],
+            "route canary blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "sensitive",
+            ["secret-token-route-canary-blocker"],
+            "route canary blockers[0] contains sensitive name",
+        ),
+        (
+            "valid_nonempty",
+            ["route canary governance review pending"],
+            "route canary blockers must be empty",
+        ),
+    )
+    for case_label, blocker_value, expected_blocker in route_canary_blocker_cases:
+        canary = {**valid_canary, "blockers": blocker_value}
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert any(expected_blocker in blocker for blocker in blockers), case_label
+        assert "secret-token" not in "\n".join(blockers)
+
+    upstream_hash_roles = (
+        ("source verifier material hash", fixed_hex32(0xB1)),
+        ("source adapter engine deployment hash", fixed_hex32(0xB2)),
+        ("destination binding hash", fixed_hex32(0xB3)),
+        ("source adapter gate hash", fixed_hex32(0xB4)),
+        ("route allowlist hash", fixed_hex32(0xB5)),
+    )
+    canary_hash_roles = (
+        ("evidence_hash", "evidence hash"),
+        ("transaction_hash", "transaction hash"),
+        ("receipt_block_hash", "receipt block hash"),
+        ("block_receipts_root", "block receipts root"),
+        ("message_id", "message id"),
+    )
+    for canary_field, canary_label in canary_hash_roles:
+        for upstream_label, upstream_hash in upstream_hash_roles:
+            canary = {**valid_canary, canary_field: upstream_hash}
+            blockers = verifier._active_launch_route_canary_metadata_blockers(
+                label,
+                canary,
+                upstream_hash_roles,
+            )
+
+            assert (
+                f"{label}: route canary {canary_label} must not reuse {upstream_label}"
+            ) in blockers
+
+    canary = {**valid_canary, "message_id": upstream_hash_roles[-1][1]}
+    blockers = verifier._active_launch_route_canary_metadata_blockers(
+        label,
+        canary,
+        upstream_hash_roles,
+    )
+    assert (
+        f"{label}: route canary message id must not reuse "
+        f"{upstream_hash_roles[-1][0]}"
+    ) in blockers
+
+    route_canary_hash_role_reuse_cases = (
+        (
+            "transaction_hash",
+            "evidence_hash",
+            "transaction hash",
+            "evidence hash",
+        ),
+        (
+            "receipt_block_hash",
+            "evidence_hash",
+            "receipt block hash",
+            "evidence hash",
+        ),
+        (
+            "receipt_block_hash",
+            "transaction_hash",
+            "receipt block hash",
+            "transaction hash",
+        ),
+        (
+            "block_receipts_root",
+            "evidence_hash",
+            "block receipts root",
+            "evidence hash",
+        ),
+        (
+            "block_receipts_root",
+            "transaction_hash",
+            "block receipts root",
+            "transaction hash",
+        ),
+        (
+            "block_receipts_root",
+            "receipt_block_hash",
+            "block receipts root",
+            "receipt block hash",
+        ),
+        ("message_id", "evidence_hash", "message id", "evidence hash"),
+        ("message_id", "transaction_hash", "message id", "transaction hash"),
+        ("message_id", "receipt_block_hash", "message id", "receipt block hash"),
+        ("message_id", "block_receipts_root", "message id", "block receipts root"),
+    )
+    for target_field, source_field, target_label, source_label in (
+        route_canary_hash_role_reuse_cases
+    ):
+        canary = {**valid_canary, target_field: valid_canary[source_field]}
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert (
+            f"{label}: route canary {target_label} must not reuse {source_label}"
+        ) in blockers
 
     route_canary_hex32_exactness_cases = (
         ("evidence_hash", None, "evidence hash"),
@@ -600,6 +829,40 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
         "source adapter engine deployment hash"
     ) in route_blockers
 
+    for role_name, reused_hash, expected_blocker in (
+        (
+            "source verifier material",
+            source_material_hash,
+            f"{label}: route allowlist hash must not reuse source verifier material hash",
+        ),
+        (
+            "source adapter engine deployment",
+            source_deployment_hash,
+            f"{label}: route allowlist hash must not reuse source adapter engine deployment hash",
+        ),
+        (
+            "destination binding",
+            destination_binding_hash,
+            f"{label}: route allowlist hash must not reuse destination binding hash",
+        ),
+    ):
+        lane = {
+            **valid_lane,
+            "route_allowlist": {
+                **valid_lane["route_allowlist"],
+                "route_allowlist_hash": reused_hash,
+                "expected_route_allowlist_hash": reused_hash,
+                "expected_route_allowlist_hash_matches": True,
+            },
+        }
+
+        blockers = verifier._active_launch_route_allowlist_binding_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, role_name
+
     expected_match_flag_exactness_cases = ("true", 1, False, None)
     for value in expected_match_flag_exactness_cases:
         lane = {
@@ -623,6 +886,54 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
             "deployment hash" in blocker
             for blocker in blockers
         )
+
+    route_allowlist_blocker_cases = (
+        (
+            "scalar",
+            "operator says route allowlist is ready",
+            f"{label}: route allowlist blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            "empty",
+            [""],
+            f"{label}: route allowlist blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "padded",
+            [" route canary still pending"],
+            f"{label}: route allowlist blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "numeric",
+            [123],
+            f"{label}: route allowlist blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "sensitive",
+            ["secret-token-route-blocker"],
+            f"{label}: route allowlist blockers[0] contains sensitive name",
+        ),
+        (
+            "valid nonempty",
+            ["governance canary has not passed"],
+            f"{label}: route allowlist blockers must be empty",
+        ),
+    )
+    for case_id, route_blockers, expected_blocker in route_allowlist_blocker_cases:
+        lane = {
+            **valid_lane,
+            "route_allowlist": {
+                **valid_lane["route_allowlist"],
+                "blockers": route_blockers,
+            },
+        }
+
+        blockers = verifier._active_launch_route_allowlist_binding_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, case_id
 
 
 def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_and_role_reuse(
@@ -675,6 +986,68 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
         reused_role_lane,
     )
 
+    for role_name, reused_hash, expected_blocker in (
+        (
+            "source verifier material",
+            source_material_hash,
+            f"{label}: governed deployment destination binding hash must not reuse source verifier material hash",
+        ),
+        (
+            "source adapter engine deployment",
+            source_deployment_hash,
+            f"{label}: governed deployment destination binding hash must not reuse source adapter engine deployment hash",
+        ),
+    ):
+        lane = {
+            **valid_lane,
+            "destination_binding": {
+                **valid_lane["destination_binding"],
+                "destination_binding_hash": reused_hash,
+                "expected_destination_binding_hash": reused_hash,
+                "expected_destination_binding_hash_matches": True,
+            },
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, role_name
+
+    for role_name, reused_hash, expected_blocker in (
+        (
+            "source verifier material",
+            source_material_hash,
+            f"{label}: governed deployment source adapter gate hash must not reuse source verifier material hash",
+        ),
+        (
+            "source adapter engine deployment",
+            source_deployment_hash,
+            f"{label}: governed deployment source adapter gate hash must not reuse source adapter engine deployment hash",
+        ),
+        (
+            "destination binding",
+            destination_binding_hash,
+            f"{label}: governed deployment source adapter gate hash must not reuse destination binding hash",
+        ),
+    ):
+        lane = {
+            **valid_lane,
+            "source_adapter_gate": {
+                **valid_lane["source_adapter_gate"],
+                "gate_hash": reused_hash,
+                "audit_hashes": {"evm_source_gate_hash": reused_hash},
+            },
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, role_name
+
     expected_destination_match_flag_exactness_cases = ("true", 1, False, None)
     for value in expected_destination_match_flag_exactness_cases:
         lane = {
@@ -699,6 +1072,104 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
             "deployment hash" in blocker
             for blocker in blockers
         )
+
+    destination_binding_blocker_cases = (
+        (
+            "scalar",
+            "operator says destination rollout is ready",
+            f"{label}: destination rollout blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            "empty",
+            [""],
+            f"{label}: destination rollout blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "padded",
+            [" deployment still pending"],
+            f"{label}: destination rollout blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "numeric",
+            [123],
+            f"{label}: destination rollout blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "sensitive",
+            ["secret-token-destination-blocker"],
+            f"{label}: destination rollout blockers[0] contains sensitive name",
+        ),
+        (
+            "valid nonempty",
+            ["destination verifier deployment still pending"],
+            f"{label}: destination rollout blockers must be empty",
+        ),
+    )
+    for case_id, destination_blockers, expected_blocker in (
+        destination_binding_blocker_cases
+    ):
+        lane = {
+            **valid_lane,
+            "destination_binding": {
+                **valid_lane["destination_binding"],
+                "blockers": destination_blockers,
+            },
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, case_id
+
+    source_adapter_gate_blocker_cases = (
+        (
+            "scalar",
+            "operator says source gate is ready",
+            f"{label}: source adapter gate blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            "empty",
+            [""],
+            f"{label}: source adapter gate blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "padded",
+            [" source gate audit pending"],
+            f"{label}: source adapter gate blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "numeric",
+            [123],
+            f"{label}: source adapter gate blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            "sensitive",
+            ["secret-token-source-gate-blocker"],
+            f"{label}: source adapter gate blockers[0] contains sensitive name",
+        ),
+        (
+            "valid nonempty",
+            ["source gate audit pending"],
+            f"{label}: source adapter gate blockers must be empty",
+        ),
+    )
+    for case_id, gate_blockers, expected_blocker in source_adapter_gate_blocker_cases:
+        lane = {
+            **valid_lane,
+            "source_adapter_gate": {
+                **valid_lane["source_adapter_gate"],
+                "blockers": gate_blockers,
+            },
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, case_id
 
 
 def load_bundle_module():
@@ -1377,6 +1848,21 @@ def test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory(
     verifier = load_verify_helpers()
     assert verifier._all_lanes_route_canary_scalar_inventory_errors() == []
 
+    tonless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS,
+        verifier.ALL_LANES_ROUTE_CANARY_SCALAR_LANE_COVERAGE_MARKERS,
+        "ton",
+    )
+    errors = verifier._all_lanes_route_canary_scalar_inventory_errors(
+        tonless_inventory
+    )
+    assert any(
+        "SCCP all-lanes route-canary scalar source inventory missing active "
+        "launch lane coverage for ton" in error
+        and 'SCCP_DOMAIN_TON: "ton_live_account_snapshot",' in error
+        for error in errors
+    )
+
     for index, (source_path, required_markers) in enumerate(
         verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS
     ):
@@ -1487,6 +1973,22 @@ def test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_invent
     verifier = load_verify_helpers()
     assert verifier._all_lanes_governed_blocker_schema_inventory_errors() == []
 
+    tonless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS,
+        verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_LANE_COVERAGE_MARKERS,
+        "ton",
+    )
+    errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
+        tonless_inventory
+    )
+    assert any(
+        "SCCP all-lanes governed blocker schema source inventory missing active "
+        "launch lane coverage for ton" in error
+        and 'ton_route["blockers"] = ["operator|governed-blocker", confusable_blocker]'
+        in error
+        for error in errors
+    )
+
     for index, (source_path, required_markers) in enumerate(
         verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS
     ):
@@ -1528,6 +2030,22 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
     assert (
         verifier._all_lanes_release_checklist_exact_boolean_inventory_errors()
         == []
+    )
+
+    ethless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS,
+        verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_LANE_COVERAGE_MARKERS,
+        "eth",
+    )
+    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+        ethless_inventory
+    )
+    assert any(
+        "SCCP all-lanes release-checklist exact-boolean source inventory "
+        "missing active launch lane coverage for eth" in error
+        and "EthereumMainnetLane must let production-ready ETH open before "
+        "all lanes are ready" in error
+        for error in errors
     )
 
     for index, (source_path, required_markers) in enumerate(
@@ -1967,6 +2485,21 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         == []
     )
 
+    tronless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS,
+        verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_LANE_COVERAGE_MARKERS,
+        "tron",
+    )
+    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
+        tronless_inventory
+    )
+    assert any(
+        "SCCP release public scalar-text schema source inventory missing active "
+        "launch lane coverage for tron" in error
+        and "TRON destination verifier runtime bytecode metadata is invalid" in error
+        for error in errors
+    )
+
     for index, (source_path, required_markers) in enumerate(
         verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
     ):
@@ -2223,6 +2756,22 @@ def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_i
         == []
     )
 
+    solless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS,
+        verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_LANE_COVERAGE_MARKERS,
+        "sol",
+    )
+    errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
+        solless_inventory
+    )
+    assert any(
+        "SCCP release public cryptographic-evidence binding source inventory "
+        "missing active launch lane coverage for sol" in error
+        and 'SCCP_DOMAIN_SOL: "solana_live_programdata_snapshot",' in error
+        and '"solana_full_light_client_gate_hash",' in error
+        for error in errors
+    )
+
     for index, (source_path, required_markers) in enumerate(
         verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
     ):
@@ -2267,6 +2816,21 @@ def test_release_bundle_verifier_guards_release_public_submission_surface_bindin
     assert (
         verifier._sccp_release_public_submission_surface_binding_inventory_errors()
         == []
+    )
+
+    tonless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS,
+        verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_LANE_COVERAGE_MARKERS,
+        "ton",
+    )
+    errors = verifier._sccp_release_public_submission_surface_binding_inventory_errors(
+        tonless_inventory
+    )
+    assert any(
+        "SCCP release public submission-surface binding source inventory "
+        "missing active launch lane coverage for ton" in error
+        and '"buildTonSccpFullLightClientAuditProofRequests",' in error
+        for error in errors
     )
 
     for index, (source_path, required_markers) in enumerate(
@@ -2541,7 +3105,7 @@ def test_release_bundle_phase_command_matchers_reject_bare_fragments() -> None:
         ("swift-sdk", "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions"),
         ("kotlin-sdk", "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"),
         ("java-android", "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"),
-        ("dotnet-sdk", "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests"),
+        ("dotnet-sdk", "FullyQualifiedName~Sccp"),
         ("contract-smoke", "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js"),
     )
 
@@ -2661,13 +3225,13 @@ def test_release_bundle_phase_command_matchers_reject_inert_option_values() -> N
             "dotnet-sdk",
             "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
             "--filter FullyQualifiedName~Other --logger "
-            "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
-            "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+            "FullyQualifiedName~Sccp",
+            "FullyQualifiedName~Sccp",
         ),
         (
             "dotnet-sdk",
             "+ dotnet test tests/Other/Other.csproj "
-            "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+            "--filter FullyQualifiedName~Sccp "
             "--logger dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
             "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
         ),
@@ -2676,6 +3240,12 @@ def test_release_bundle_phase_command_matchers_reject_inert_option_values() -> N
             "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
             "--test-reporter scripts/sccp_bsc_taira_xor_deploy.test.mjs",
             "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        ),
+        (
+            "contract-smoke",
+            "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
+            "--test-reporter scripts/sccp_bsc_groth16_material.test.mjs",
+            "scripts/sccp_bsc_groth16_material.test.mjs",
         ),
         (
             "contract-smoke",
@@ -2836,16 +3406,16 @@ def test_release_bundle_phase_command_matchers_reject_extra_suffix_arguments() -
         (
             "dotnet-sdk",
             "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
-            "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+            "--filter FullyQualifiedName~Sccp "
             "--nologo --logger trx",
             "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
         ),
         (
             "dotnet-sdk",
             "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
-            "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+            "--filter FullyQualifiedName~Sccp "
             "--nologo || true",
-            "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+            "FullyQualifiedName~Sccp",
         ),
     )
 
@@ -2983,10 +3553,7 @@ def write_phase_artifacts(tmp_path: Path) -> dict[str, str]:
         payload = "\n".join(
             (
                 f"==> SCCP production corridor: {phase}",
-                *phase_command_lines(
-                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
-                ),
-                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase],
+                *phase_successful_lines(report, phase),
                 "SCCP production corridor completed.",
                 "",
             )
@@ -3005,10 +3572,7 @@ def complete_corridor_log(phases: tuple[str, ...] = PHASES) -> str:
     lines: list[str] = []
     for phase in phases:
         lines.append(f"==> SCCP production corridor: {phase}")
-        lines.extend(
-            phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
-        )
-        lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
+        lines.extend(phase_successful_lines(report, phase))
     return "\n".join(
         [*lines, ""]
     ) + "SCCP production corridor completed.\n"
@@ -3025,18 +3589,121 @@ def complete_corridor_log_with_success_before_command(
     for phase in phases:
         lines.append(f"==> SCCP production corridor: {phase}")
         if phase == forged_phase:
-            lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
+            lines.extend(phase_success_lines(report, phase))
             lines.extend(
                 phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
             )
             continue
-        lines.extend(
-            phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
-        )
-        lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
+        lines.extend(phase_successful_lines(report, phase))
     return "\n".join(
         [*lines, ""]
     ) + "SCCP production corridor completed.\n"
+
+
+def complete_corridor_log_with_success_only_after_final_required_command(
+    forged_phase: str,
+    phases: tuple[str, ...] = PHASES,
+) -> str:
+    """Return a full corridor log proving only one phase's final command."""
+
+    report = load_report_module()
+    lines: list[str] = []
+    for phase in phases:
+        lines.append(f"==> SCCP production corridor: {phase}")
+        if phase == forged_phase:
+            lines.extend(
+                phase_body_with_success_only_after_final_required_command(
+                    report, phase
+                )
+            )
+            continue
+        lines.extend(phase_successful_lines(report, phase))
+    return "\n".join(
+        [*lines, ""]
+    ) + "SCCP production corridor completed.\n"
+
+
+def phase_log_with_success_before_required_late_command(report, phase: str) -> str:
+    """Return a phase log whose success output precedes a later required command."""
+
+    commands = phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+    success = phase_success_lines(report, phase)
+    if phase == "swift-sdk":
+        assert len(commands) == 2
+        body = (commands[0], success[0], commands[1])
+    elif phase == "kotlin-sdk":
+        assert len(commands) == 2
+        body = (commands[0], success[0], success[1], commands[1])
+    elif phase == "java-android":
+        assert len(commands) == 3
+        body = (commands[0], success[0], commands[1], success[1], commands[2])
+    elif phase == "contract-smoke":
+        assert len(commands) == 3
+        node_success = tuple(
+            marker for marker in success if marker != "sccp_message_bridge_smoke: ok"
+        )
+        body = (
+            commands[0],
+            *node_success,
+            commands[1],
+            "sccp_message_bridge_smoke: ok",
+            commands[2],
+        )
+    else:
+        raise AssertionError(f"no late-command success fixture for phase {phase}")
+    return "\n".join(
+        (
+            f"==> SCCP production corridor: {phase}",
+            *body,
+            "SCCP production corridor completed.",
+            "",
+        )
+    )
+
+
+def phase_body_with_success_only_after_final_required_command(
+    report, phase: str
+) -> tuple[str, ...]:
+    """Return phase lines proving only the last command in a multi-command phase."""
+
+    commands = phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+    success = phase_success_lines(report, phase)
+    if phase == "swift-sdk":
+        assert len(commands) == 2
+        body = (commands[0], commands[1], success[0])
+    elif phase == "java-android":
+        assert len(commands) == 3
+        body = (commands[0], success[0], commands[1], commands[2], success[1])
+    elif phase == "contract-smoke":
+        assert len(commands) == 3
+        node_success = tuple(
+            marker for marker in success if marker != "sccp_message_bridge_smoke: ok"
+        )
+        body = (
+            commands[0],
+            commands[1],
+            *node_success,
+            commands[2],
+            "sccp_message_bridge_smoke: ok",
+        )
+    else:
+        raise AssertionError(f"no final-command-only success fixture for phase {phase}")
+    return body
+
+
+def phase_log_with_success_only_after_final_required_command(
+    report, phase: str
+) -> str:
+    """Return a phase log proving only the last command in a multi-command phase."""
+
+    return "\n".join(
+        (
+            f"==> SCCP production corridor: {phase}",
+            *phase_body_with_success_only_after_final_required_command(report, phase),
+            "SCCP production corridor completed.",
+            "",
+        )
+    )
 
 
 def build_ready_bundle(tmp_path: Path) -> Path:
@@ -3437,6 +4104,7 @@ def rewrite_report_phase_artifact(output_dir: Path, phase: str) -> None:
     )
     rewrite_manifest_artifact(output_dir, relative_path)
     rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
 
 
 def rewrite_report_input_artifact(output_dir: Path, relative_path: str) -> None:
@@ -4368,6 +5036,7 @@ def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render(
                 checklist[markdown_field] = "approved outside evidence"
                 checklist[confusable_field] = "approved outside evidence"
                 checklist["operator_attestation"] = "approved outside evidence"
+                checklist[7] = "safe checklist int-key note"
                 items = checklist["items"]
                 assert isinstance(items, list)
                 item = items[0]
@@ -4378,6 +5047,7 @@ def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render(
                 item[markdown_field] = "approved outside evidence"
                 item[confusable_field] = "approved outside evidence"
                 item["operator_attestation"] = "approved outside evidence"
+                item[7] = "safe checklist item int-key note"
             return report
 
         def _render_markdown(self, *args, **kwargs) -> str:
@@ -4426,6 +5096,7 @@ def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render(
             f"{public_label} contains unknown field name with non-ASCII character"
             in captured.err
         )
+        assert f"{public_label} contains malformed unknown field name" in captured.err
     assert (
         "bundled report.release_checklist contains unknown field: "
         "operator_attestation"
@@ -4436,6 +5107,8 @@ def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render(
     ) in captured.err
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
+    assert "safe checklist int-key note" not in captured.err
+    assert "safe checklist item int-key note" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -8058,6 +8731,7 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
                     markdown_field: "reviewed outside evidence",
                     confusable_field: "reviewed outside evidence",
                     "operator_attestation": "reviewed outside evidence",
+                    7: "reviewed outside evidence",
                 }
                 lane = report["evidence"]["lanes"][0]
                 lane[" operator_attestation "] = "reviewed outside evidence"
@@ -8065,12 +8739,14 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
                 lane["operator attestation"] = "reviewed outside evidence"
                 lane[markdown_field] = "reviewed outside evidence"
                 lane[confusable_field] = "reviewed outside evidence"
+                lane[7] = "reviewed outside evidence"
                 records = lane["records"]
                 records[" operator_attestation "] = True
                 records["operator\nattestation"] = True
                 records["operator attestation"] = True
                 records[markdown_field] = True
                 records[confusable_field] = True
+                records[7] = True
             return report
 
         def _render_markdown(self, *args, **kwargs) -> str:
@@ -8119,6 +8795,9 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
         assert (
             f"{public_label} contains unknown field name with non-ASCII character"
             in captured.err
+        )
+        assert f"{public_label} contains malformed unknown field name" in (
+            captured.err
         )
     assert (
         "bundled report.evidence contains unknown field: operator_attestation"
@@ -8240,6 +8919,7 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                 confusable_field: "reviewed elsewhere",
                                 secret_source_field: "reviewed elsewhere",
                                 "operator_attestation": "reviewed elsewhere",
+                                7: "reviewed elsewhere",
                             },
                             "source_adapter_gate": {
                                 "required": True,
@@ -8252,8 +8932,10 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                     "audit|attestation": "0x" + "66" * 32,
                                     confusable_audit: "0x" + "77" * 32,
                                     "operator_attestation": "0X" + "88" * 32,
+                                    7: "0x" + "99" * 32,
                                 },
                                 "blockers": [" padded gate blocker "],
+                                7: "reviewed elsewhere",
                             },
                             "evm_live_metadata": {
                                 "required": False,
@@ -8262,6 +8944,7 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                 "source_block_tag": 1,
                                 "destination_rpc_chain_id": "",
                                 "destination_block_tag": "",
+                                7: "reviewed elsewhere",
                             },
                             "destination_binding": {
                                 "destination_binding_hash": "0X" + "99" * 32,
@@ -8271,6 +8954,7 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                 "recomputed": "true",
                                 "destination_bridge_address": " bridge ",
                                 "destination_network_id": 1,
+                                7: "reviewed elsewhere",
                             },
                             "route_allowlist": {
                                 "route_allowlist_hash": "0X" + "aa" * 32,
@@ -8292,7 +8976,9 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                     confusable_field: "reviewed elsewhere",
                                     secret_canary_field: "reviewed elsewhere",
                                     "operator_attestation": "reviewed elsewhere",
+                                    7: "reviewed elsewhere",
                                 },
+                                7: "reviewed elsewhere",
                             },
                             "blockers": ["nested evidence remains blocked"],
                         }
@@ -8341,6 +9027,10 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
         "sensitive name"
     ) in captured.err
     assert (
+        f"{lane_label}.source_record_hashes contains malformed unknown field name"
+        in captured.err
+    )
+    assert (
         f"{lane_label}.source_record_hashes contains unknown field: "
         "operator_attestation"
     ) in captured.err
@@ -8365,21 +9055,34 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
     assert f"{audit_label} contains audit field name with non-ASCII character" in (
         captured.err
     )
+    assert f"{audit_label} contains malformed audit field name" in captured.err
     assert (
         f"{audit_label} operator_attestation must be a non-zero canonical "
         "bytes32 hex string"
     ) in captured.err
+    assert f"{lane_label}.source_adapter_gate contains malformed unknown field name" in (
+        captured.err
+    )
     assert f"{lane_label}.evm_live_metadata ready must be true or false" in (
+        captured.err
+    )
+    assert f"{lane_label}.evm_live_metadata contains malformed unknown field name" in (
         captured.err
     )
     assert (
         f"{lane_label}.destination_binding destination_binding_hash must be empty, "
         "null, or a non-zero canonical bytes32 hex string"
     ) in captured.err
+    assert f"{lane_label}.destination_binding contains malformed unknown field name" in (
+        captured.err
+    )
     assert (
         f"{lane_label}.route_allowlist expected_route_allowlist_hash_matches "
         "must be true or false"
     ) in captured.err
+    assert f"{lane_label}.route_allowlist contains malformed unknown field name" in (
+        captured.err
+    )
     assert (
         f"{canary_label} contains unknown field name with surrounding whitespace"
         in captured.err
@@ -8394,6 +9097,7 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
     assert f"{canary_label} contains unknown field name with sensitive name" in (
         captured.err
     )
+    assert f"{canary_label} contains malformed unknown field name" in captured.err
     assert f"{canary_label} contains unknown field: operator_attestation" in (
         captured.err
     )
@@ -18171,6 +18875,44 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "C#/.NET ETH/BSC source-material vectors"
     ) in errors
 
+    weakened = markdown.replace(
+        "BSC recursive source-adapter verifier deployment is not complete for "
+        "the SCCP inbound path",
+        "BSC source verifier deployment is pending",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "BSC recursive source-adapter verifier deployment is not complete for "
+        "the SCCP inbound path"
+    ) in errors
+
+    weakened = markdown.replace(
+        "- Windows `.NET 8` SCCP SDK phase evidence must include the full C# "
+        "SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical "
+        "Windows OS/RID/architecture markers, a non-zero passed VSTest summary "
+        "with `Failed: 0`, and the strict `SCCP .NET SDK TRX: "
+        ".../sccp-dotnet-sdk.trx` marker before release readiness can pass.\n",
+        "",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "Windows `.NET 8` SCCP SDK phase evidence"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "FullyQualifiedName~Sccp"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx"
+    ) in errors
+
     weakened = markdown.replace("copied-summary scalar exactness, ", "")
     errors = verifier._readiness_markdown_invariant_errors(report, weakened)
     assert (
@@ -18340,6 +19082,14 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
         "source-adapter gate hash/audit replay rejection"
+    ) in errors
+
+    weakened = markdown.replace("upstream route-canary hash replay rejection ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "upstream route-canary hash replay rejection"
     ) in errors
 
     for marker in (
@@ -20627,6 +21377,68 @@ def test_release_bundle_verifier_rejects_missing_public_discovery_documentation_
     assert (
         "readiness report source_inventory missing required gate: "
         "public_discovery_documentation_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_documentation_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the BSC Groth16 material docs gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("bsc_groth16_material_documentation_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "bsc_groth16_material_documentation_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_bsc_groth16_material_evidence_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the BSC Groth16 material evidence gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("bsc_groth16_material_evidence_guard_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "bsc_groth16_material_evidence_guard_gate"
     ) in verified.stdout
 
 
@@ -33446,8 +34258,16 @@ def test_release_bundle_verifier_rejects_dotnet_suffix_phase_command_fragment(
 
     output_dir = build_ready_bundle(tmp_path)
     report = load_report_module()
-    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][0]
-    filter_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][1]
+    required_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("dotnet test ")
+    )
+    filter_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("FullyQualifiedName")
+    )
     phase_log = output_dir / "corridor" / "dotnet-sdk.log"
     phase_log.write_text(
         "\n".join(
@@ -33455,7 +34275,7 @@ def test_release_bundle_verifier_rejects_dotnet_suffix_phase_command_fragment(
                 "==> SCCP production corridor: dotnet-sdk",
                 "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
                 f"--filter {filter_fragment} --nologo --logger trx",
-                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["dotnet-sdk"],
+                *phase_success_lines(report, "dotnet-sdk"),
                 "SCCP production corridor completed.",
                 "",
             )
@@ -33476,6 +34296,626 @@ def test_release_bundle_verifier_rejects_dotnet_suffix_phase_command_fragment(
     assert (
         "readiness report phase dotnet-sdk evidence artifact is missing "
         f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_success_before_test_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET success markers must follow the strict dotnet test command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    command_lines = phase_command_lines(
+        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    )
+    test_command = next(
+        line for line in command_lines if line.startswith("+ dotnet test ")
+    )
+    success_lines = phase_success_lines(report, "dotnet-sdk")
+    version_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK version:")
+    )
+    os_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK OS:")
+    )
+    rid_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK RID:")
+    )
+    architecture_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK Architecture:")
+    )
+    passed_success = next(line for line in success_lines if line.startswith("Passed!"))
+    trx_success = next(
+        line for line in success_lines if line.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet --version",
+                version_success,
+                "+ dotnet --info",
+                os_success,
+                rid_success,
+                architecture_success,
+                "+ dotnet restore Hyperledger.Iroha.Sdk.sln",
+                passed_success,
+                trx_success,
+                test_command,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK TRX:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_non_windows_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must prove the Windows host handoff."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                "SCCP .NET SDK version: 8.0.204",
+                "OS Platform: Linux",
+                "RID: linux-x64",
+                "Passed!",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK OS: Windows"
+    ) in verified.stdout
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK RID: win-"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_version_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report a canonical .NET 8 SDK version."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK version: 8.not-a-version"
+        if fragment.startswith("SCCP .NET SDK version:")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK version: 8."
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_os_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report the exact Windows handoff marker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK OS: Windowsish"
+        if fragment == "SCCP .NET SDK OS: Windows"
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK OS: Windows"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_bare_passed_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must include the real test summary."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed!" if fragment.startswith("Passed!") else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_failed_summary_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report zero failed tests."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 1, Passed: 42, Skipped: 0, Total: 43, "
+        "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_zero_passed_summary_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must show that at least one test passed."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 0, Passed: 0, Skipped: 0, Total: 0, "
+        "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_inconsistent_total_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must keep passed/skipped/total counts consistent."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "Passed! - Failed: 0, Passed: 42, Skipped: 1, Total: 42, "
+        "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+        if fragment.startswith("Passed!")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_missing_architecture_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must include the Windows architecture marker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+        if not fragment.startswith("SCCP .NET SDK Architecture:")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK Architecture:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_rid_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report a canonical lower-case Windows SDK RID."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    for marker in (
+        "SCCP .NET SDK RID: win-itanium",
+        "SCCP .NET SDK RID: WIN-X64",
+    ):
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        success_fragments = tuple(
+            marker
+            if fragment.startswith("SCCP .NET SDK RID:")
+            else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: SCCP .NET SDK RID: win-"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_architecture_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must report a canonical lower-case Windows SDK architecture."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    for marker in (
+        "SCCP .NET SDK Architecture: mips64",
+        "SCCP .NET SDK Architecture: X64",
+    ):
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        success_fragments = tuple(
+            marker
+            if fragment.startswith("SCCP .NET SDK Architecture:")
+            else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: SCCP .NET SDK Architecture:"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_missing_trx_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must include the produced TRX artifact path."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+        if not fragment.startswith("SCCP .NET SDK TRX:")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK TRX:"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_malformed_trx_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not accept arbitrary TRX-looking paths."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = tuple(
+        "SCCP .NET SDK TRX: ../../sccp-dotnet-sdk.trx"
+        if fragment.startswith("SCCP .NET SDK TRX:")
+        else fragment
+        for fragment in phase_success_lines(report, "dotnet-sdk")
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        "expected phase-block success marker: SCCP .NET SDK TRX:"
     ) in verified.stdout
 
 
@@ -33569,8 +35009,16 @@ def test_release_bundle_verifier_rejects_inert_dotnet_project_phase_command_frag
 
     output_dir = build_ready_bundle(tmp_path)
     report = load_report_module()
-    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][0]
-    filter_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][1]
+    required_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("dotnet test ")
+    )
+    filter_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("FullyQualifiedName")
+    )
     phase_log = output_dir / "corridor" / "dotnet-sdk.log"
     phase_log.write_text(
         "\n".join(
@@ -33578,7 +35026,51 @@ def test_release_bundle_verifier_rejects_inert_dotnet_project_phase_command_frag
                 "==> SCCP production corridor: dotnet-sdk",
                 "+ dotnet test tests/Other/Other.csproj "
                 f"--filter {filter_fragment} --logger {required_fragment}",
-                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["dotnet-sdk"],
+                *phase_success_lines(report, "dotnet-sdk"),
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_narrow_dotnet_sccp_filter(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must run the full C# SCCP test filter."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = next(
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        if fragment.startswith("FullyQualifiedName")
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+                "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+                "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+                *phase_success_lines(report, "dotnet-sdk"),
                 "SCCP production corridor completed.",
                 "",
             )
@@ -33992,6 +35484,22 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_source_live_production_inventory_errors() == []
 
+    ethless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS,
+        verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_LANE_COVERAGE_MARKERS,
+        "eth",
+    )
+    errors = verifier._ethereum_evm_source_live_production_inventory_errors(
+        ethless_inventory
+    )
+    assert any(
+        "Ethereum mainnet live EVM source production source inventory missing "
+        "active launch lane coverage for eth" in error
+        and 'SCCP_DOMAIN_ETH: "sccp_eth_source_bridge_evidence.py",' in error
+        and 'assert eth_summary["block_tag"] == "finalized"' in error
+        for error in errors
+    )
+
     for index, (source_path, required_markers) in enumerate(
         verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS
     ):
@@ -34052,6 +35560,22 @@ def test_release_bundle_verifier_guards_evm_live_destination_production(
 
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_live_destination_production_inventory_errors() == []
+
+    ethless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS,
+        verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_LANE_COVERAGE_MARKERS,
+        "eth",
+    )
+    errors = verifier._ethereum_evm_live_destination_production_inventory_errors(
+        ethless_inventory
+    )
+    assert any(
+        "Ethereum mainnet live EVM destination production source inventory missing "
+        "active launch lane coverage for eth" in error
+        and "evidence.SCCP_DOMAIN_ETH: 1," in error
+        and 'assert eth_summary["block_tag"] == "finalized"' in error
+        for error in errors
+    )
 
     for index, (source_path, required_markers) in enumerate(
         verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS
@@ -34177,6 +35701,21 @@ def test_release_bundle_verifier_guards_evm_block_tag_metadata_sources(
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_block_tag_metadata_inventory_errors() == []
 
+    ethless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS,
+        verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_LANE_COVERAGE_MARKERS,
+        "eth",
+    )
+    errors = verifier._ethereum_evm_block_tag_metadata_inventory_errors(
+        ethless_inventory
+    )
+    assert any(
+        "Ethereum mainnet EVM block-tag metadata source inventory missing "
+        "active launch lane coverage for eth" in error
+        and 'assert eth_summary["block_tag"] == "finalized"' in error
+        for error in errors
+    )
+
     for index, (source_path, required_markers) in enumerate(
         verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS
     ):
@@ -34239,36 +35778,56 @@ def test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate(
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     output_dir = build_ready_bundle(bundle_dir)
-    required_markers = verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS[
-        0
-    ][1]
+    original_inventory = verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS
 
-    checked_markers = 0
-    for index, removed_marker in enumerate(required_markers):
-        remaining_markers = tuple(
-            marker for marker in required_markers if marker != removed_marker
-        )
-        if removed_marker in "\n".join(remaining_markers):
-            continue
-        checked_markers += 1
-        sparse_source = tmp_path / f"lib_{index}.rs"
-        sparse_source.write_text(
-            "\n".join(remaining_markers),
-            encoding="utf-8",
-        )
-        verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
-            (sparse_source, required_markers),
-        )
-        verified = verifier.verify_bundle(output_dir)
+    ethless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        original_inventory,
+        verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_LANE_COVERAGE_MARKERS,
+        "eth",
+    )
+    verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = ethless_inventory
+    verified = verifier.verify_bundle(output_dir)
 
-        assert verified["verified"] is False
-        assert any(
-            "Ethereum mainnet EVM source-adapter deployment gate source inventory"
-            in error
-            and f"missing marker: {removed_marker}" in error
-            for error in verified["errors"]
-        )
-    assert checked_markers > 0
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet EVM source-adapter deployment gate source inventory "
+        "missing active launch lane coverage for eth" in error
+        and "ETH facade must reject replayed deployment receipts" in error
+        and "Ethereum mainnet source-adapter deployment" in error
+        for error in verified["errors"]
+    )
+
+    verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = original_inventory
+    for source_index, (source_path, required_markers) in enumerate(original_inventory):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"evm-source-adapter-{source_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
+                (sparse_source, required_markers),
+            )
+            verified = verifier.verify_bundle(output_dir)
+
+            assert verified["verified"] is False
+            assert any(
+                "Ethereum mainnet EVM source-adapter deployment gate source inventory"
+                in error
+                and f"missing marker: {removed_marker}" in error
+                for error in verified["errors"]
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_ethereum_launch_policy_selector(
@@ -34470,6 +36029,126 @@ def test_release_bundle_verifier_guards_public_discovery_documentation(
     assert verified["verified"] is False
     assert any(
         "SCCP public discovery documentation source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_bsc_groth16_material_documentation(
+    tmp_path: Path,
+) -> None:
+    """Bundle verification must pin BSC Groth16 material operator docs."""
+
+    verifier = load_verify_helpers()
+    assert verifier._bsc_groth16_material_documentation_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-groth16-docs-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._bsc_groth16_material_documentation_inventory_errors(
+                ((sparse_source, required_markers),),
+            )
+
+            assert any(
+                "BSC Groth16 material documentation source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS,
+        0,
+    )
+    verifier.BSC_GROTH16_MATERIAL_DOCUMENTATION_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "BSC Groth16 material documentation source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_bsc_groth16_material_evidence_guard(
+    tmp_path: Path,
+) -> None:
+    """Bundle verification must pin BSC Groth16 material evidence guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._bsc_groth16_material_evidence_guard_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-groth16-evidence-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._bsc_groth16_material_evidence_guard_inventory_errors(
+                ((sparse_source, required_markers),),
+            )
+
+            assert any(
+                "BSC Groth16 material evidence guard source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS,
+        0,
+    )
+    verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "BSC Groth16 material evidence guard source inventory" in error
         and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
@@ -34883,6 +36562,23 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
 
     verifier = load_verify_helpers()
     assert verifier._sccp_proof_request_bundle_gate_inventory_errors() == []
+
+    bscless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS,
+        verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_LANE_COVERAGE_MARKERS,
+        "bsc",
+    )
+    errors = verifier._sccp_proof_request_bundle_gate_inventory_errors(
+        bscless_inventory
+    )
+    assert any(
+        "SCCP proof-request bundle/source-proof gate source inventory missing "
+        "active launch lane coverage for bsc" in error
+        and "tamperedBscBase64ProofResult" in error
+        and "SccpMessageProofBundles.RequireMatchesPublicInputs" in error
+        for error in errors
+    )
+
     inventory_paths = {
         str(path) for path, _ in verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS
     }
@@ -35556,7 +37252,14 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
                     "def _phase_marker_count(",
                     "marker_positions != sorted(marker_positions)",
                     "first_phase_command_position = min(phase_command_positions)",
-                    "position > first_phase_command_position",
+                    "def _phase_success_fragment_required_command_fragment(",
+                    "def _phase_success_fragment_required_command_fragments(",
+                    "def _phase_success_command_windows(",
+                    "def _phase_success_fragment_has_position_after_required_command(",
+                    "required_success_command_positions = _phase_block_command_fragment_line_indices(",
+                    "phase_required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())",
+                    "later_command_positions: list[int] = []",
+                    "window_ceiling = (",
                     "for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:",
                     "for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):",
                     "line == CORRIDOR_COMPLETION_SENTINEL",
@@ -35594,7 +37297,8 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
                     "def _phase_block_has_exact_output_line(",
                     "def _phase_block_has_completion_after_required_evidence(",
                     "first_command_position = min(command_positions_before_completion)",
-                    "first_command_position < position < completion_position",
+                    "def _phase_success_fragment_has_position_before_completion(",
+                    "anchor_position < position < window_ceiling",
                     "def _phase_block_has_traced_command_after_completion(",
                     "def _transcript_has_traced_command_after_completion(",
                     "def _phase_block_has_nonempty_line_after_completion(",
@@ -35642,7 +37346,28 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
     )
     assert any(
         "SCCP release corridor phase-transcript source inventory" in error
-        and "missing marker: position > first_phase_command_position" in error
+        and "missing marker: def _phase_success_fragment_required_command_fragment("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_success_fragment_required_command_fragments("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_success_command_windows(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: required_success_command_positions = "
+            "_phase_block_command_fragment_line_indices("
+        )
+        in error
         for error in errors
     )
     assert any(
@@ -35921,7 +37646,16 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
     )
     assert any(
         "SCCP release corridor phase-transcript source inventory" in error
-        and "missing marker: first_command_position < position < completion_position"
+        and (
+            "missing marker: "
+            "def _phase_success_fragment_has_position_before_completion("
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: anchor_position < position < window_ceiling"
         in error
         for error in errors
     )
@@ -37630,7 +39364,7 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "proofArtifactBytes must be at least 65536 bytes",
                 "provingKeyBytes must be at least 65536 bytes",
                 "verifierKeyBytes must be at least 128 bytes",
-                "crossSdkFixtureParityBytes must be at least 128 bytes",
+                "crossSdkParityBytes must be at least 128 bytes",
                 "nativeProverSelfTestBytes must be at least 128 bytes",
                 "implementationBytes must be at least 1024 bytes",
                 "ipfs:proof-artifact.bin",
@@ -37709,7 +39443,7 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
         "proofArtifactBytes must be at least 65536 bytes",
         "provingKeyBytes must be at least 65536 bytes",
         "verifierKeyBytes must be at least 128 bytes",
-        "crossSdkFixtureParityBytes must be at least 128 bytes",
+        "crossSdkParityBytes must be at least 128 bytes",
         "nativeProverSelfTestBytes must be at least 128 bytes",
         "implementationBytes must be at least 1024 bytes",
     ):
@@ -40201,6 +41935,27 @@ def source_marker_inventory_with_one_marker_removed(
     return ((sparse_source, required_markers),), removed_marker
 
 
+def source_marker_inventory_with_lane_coverage_removed(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
+    lane_markers: dict[str, tuple[tuple[str, str], ...]],
+    lane: str,
+) -> tuple[tuple[str | Path, tuple[str, ...]], ...]:
+    """Return an inventory fixture with all lane-coverage sentinels removed."""
+
+    removed_markers = set(lane_markers[lane])
+    trimmed: list[tuple[str | Path, tuple[str, ...]]] = []
+    for source_path, required_markers in inventory:
+        path = Path(source_path).as_posix()
+        remaining_markers = tuple(
+            marker
+            for marker in required_markers
+            if (path, marker) not in removed_markers
+        )
+        if remaining_markers:
+            trimmed.append((source_path, remaining_markers))
+    return tuple(trimmed)
+
+
 def test_release_bundle_verifier_guards_sccp_source_material_template_rejection_inventory(
     tmp_path: Path,
 ) -> None:
@@ -40208,6 +41963,21 @@ def test_release_bundle_verifier_guards_sccp_source_material_template_rejection_
 
     verifier = load_verify_helpers()
     assert verifier._sccp_source_material_template_rejection_inventory_errors() == []
+
+    tronless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS,
+        verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_LANE_COVERAGE_MARKERS,
+        "tron",
+    )
+    errors = verifier._sccp_source_material_template_rejection_inventory_errors(
+        tronless_inventory
+    )
+    assert any(
+        "SCCP source-material template rejection source inventory missing active "
+        "launch lane coverage for tron" in error
+        and "TRON_TEMPLATE_COMPONENTS = {" in error
+        for error in errors
+    )
 
     for index, (source_path, required_markers) in enumerate(
         verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS
@@ -40265,6 +42035,21 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
 
     verifier = load_verify_helpers()
     assert verifier._sccp_source_material_role_validation_inventory_errors() == []
+
+    tonless_inventory = source_marker_inventory_with_lane_coverage_removed(
+        verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS,
+        verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_LANE_COVERAGE_MARKERS,
+        "ton",
+    )
+    errors = verifier._sccp_source_material_role_validation_inventory_errors(
+        tonless_inventory
+    )
+    assert any(
+        "SCCP source-material role validation source inventory missing active "
+        "launch lane coverage for ton" in error
+        and "TON full-light-client verifier hashes must be role-separated" in error
+        for error in errors
+    )
 
     for index, (source_path, required_markers) in enumerate(
         verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS
@@ -40991,6 +42776,114 @@ def test_release_bundle_verifier_rejects_full_corridor_success_before_command(
         "readiness report phase contract-smoke evidence artifact contains "
         "incomplete multi-phase corridor transcript"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_full_corridor_final_command_only_success(
+    tmp_path: Path,
+) -> None:
+    """Published full-corridor logs must prove each multi-command phase window."""
+
+    for phase in ("swift-sdk", "java-android", "contract-smoke"):
+        case_dir = tmp_path / phase
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        phase_log = output_dir / "corridor" / f"{phase}.log"
+        phase_log.write_text(
+            complete_corridor_log_with_success_only_after_final_required_command(
+                phase
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, phase)
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, phase
+        assert (
+            f"readiness report phase {phase} evidence artifact contains "
+            "incomplete multi-phase corridor transcript"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_success_before_required_late_command(
+    tmp_path: Path,
+) -> None:
+    """Published multi-command phase success must follow its producing command."""
+
+    report = load_report_module()
+    cases = (
+        ("swift-sdk", "0 failures"),
+        ("kotlin-sdk", "BUILD SUCCESSFUL"),
+        ("java-android", "BUILD SUCCESSFUL"),
+        ("contract-smoke", "sccp_message_bridge_smoke: ok"),
+    )
+    for phase, success_marker in cases:
+        case_dir = tmp_path / phase
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        phase_log = output_dir / "corridor" / f"{phase}.log"
+        phase_log.write_text(
+            phase_log_with_success_before_required_late_command(report, phase),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, phase)
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, phase
+        assert (
+            f"readiness report phase {phase} evidence artifact is missing "
+            f"expected phase-block success marker: {success_marker}"
+        ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_success_only_after_final_required_command(
+    tmp_path: Path,
+) -> None:
+    """Published multi-command phases must prove success in each command window."""
+
+    report = load_report_module()
+    cases = (
+        ("swift-sdk", "0 failures"),
+        ("java-android", "BUILD SUCCESSFUL"),
+        ("contract-smoke", report.CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS[0]),
+    )
+    for phase, success_marker in cases:
+        case_dir = tmp_path / phase
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        phase_log = output_dir / "corridor" / f"{phase}.log"
+        phase_log.write_text(
+            phase_log_with_success_only_after_final_required_command(report, phase),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, phase)
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, phase
+        assert (
+            f"readiness report phase {phase} evidence artifact is missing "
+            f"expected phase-block success marker: {success_marker}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_completion_outside_claimed_phase_block(

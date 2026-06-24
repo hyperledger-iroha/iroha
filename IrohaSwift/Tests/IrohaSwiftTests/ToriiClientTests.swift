@@ -13529,6 +13529,8 @@ id: 88
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             XCTAssertEqual(json["creation_time_ms"] as? Int, 123)
             XCTAssertEqual(json["fee_sponsor"] as? String, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+            XCTAssertEqual(json["validation_fee_policy_version"] as? String, "7")
+            XCTAssertEqual(json["validation_fee_policy_hash"] as? String, String(repeating: "ab", count: 32))
             let instructions = json["instructions"] as? [[String: Any]]
             XCTAssertEqual(instructions?.first?["kind"] as? String, "Transfer")
             let response = HTTPURLResponse(url: request.url!,
@@ -13541,11 +13543,13 @@ id: 88
             return (response, bodyData)
         }
 
-        let request = try ToriiMultisigProposeRequest(
+        let request = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             creationTimeMs: 123,
             feeSponsor: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+            validationFeePolicyVersion: 7,
+            validationFeePolicyHash: "0x\(String(repeating: "AB", count: 32))",
             instructions: [
                 try ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
             ]
@@ -13646,6 +13650,31 @@ id: 88
             instructions: []
         )
         XCTAssertThrowsError(try JSONEncoder().encode(emptyBatchRequest)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+
+        let missingPolicyHashRequest = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: signer,
+            validationFeePolicyVersion: 7,
+            instructions: [instruction]
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(missingPolicyHashRequest)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+
+        let malformedPolicyHashRequest = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: signer,
+            validationFeePolicyVersion: 7,
+            validationFeePolicyHash: "zz",
+            instructions: [instruction]
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(malformedPolicyHashRequest)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }

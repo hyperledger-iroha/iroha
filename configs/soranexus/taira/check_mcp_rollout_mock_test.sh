@@ -142,14 +142,24 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
     status="503"
     content_type="text/plain"
     body='service unavailable'
+  elif [[ "$scenario" == "status_highest_qc_behind_commit" ]]; then
+    body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":9532,"queue_size":149,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":9532,"highest_qc_height":6544,"locked_qc_height":6544,"commit_qc_validator_set_len":4,"tx_queue_depth":149,"tx_queue_capacity":20000,"tx_queue_saturated":true}}'
+  elif [[ "$scenario" == "status_locked_qc_behind_commit" ]]; then
+    body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":9532,"queue_size":149,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":9532,"highest_qc_height":9532,"locked_qc_height":6544,"commit_qc_validator_set_len":4,"tx_queue_depth":149,"tx_queue_capacity":20000,"tx_queue_saturated":true}}'
+  elif [[ "$scenario" == "status_build_sha_missing" ]]; then
+    body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+  elif [[ "$scenario" == "status_build_sha_too_short" ]]; then
+    body='{"build":{"git_commit_sha":"490dac"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+  elif [[ "$scenario" == "status_build_sha_mismatch" ]]; then
+    body='{"build":{"git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
   else
-    body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
+    body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
   if [[ "$scenario" == "post_canary_sumeragi_missing_validator_set" ]]; then
-    body='{"commit_qc_height":707,"highest_qc_height":708,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+    body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
   else
-    body='{"commit_qc_height":707,"highest_qc_height":708,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+    body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
@@ -255,6 +265,7 @@ run_case() {
   local scenario="$1"
   local expected_pattern="$2"
   local extra_pattern="${3:-}"
+  local expected_git_sha="${4:-}"
   local root output_file
 
   root="$(mktemp -d)"
@@ -265,6 +276,7 @@ run_case() {
   if PATH="${root}/mockbin:${PATH}" \
       MOCK_SCENARIO="$scenario" \
       MOCK_STATE_DIR="${root}/state" \
+      EXPECTED_TAIRA_GIT_SHA="$expected_git_sha" \
       POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
       POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
       "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
@@ -296,7 +308,31 @@ run_case permission_403 'write canary failed: signer or permission check returne
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
+run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
+run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
+run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not match expected 490dacc' '' '490dacc'
+run_case status_highest_qc_behind_commit '/status Sumeragi highest QC height 6544 is behind commit QC height 9532'
+run_case status_locked_qc_behind_commit '/status Sumeragi locked QC height 6544 is behind commit QC height 9532'
 run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported an empty commit validator set'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --expected-git-sha bad \
+      --skip-write-canary \
+      >"${root}/invalid-sha-output.log" 2>&1; then
+  echo "invalid expected git SHA case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-sha-output.log" >&2 || true
+  exit 1
+fi
+grep -q -- '--expected-git-sha must be a 7 to 40 character hexadecimal git SHA prefix' \
+  "${root}/invalid-sha-output.log"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

@@ -1635,6 +1635,12 @@ public static class EthereumMainnetSccp
             sourceBridgeEmitterCodeHash,
             nameof(sourceBridgeEmitterCodeHash),
             32);
+        if (string.Equals(canonicalCodeHash, canonicalNetworkId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "sourceBridgeEmitterCodeHash must not match networkId.",
+                nameof(sourceBridgeEmitterCodeHash));
+        }
 
         using var payload = new MemoryStream();
         payload.Write(Keccak256(Encoding.UTF8.GetBytes(EthSourceBridgeConfigLabel)));

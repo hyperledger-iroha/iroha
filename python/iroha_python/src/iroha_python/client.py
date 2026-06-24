@@ -12450,8 +12450,17 @@ class ToriiClient(_BaseToriiClient):
             instructions=None,
             **sign_overrides,
         )
-        status = self.submit_transaction_envelope(envelope)
         hash_hex = self._envelope_hash_hex(envelope)
+        try:
+            status = self.submit_transaction_envelope(envelope)
+        except (requests.RequestException, TimeoutError) as exc:
+            if wait:
+                raise
+            status = {
+                "ok": False,
+                "status": "submission_timeout_pending_status",
+                "error": str(exc),
+            }
         result: Dict[str, Any] = {
             "envelope": envelope,
             "hash": hash_hex,

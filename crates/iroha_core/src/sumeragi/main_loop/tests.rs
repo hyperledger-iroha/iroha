@@ -19308,11 +19308,12 @@ async fn block_sync_update_known_block_prunes_commit_votes_without_roster_hint()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn cache_block_sync_qc_records_commit_qc_history() {
+async fn cache_block_sync_qc_requests_certified_fetch_without_commit_history() {
     use crate::sumeragi::status;
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
 
     let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
@@ -19364,10 +19365,22 @@ async fn cache_block_sync_qc_records_commit_qc_history() {
 
     let history = status::commit_qc_history();
     assert!(
-        history
-            .iter()
-            .any(|cert| cert.subject_block_hash == block_hash && cert.height == block_height),
-        "commit certificate should be recorded when caching block sync QC"
+        history.is_empty(),
+        "cached QC-only block sync evidence must not publish a commit frontier before the block body is ready"
+    );
+    assert!(
+        actor
+            .cached_commit_qc_for_block(block_hash, block_height, view)
+            .is_some(),
+        "commit certificate should still be cached for a later certified body"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("CertifiedBlockFetchRequest")
+        }),
+        "cached QC-only block sync evidence should request a certified block body"
     );
 
     harness.shutdown.send();
@@ -55003,6 +55016,154 @@ async fn rebroadcast_stalled_rbc_payloads_retries_ready_for_incomplete_delivered
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_delivered_complete_rbc_emits_local_commit_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 3_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = insert_validated_pending(actor, block.clone());
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("complete RBC session");
+    session.test_set_delivered(true);
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires a commit roster");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending block")
+            .local_commit_vote_emitted(),
+        "test should start before the local commit vote is emitted"
+    );
+
+    let progress = actor.rebroadcast_stalled_rbc_payloads(Instant::now());
+
+    assert!(
+        progress,
+        "delivered complete RBC should wake commit progress for the matching pending block"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending block retained")
+            .local_commit_vote_emitted(),
+        "RBC delivery should emit the local commit vote instead of only rebroadcasting DELIVER"
+    );
+    let topology = super::network_topology::Topology::new(roster);
+    assert!(
+        actor
+            .local_precommit_vote_for(height, view, actor.epoch_for_height(height), &topology)
+            .is_some(),
+        "the local precommit vote should be available for commit-QC recovery"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_delivered_complete_rbc_completes_near_quorum_commit_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 2_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = insert_validated_pending(actor, block.clone());
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("complete RBC session");
+    session.test_set_delivered(true);
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires a quorum-minus-one remote vote set"
+    );
+    let seeded = seed_cached_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup should seed a remote near-quorum"
+    );
+    let before = actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view);
+    assert_eq!(
+        before.vote_count,
+        required.saturating_sub(1),
+        "block should start one local vote short of quorum"
+    );
+    assert!(
+        !before.quorum_reached,
+        "remote votes alone must not form the commit quorum"
+    );
+
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let progress = actor.rebroadcast_stalled_rbc_payloads(Instant::now());
+
+    assert!(
+        progress,
+        "delivered complete RBC should wake commit progress for a near-quorum block"
+    );
+    let after = actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view);
+    assert!(
+        after.quorum_reached,
+        "local delivery wakeup should complete the commit quorum"
+    );
+    assert!(
+        actor
+            .local_precommit_vote_for(height, view, actor.epoch_for_height(height), &topology)
+            .is_some(),
+        "the local precommit vote should be available for commit-QC recovery"
+    );
+    if let Some(pending) = actor.pending.pending_blocks.get(&block_hash) {
+        assert!(
+            pending.local_commit_vote_emitted(),
+            "retained pending block should record the local commit vote"
+        );
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_skips_payload_recovery_once_authoritative() {
     let mut harness = test_actor_harness(4).await;
     let key = insert_active_pending_block(&mut harness.actor, 0);
@@ -66392,6 +66553,75 @@ async fn maybe_emit_rbc_deliver_accepts_derived_roster() {
             .deliver_deferral
             .contains_key(&second_key),
         "derived DELIVER should clear DELIVER deferral bookkeeping"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_emits_local_commit_vote_for_authoritative_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 1_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = insert_validated_pending(actor, block.clone());
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("RBC session");
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires a commit roster");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    session.sent_ready = true;
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 0..required {
+        assert!(session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![u8::try_from(idx).expect("index fits u8")]
+        ));
+    }
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending block")
+            .local_commit_vote_emitted(),
+        "test should start before the local commit vote is emitted"
+    );
+
+    actor.maybe_emit_rbc_deliver(key).expect("deliver emission");
+
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending block retained")
+            .local_commit_vote_emitted(),
+        "authoritative payload delivery should emit the local commit vote"
+    );
+    assert!(
+        actor
+            .local_precommit_vote_for(height, view, actor.epoch_for_height(height), &topology)
+            .is_some(),
+        "the local precommit vote should be available for commit-QC recovery"
     );
 
     harness.shutdown.send();
@@ -99626,6 +99856,67 @@ async fn proposal_gated_by_missing_dependencies_requires_recent_range_pull_progr
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_gated_by_missing_dependencies_allows_empty_frontier_local_leader() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = (0_u64..64)
+        .find(|candidate| actor.local_is_round_leader(height, *candidate))
+        .expect("test harness should find a local leader view");
+    let now = Instant::now();
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let block_hash = insert_unresolved_missing_request_for_tests(actor, 0xEA, height, 1, now, now);
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::RangePullFromAnchor,
+        None,
+        now,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    assert!(
+        actor.missing_block_height_recovery.contains_key(&key),
+        "test setup should create a fresh same-height range-pull dependency"
+    );
+    assert!(
+        actor.missing_qc_height_has_unresolved_dependency_at_height(height),
+        "test setup should activate missing-QC dependency gating"
+    );
+    assert_eq!(
+        actor.pending_block_count_for_height(height),
+        0,
+        "test setup should model an empty contiguous frontier"
+    );
+    assert!(
+        !actor.slot_has_round_liveness(height, view),
+        "test setup should start before any local proposal evidence exists"
+    );
+
+    assert!(
+        !actor.proposal_gated_by_missing_dependencies(height),
+        "a local leader with queued work must not be starved by its own empty-frontier recovery pull"
+    );
+    assert!(
+        !actor.missing_block_height_recovery.contains_key(&key),
+        "bypassing the gate should clear the stale range-pull budget"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_gated_by_missing_dependencies_clears_authoritative_local_payload() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -112384,6 +112675,10 @@ async fn block_created_records_collect_da_phase_without_proposal() {
 
     actor.record_phase_sample(PipelinePhase::Propose, height, view);
     let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
     {
         let _local_removed_guard = super::status::local_removed_test_guard();
         super::status::set_local_removed_from_world(false);
@@ -112401,6 +112696,28 @@ async fn block_created_records_collect_da_phase_without_proposal() {
     assert!(
         actor.commit_pipeline_wakeup_pending(),
         "BlockCreated should wake the commit pipeline even without a prior Proposal"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("BlockCreated without prior Proposal should queue vNext validation work");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "BlockCreated-owned validation should be tracked as vNext inflight"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "BlockCreated-owned validation should be dispatched to a worker"
     );
     let snapshot = super::status::round_trace_snapshot();
     let latest = snapshot.latest.expect("round trace should be recorded");
@@ -118785,6 +119102,15 @@ async fn maybe_force_view_change_for_stalled_pending_defers_base_frontier_pendin
 
     let frontier_pending_timeout =
         actor.stalled_pending_frontier_pending_timeout(base_timeout, backlog_signals);
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
+    );
     assert!(
         frontier_pending_timeout > base_timeout,
         "test requires tx backlog to widen the active frontier pending timeout"
@@ -118798,20 +119124,17 @@ async fn maybe_force_view_change_for_stalled_pending_defers_base_frontier_pendin
         "forced-view marker should stay clear inside the active tx backlog window"
     );
 
-    let later = now
-        .checked_add(
-            frontier_pending_timeout
-                .saturating_sub(base_timeout)
-                .saturating_add(Duration::from_millis(2)),
-        )
+    let later = stalled_at
+        .checked_add(repair_exhaustion_window.saturating_add(Duration::from_millis(2)))
         .unwrap_or(now);
     assert!(
-        !actor.maybe_force_view_change_for_stalled_pending(later),
-        "body-present round liveness should keep the frontier view stable while active tx backlog is the only damping signal"
+        actor.maybe_force_view_change_for_stalled_pending(later),
+        "body-present round liveness should expire once the bounded tx-backlog recovery window is exhausted"
     );
     assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout, None,
-        "forced-view marker should stay clear while tx-backlog liveness defers rotation"
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1))),
+        "forced-view marker should advance after bounded tx-backlog recovery expires"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -124327,6 +124650,211 @@ async fn proposal_yields_unvoted_stale_frontier_owner_for_fresh_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_yields_no_qc_stale_owner_after_quorum_timeout_before_lag_window() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    consensus_cfg.recovery.missing_block_height_ttl = Duration::from_secs(60);
+    consensus_cfg.recovery.missing_qc_reacquire_window = Duration::from_secs(60);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let quorum_yield_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(Duration::from_millis(1));
+    let standard_yield_age = quorum_yield_age
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    assert!(
+        standard_yield_age > quorum_yield_age.saturating_add(Duration::from_secs(1)),
+        "test setup requires a wider lag window than the quorum timeout"
+    );
+    let stale_at = now
+        .checked_sub(quorum_yield_age.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    assert!(
+        now.saturating_duration_since(stale_at) < standard_yield_age,
+        "test setup must stay inside the old max-lag yield grace"
+    );
+    actor
+        .phase_tracker
+        .start_new_round(frontier_height, stale_at);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, fresh_view, now);
+
+    let block = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    );
+    let owner_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, frontier_height, owner_view);
+    pending.inserted_at = stale_at;
+    pending.touch_progress(stale_at);
+    actor.pending.pending_blocks.insert(owner_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        owner_hash,
+        stale_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(frontier_height, fresh_view)
+            .is_some(),
+        "no-QC stale owner should initially suppress the fresh view"
+    );
+    assert!(
+        actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            owner_hash,
+            owner_view,
+            now,
+            actor.queue.queued_len(),
+        ),
+        "same-height recovery should yield no-QC stale owners after quorum timeout without waiting for the wider lag window"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "yielding should drop the stale no-QC owner"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_yields_no_qc_stale_owner_after_fast_recovery_window_before_quorum_timeout() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let fast_yield_age =
+        super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+            .min(actor.quorum_timeout(actor.runtime_da_enabled()))
+            .max(Duration::from_millis(1));
+    let quorum_yield_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(Duration::from_millis(1));
+    assert!(
+        fast_yield_age < quorum_yield_age,
+        "test setup requires a fast recovery window below the full quorum timeout"
+    );
+    let stale_at = now
+        .checked_sub(fast_yield_age.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    assert!(
+        now.saturating_duration_since(stale_at) < quorum_yield_age,
+        "test setup must stay inside the old full quorum-timeout yield grace"
+    );
+    actor
+        .phase_tracker
+        .start_new_round(frontier_height, stale_at);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, fresh_view, now);
+
+    let block = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    );
+    let owner_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, frontier_height, owner_view);
+    pending.inserted_at = stale_at;
+    pending.touch_progress(stale_at);
+    actor.pending.pending_blocks.insert(owner_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        owner_hash,
+        stale_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(frontier_height, fresh_view)
+            .is_some(),
+        "no-QC stale owner should initially suppress the fresh view"
+    );
+    assert!(
+        actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            owner_hash,
+            owner_view,
+            now,
+            actor.queue.queued_len(),
+        ),
+        "same-height recovery should yield no-QC owners after the fast recovery window"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "yielding should drop the stale no-QC owner before the full quorum timeout"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_yields_local_voted_stale_frontier_owner_without_quorum_lock() {
     use std::borrow::Cow;
 
@@ -126783,11 +127311,13 @@ async fn cached_recovery_proposal_with_hint_repairs_missing_body_before_rotation
         .proposal_cache
         .observed_at
         .insert((height, view), stale_started_at);
+    actor.pending.pending_processing.set(Some(missing_hash));
+    actor.pending.pending_processing_parent.set(Some(parent));
 
     let rotated = actor.on_pacemaker_propose_ready(Instant::now());
     assert!(
         !rotated,
-        "expired body repair should rotate away from the orphaned cached proposal"
+        "expired body repair should rotate away from the orphaned cached proposal even if stale local processing still references it"
     );
     assert!(
         actor
@@ -145201,6 +145731,301 @@ async fn new_view_qc_retries_local_precommit_for_already_valid_pending_block() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_view_qc_starts_validation_for_passive_same_height_pending_block() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let prev_hash = seed_genesis_block_for_state(&actor.state);
+
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = highest_qc.height.saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = 1_u64;
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(prev_hash),
+    );
+    let owner_parent = owner_block.header().prev_block_hash();
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology);
+    let epoch = actor.epoch_for_height(height);
+    assert!(
+        actor.emit_precommit_vote(
+            owner_hash,
+            height,
+            owner_view,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            owner_parent,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "test setup should record a lower-view local precommit"
+    );
+    while actor.poll_vote_verify_results() {}
+
+    let fresh_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        fresh_view,
+        Some(prev_hash),
+    );
+    let fresh_hash = fresh_block.hash();
+    let created = actor.frontier_block_created_for_wire(&fresh_block);
+    actor
+        .handle_block_created(created, None)
+        .expect("handle conflicting higher-view BlockCreated");
+
+    let pending_before = actor
+        .pending
+        .pending_blocks
+        .get(&fresh_hash)
+        .expect("fresh payload should be retained passively");
+    assert!(
+        pending_before.is_retired_same_height(),
+        "higher-view payload should stay passive before NEW_VIEW QC"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .get(&fresh_hash)
+            .is_none(),
+        "passive payload must not start validation before NEW_VIEW QC"
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
+
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, fresh_view, highest_qc);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&fresh_hash)
+        .expect("fresh payload should remain pending");
+    assert!(
+        !pending_after.is_retired_same_height() && !pending_after.aborted,
+        "NEW_VIEW QC should reactivate the passive higher-view payload"
+    );
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(height, fresh_view),
+        Some(fresh_hash),
+        "reactivated payload should become the authoritative owner for the fresh view"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .get(&fresh_hash)
+            .is_some(),
+        "NEW_VIEW QC should start validation for the reactivated payload"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("NEW_VIEW QC should queue validation work for the reactivated payload");
+    assert_eq!(queued_work.hash, fresh_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, fresh_view);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cached_new_view_qc_starts_validation_for_active_same_height_body_repair() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let prev_hash = seed_genesis_block_for_state(&actor.state);
+
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = highest_qc.height.saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = 1_u64;
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(prev_hash),
+    );
+    let owner_parent = owner_block.header().prev_block_hash();
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology);
+    let epoch = actor.epoch_for_height(height);
+    assert!(
+        actor.emit_precommit_vote(
+            owner_hash,
+            height,
+            owner_view,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            owner_parent,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "test setup should record a lower-view local precommit"
+    );
+    while actor.poll_vote_verify_results() {}
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, fresh_view, highest_qc);
+
+    let fresh_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        fresh_view,
+        Some(prev_hash),
+    );
+    let fresh_hash = fresh_block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&fresh_block);
+    let payload_hash = Hash::new(&payload_bytes);
+    actor.pending.pending_blocks.insert(
+        fresh_hash,
+        PendingBlock::new_with_payload_bytes(
+            fresh_block,
+            payload_hash,
+            height,
+            fresh_view,
+            payload_bytes,
+        ),
+    );
+    actor.note_proposal_seen(height, fresh_view, payload_hash);
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&fresh_hash)
+            .is_some_and(|pending| {
+                !pending.is_retired_same_height()
+                    && !pending.aborted
+                    && pending.validation_status == ValidationStatus::Pending
+            }),
+        "body repair should leave an active pending block awaiting validation"
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
+
+    assert!(
+        actor.maybe_start_validation_for_pending_after_cached_new_view_qc(
+            height,
+            fresh_view,
+            "test_body_repair"
+        ),
+        "cached NEW_VIEW QC should start validation for active body-repaired payloads"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("cached NEW_VIEW QC should queue validation work for the body-repaired payload");
+    assert_eq!(queued_work.hash, fresh_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, fresh_view);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cached_new_view_qc_starts_validation_for_fresh_block_created_body() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let prev_hash = seed_genesis_block_for_state(&actor.state);
+
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = highest_qc.height.saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = 1_u64;
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(prev_hash),
+    );
+    let owner_parent = owner_block.header().prev_block_hash();
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology);
+    let epoch = actor.epoch_for_height(height);
+    assert!(
+        actor.emit_precommit_vote(
+            owner_hash,
+            height,
+            owner_view,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            owner_parent,
+            Some((zero_state_root(), zero_state_root())),
+        ),
+        "test setup should record a lower-view local precommit"
+    );
+    while actor.poll_vote_verify_results() {}
+
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, fresh_view, highest_qc);
+    actor.slot_tracker.proposals_seen.clear();
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
+
+    let fresh_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        fresh_view,
+        Some(prev_hash),
+    );
+    let fresh_hash = fresh_block.hash();
+    let created = actor.frontier_block_created_for_wire(&fresh_block);
+    actor
+        .handle_block_created(created, None)
+        .expect("fresh BlockCreated should be accepted after cached NEW_VIEW QC");
+
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(height, fresh_view),
+        Some(fresh_hash),
+        "fresh BlockCreated should become authoritative for the cached NEW_VIEW slot"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("cached NEW_VIEW QC should queue validation work for fresh BlockCreated payload");
+    assert_eq!(queued_work.hash, fresh_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, fresh_view);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_qc_requests_missing_payload_for_accepted_commit_vote() {
     let _commit_history_guard = isolate_commit_history_state();
     let mut consensus_cfg = test_sumeragi_config();
@@ -146927,6 +147752,89 @@ async fn missing_qc_view_change_keeps_liveness_for_full_topology_new_view_vote()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn missing_qc_view_zero_nonleader_frontier_rotates_after_proposal_timeout() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let original_roster = actor.effective_commit_topology();
+    let local = actor.common_config.peer.id().clone();
+    assert!(
+        original_roster.len() >= 2,
+        "test requires multiple validators"
+    );
+
+    let mut selected_roster = None;
+    for shift in 0..original_roster.len() {
+        let mut candidate = original_roster.clone();
+        candidate.rotate_left(shift);
+        {
+            let mut topo_block = actor.state.commit_topology.block();
+            topo_block.mutate_vec(|vec| *vec = candidate.clone());
+            topo_block.commit();
+        }
+        if !actor.local_is_round_leader(height, 0) {
+            selected_roster = Some(candidate);
+            break;
+        }
+    }
+    assert!(
+        selected_roster.is_some(),
+        "test setup should find a view-0 non-leader roster for local peer {local}"
+    );
+
+    let started_at = Instant::now();
+    actor.phase_tracker.on_view_change(height, 0, started_at);
+    actor.mark_proposal_liveness_state(
+        height,
+        0,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        started_at,
+    );
+    let timeout = actor.cap_active_block_production_gap(
+        super::idle_view_timeout(
+            false,
+            actor.commit_quorum_timeout(),
+            actor.subsystems.propose.pacemaker.propose_interval,
+            actor.runtime_da_enabled(),
+        ),
+        true,
+    );
+
+    let before_timeout = started_at
+        .checked_add(timeout.saturating_sub(Duration::from_millis(1)))
+        .unwrap_or(started_at);
+    assert!(
+        !actor.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+            height,
+            0,
+            1,
+            before_timeout,
+        ),
+        "view-0 non-leader must not rotate before the missing proposal timeout"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(0));
+
+    let after_timeout = started_at
+        .checked_add(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(started_at);
+    assert!(
+        actor
+            .maybe_rotate_missing_qc_nonleader_after_proposal_timeout(height, 0, 1, after_timeout,),
+        "view-0 non-leader should rotate after the missing proposal timeout"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(1));
+    assert!(
+        actor.frontier_missing_qc_liveness_active(height, 1),
+        "missing-QC liveness should carry into the next view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_qc_nonleader_frontier_rotates_after_proposal_timeout() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -146990,6 +147898,269 @@ async fn missing_qc_nonleader_frontier_rotates_after_proposal_timeout() {
     assert!(
         actor.frontier_missing_qc_liveness_active(height, next_view),
         "missing-QC liveness should carry into the next view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_nonleader_rotation_ignores_lower_view_pending_superseded_by_new_view_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let stale_view = 0_u64;
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(8)
+        .max(2);
+    let view = (stale_view.saturating_add(1)..search_limit)
+        .find(|candidate| !actor.local_is_round_leader(height, *candidate))
+        .expect("find non-leader higher view");
+
+    let stale_key = insert_active_pending_block(actor, stale_view);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&stale_key.0)
+        .expect("stale pending block exists")
+        .note_local_commit_vote_emitted();
+    assert!(
+        actor.has_active_pending_blocks(),
+        "test setup requires lower-view pending work"
+    );
+
+    let exact_key = insert_pending_block(actor, height, view);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&exact_key.0)
+        .expect("exact pending block exists")
+        .note_local_commit_vote_emitted();
+    assert!(
+        actor.has_pending_blocks_blocking_missing_qc_rotation(height, view),
+        "exact-view pending work must still block non-leader missing-QC rotation"
+    );
+    actor.pending.pending_blocks.remove(&exact_key.0);
+
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, view, committed_qc);
+    assert!(
+        actor.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+            height, stale_view
+        ),
+        "higher NEW_VIEW quorum should supersede stale lower-view commit-QC repair"
+    );
+    assert!(
+        !actor.slot_has_round_liveness(height, view),
+        "superseded lower-view local vote must not pin the later empty view"
+    );
+    assert!(
+        !actor.has_pending_blocks_blocking_missing_qc_rotation(height, view),
+        "superseded lower-view pending work must not block later-view rotation"
+    );
+
+    let started_at = Instant::now();
+    actor.phase_tracker.on_view_change(height, view, started_at);
+    actor.mark_proposal_liveness_state(
+        height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        started_at,
+    );
+    let timeout = actor.cap_active_block_production_gap(
+        super::idle_view_timeout(
+            false,
+            actor.commit_quorum_timeout(),
+            actor.subsystems.propose.pacemaker.propose_interval,
+            actor.runtime_da_enabled(),
+        ),
+        true,
+    );
+    let after_timeout = started_at
+        .checked_add(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(started_at);
+    assert!(
+        actor.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+            height,
+            view,
+            1,
+            after_timeout,
+        ),
+        "non-leader should rotate when only superseded lower-view pending work remains"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view.saturating_add(1))
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_nonleader_rotation_advances_stale_vote_locked_lower_view() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let owner_view = 0_u64;
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(8)
+        .max(2);
+    let view = (owner_view.saturating_add(1)..search_limit)
+        .find(|candidate| !actor.local_is_round_leader(height, *candidate))
+        .expect("find non-leader higher view");
+
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(parent_hash),
+    );
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 3, "test requires quorum-minus-one remote votes");
+    let seeded = seed_cached_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        height,
+        owner_view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup should seed a lower-view raw vote lock"
+    );
+    assert!(
+        actor
+            .same_height_vote_lock_blocking_candidate(height, view, None)
+            .is_some(),
+        "lower-view raw votes should make a fresh branch non-viable"
+    );
+    assert!(
+        actor.has_pending_blocks_blocking_missing_qc_rotation(height, view),
+        "lower-view vote-backed pending work should normally block missing-QC rotation"
+    );
+    assert!(
+        !actor.has_current_view_or_qc_pending_blocking_missing_qc_rotation(height, view),
+        "test setup should only have stale lower-view raw-vote blockers"
+    );
+    assert!(
+        !actor.slot_has_round_liveness(height, view),
+        "test setup should not create exact-view liveness"
+    );
+
+    let started_at = Instant::now();
+    let stale_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1))
+        .saturating_mul(3)
+        .saturating_add(Duration::from_millis(1));
+    let recovery_entered_at = started_at.checked_sub(stale_age).unwrap_or(started_at);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: recovery_entered_at,
+        last_progress_at: recovery_entered_at,
+        last_dependency_progress_at: None,
+        last_action_at: None,
+        no_progress_windows: 1,
+        cleanup_done: false,
+        last_view: view,
+        last_rotation_view: Some(view),
+        last_cause: "missing_qc",
+    });
+    actor.phase_tracker.on_view_change(height, view, started_at);
+    actor.mark_proposal_liveness_state(
+        height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        started_at,
+    );
+    let timeout = actor.cap_active_block_production_gap(
+        super::idle_view_timeout(
+            false,
+            actor.commit_quorum_timeout(),
+            actor.subsystems.propose.pacemaker.propose_interval,
+            actor.runtime_da_enabled(),
+        ),
+        true,
+    );
+    let after_timeout = started_at
+        .checked_add(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(started_at);
+    assert!(
+        actor.vote_locked_frontier_recovery_ready(height, view, after_timeout),
+        "stale lower-view vote lock should be eligible for exact-recovery view rotation"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(view));
+    assert!(
+        actor
+            .phase_tracker
+            .view_age(height, after_timeout)
+            .is_some_and(|age| super::idle_round_timed_out(true, age, timeout)),
+        "test setup should be past the non-leader proposal timeout"
+    );
+    assert!(
+        !actor.subsystems.commit.inflight.is_some(),
+        "test setup should not have commit work in flight"
+    );
+    assert!(
+        !actor.frontier_slot_passive_catchup_owns_height(height),
+        "test setup should not be owned by passive catch-up"
+    );
+    assert!(
+        !actor.committed_edge_conflict_owner_blocks_height(height),
+        "test setup should not be blocked by committed-edge conflict recovery"
+    );
+    assert!(
+        !actor.has_commit_phase_missing_qc_dependency_for_height(height),
+        "test setup should not have commit-phase missing-QC dependencies"
+    );
+    assert!(
+        !actor.missing_qc_height_has_unresolved_dependency_at_height(height),
+        "test setup should not have unresolved height dependencies"
+    );
+    assert!(
+        actor.frontier_catchup_dependency_blocks_missing_qc_rotation(height, view),
+        "test setup should expose the lower-view vote lock as frontier catch-up pressure"
+    );
+    assert!(
+        !actor.has_actionable_missing_block_requests(),
+        "test setup should not have actionable missing block requests"
+    );
+    assert!(
+        !actor.has_actionable_deferred_missing_payload_qcs(),
+        "test setup should not have deferred missing-payload QCs"
+    );
+    assert!(
+        !actor.sidecar_quarantined_for_height(height),
+        "test setup should not have sidecar quarantine"
+    );
+
+    assert!(
+        actor.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+            height,
+            view,
+            1,
+            after_timeout,
+        ),
+        "non-leader should rotate away from a timed-out recovery leader while preserving the vote-locked branch"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view.saturating_add(1))
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&owner_hash),
+        "view rotation must preserve the lower-view vote-locked pending block"
     );
 
     harness.shutdown.send();
@@ -156725,6 +157896,10 @@ async fn duplicate_block_created_hydrates_existing_rbc_session() {
         actor.pending.pending_blocks.contains_key(&block_hash),
         "pending block should be cached before duplicate BlockCreated"
     );
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
 
     let before = actor
         .subsystems
@@ -156738,6 +157913,7 @@ async fn duplicate_block_created_hydrates_existing_rbc_session() {
 
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
+    actor.pending.commit_pipeline_wakeup = false;
     actor
         .handle_block_created(
             super::message::BlockCreated {
@@ -156797,6 +157973,24 @@ async fn duplicate_block_created_hydrates_existing_rbc_session() {
                 && entry.msg_kind == Some("RbcReady")
         }),
         "duplicate BlockCreated hydration should queue READY broadcast immediately"
+    );
+    assert!(
+        actor.pending.commit_pipeline_wakeup,
+        "duplicate BlockCreated hydration should wake validation and commit voting"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("duplicate BlockCreated hydration should queue validation work");
+    assert_eq!(queued_work.hash, block_hash);
+    assert_eq!(queued_work.height, height);
+    assert_eq!(queued_work.view, view);
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "duplicate BlockCreated hydration should install vNext validation ownership"
     );
 
     harness.shutdown.send();
@@ -175807,7 +177001,8 @@ async fn block_sync_update_future_window_drops_unrequested() {
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -175849,7 +177044,8 @@ async fn block_sync_update_future_window_allows_requested() {
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -175893,7 +177089,8 @@ async fn block_sync_update_future_window_drops_requested_when_height_exceeds_sta
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -175950,7 +177147,8 @@ async fn block_sync_update_future_window_drops_requested_even_with_known_parent_
         Some(parent_hash),
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -176014,7 +177212,8 @@ async fn block_sync_update_future_window_drops_unrequested_when_lower_missing_he
         Some(parent_hash),
         far_height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -176054,7 +177253,8 @@ async fn block_sync_update_future_window_allows_known_block() {
         parent_hash,
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
     harness.shutdown.send();
 }
@@ -176099,8 +177299,177 @@ async fn block_sync_update_future_window_allows_known_parent() {
         Some(parent_hash),
         height,
         view,
-        requested_missing_block
+        requested_missing_block,
+        false
     ));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn block_sync_update_future_window_allows_commit_evidence_during_frontier_range_pull() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.missing_request_stale_height_margin = 1;
+
+    let local_height = actor.last_committed_height;
+    let view = 0;
+    let frontier_height = local_height.saturating_add(1);
+    let missing_hash = sample_block(frontier_height, view, None).hash();
+    let inserted = super::touch_missing_block_request(
+        &mut actor.pending.missing_block_requests,
+        missing_hash,
+        frontier_height,
+        view,
+        crate::sumeragi::consensus::Phase::Commit,
+        super::MissingBlockPriority::Background,
+        Instant::now(),
+        Duration::from_secs(1),
+        None,
+    );
+    assert!(inserted, "frontier missing dependency should be tracked");
+
+    let pull_requested = actor.request_range_pull_from_anchor_with_tier(
+        frontier_height,
+        "rbc_far_future_missing_block",
+        Instant::now(),
+        Some(super::RangePullCandidateTier::CommitTopology),
+    );
+    assert!(pull_requested, "frontier range pull should be emitted");
+
+    let parent_height = local_height.saturating_add(3);
+    let parent_block = sample_block(parent_height, view, None);
+    let parent_hash = parent_block.hash();
+    actor.pending.pending_blocks.insert(
+        parent_hash,
+        PendingBlock::new(
+            parent_block,
+            Hash::prehashed([0xAD; Hash::LENGTH]),
+            parent_height,
+            view,
+        ),
+    );
+    let far_height = parent_height.saturating_add(1);
+    let far_block = sample_block(far_height, view, Some(parent_hash));
+    let far_hash = far_block.hash();
+    let requested_missing_block = actor.pending.missing_block_requests.contains_key(&far_hash);
+
+    assert!(
+        actor.should_drop_future_block_sync_update(
+            &far_hash,
+            Some(parent_hash),
+            far_height,
+            view,
+            requested_missing_block,
+            false
+        ),
+        "non-certified far updates should remain blocked by the lower unresolved frontier"
+    );
+    assert!(
+        !actor.should_drop_future_block_sync_update(
+            &far_hash,
+            Some(parent_hash),
+            far_height,
+            view,
+            requested_missing_block,
+            true
+        ),
+        "commit-certified range responses should pass while the frontier range pull is active"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn certified_block_sync_update_with_missing_parent_defers_without_static_validation() {
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, test_sumeragi_config(), None, 5).await;
+    let actor = &mut harness.actor;
+
+    let local_height = actor.committed_height_snapshot();
+    let view = 0;
+    let frontier_height = local_height.saturating_add(1);
+    let frontier_hash = sample_block(frontier_height, view, None).hash();
+    let inserted = super::touch_missing_block_request(
+        &mut actor.pending.missing_block_requests,
+        frontier_hash,
+        frontier_height,
+        view,
+        crate::sumeragi::consensus::Phase::Commit,
+        super::MissingBlockPriority::Background,
+        Instant::now(),
+        Duration::from_secs(1),
+        None,
+    );
+    assert!(inserted, "frontier missing dependency should be tracked");
+    assert!(
+        actor.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "rbc_far_future_missing_block",
+            Instant::now(),
+            Some(super::RangePullCandidateTier::CommitTopology),
+        ),
+        "frontier range pull should be active for certified far-ahead responses"
+    );
+    let parent_height = local_height.saturating_add(2);
+    let parent_hash = sample_block(parent_height, view, None).hash();
+    let height = parent_height.saturating_add(1);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    assert!(
+        !actor.block_known_locally(parent_hash),
+        "test requires the certified update's parent to be missing locally"
+    );
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "test requires an unknown far-ahead block"
+    );
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<ValidatorIndex> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = certified_fetch_checkpoint_for_qc(&qc);
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("certified parent-gap block sync update should defer");
+
+    let deferred = actor
+        .deferred_block_sync_updates
+        .get(&(height, view, block_hash))
+        .expect("far-ahead certified payload should wait in the deferred block-sync queue");
+    assert!(
+        deferred.update.commit_qc.is_some(),
+        "deferred far-ahead payload should preserve its commit proof"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "far-ahead payload must not enter normal validation before its parent is local"
+    );
+
     harness.shutdown.send();
 }
 
@@ -179243,6 +180612,196 @@ async fn rescue_rbc_missing_ready_peers_sends_payload_after_deliver() {
             .targeted_payload_rescue_last_sent
             .contains_key(&key),
         "delivered targeted payload rescue should still arm its own cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rescue_rbc_missing_ready_peers_sends_verified_payload_for_active_ready_gap() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 32;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "commit roster should be non-empty");
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let epoch = actor.epoch_for_height(height);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("RBC session");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    session.sent_ready = true;
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = Actor::rbc_protocol_deliver_quorum(&topology);
+    assert!(required > 2, "test requires READY quorum above two");
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let local_idx = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    let remote_idx = (0..signature_topology.as_ref().len())
+        .map(|idx| u32::try_from(idx).expect("idx fits u32"))
+        .find(|idx| *idx != local_idx)
+        .expect("remote READY sender");
+    assert!(session.record_ready(local_idx, vec![0xAA]));
+    assert!(session.record_ready(remote_idx, vec![0xBB]));
+    assert!(session.ready_signatures.len() < required);
+
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .targeted_payload_rescue_last_sent
+        .remove(&key);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .remove(&key);
+
+    assert!(
+        actor.rbc_rebroadcast_active(key),
+        "test session should be active for near-tip rescue"
+    );
+    assert!(
+        actor.rbc_session_has_verified_or_local_payload_for_progress(key, &session),
+        "complete peer chunk payload should be accepted for progress"
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, &session),
+        "test must not rely on local block/body authority"
+    );
+
+    let missing_ready_peers = Actor::rbc_missing_ready_peers(&session, &signature_topology);
+    let expected_targets: BTreeSet<_> = missing_ready_peers
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .cloned()
+        .collect();
+    assert!(
+        !expected_targets.is_empty(),
+        "missing READY peers should include at least one remote peer"
+    );
+
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let repaired = actor.rescue_rbc_missing_ready_peers(
+        key,
+        &session,
+        missing_ready_peers.as_slice(),
+        session.ready_signatures.len(),
+        Instant::now(),
+    );
+
+    assert!(
+        repaired,
+        "active verified payloads below READY quorum should send targeted payload rescue"
+    );
+    let entries = take_background_log(&background_log);
+    let targeted_init_peers: BTreeSet<_> = entries
+        .iter()
+        .filter_map(|post| match post {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("RbcInit"),
+                peer: Some(peer),
+            } if expected_targets.contains(peer) => Some(peer.clone()),
+            _ => None,
+        })
+        .collect();
+    let targeted_chunk_peers: BTreeSet<_> = entries
+        .iter()
+        .filter_map(|post| match post {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("RbcChunk" | "RbcChunkCompact"),
+                peer: Some(peer),
+            } if expected_targets.contains(peer) => Some(peer.clone()),
+            _ => None,
+        })
+        .collect();
+    let targeted_body_peers: BTreeSet<_> = entries
+        .iter()
+        .filter_map(|post| match post {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("BlockBodyResponse" | "BlockCreated"),
+                peer: Some(peer),
+            } if expected_targets.contains(peer) => Some(peer.clone()),
+            _ => None,
+        })
+        .collect();
+    let targeted_ready_peers: BTreeSet<_> = entries
+        .iter()
+        .filter_map(|post| match post {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("RbcReady"),
+                peer: Some(peer),
+            } if expected_targets.contains(peer) => Some(peer.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        targeted_init_peers, expected_targets,
+        "verified payload rescue should repeat RBC INIT for peers missing READY"
+    );
+    assert_eq!(
+        targeted_chunk_peers, expected_targets,
+        "verified payload rescue should repeat chunks for peers missing READY"
+    );
+    assert!(
+        targeted_body_peers.is_empty(),
+        "verified payload rescue should not need exact local body companions"
+    );
+    assert_eq!(
+        targeted_ready_peers, expected_targets,
+        "verified payload rescue should also forward the known READY evidence"
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .targeted_payload_rescue_last_sent
+            .contains_key(&key),
+        "verified payload rescue should arm the targeted payload cooldown"
     );
 
     harness.shutdown.send();
@@ -207730,6 +209289,255 @@ async fn pending_rbc_slot_eviction_releases_block_payload_dedup() {
     assert!(!guard.contains(&ready_key));
     assert!(!guard.contains(&deliver_key));
     assert!(!guard.contains(&chunk_key));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_evicts_quiet_stale_stash_without_new_rbc_traffic() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_pending_rbc_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_millis(1);
+
+    let key = pending_session_key(1);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x60);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_millis(50))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+    actor.publish_rbc_backlog_snapshot();
+
+    assert!(
+        actor.has_unresolved_rbc_backlog(),
+        "quiet pending RBC stash should be visible as unresolved backlog before TTL sweep"
+    );
+    assert!(
+        actor.prune_expired_pending_rbc(),
+        "periodic sweep should evict stale pending RBC without waiting for another RBC message"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "stale pending RBC stash should be removed"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &dedup_keys,
+        "periodic pending RBC TTL sweep should release dedup state",
+    );
+    assert!(
+        !actor.has_unresolved_rbc_backlog(),
+        "expired quiet pending RBC stash must not keep backlog pressure active"
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        0,
+        "operator pending-RBC snapshot should reflect TTL eviction"
+    );
+
+    super::status::reset_pending_rbc_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_is_disabled_when_ttl_is_zero() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::ZERO;
+
+    let key = pending_session_key(2);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x62);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_secs(300))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+
+    assert!(
+        !actor.prune_expired_pending_rbc(),
+        "zero pending TTL should disable periodic pending-RBC eviction"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "pending RBC stash should remain when TTL eviction is disabled"
+    );
+    assert_block_payload_dedup_keys_present(
+        actor,
+        &dedup_keys,
+        "disabled pending-RBC TTL sweep should retain dedup state",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_evicts_all_expired_quiet_stashes_in_one_pass() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_pending_rbc_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_secs(60);
+
+    let stale_a = pending_session_key(3);
+    let stale_b = pending_session_key(4);
+    let fresh = pending_session_key(5);
+    let stale_a_dedup = insert_pending_rbc_stash_with_dedup(actor, stale_a, 0x63);
+    let stale_b_dedup = insert_pending_rbc_stash_with_dedup(actor, stale_b, 0x64);
+    let fresh_dedup = insert_pending_rbc_stash_with_dedup(actor, fresh, 0x65);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_secs(120))
+        .unwrap_or_else(Instant::now);
+    for key in [stale_a, stale_b] {
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .get_mut(&key)
+            .expect("pending RBC stash inserted")
+            .touch(stale_seen);
+    }
+
+    assert!(
+        actor.prune_expired_pending_rbc(),
+        "periodic sweep should evict every expired pending RBC stash"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&stale_a),
+        "first expired pending RBC stash should be removed"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&stale_b),
+        "second expired pending RBC stash should be removed"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&fresh),
+        "fresh pending RBC stash should be retained"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &stale_a_dedup,
+        "periodic pending-RBC TTL sweep should release first expired stash dedup",
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &stale_b_dedup,
+        "periodic pending-RBC TTL sweep should release second expired stash dedup",
+    );
+    assert_block_payload_dedup_keys_present(
+        actor,
+        &fresh_dedup,
+        "periodic pending-RBC TTL sweep should keep fresh stash dedup",
+    );
+    assert_eq!(
+        super::status::pending_rbc_snapshot().sessions,
+        1,
+        "operator pending-RBC snapshot should retain only the fresh stash"
+    );
+
+    super::status::reset_pending_rbc_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_prunes_quiet_expired_pending_rbc_without_new_rbc_traffic() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_pending_rbc_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_secs(60);
+
+    let key = pending_session_key(6);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x66);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_secs(120))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+    actor.publish_rbc_backlog_snapshot();
+
+    assert!(
+        actor.tick(),
+        "actor tick should report progress when it prunes expired pending RBC"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "periodic actor tick should remove expired quiet pending RBC stash"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &dedup_keys,
+        "tick-driven pending-RBC TTL sweep should release dedup state",
+    );
+    assert!(
+        !actor.has_unresolved_rbc_backlog(),
+        "tick-driven pending-RBC TTL sweep must clear stale backlog pressure"
+    );
+
+    super::status::reset_pending_rbc_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_rbc_ttl_sweep_retains_stash_with_active_session() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.rbc.pending_ttl = Duration::from_millis(1);
+
+    let key = pending_session_key(1);
+    let dedup_keys = insert_pending_rbc_stash_with_dedup(actor, key, 0x61);
+    let stale_seen = Instant::now()
+        .checked_sub(Duration::from_millis(50))
+        .unwrap_or_else(Instant::now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .get_mut(&key)
+        .expect("pending RBC stash inserted")
+        .touch(stale_seen);
+    actor.subsystems.da_rbc.rbc.sessions.insert(
+        key,
+        RbcSession::test_new(1, None, None, actor.epoch_for_height(key.1)),
+    );
+
+    assert!(
+        !actor.prune_expired_pending_rbc(),
+        "active RBC sessions should retain their pending stash past pending TTL"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "active-session pending RBC stash should be retained"
+    );
+    assert_block_payload_dedup_keys_present(
+        actor,
+        &dedup_keys,
+        "retained active-session pending RBC stash should keep dedup state",
+    );
 
     harness.shutdown.send();
 }

@@ -173,6 +173,7 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
         "/v1/offline/audit",
         "/v1/offline/revocations",
         "/v1/offline/revocations/bundle",
+        "/v1/attestation/issue",
     ] {
         let response = app
             .clone()

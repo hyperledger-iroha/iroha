@@ -5113,6 +5113,42 @@ def _android_report_d2d_payment_transports(report: dict[str, Any]) -> list[str]:
     return []
 
 
+def _android_d2d_payment_transport_coverage_by_family(
+    reports: list[dict[str, Any]],
+    signed_evidence: dict[str, dict[str, str]],
+) -> dict[str, list[str]]:
+    """Return admitted D2D transport coverage keyed by standard device family."""
+
+    coverage: dict[str, set[str]] = {
+        family: set() for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    }
+    for report in reports:
+        if report.get("status") != "ok" or not _android_report_has_complete_signed_evidence(
+            report,
+            signed_evidence,
+        ):
+            continue
+        family = _android_report_device_family(report)
+        if family is None:
+            continue
+        coverage[family].update(_android_report_d2d_payment_transports(report))
+    return {family: sorted(transports) for family, transports in coverage.items()}
+
+
+def _missing_android_d2d_payment_transport_pairs(
+    coverage_by_family: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Return required family/transport pairs without admitted signed evidence."""
+
+    missing: list[dict[str, str]] = []
+    for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+        covered = set(coverage_by_family.get(family, []))
+        for transport in ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS:
+            if transport not in covered:
+                missing.append({"device_family": family, "transport": transport})
+    return missing
+
+
 def _check_android_signed_evidence_freshness(
     reports: list[dict[str, Any]],
     min_signed_at: dt.datetime | None,
@@ -5183,10 +5219,42 @@ def _check_android_signed_evidence_freshness(
     return blockers
 
 
+def _android_report_duplicate_matrix_values(
+    kagemusha: dict[str, Any],
+    field: str,
+) -> set[str]:
+    """Return canonical matrix-binding values from a sanitized Android report."""
+
+    values: set[str] = set()
+    value = kagemusha.get(field)
+    if (
+        isinstance(value, str)
+        and device_lab.SHA256_HEX_RE.fullmatch(value)
+        and value != "0" * 64
+    ):
+        values.add(value)
+    if field != "d2d_payment_transcript_sha256":
+        return values
+    transcripts = kagemusha.get("d2d_payment_transcripts")
+    if not isinstance(transcripts, dict):
+        return values
+    for entry in transcripts.values():
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("sha256")
+        if (
+            isinstance(digest, str)
+            and device_lab.SHA256_HEX_RE.fullmatch(digest)
+            and digest != "0" * 64
+        ):
+            values.add(digest)
+    return values
+
+
 def _check_android_matrix_unique_bindings(
     reports: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Reject matrix rows copied from the same physical device run."""
+    """Reject matrix rows copied from the same device or D2D evidence run."""
 
     blockers: list[dict[str, Any]] = []
     checks = (
@@ -5200,32 +5268,45 @@ def _check_android_matrix_unique_bindings(
             "android_device_lab_duplicate_attestation_challenge",
             "Android device-lab production slots must not reuse an attestation challenge",
         ),
+        (
+            "d2d_payment_transcript_sha256",
+            "android_device_lab_duplicate_d2d_payment_transcript",
+            "Android device-lab production slots must not reuse a D2D payment transcript digest",
+        ),
     )
     for field, code, message in checks:
-        seen: dict[str, list[str]] = {}
+        seen: dict[str, set[str]] = {}
         for report in reports:
             if report.get("status") != "ok":
                 continue
             slot = report.get("slot")
-            value = _android_report_kagemusha(report).get(field)
+            kagemusha = _android_report_kagemusha(report)
+            value = kagemusha.get(field)
             if not isinstance(slot, str) or not isinstance(value, str) or not value:
-                continue
-            safe_slot = _display_evidence_value(slot)
-            if field.endswith("_sha256") and (
-                device_lab.SHA256_HEX_RE.fullmatch(value) is None
-                or value == "0" * 64
-            ):
-                blockers.append(
-                    blocker(
-                        "android_device_lab_binding_digest_invalid",
-                        "Android device-lab production binding digests must be non-zero lowercase sha256 hex",
-                        slot=safe_slot,
-                        field=field,
-                        value_sha256=_display_evidence_value(value),
+                if not isinstance(slot, str):
+                    continue
+            else:
+                safe_slot = _display_evidence_value(slot)
+                if field.endswith("_sha256") and (
+                    device_lab.SHA256_HEX_RE.fullmatch(value) is None
+                    or value == "0" * 64
+                ):
+                    blockers.append(
+                        blocker(
+                            "android_device_lab_binding_digest_invalid",
+                            "Android device-lab production binding digests must be non-zero lowercase sha256 hex",
+                            slot=safe_slot,
+                            field=field,
+                            value_sha256=_display_evidence_value(value),
+                        )
                     )
-                )
-                continue
-            seen.setdefault(value, []).append(safe_slot)
+                    continue
+            safe_slot = _display_evidence_value(slot)
+            for duplicate_value in _android_report_duplicate_matrix_values(
+                kagemusha,
+                field,
+            ):
+                seen.setdefault(duplicate_value, set()).add(safe_slot)
         for value, slots in sorted(seen.items()):
             if len(slots) <= 1:
                 continue
@@ -5606,6 +5687,11 @@ def check_android_device_lab(
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_d2d_payment_transports": [],
             "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+            "covered_d2d_payment_transports_by_family": {
+                family: []
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -5635,6 +5721,11 @@ def check_android_device_lab(
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_d2d_payment_transports": [],
             "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+            "covered_d2d_payment_transports_by_family": {
+                family: []
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -5659,6 +5750,11 @@ def check_android_device_lab(
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_d2d_payment_transports": [],
             "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+            "covered_d2d_payment_transports_by_family": {
+                family: []
+                for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            },
+            "missing_d2d_payment_transport_pairs": _missing_android_d2d_payment_transport_pairs({}),
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -5689,6 +5785,14 @@ def check_android_device_lab(
         )
         missing_device_families = list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
         missing_d2d_payment_transports = list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS)
+        covered_d2d_payment_transports_by_family = {
+            family: [] for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+        }
+        missing_d2d_payment_transport_pairs = (
+            _missing_android_d2d_payment_transport_pairs(
+                covered_d2d_payment_transports_by_family,
+            )
+        )
         blockers.append(
             blocker(
                 "android_device_lab_standard_matrix_missing",
@@ -5701,6 +5805,7 @@ def check_android_device_lab(
                 "android_device_lab_d2d_transport_matrix_missing",
                 "missing Kagemusha production evidence for one or more offline D2D payment transports",
                 missing_d2d_payment_transports=missing_d2d_payment_transports,
+                missing_d2d_payment_transport_pairs=missing_d2d_payment_transport_pairs,
             )
         )
         return {
@@ -5711,6 +5816,8 @@ def check_android_device_lab(
             "missing_device_families": missing_device_families,
             "covered_d2d_payment_transports": [],
             "missing_d2d_payment_transports": missing_d2d_payment_transports,
+            "covered_d2d_payment_transports_by_family": covered_d2d_payment_transports_by_family,
+            "missing_d2d_payment_transport_pairs": missing_d2d_payment_transport_pairs,
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -5783,6 +5890,13 @@ def check_android_device_lab(
         for transport in ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
         if transport not in covered_transports
     ]
+    covered_transports_by_family = _android_d2d_payment_transport_coverage_by_family(
+        reports,
+        signed_evidence,
+    )
+    missing_transport_pairs = _missing_android_d2d_payment_transport_pairs(
+        covered_transports_by_family,
+    )
     if missing:
         blockers.append(
             blocker(
@@ -5791,12 +5905,13 @@ def check_android_device_lab(
                 missing_device_families=missing,
             )
         )
-    if missing_transports:
+    if missing_transports or missing_transport_pairs:
         blockers.append(
             blocker(
                 "android_device_lab_d2d_transport_matrix_missing",
-                "missing Kagemusha production evidence for one or more offline D2D payment transports",
+                "missing Kagemusha production evidence for one or more standard-family offline D2D payment transports",
                 missing_d2d_payment_transports=missing_transports,
+                missing_d2d_payment_transport_pairs=missing_transport_pairs,
             )
         )
     blockers.extend(_check_android_matrix_unique_bindings(reports))
@@ -5823,6 +5938,8 @@ def check_android_device_lab(
         "missing_device_families": missing,
         "covered_d2d_payment_transports": covered_transports,
         "missing_d2d_payment_transports": missing_transports,
+        "covered_d2d_payment_transports_by_family": covered_transports_by_family,
+        "missing_d2d_payment_transport_pairs": missing_transport_pairs,
         "duplicate_bindings": _android_duplicate_matrix_bindings_summary(
             reports,
             signed_evidence,

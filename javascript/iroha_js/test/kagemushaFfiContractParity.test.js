@@ -426,7 +426,13 @@ function assertWorkflowIncludesPaths(workflow, paths, label) {
 }
 
 function assertWorkflowRunsNegativeControlModes(workflow, command, modes, label) {
-  for (const mode of modes) {
+  const modeList = Array.from(modes);
+  assert.equal(
+    new Set(modeList).size,
+    modeList.length,
+    `${label} workflow expected negative-control modes must not contain duplicates`,
+  );
+  for (const mode of modeList) {
     assert.match(
       workflow,
       new RegExp(`^\\s+${escapeRegExp(command)} ${escapeRegExp(mode)}$`, "m"),
@@ -434,6 +440,20 @@ function assertWorkflowRunsNegativeControlModes(workflow, command, modes, label)
     );
   }
 }
+
+test("workflow negative-control helper rejects duplicate expected modes", () => {
+  const workflow = "          ci/check_fixture.sh --negative-control-fixture\n";
+  assert.throws(
+    () =>
+      assertWorkflowRunsNegativeControlModes(
+        workflow,
+        "ci/check_fixture.sh",
+        ["--negative-control-fixture", "--negative-control-fixture"],
+        "fixture guard",
+      ),
+    /fixture guard workflow expected negative-control modes must not contain duplicates/u,
+  );
+});
 
 function assertContainsAll(text, names, label) {
   for (const name of names) {
@@ -3431,6 +3451,13 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-localnet-lifecycle-acceptance-report-path-shape",
     "--negative-control-localnet-lifecycle-acceptance-report-filename",
     "--negative-control-localnet-lifecycle-acceptance-report-filename-preflight",
+    "--negative-control-localnet-lifecycle-acceptance-identity-preflight",
+    "--negative-control-localnet-lifecycle-acceptance-source-path-preflight",
+    "--negative-control-localnet-lifecycle-acceptance-source-path-shape-preflight",
+    "--negative-control-localnet-lifecycle-acceptance-source-identity-preflight",
+    "--negative-control-localnet-lifecycle-acceptance-output-corridor-before-parent-create",
+    "--negative-control-localnet-lifecycle-source-recorder-root-preflight",
+    "--negative-control-localnet-lifecycle-source-recorder-private-publish",
     "--negative-control-localnet-lifecycle-helper-validation-private-permissions",
     "--negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure",
     "--negative-control-localnet-lifecycle-helper-output-early-preflight",
@@ -3513,6 +3540,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-compact-key-staged-runner-child-log-file",
     "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "--negative-control-staged-runner-relative-repo-root-child-path",
     "--negative-control-compact-key-staged-runner-execution-log-sha256",
     "--negative-control-compact-key-staged-runner-resume-replace-conflict",
     "--negative-control-doc-route",
@@ -3664,7 +3692,6 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "--negative-control-lineage-proof-staged-runner-execution-log-sha256",
     "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
-    "--negative-control-lineage-staged-elapsed-file-path-shape",
     "--negative-control-lineage-proof-log-exact",
     "--negative-control-lineage-proof-log-size-limit",
     "--negative-control-lineage-proof-log-is-file-preflight",
@@ -3703,19 +3730,6 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-sync-failure",
     "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-identity",
     "--negative-control-localnet-lifecycle-helper-validation-temp-write-failure",
-    "--negative-control-localnet-lifecycle-helper-validation-private-permissions",
-    "--negative-control-localnet-lifecycle-acceptance-report-path-shape",
-    "--negative-control-localnet-lifecycle-acceptance-report-filename",
-    "--negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure",
-    "--negative-control-localnet-lifecycle-helper-output-early-preflight",
-    "--negative-control-localnet-lifecycle-helper-output-corridor-resolve-failure",
-    "--negative-control-localnet-lifecycle-helper-output-private-permissions",
-    "--negative-control-localnet-lifecycle-helper-output-write-failure",
-    "--negative-control-localnet-lifecycle-helper-validation-before-write",
-    "--negative-control-localnet-lifecycle-helper-build-errors-before-validation",
-    "--negative-control-localnet-lifecycle-helper-input-errors-before-build",
-    "--negative-control-localnet-lifecycle-helper-output-errors-before-input",
-    "--negative-control-localnet-lifecycle-helper-raw-paths-before-path-construction",
     "--negative-control-localnet-lifecycle-helper-acceptance-size-cap-specificity",
     "--negative-control-localnet-lifecycle-helper-final-write-size-cap-specificity",
     "--negative-control-localnet-lifecycle-evidence-size-cap-specificity",
@@ -3924,6 +3938,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-format-control-sanitization",
     "--negative-control-android-device-lab-wallet-integrity",
     "--negative-control-android-device-lab-unique-bindings",
+    "--negative-control-android-device-lab-d2d-duplicate-bindings",
     "--negative-control-android-device-lab-summary",
     "--negative-control-android-device-lab-summary-complete-evidence",
     "--negative-control-android-device-lab-summary-slot-pruning",
@@ -4327,6 +4342,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "Kagemusha production readiness guard",
   );
   const expectedModeSet = new Set(expectedModes);
+  assert.equal(
+    expectedModeSet.size,
+    expectedModes.length,
+    "Kagemusha production readiness expectedModes must not contain duplicates",
+  );
   const actualModeSet = new Set(
     [...readiness.matchAll(/^if mode == "(--negative-control-[a-z0-9-]+)":/gmu)].map(
       ([, mode]) => mode,
@@ -4911,6 +4931,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key staged runner supervisor output pipe",
     ],
     [
+      "--negative-control-staged-runner-relative-repo-root-child-path",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?return repo_root if repo_root\.is_absolute\(\) else Path\.cwd\(\) \/ repo_root[\s\S]*?return repo_root/u,
+      "Kagemusha staged runner relative repo-root child PATH",
+    ],
+    [
       "--negative-control-compact-key-staged-runner-execution-log-sha256",
       /generator_log_sha256 must match staged generator log SHA-256[\s\S]*?generator_log_sha256 may drift from staged generator log SHA-256/u,
       "ABI-7 recursive compact key staged runner execution-log SHA-256 binding",
@@ -5286,6 +5311,41 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha localnet lifecycle acceptance-report filename preflight gate",
     ],
     [
+      "--negative-control-localnet-lifecycle-acceptance-identity-preflight",
+      /scripts\/kagemusha_localnet_lifecycle_acceptance\.py[\s\S]*?identity_errors = validate_acceptance_identity\([\s\S]*?return None, identity_errors/u,
+      "Kagemusha localnet lifecycle acceptance identity preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-source-path-preflight",
+      /scripts\/kagemusha_localnet_lifecycle_acceptance\.py[\s\S]*?source_artifact_path_errors = validate_source_artifact_paths\([\s\S]*?return None, source_artifact_path_errors/u,
+      "Kagemusha localnet lifecycle acceptance source-artifact path preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-source-path-shape-preflight",
+      /scripts\/kagemusha_localnet_lifecycle_acceptance\.py[\s\S]*?shape_errors = validate_source_artifact_path_shapes\([\s\S]*?return shape_errors/u,
+      "Kagemusha localnet lifecycle acceptance source-artifact shape preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-source-identity-preflight",
+      /scripts\/kagemusha_localnet_lifecycle_acceptance\.py[\s\S]*?source_artifact_identity_errors = validate_source_artifact_file_identities\([\s\S]*?return None, source_artifact_identity_errors/u,
+      "Kagemusha localnet lifecycle acceptance source-artifact identity preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-output-corridor-before-parent-create",
+      /lineage_helper\.validate_output_corridor\(out_path, artifact_dir\)[\s\S]*?return corridor_errors[\s\S]*?lineage_helper\.validate_output_path\(out_path, \\?"--out\\?"\)/u,
+      "Kagemusha localnet lifecycle acceptance output corridor before parent-create gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-source-recorder-root-preflight",
+      /integration_tests\/tests\/zk_confidential_localnet\.rs[\s\S]*?prepare_localnet_lifecycle_source_dir\(root\)\?;[\s\S]*?fs::create_dir_all\(root\)/u,
+      "Kagemusha localnet lifecycle source recorder root preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-source-recorder-private-publish",
+      /integration_tests\/tests\/zk_confidential_localnet\.rs[\s\S]*?write_localnet_lifecycle_source_artifact\(&path, json_text\.as_bytes\(\)\)\?;[\s\S]*?fs::write\(&path, json_text\)\?;/u,
+      "Kagemusha localnet lifecycle source recorder private publish gate",
+    ],
+    [
       "--negative-control-localnet-lifecycle-helper-validation-size-limit",
       /len\(evidence_text\.encode\(\\"utf-8\\"\)\)[\s\S]*?"0"/u,
       "Kagemusha localnet lifecycle helper validation size limit",
@@ -5462,7 +5522,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-lineage-proof-helper-timestamp-raw",
-      /errors\.extend\(_validate_generated_at_utc\(generated_at_utc\)\)[\s\S]*?errors\.extend\(\[\]\)/u,
+      /generated_at_errors = _validate_generated_at_utc\(generated_at_utc\)[\s\S]*?generated_at_errors = \[\]/u,
       "Reserved-lineage proof evidence helper raw timestamp gate",
     ],
     [
@@ -6270,7 +6330,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-duplicate-binding-zero-digest",
-      /or value == "0" \* 64[\s\S]*?""/u,
+      /and value != "0" \* 64[\s\S]*?and True/u,
       "Android device-lab duplicate-binding zero digest",
     ],
     [
@@ -6882,6 +6942,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-unique-bindings",
       /Android device-lab production slots must not reuse a device fingerprint[\s\S]*?Android device-lab production slots may reuse a device fingerprint/u,
       "Android device-lab unique matrix bindings",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-duplicate-bindings",
+      /d2d_payment_transcript_sha256[\s\S]*?Android device-lab production slots must not reuse a D2D payment transcript digest[\s\S]*?Android device-lab production slots may reuse a D2D payment transcript digest/u,
+      "Android device-lab D2D duplicate matrix bindings",
     ],
     [
       "--negative-control-android-device-lab-summary",
@@ -8475,7 +8540,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-release-bundle-android-duplicate-binding-value-binding",
-      /if kagemusha\.get\(raw_field\) == value_sha256:[\s\S]*?if True:/u,
+      /if value_sha256 in _android_duplicate_binding_slot_values\([\s\S]*?if True:/u,
       "Kagemusha release bundle Android duplicate-binding value binding",
     ],
     [
@@ -9065,6 +9130,229 @@ test("recursive Kagemusha payload reducer pins expected-hop and benchmark-name c
   );
 });
 
+test("recursive Kagemusha policy workflow and doc negative controls require exact diagnostics", () => {
+  const policy = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const branchSpecs = [
+    [
+      "--negative-control-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+    ],
+    [
+      "--negative-control-js-package-dist-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: javascript/iroha_js/test/package_dist.test.js",
+    ],
+    [
+      "--negative-control-core-isi-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    ],
+    [
+      "--negative-control-payload-script-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: ci/check_kagemusha_recursive_spend_payload_bench.sh",
+    ],
+    [
+      "--negative-control-ci-guard-script-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: ci/check_connect_norito_bridge_header.sh",
+    ],
+    [
+      "--negative-control-payload-self-test-workflow",
+      "Kagemusha payload workflow must run the payload reducer self-test before benchmarking",
+    ],
+    [
+      "--negative-control-payload-self-test-order-workflow",
+      "Kagemusha payload workflow must run the payload reducer self-test before the real benchmark",
+    ],
+    [
+      "--negative-control-payload-missing-payload-workflow",
+      "Kagemusha payload workflow must run the missing payload negative control before benchmarking",
+    ],
+    [
+      "--negative-control-payload-negative-controls-workflow",
+      "Kagemusha payload workflow must run the transition-profile growth negative control before benchmarking",
+    ],
+    [
+      "--negative-control-reserved-lineage-payload-negative-controls-workflow",
+      "Kagemusha payload workflow must run the Reserved-lineage payload growth negative control before benchmarking",
+    ],
+    [
+      "--negative-control-payload-hop-list-negative-controls-workflow",
+      "Kagemusha payload workflow must run the duplicate expected-hop negative control before benchmarking",
+    ],
+    [
+      "--negative-control-payload-benchmark-name-negative-controls-workflow",
+      "Kagemusha payload workflow must run the malformed payload benchmark-name negative control before benchmarking",
+    ],
+    [
+      "--negative-control-payload-negative-controls-comment-workflow",
+      "Kagemusha payload workflow must run the transition-profile growth negative control before benchmarking",
+    ],
+    [
+      "--negative-control-payload-negative-controls-order-workflow",
+      "Kagemusha payload workflow must run the transition-profile growth negative control before the real benchmark",
+    ],
+    [
+      "--negative-control-payload-benchmark-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
+    ],
+    [
+      "--negative-control-payload-benchmark-manifest-workflow",
+      "Kagemusha payload workflow paths do not cover fail-closed policy sources: crates/iroha_data_model/Cargo.toml",
+    ],
+    [
+      "--negative-control-doc-payload-budget",
+      "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: fixed-proof recursive spend bundle at 1,751 bytes",
+    ],
+    [
+      "--negative-control-doc-sdk-host-boundary",
+      "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: the native bridge and SDK append wrappers validate the metadata tuple",
+    ],
+    [
+      "--negative-control-doc-sdk-availability-surface",
+      "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: native availability probes: init, append, both transition-profile helpers, the append-boundary helper, both lineage-witness helpers, verify, and redeem must be callable",
+    ],
+    [
+      "--negative-control-doc-abi-entry-count",
+      "docs/source/offline_kagemusha.md contains stale ABI-6 eight-entry wording",
+    ],
+    [
+      "--negative-control-roadmap-abi-surface",
+      "roadmap.md is missing complete recursive spend ABI-6 surface documentation: Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile helpers, append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points",
+    ],
+    [
+      "--negative-control-policy-negative-controls-workflow",
+      "Kagemusha payload workflow must run the policy core redeem execution-order negative control",
+    ],
+    [
+      "--negative-control-policy-negative-controls-comment-workflow",
+      "Kagemusha payload workflow must run the policy core redeem execution-order negative control",
+    ],
+    [
+      "--negative-control-policy-negative-controls-order-workflow",
+      "Kagemusha payload workflow must run the policy core redeem execution-order negative control before the main policy guard",
+    ],
+    [
+      "--negative-control-header-negative-controls-workflow",
+      "Kagemusha payload workflow must run the NoritoBridge bad recursive header signature negative control",
+    ],
+    [
+      "--negative-control-python-sdk-test-workflow",
+      "Kagemusha payload workflow must run the Python recursive spend SDK tests before benchmarking",
+    ],
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    branchSpecs.map(([mode]) => mode),
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    policy,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  const policyBranch = (mode) => {
+    const start = policy.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing policy branch ${mode}`);
+    const end = policy.indexOf("\nif mode ==", start + 1);
+    return policy.slice(start, end === -1 ? policy.length : end);
+  };
+
+  for (const [mode, expected] of branchSpecs) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    const branch = policyBranch(mode);
+    const normalizedBranch = branch.replace(/"\s*\n\s*"/gu, "");
+    assert.match(
+      normalizedBranch,
+      new RegExp(
+        `${escapeRegExp(expected)}[\\s\\S]*?expected not in message[\\s\\S]*?wrong reason`,
+        "u",
+      ),
+      `${mode} must require its exact diagnostic`,
+    );
+    assert.doesNotMatch(
+      branch,
+      /print\(str\(error\)\.splitlines\(\)\[0\]\)/u,
+      `${mode} must not print unchecked PolicyError messages`,
+    );
+  }
+});
+
+test("recursive Kagemusha policy tail negative controls require exact diagnostics", () => {
+  const policy = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const branchSpecs = [
+    [
+      "--negative-control-core-isi",
+      "{target} is missing Reserved-lineage adversarial coverage: fn kagemusha_recursive_redeem_rejects_semantic_recursive_spend_before_mint",
+    ],
+    [
+      "--negative-control-core-multi-hop-redeem-success",
+      "{target} is missing Reserved-lineage adversarial coverage: fn kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay",
+    ],
+    [
+      "--negative-control-core-lineage-hop-proof",
+      "{target} is missing Reserved-lineage adversarial coverage: fn kagemusha_recursive_redeem_rejects_malformed_lineage_hop_proof_before_mint",
+    ],
+    [
+      "--negative-control-core-redeem-order",
+      "recursive Kagemusha redeem execution order no longer gates mint behind lineage, proof, and nullifier checks: missing state_transaction.register_confidential_proof(self.redeem_proof.proof.bytes.len())",
+    ],
+    [
+      "--negative-control-core-redeem-early-mint",
+      "recursive Kagemusha redeem must have exactly one production mint construction after all lineage, proof, and nullifier gates; found 2",
+    ],
+    [
+      "--negative-control-status-doc-drift",
+      "status.md contains stale one-hop witnessless chain-redemption boundary",
+    ],
+    [
+      "--negative-control-workflow-cancel-in-progress",
+      "Kagemusha payload workflow must not cancel in-progress runs; long proof/benchmark evidence must be allowed to finish",
+    ],
+    [
+      "--negative-control-main-guards-workflow",
+      "Kagemusha payload workflow must run the main Kagemusha recursive spend SDK parity guard",
+    ],
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    branchSpecs.map(([mode]) => mode),
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    policy,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  const policyBranch = (mode) => {
+    const start = policy.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing policy branch ${mode}`);
+    const end = policy.indexOf("\nif mode ==", start + 1);
+    return policy.slice(start, end === -1 ? policy.length : end);
+  };
+
+  for (const [mode, expected] of branchSpecs) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    const normalizedBranch = policyBranch(mode).replace(/"\s*\n\s*"/gu, "");
+    assert.match(
+      normalizedBranch,
+      new RegExp(
+        `${escapeRegExp(expected)}[\\s\\S]*?expected not in message[\\s\\S]*?wrong reason`,
+        "u",
+      ),
+      `${mode} must require its exact diagnostic`,
+    );
+    assert.doesNotMatch(
+      normalizedBranch,
+      /print\(str\(error\)\.splitlines\(\)\[0\]\)/u,
+      `${mode} must not print unchecked PolicyError messages`,
+    );
+  }
+});
+
 test("recursive Kagemusha policy pins payload benchmark append-opening call coverage", () => {
   const policy = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -9190,6 +9478,93 @@ test("recursive Kagemusha policy negative controls pin SDK helper edge exactness
   );
 });
 
+test("recursive Kagemusha policy edge-case negative controls require exact missing labels", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const specs = [
+    [
+      "--negative-control-sdk-selector-edge",
+      "--negative-control-sdk-preferred-cap-edge",
+      "semantic previous proofs cannot select Reserved-lineage output",
+      "SDK selector edge drift was not detected",
+    ],
+    [
+      "--negative-control-sdk-preferred-cap-edge",
+      "--negative-control-js-package-dist-selector-edge",
+      "preferred append selector falls back at the witnessless hop cap",
+      "SDK preferred cap edge drift was not detected",
+    ],
+    [
+      "--negative-control-js-package-dist-selector-edge",
+      "--negative-control-python-hop-edges",
+      "semantic previous proofs cannot select Reserved-lineage output",
+      "JavaScript package-dist selector edge drift was not detected",
+    ],
+    [
+      "--negative-control-python-hop-edges",
+      "--negative-control-js-hop-edges",
+      'float("nan")',
+      "Python hop-count policy drift was not detected",
+    ],
+    [
+      "--negative-control-js-hop-edges",
+      "--negative-control-js-package-dist-hop-edges",
+      "canAppendKagemushaRecursiveSpendWitnesslessLineage(1n)",
+      "JavaScript BigInt hop-count policy drift was not detected",
+    ],
+    [
+      "--negative-control-js-package-dist-hop-edges",
+      "--negative-control-sdk-append-cap-binding",
+      "canAppendKagemushaRecursiveSpendWitnesslessLineage(1n)",
+      "JavaScript package-dist BigInt hop-count policy drift was not detected",
+    ],
+  ];
+  const modes = specs.map(([mode]) => mode);
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    modes,
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+
+  for (const [mode, nextMode, label, failure] of specs) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    const start = guard.indexOf(`if mode == "${mode}":`);
+    const end = guard.indexOf(`if mode == "${nextMode}":`, start + 1);
+    assert.notEqual(start, -1, `policy guard must implement ${mode}`);
+    assert.notEqual(end, -1, `policy guard must terminate ${mode} before ${nextMode}`);
+    const branch = guard.slice(start, end);
+    assert.ok(branch.includes(label), `${mode} must pin exact missing label ${label}`);
+    const doubleQuotedLabel = escapeRegExp(JSON.stringify(label));
+    const singleQuotedLabel = escapeRegExp(`'${label}'`);
+    assert.match(
+      branch,
+      new RegExp(`if\\s+(?:${doubleQuotedLabel}|${singleQuotedLabel})\\s+not\\s+in\\s+message:`, "u"),
+      `${mode} must check the exact missing label in the PolicyError message`,
+    );
+    assert.match(
+      branch,
+      /except\s+PolicyError\s+as\s+error:[\s\S]*?message = str\(error\)[\s\S]*?if [\s\S]*? not in message:[\s\S]*?raise SystemExit\("negative control failed:[\s\S]*?print\(message\.splitlines\(\)\[0\]\)[\s\S]*?raise SystemExit\(0\)/u,
+      `${mode} must only pass after checking the exact missing-label message`,
+    );
+    assert.ok(
+      branch.includes(`raise SystemExit("negative control failed: ${failure}")`),
+      `${mode} must fail when exact drift is not detected`,
+    );
+    assert.doesNotMatch(
+      branch,
+      /print\(str\(error\)\.splitlines\(\)\[0\]\)/u,
+      `${mode} must not print unchecked PolicyError messages`,
+    );
+  }
+});
+
 test("recursive Kagemusha policy negative controls pin native host archive caps", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -9216,7 +9591,7 @@ test("recursive Kagemusha policy negative controls pin native host archive caps"
 
   const jsHostArchiveCapBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-host-kagemusha-archive-cap":'),
-    guard.indexOf('if mode == "--negative-control-python-recursive-compact-vk-hash":'),
+    guard.indexOf('if mode == "--negative-control-js-host-append-boundary-current-output-set":'),
   );
   assert.match(
     jsHostArchiveCapBranch,
@@ -9227,6 +9602,11 @@ test("recursive Kagemusha policy negative controls pin native host archive caps"
     jsHostArchiveCapBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "JS host archive-cap negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsHostArchiveCapBranch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES \+ 1[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "JS host archive-cap negative control must require the exact cap-plus-one diagnostic",
   );
   assert.match(
     jsHostArchiveCapBranch,
@@ -9241,7 +9621,7 @@ test("recursive Kagemusha policy negative controls pin native host archive caps"
 
   const pythonArchiveCapBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-kagemusha-archive-cap":'),
-    guard.indexOf('if mode == "--negative-control-fixed-window-manifest-digest-splice":'),
+    guard.indexOf('if mode == "--negative-control-python-append-boundary-current-output-set":'),
   );
   assert.match(
     pythonArchiveCapBranch,
@@ -9252,6 +9632,11 @@ test("recursive Kagemusha policy negative controls pin native host archive caps"
     pythonArchiveCapBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "Python host archive-cap negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    pythonArchiveCapBranch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES \+ 1[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "Python host archive-cap negative control must require the exact cap-plus-one diagnostic",
   );
   assert.match(
     pythonArchiveCapBranch,
@@ -9403,6 +9788,43 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
     "native output cap negative control must not unconditionally pass after run_checks",
   );
 
+  const sharedFixtureModes = [
+    "--negative-control-shared-fixture-manifest",
+    "--negative-control-shared-archive-fixture",
+    "--negative-control-shared-abi7-fixture-manifest",
+    "--negative-control-shared-abi7-archive-fixture",
+  ];
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    sharedFixtureModes,
+    "Kagemusha policy guard",
+  );
+  for (const sharedMode of sharedFixtureModes) {
+    assert.ok(
+      inventoryModes.includes(sharedMode),
+      `policy negative-control inventory must include ${sharedMode}`,
+    );
+  }
+  const abi6ManifestBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-shared-fixture-manifest":'),
+    guard.indexOf('if mode == "--negative-control-shared-archive-fixture":'),
+  );
+  assert.match(
+    abi6ManifestBranch,
+    /"operation_count": 9[\s\S]*?"operation_count": 8[\s\S]*?expected = f"\{target\} must contain exactly nine ABI-6 operations"[\s\S]*?expected not in message/u,
+    "ABI-6 fixture manifest negative control must require the exact operation-count diagnostic",
+  );
+  const abi6ArchiveBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-shared-archive-fixture":'),
+    guard.indexOf('if mode == "--negative-control-shared-abi7-fixture-manifest":'),
+  );
+  assert.match(
+    abi6ArchiveBranch,
+    /c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68[\s\S]*?00402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68[\s\S]*?is missing shared recursive spend ABI-6 fixture coverage[\s\S]*?expected not in message/u,
+    "ABI-6 archive fixture negative control must require the exact archive hash diagnostic",
+  );
+
   const abi7Modes = [
     "--negative-control-shared-abi7-fixture-manifest",
     "--negative-control-shared-abi7-archive-fixture",
@@ -9460,8 +9882,8 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ManifestBranch,
-    /"operation_count": 5[\s\S]*?"operation_count": 4[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
-    "ABI-7 fixture manifest negative control must mutate and validate the manifest snapshot",
+    /"operation_count": 5[\s\S]*?"operation_count": 4[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?expected = f"\{target\} must contain exactly five ABI-7 fixture operations"[\s\S]*?expected not in message/u,
+    "ABI-7 fixture manifest negative control must mutate the manifest and require the exact operation-count diagnostic",
   );
   const abi7ArchiveBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-shared-abi7-archive-fixture":'),
@@ -9469,8 +9891,8 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ArchiveBranch,
-    /271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70[\s\S]*?001268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
-    "ABI-7 archive fixture negative control must mutate and validate the archive snapshot",
+    /271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70[\s\S]*?001268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
+    "ABI-7 archive fixture negative control must mutate the archive and require the exact hash diagnostic",
   );
   const abi7SdkCoverageBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-shared-abi7-sdk-manifest-coverage":'),
@@ -9532,6 +9954,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
   const expectedModes = [
+    "--negative-control-core-append-cap-boundary",
     "--negative-control-core-lineage-profile-split",
     "--negative-control-core-proof-chain-accumulator",
     "--negative-control-core-fixed-window-table-base-accumulator",
@@ -9548,7 +9971,9 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-append-digest-unchecked-surface",
     "--negative-control-core-append-digest-wrapper-bypass",
     "--negative-control-core-append-boundary-profile-comparison",
+    "--negative-control-data-model-append-cap-boundary",
     "--negative-control-data-model-self-consistent-boundary",
+    "--negative-control-data-model-transition-profile-current-hop-sets",
     "--negative-control-data-model-proof-public-input-circuit-binding",
     "--negative-control-data-model-semantic-proof-append-opening",
     "--negative-control-data-model-public-input-one-hop-append-opening",
@@ -9590,6 +10015,16 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "Kagemusha policy verifier witness profile source pins",
   );
 
+  const dataModelAppendCapBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-append-cap-boundary":'),
+    guard.indexOf('if mode == "--negative-control-data-model-self-consistent-boundary":'),
+  );
+  assert.match(
+    dataModelAppendCapBranch,
+    /Reserved-lineage append request at the witnessless hop cap must reject before proving[\s\S]*?Reserved-lineage append request at the hop edge[\s\S]*?is missing Reserved-lineage adversarial coverage[\s\S]*?expected not in message/u,
+    "data-model append cap negative control must require the exact adversarial coverage diagnostic",
+  );
+
   const selfConsistentBoundaryBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-data-model-self-consistent-boundary":'),
     guard.indexOf('if mode == "--negative-control-data-model-transition-profile-current-hop-sets":'),
@@ -9625,6 +10060,16 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "data-model self-consistent boundary negative control must not unconditionally pass after run_checks",
   );
 
+  const transitionProfileCurrentHopSetsBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-transition-profile-current-hop-sets":'),
+    guard.indexOf('if mode == "--negative-control-data-model-proof-public-input-circuit-binding":'),
+  );
+  assert.match(
+    transitionProfileCurrentHopSetsBranch,
+    /validate_kagemusha_unique_input_output_sets[\s\S]*?validate_kagemusha_canonical_input_output_sets[\s\S]*?is missing Reserved-lineage adversarial coverage[\s\S]*?expected not in message/u,
+    "transition-profile current-hop set negative control must require the exact adversarial coverage diagnostic",
+  );
+
   const proofPublicInputCircuitBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-data-model-proof-public-input-circuit-binding":'),
     guard.indexOf('if mode == "--negative-control-data-model-previous-proof-field-binding":'),
@@ -9641,8 +10086,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     proofPublicInputCircuitBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: proof public-input circuit binding drift was not detected"\)/u,
-    "proof public-input circuit binding negative control must only pass after detecting injected drift",
+    /recursive spend proof public-input circuit binding is missing ordered preverification step:[\s\S]*?if expected\.append_opening_preflight_digest == \[0u8; Hash::LENGTH\][\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: proof public-input circuit binding drift was not detected"\)/u,
+    "proof public-input circuit binding negative control must only pass after detecting the exact ordered-step drift",
   );
   assert.doesNotMatch(
     proofPublicInputCircuitBranch,
@@ -9666,8 +10111,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     semanticProofAppendOpeningBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: semantic proof append-opening drift was not detected"\)/u,
-    "semantic proof append-opening negative control must only pass after detecting injected drift",
+    /recursive spend proof public-input circuit binding is missing ordered preverification step:[\s\S]*?if accumulator\.append_opening_preflight_digest != \[0u8; Hash::LENGTH\][\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: semantic proof append-opening drift was not detected"\)/u,
+    "semantic proof append-opening negative control must only pass after detecting the exact ordered-step drift",
   );
 
   const oneHopAppendOpeningBranch = guard.slice(
@@ -9686,8 +10131,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     oneHopAppendOpeningBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: one-hop append-opening public-input drift was not detected"\)/u,
-    "one-hop append-opening negative control must only pass after detecting injected drift",
+    /missing Rust one-hop append-opening public-input rejection[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: one-hop append-opening public-input drift was not detected"\)/u,
+    "one-hop append-opening negative control must only pass after detecting the exact Rust rejection drift",
   );
 
   const genericProofScalarBranch = guard.slice(
@@ -9706,8 +10151,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     genericProofScalarBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: generic proof scalar-projection drift was not detected"\)/u,
-    "generic proof scalar-projection negative control must only pass after detecting injected drift",
+    /missing Rust generic proof spend-state rejection for recursive_verifier_scalar_projection_digest[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: generic proof scalar-projection drift was not detected"\)/u,
+    "generic proof scalar-projection negative control must only pass after detecting the exact Rust rejection drift",
   );
 
   const spendProofArtifactCircuitBranch = guard.slice(
@@ -9726,8 +10171,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     spendProofArtifactCircuitBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: spend proof artifact circuit gate drift was not detected"\)/u,
-    "spend proof artifact circuit-gate negative control must only pass after detecting injected drift",
+    /recursive spend proof artifact circuit gate binding is missing ordered preverification step:[\s\S]*?&& public_inputs\.append_boundary_digest == \[0u8; Hash::LENGTH\][\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: spend proof artifact circuit gate drift was not detected"\)/u,
+    "spend proof artifact circuit-gate negative control must only pass after detecting the exact ordered-step drift",
   );
 
   const previousProofOpeningBundleBranch = guard.slice(
@@ -9746,8 +10191,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     previousProofOpeningBundleBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof opening bundle binding drift was not detected"\)/u,
-    "previous-proof opening bundle-binding negative control must only pass after detecting injected drift",
+    /previous proof opening domain-tag bundle binding is missing ordered preverification step:[\s\S]*?previous_bundle\.validate_public_input_binding\(\)\?;[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof opening bundle binding drift was not detected"\)/u,
+    "previous-proof opening bundle-binding negative control must only pass after detecting the exact ordered-step drift",
   );
 
   const previousProofFieldBranch = guard.slice(
@@ -9766,8 +10211,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     previousProofFieldBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof field binding drift was not detected"\)/u,
-    "previous-proof field binding negative control must only pass after detecting injected drift",
+    /expected_prefix = "recursive spend previous-proof public-input field binding drifted;"[\s\S]*?expected_actual = "actual=\['domain', 'evidence_digest', 'aggregation_transcript_digest'"[\s\S]*?expected_prefix not in message or expected_actual not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof field binding drift was not detected"\)/u,
+    "previous-proof field binding negative control must only pass after detecting the exact folded-hash field drift",
   );
   assert.doesNotMatch(
     previousProofFieldBranch,
@@ -9798,13 +10243,23 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     previousProofStaleHashBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: stale previous-proof hash fixture drift was not detected"\)/u,
-    "previous-proof stale hash negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?recursive-spend-stale-previous-proof-public-input-hash[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: stale previous-proof hash fixture drift was not detected"\)/u,
+    "previous-proof stale hash negative control must only pass after detecting the exact adversarial fixture drift",
   );
   assert.doesNotMatch(
     previousProofStaleHashBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "previous-proof stale hash negative control must not unconditionally pass after run_checks",
+  );
+
+  const coreAppendCapBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-cap-boundary":'),
+    guard.indexOf('if mode == "--negative-control-core-lineage-profile-split":'),
+  );
+  assert.match(
+    coreAppendCapBranch,
+    /direct Reserved-lineage append at the witnessless hop cap must reject before input parsing[\s\S]*?direct Reserved-lineage append at the hop edge[\s\S]*?is missing Reserved-lineage adversarial coverage[\s\S]*?expected not in message/u,
+    "core append cap boundary negative control must require the exact adversarial coverage diagnostic",
   );
 
   const profileSplitBranch = guard.slice(
@@ -9814,6 +10269,10 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     profileSplitBranch,
     [
+      "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: &str =",
+      "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: &str =",
+      "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1\\n        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+      "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {\\n            can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count)",
       "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID: &str =",
       "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID: &str =",
       "pub fn kagemusha_recursive_spend_lineage_append_vk_record(",
@@ -9861,8 +10320,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     proofChainBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: proof-chain accumulator drift was not detected"\)/u,
-    "proof-chain accumulator negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?proof-byte splice is bound into accumulator state[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: proof-chain accumulator drift was not detected"\)/u,
+    "proof-chain accumulator negative control must only pass after detecting the exact adversarial coverage drift",
   );
   assert.doesNotMatch(
     proofChainBranch,
@@ -9886,8 +10345,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     tableBaseBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: fixed-window table-base accumulator drift was not detected"\)/u,
-    "fixed-window table-base accumulator negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?per-hop fixed-window table-base digest must stream across append[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: fixed-window table-base accumulator drift was not detected"\)/u,
+    "fixed-window table-base accumulator negative control must only pass after detecting the exact adversarial coverage drift",
   );
   assert.doesNotMatch(
     tableBaseBranch,
@@ -9911,8 +10370,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     appendBoundaryBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary accumulator drift was not detected"\)/u,
-    "append-boundary accumulator negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?append-boundary digest must not feed back into the accumulator digest[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary accumulator drift was not detected"\)/u,
+    "append-boundary accumulator negative control must only pass after detecting the exact adversarial coverage drift",
   );
   assert.doesNotMatch(
     appendBoundaryBranch,
@@ -9941,8 +10400,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     previousAccumulatorBoundaryBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous accumulator boundary drift was not detected"\)/u,
-    "previous accumulator boundary negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?field: "append_boundary\.previous_accumulator_digest"[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous accumulator boundary drift was not detected"\)/u,
+    "previous accumulator boundary negative control must only pass after detecting the exact adversarial coverage drift",
   );
   assert.doesNotMatch(
     previousAccumulatorBoundaryBranch,
@@ -10042,8 +10501,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     publicInputsBoundaryBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary public inputs refresh drift was not detected"\s*\)/u,
-    "append-boundary public-inputs negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?refresh_append_boundary_digest\(&mut self_consistent_forged_public_inputs\);[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary public inputs refresh drift was not detected"\s*\)/u,
+    "append-boundary public-inputs negative control must only pass after detecting the exact refresh diagnostic",
   );
   assert.doesNotMatch(
     publicInputsBoundaryBranch,
@@ -10072,8 +10531,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     verifierContextBoundaryBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary verifier context refresh drift was not detected"\s*\)/u,
-    "append-boundary verifier-context negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?field: "append_boundary\.verifier_params_fingerprint"[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary verifier context refresh drift was not detected"\s*\)/u,
+    "append-boundary verifier-context negative control must only pass after detecting the exact verifier-context diagnostic",
   );
   assert.doesNotMatch(
     verifierContextBoundaryBranch,
@@ -10102,8 +10561,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     hopCountBoundaryBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary hop-count refresh drift was not detected"\s*\)/u,
-    "append-boundary hop-count negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?refresh_append_boundary_digest\(&mut self_consistent_forged_hop_count\);[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary hop-count refresh drift was not detected"\s*\)/u,
+    "append-boundary hop-count negative control must only pass after detecting the exact refresh diagnostic",
   );
   assert.doesNotMatch(
     hopCountBoundaryBranch,
@@ -10157,8 +10616,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     appendBoundaryDigestMatchBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary digest match drift was not detected"\)/u,
-    "append-boundary digest match negative control must only pass after detecting injected drift",
+    /is missing Reserved-lineage adversarial coverage:[\s\S]*?append_boundary\.append_boundary_digest != accumulator\.append_boundary_digest[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary digest match drift was not detected"\)/u,
+    "append-boundary digest match negative control must only pass after detecting the exact digest comparator diagnostic",
   );
   assert.doesNotMatch(
     appendBoundaryDigestMatchBranch,
@@ -10242,8 +10701,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     uncheckedSurfaceBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append digest unchecked surface drift was not detected"\)/u,
-    "append digest unchecked surface negative control must only pass after detecting injected drift",
+    /unchecked append digest helper must remain private:[\s\S]*?kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append digest unchecked surface drift was not detected"\)/u,
+    "append digest unchecked surface negative control must only pass after detecting the exact private-helper diagnostic",
   );
   assert.doesNotMatch(
     uncheckedSurfaceBranch,
@@ -10267,8 +10726,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     wrapperBypassBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append digest wrapper bypass drift was not detected"\)/u,
-    "append digest wrapper bypass negative control must only pass after detecting injected drift",
+    /append opening preflight public digest wrapper is missing ordered preverification step:[\s\S]*?preflight\.validate_context\(\)\?;[\s\S]*?expected not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append digest wrapper bypass drift was not detected"\)/u,
+    "append digest wrapper bypass negative control must only pass after detecting the exact checked-wrapper diagnostic",
   );
   assert.doesNotMatch(
     wrapperBypassBranch,
@@ -10298,8 +10757,8 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     profileComparisonBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary profile comparison drift was not detected"\)/u,
-    "append-boundary profile comparison negative control must only pass after detecting injected drift",
+    /append boundary transition-profile comparison fields drifted;[\s\S]*?expected_actual = \(\n\s*"'fixed_window_table_schedule_digest', 'fixed_window_shared_table_manifest_digest'\]"\n\s*\)[\s\S]*?expected_prefix not in message or expected_actual not in message[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary profile comparison drift was not detected"\)/u,
+    "append-boundary profile comparison negative control must only pass after detecting the exact field-list drift",
   );
   assert.doesNotMatch(
     profileComparisonBranch,
@@ -10354,6 +10813,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     schemaOrderBranch,
+    /expected_prefix = "recursive aggregation public-input schema order drifted;"[\s\S]*?expected_actual = \([\s\S]*?append_boundary_digest_limb0[\s\S]*?append_opening_preflight_digest_limb0[\s\S]*?expected_prefix not in message or expected_actual not in message[\s\S]*?wrong reason/u,
+    "recursive public-input schema negative control must require the exact schema-order diagnostic",
+  );
+  assert.match(
+    schemaOrderBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input schema order drift was not detected"\)/u,
     "recursive public-input schema negative control must only pass after detecting injected drift",
   );
@@ -10376,6 +10840,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     indexMapBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "recursive public-input index negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    indexMapBranch,
+    /expected = \([\s\S]*?recursive aggregation public-input index map drifted:[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX expected 48 actual 44[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "recursive public-input index negative control must require the exact index-map diagnostic",
   );
   assert.match(
     indexMapBranch,
@@ -10404,6 +10873,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     valueOrderBranch,
+    /expected_prefix = "recursive aggregation public-input value builder order drifted;"[\s\S]*?expected_actual = \([\s\S]*?append_boundary_limbs\[0\][\s\S]*?append_opening_preflight_limbs\[0\][\s\S]*?expected_prefix not in message or expected_actual not in message[\s\S]*?wrong reason/u,
+    "recursive public-input value negative control must require the exact value-order diagnostic",
+  );
+  assert.match(
+    valueOrderBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input value order drift was not detected"\)/u,
     "recursive public-input value negative control must only pass after detecting injected drift",
   );
@@ -10429,6 +10903,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     nonzeroGroupBranch,
+    /expected_prefix = "recursive aggregation non-zero public field groups drifted;"[\s\S]*?expected_actual = \([\s\S]*?\[28, 29, 30, 31\], \[28, 29, 30, 31\]\][\s\S]*?expected_prefix not in message or expected_actual not in message[\s\S]*?wrong reason/u,
+    "recursive public-input nonzero group negative control must require the exact group diagnostic",
+  );
+  assert.match(
+    nonzeroGroupBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input nonzero group drift was not detected"\)/u,
     "recursive public-input nonzero group negative control must only pass after detecting injected drift",
   );
@@ -10451,6 +10930,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     appendSemanticNonzeroBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "append semantic nonzero group negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    appendSemanticNonzeroBranch,
+    /expected_prefix = "append recursive verifier-slice semantic non-zero groups drifted;"[\s\S]*?expected_actual = \([\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX[\s\S]*?append-boundary digest[\s\S]*?expected_prefix not in message or expected_actual not in message[\s\S]*?wrong reason/u,
+    "append semantic nonzero group negative control must require the exact semantic group diagnostic",
   );
   assert.match(
     appendSemanticNonzeroBranch,
@@ -10515,6 +10999,11 @@ test("recursive Kagemusha policy negative controls pin checked-fold preverificat
   );
   assert.match(
     bindingBranch,
+    /expected = \([\s\S]*?direct public-input binding mismatch must reject before proof verification[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "checked-fold public-input binding negative control must require the exact missing-coverage diagnostic",
+  );
+  assert.match(
+    bindingBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: checked-fold public-input binding drift was not detected"\)/u,
     "checked-fold public-input binding negative control must only pass after detecting injected drift",
   );
@@ -10536,6 +11025,11 @@ test("recursive Kagemusha policy negative controls pin checked-fold preverificat
     branch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "checked-fold public-input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /expected = \([\s\S]*?checked-fold direct public-input preverification path is missing ordered preverification step:[\s\S]*?verified_steps\.push\(kagemusha_verified_fold_step\(step\)\?\);[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "checked-fold public-input negative control must require the exact ordered-step diagnostic",
   );
   assert.match(
     branch,
@@ -10562,6 +11056,11 @@ test("recursive Kagemusha policy negative controls pin checked-fold preverificat
     recordBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "record-backed checked-fold public-input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    recordBranch,
+    /expected = \([\s\S]*?record-backed checked-fold public-input preverification path is missing ordered preverification step:[\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\([\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "record-backed checked-fold public-input negative control must require the exact ordered-step diagnostic",
   );
   assert.match(
     recordBranch,
@@ -10620,65 +11119,77 @@ test("recursive Kagemusha policy negative controls pin lineage witness preflight
       "--negative-control-core-lineage-witness-fold-predecode",
       /lineage witness root-continuity error should come before Pallas archive decoding[\s\S]*?lineage witness root-continuity error may decode Pallas first/u,
       "lineage witness fold metadata predecode",
+      "lineage witness root-continuity error should come before Pallas archive decoding",
     ],
     [
       "--negative-control-core-lineage-witness-record-predecode",
       /lineage witness verifier-record error should come before Pallas archive decoding[\s\S]*?lineage witness verifier-record error may decode Pallas first/u,
       "lineage witness verifier-record predecode",
+      "lineage witness verifier-record error should come before Pallas archive decoding",
     ],
     [
       "--negative-control-core-lineage-witness-count-mismatch-predecode",
       /current-note count mismatch: expected 2, found 1[\s\S]*?current-note count mismatch: expected 2, found 0/u,
       "lineage witness count-mismatch predecode",
+      "current-note count mismatch: expected 2, found 1",
     ],
     [
       "--negative-control-core-lineage-witness-envelope-count",
       /lineage envelope count mismatch: expected 2, found 0[\s\S]*?lineage envelope count mismatch: expected 2, found 1[\s\S]*?if envelopes\.len\(\) != step_count[\s\S]*?if false && envelopes\.len\(\) != step_count/u,
       "lineage witness envelope-count",
+      null,
     ],
     [
       "--negative-control-core-lineage-witness-malformed-envelope-archive",
       /kagemusha_recursive_spend_lineage_witness_rejects_malformed_envelope_archive[\s\S]*?kagemusha_recursive_spend_lineage_witness_allows_malformed_envelope_archive/u,
       "lineage witness malformed envelope archive",
+      "fn kagemusha_recursive_spend_lineage_witness_rejects_malformed_envelope_archive",
     ],
     [
       "--negative-control-core-lineage-witness-note-predecode",
       /lineage witness current-note error should come before Pallas archive decoding[\s\S]*?lineage witness current-note error may decode Pallas first/u,
       "lineage witness current-note predecode",
+      "lineage witness current-note error should come before Pallas archive decoding",
     ],
     [
       "--negative-control-core-lineage-witness-note-binding-predecode",
       /lineage witness current-note binding error should come before Pallas archive decoding[\s\S]*?lineage witness current-note binding error may decode Pallas first/u,
       "lineage witness current-note binding predecode",
+      "lineage witness current-note binding error should come before Pallas archive decoding",
     ],
     [
       "--negative-control-core-lineage-witness-current-note-invariants",
       /current note 0 spend nullifier must be non-zero[\s\S]*?current note 0 spend nullifier may be zero/u,
       "lineage witness current-note invariants",
+      "current note 0 spend nullifier must be non-zero",
     ],
     [
       "--negative-control-core-lineage-witness-handoff-predecode",
       /lineage witness append-handoff error should come before Pallas archive decoding[\s\S]*?lineage witness append-handoff error may decode Pallas first/u,
       "lineage witness append-handoff predecode",
+      "lineage witness append-handoff error should come before Pallas archive decoding",
     ],
     [
       "--negative-control-core-lineage-witness-duplicate-current-note",
       /current note 2 spend nullifier is duplicated[\s\S]*?current note 2 spend nullifier may be duplicated/u,
       "lineage witness duplicate current-note spend-nullifier",
+      "current note 2 spend nullifier is duplicated",
     ],
     [
       "--negative-control-core-lineage-witness-final-bundle-context",
       /hop count 1 does not match redeem bundle hop count 2[\s\S]*?hop count 1 may mismatch redeem bundle hop count 2/u,
       "lineage witness final-bundle context",
+      "hop count 1 does not match redeem bundle hop count 2",
     ],
     [
       "--negative-control-core-lineage-witness-final-bundle-predecode",
       /lineage witness final-bundle error should come before Pallas archive decoding[\s\S]*?lineage witness final-bundle error may decode Pallas first/u,
       "lineage witness final-bundle predecode",
+      "lineage witness final-bundle error should come before Pallas archive decoding",
     ],
   ];
 
-  for (const [mode, mutationPattern, label] of branchSpecs) {
+  for (const [mode, mutationPattern, label, diagnosticNeedle] of branchSpecs) {
     const branch = policyBranch(mode);
     assert.match(branch, mutationPattern, `${label} negative control must mutate the guarded source text`);
     assert.match(
@@ -10693,6 +11204,15 @@ test("recursive Kagemusha policy negative controls pin lineage witness preflight
         `${label} negative control must only pass after detecting every injected drift`,
       );
     } else {
+      assert.match(
+        branch,
+        /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+        `${label} negative control must require the exact missing-coverage diagnostic`,
+      );
+      assert.ok(
+        branch.includes(diagnosticNeedle),
+        `${label} negative control must pin its exact missing coverage needle`,
+      );
       assert.match(
         branch,
         /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
@@ -10757,90 +11277,107 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
       "--negative-control-core-recursive-compact-public-instance-shape",
       /recursive compact token multi-row public instances must reject[\s\S]*?recursive compact token multi-row public instances may pass/u,
       "core recursive compact public-instance shape",
+      "recursive compact token multi-row public instances must reject",
     ],
     [
       "--negative-control-core-recursive-compact-pallas-count",
       /if envelopes\.len\(\) != step_count[\s\S]*?if false && envelopes\.len\(\) != step_count[\s\S]*?detached compact Pallas archive must reject before proving[\s\S]*?detached compact Pallas archive may return unavailable[\s\S]*?height-aware detached compact Pallas archive must reject before proving[\s\S]*?height-aware detached compact Pallas archive may return unavailable[\s\S]*?extra compact Pallas opening must reject before proving[\s\S]*?extra compact Pallas opening may return unavailable[\s\S]*?height-aware extra compact Pallas opening must reject before proving[\s\S]*?height-aware extra compact Pallas opening may return unavailable[\s\S]*?missing compact Pallas opening must reject before proving[\s\S]*?missing compact Pallas opening may return unavailable[\s\S]*?height-aware missing compact Pallas opening must reject before proving[\s\S]*?height-aware missing compact Pallas opening may return unavailable[\s\S]*?duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?reordered multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware reordered multi-hop compact Pallas archive may return unavailable/u,
       "core recursive compact Pallas opening count",
+      null,
     ],
     [
       "--negative-control-core-recursive-compact-pallas-metadata",
       /forged multi-hop compact Pallas metadata must reject before proving[\s\S]*?forged multi-hop compact Pallas metadata may return unavailable[\s\S]*?height-aware forged multi-hop compact Pallas metadata must reject before proving[\s\S]*?height-aware forged multi-hop compact Pallas metadata may return unavailable/u,
       "core recursive compact Pallas metadata",
+      null,
     ],
     [
       "--negative-control-core-recursive-compact-cid-spoof-key",
       /\.expect_err\("CID-spoofed ABI-7 compact verifier key must reject"\);[\s\S]*?\.expect_err\("CID-spoofed ABI-7 compact verifier key may pass"\);[\s\S]*?\.expect_err\("public CID-spoofed ABI-7 compact verifier key must reject"\);[\s\S]*?\.expect_err\("public CID-spoofed ABI-7 compact verifier key may pass"\);/u,
       "core recursive compact CID-spoof key",
+      null,
     ],
     [
       "--negative-control-core-recursive-spend-compact-projection-token",
       /pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection\([\s\S]*?pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection_unchecked\(/u,
       "core recursive spend compact projection token",
+      "pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection(",
     ],
     [
       "--negative-control-bridge-recursive-compact-public-instance-shape",
       /ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result[\s\S]*?ABI-7 compact verifier may soft-invalid multi-row public instances/u,
       "bridge recursive compact public-instance shape",
+      "ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result",
     ],
     [
       "--negative-control-bridge-recursive-compact-pallas-count",
       /ABI-7 compact prover must reject extra valid Pallas opening archives before proving[\s\S]*?ABI-7 compact prover may accept extra valid Pallas opening archives[\s\S]*?ABI-7 compact prover must reject missing valid Pallas opening archives before proving[\s\S]*?ABI-7 compact prover may accept missing valid Pallas opening archives[\s\S]*?ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before proving[\s\S]*?ABI-7 compact prover may accept duplicated multi-hop valid Pallas opening archives[\s\S]*?ABI-7 compact prover must reject reordered valid Pallas opening archives before proving[\s\S]*?ABI-7 compact prover may accept reordered valid Pallas opening archives/u,
       "bridge recursive compact Pallas opening count",
+      null,
     ],
     [
       "--negative-control-bridge-recursive-compact-pallas-metadata",
       /ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving[\s\S]*?ABI-7 compact prover may accept forged multi-hop Pallas metadata/u,
       "bridge recursive compact Pallas metadata",
+      "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving",
     ],
     [
       "--negative-control-bridge-recursive-compact-vk-hash",
       /ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result[\s\S]*?ABI-7 compact verifier may soft-invalid non-canonical envelope verifier-key hashes/u,
       "bridge recursive compact verifier-key hash",
+      "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result",
     ],
     [
       "--negative-control-js-host-recursive-compact-vk-hash",
       /recursive compact token with forged verifier-key hash must reject[\s\S]*?recursive compact token with forged verifier-key hash may soft-invalid/u,
       "JS host recursive compact verifier-key hash",
+      "recursive compact token with forged verifier-key hash must reject",
     ],
     [
       "--negative-control-js-host-recursive-compact-pallas-count",
       /recursive compact prover must reject extra valid Pallas opening archive[\s\S]*?recursive compact prover may accept extra valid Pallas opening archive[\s\S]*?recursive compact prover must reject missing valid Pallas opening archive[\s\S]*?recursive compact prover may accept missing valid Pallas opening archive[\s\S]*?recursive compact prover must reject duplicated multi-hop valid Pallas opening archive[\s\S]*?recursive compact prover may accept duplicated multi-hop valid Pallas opening archive[\s\S]*?recursive compact prover must reject reordered valid Pallas opening archive[\s\S]*?recursive compact prover may accept reordered valid Pallas opening archive/u,
       "JS host recursive compact Pallas opening count",
+      null,
     ],
     [
       "--negative-control-js-host-recursive-compact-pallas-metadata",
       /recursive compact prover must reject forged multi-hop Pallas metadata[\s\S]*?recursive compact prover may accept forged multi-hop Pallas metadata/u,
       "JS host recursive compact Pallas metadata",
+      "recursive compact prover must reject forged multi-hop Pallas metadata",
     ],
     [
       "--negative-control-js-host-recursive-compact-public-instance-shape",
       /JS host recursive compact verifier must reject multi-row public instances[\s\S]*?JS host recursive compact verifier may soft-invalid multi-row public instances/u,
       "JS host recursive compact public-instance shape",
+      "JS host recursive compact verifier must reject multi-row public instances",
     ],
     [
       "--negative-control-python-recursive-compact-vk-hash",
       /recursive compact token with forged verifier-key hash must reject[\s\S]*?recursive compact token with forged verifier-key hash may soft-invalid/u,
       "Python recursive compact verifier-key hash",
+      "recursive compact token with forged verifier-key hash must reject",
     ],
     [
       "--negative-control-python-recursive-compact-pallas-count",
       /recursive compact prover must reject extra valid Pallas opening archive[\s\S]*?recursive compact prover may accept extra valid Pallas opening archive[\s\S]*?recursive compact prover must reject missing valid Pallas opening archive[\s\S]*?recursive compact prover may accept missing valid Pallas opening archive[\s\S]*?recursive compact prover must reject duplicated multi-hop valid Pallas opening archive[\s\S]*?recursive compact prover may accept duplicated multi-hop valid Pallas opening archive[\s\S]*?recursive compact prover must reject reordered valid Pallas opening archive[\s\S]*?recursive compact prover may accept reordered valid Pallas opening archive/u,
       "Python recursive compact Pallas opening count",
+      null,
     ],
     [
       "--negative-control-python-recursive-compact-pallas-metadata",
       /recursive compact prover must reject forged multi-hop Pallas metadata[\s\S]*?recursive compact prover may accept forged multi-hop Pallas metadata/u,
       "Python recursive compact Pallas metadata",
+      "recursive compact prover must reject forged multi-hop Pallas metadata",
     ],
     [
       "--negative-control-python-recursive-compact-public-instance-shape",
       /Python recursive compact verifier must reject multi-row public instances[\s\S]*?Python recursive compact verifier may soft-invalid multi-row public instances/u,
       "Python recursive compact public-instance shape",
+      "Python recursive compact verifier must reject multi-row public instances",
     ],
   ];
 
-  for (const [mode, mutationPattern, label] of branchSpecs) {
+  for (const [mode, mutationPattern, label, diagnosticNeedle] of branchSpecs) {
     const branch = policyBranch(mode);
     assert.match(branch, mutationPattern, `${label} negative control must mutate the guarded source text`);
     assert.match(
@@ -10867,6 +11404,15 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
         `${label} negative control must only pass after every adversarial case detects injected drift`,
       );
     } else {
+      assert.match(
+        branch,
+        /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+        `${label} negative control must require the exact missing-coverage diagnostic`,
+      );
+      assert.ok(
+        branch.includes(diagnosticNeedle),
+        `${label} negative control must pin its exact missing coverage needle`,
+      );
       assert.match(
         branch,
         /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
@@ -10926,6 +11472,11 @@ test("recursive Kagemusha policy negative controls pin core Vesta IPA fold cover
   );
   assert.match(
     hFoldBranch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?shared_table_batch_preflight_rejects_h_generator_fold_splice[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "core Vesta IPA H-fold negative control must require the exact missing-coverage diagnostic",
+  );
+  assert.match(
+    hFoldBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: non-native Vesta IPA H-fold drift was not detected"\)/u,
     "core Vesta IPA H-fold negative control must only pass after detecting injected drift",
   );
@@ -10953,6 +11504,11 @@ test("recursive Kagemusha policy negative controls pin core Vesta IPA fold cover
     gFoldBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "core Vesta IPA G-fold negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    gFoldBranch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?from_pallas_witness_rejects_generator_fold_splice[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "core Vesta IPA G-fold negative control must require the exact missing-coverage diagnostic",
   );
   assert.match(
     gFoldBranch,
@@ -11056,6 +11612,11 @@ test("recursive Kagemusha policy negative controls pin core append-opening prefl
   );
   assert.match(
     branch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?pub struct KagemushaRecursiveSpendLineageAppendOpeningPreflight \{[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "append-opening preflight negative control must require the exact missing-coverage diagnostic",
+  );
+  assert.match(
+    branch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append opening-preflight splice drift was not detected"\)/u,
     "append-opening preflight negative control must only pass after detecting injected drift",
   );
@@ -11064,6 +11625,84 @@ test("recursive Kagemusha policy negative controls pin core append-opening prefl
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "append-opening preflight negative control must not unconditionally pass after run_checks",
   );
+});
+
+test("recursive Kagemusha policy negative controls pin core verifier-slice predecode diagnostics", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-core-current-hop-opening-metadata-splice",
+    "--negative-control-core-one-hop-verifier-slice-evidence-binding",
+    "--negative-control-core-fold-overlap-predecode",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    expectedModes,
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+  }
+
+  const branchSpecs = [
+    [
+      "--negative-control-core-current-hop-opening-metadata-splice",
+      "--negative-control-core-append-verifier-slice-preflight-binding",
+      /metadata-spliced current-hop opening archive must reject[\s\S]*?metadata-spliced current-hop opening archive may pass/u,
+      /expected = \([\s\S]*?metadata-spliced current-hop opening archive must reject[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+      "current-hop opening metadata splice",
+    ],
+    [
+      "--negative-control-core-one-hop-verifier-slice-evidence-binding",
+      "--negative-control-core-fold-overlap-predecode",
+      /one-hop verifier-slice evidence binding must reject params fingerprint splice[\s\S]*?one-hop verifier-slice evidence binding may accept params fingerprint splice/u,
+      /expected = \([\s\S]*?one-hop verifier-slice evidence binding must reject params fingerprint splice[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+      "one-hop verifier-slice evidence binding",
+    ],
+    [
+      "--negative-control-core-fold-overlap-predecode",
+      "--negative-control-core-fold-public-input-binding",
+      /record-backed cross-hop overlap error should come before proof decoding[\s\S]*?record-backed cross-hop overlap may decode proof first/u,
+      /expected = \([\s\S]*?record-backed cross-hop overlap error should come before proof decoding[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+      "checked-fold overlap predecode",
+    ],
+  ];
+
+  for (const [mode, nextMode, mutationPattern, diagnosticPattern, label] of branchSpecs) {
+    const branch = guard.slice(
+      guard.indexOf(`if mode == "${mode}":`),
+      guard.indexOf(`if mode == "${nextMode}":`),
+    );
+    assert.match(branch, mutationPattern, `${label} negative control must mutate the guarded source text`);
+    assert.match(
+      branch,
+      /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+      `${label} negative control must validate the mutated text snapshot`,
+    );
+    assert.match(
+      branch,
+      diagnosticPattern,
+      `${label} negative control must require the exact missing-coverage diagnostic`,
+    );
+    assert.match(
+      branch,
+      /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
+      `${label} negative control must only pass after detecting injected drift`,
+    );
+    assert.doesNotMatch(
+      branch,
+      /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+      `${label} negative control must not unconditionally pass after run_checks`,
+    );
+  }
 });
 
 test("recursive Kagemusha policy negative controls pin core lineage append helper exactness", () => {
@@ -11155,8 +11794,14 @@ test("recursive Kagemusha policy negative controls pin core previous-proof verif
       '"fixed_bytes(b\\"kagemusha-lineage-previous-proof-forged-manifest\\")"',
       '"fixed-window table schedule digest"',
       '"fixed-window shared-table manifest digest"',
+      "'err.contains(\"backend `stark/fri` is not\"),'",
     ],
     "core adversarial coverage must pin each previous-proof verifier-context splice fragment",
+  );
+  assert.doesNotMatch(
+    adversarialCoverage,
+    /^\s+"backend `stark\/fri` is not",$/mu,
+    "core adversarial coverage must not pin the shadowable bare previous-proof backend diagnostic",
   );
 
   const branch = guard.slice(
@@ -11201,8 +11846,8 @@ test("recursive Kagemusha policy negative controls pin core previous-proof verif
   );
   assert.match(
     backendBranch,
-    /previous proof verifier-key backend mismatch must reject[\s\S]*?previous proof verifier-key backend mismatch may pass[\s\S]*?unsupported previous proof circuit id must reject[\s\S]*?unsupported previous proof circuit id may pass/u,
-    "core previous-proof backend profile negative control must mutate backend and circuit-id coverage",
+    /err\.contains\("backend `stark\/fri` is not"\),[\s\S]*?err\.contains\("backend `stark\/fri` may pass"\),[\s\S]*?previous proof verifier-key backend mismatch must reject[\s\S]*?previous proof verifier-key backend mismatch may pass[\s\S]*?unsupported previous proof circuit id must reject[\s\S]*?unsupported previous proof circuit id may pass/u,
+    "core previous-proof backend profile negative control must mutate proof-backend, verifier-key, and circuit-id coverage",
   );
   assert.match(
     backendBranch,
@@ -11218,6 +11863,197 @@ test("recursive Kagemusha policy negative controls pin core previous-proof verif
     backendBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "core previous-proof backend profile negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy adversarial coverage avoids non-C# duplicate and substring-shadow needles", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const blockStart = guard.indexOf("ADVERSARIAL_COVERAGE = {");
+  const blockEnd = guard.indexOf("SDK_HELPER_EDGE_COVERAGE = {", blockStart);
+  assert.notEqual(blockStart, -1, "policy guard must define ADVERSARIAL_COVERAGE");
+  assert.notEqual(blockEnd, -1, "policy guard must terminate ADVERSARIAL_COVERAGE before SDK helper coverage");
+  const block = guard.slice(blockStart, blockEnd);
+  const entries = [
+    ...block.matchAll(/^    "(?<path>[^"]+)": \(\n(?<body>[\s\S]*?)^    \),/gmu),
+  ];
+  assert.ok(entries.length > 0, "policy guard must expose adversarial coverage entries");
+
+  const literalNeedles = (body) =>
+    body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.endsWith(","))
+      .map((line) => line.slice(0, -1))
+      .filter((line) => line.length >= 2 && ["\"", "'"].includes(line[0]) && line.at(-1) === line[0])
+      .map((line) => line.slice(1, -1));
+
+  for (const match of entries) {
+    const path = match.groups.path;
+    if (path.startsWith("csharp/")) {
+      continue;
+    }
+    const needles = literalNeedles(match.groups.body);
+    const counts = new Map();
+    for (const needle of needles) {
+      counts.set(needle, (counts.get(needle) ?? 0) + 1);
+    }
+    const duplicates = [...counts]
+      .filter(([, count]) => count > 1)
+      .map(([needle, count]) => `${count}x ${needle}`);
+    assert.deepEqual(duplicates, [], `${path} adversarial coverage needles must be duplicate-free`);
+
+    const shadows = [];
+    for (const needle of needles) {
+      if (needle.length < 12) {
+        continue;
+      }
+      const shadow = needles.find((other) => other !== needle && other.includes(needle));
+      if (shadow !== undefined) {
+        shadows.push(`${needle} -> ${shadow}`);
+      }
+    }
+    assert.deepEqual(shadows, [], `${path} adversarial coverage needles must avoid substring shadows`);
+  }
+});
+
+test("recursive Kagemusha profile-split coverage avoids non-C# duplicate and substring-shadow needles", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const blockStart = guard.indexOf("RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {");
+  const blockEnd = guard.indexOf("VERIFY_RESULT_FAIL_CLOSED_COVERAGE = {", blockStart);
+  assert.notEqual(blockStart, -1, "policy guard must define RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE");
+  assert.notEqual(blockEnd, -1, "policy guard must terminate profile-split coverage before verify-result coverage");
+  const block = guard.slice(blockStart, blockEnd);
+  const entries = [
+    ...block.matchAll(/^    "(?<path>[^"]+)": \(\n(?<body>[\s\S]*?)^    \),/gmu),
+  ];
+  assert.ok(entries.length > 0, "policy guard must expose profile-split coverage entries");
+
+  const literalNeedles = (body) =>
+    body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.endsWith(","))
+      .map((line) => line.slice(0, -1))
+      .filter((line) => line.length >= 2 && ["\"", "'"].includes(line[0]) && line.at(-1) === line[0])
+      .map((line) => line.slice(1, -1));
+
+  for (const match of entries) {
+    const path = match.groups.path;
+    if (path.startsWith("csharp/")) {
+      continue;
+    }
+    const needles = literalNeedles(match.groups.body);
+    const counts = new Map();
+    for (const needle of needles) {
+      counts.set(needle, (counts.get(needle) ?? 0) + 1);
+    }
+    const duplicates = [...counts]
+      .filter(([, count]) => count > 1)
+      .map(([needle, count]) => `${count}x ${needle}`);
+    assert.deepEqual(duplicates, [], `${path} profile-split coverage needles must be duplicate-free`);
+
+    const shadows = [];
+    for (const needle of needles) {
+      if (needle.length < 12) {
+        continue;
+      }
+      const shadow = needles.find((other) => other !== needle && other.includes(needle));
+      if (shadow !== undefined) {
+        shadows.push(`${needle} -> ${shadow}`);
+      }
+    }
+    assert.deepEqual(shadows, [], `${path} profile-split coverage needles must avoid substring shadows`);
+  }
+});
+
+test("recursive Kagemusha verify-result fail-closed coverage avoids non-C# duplicate and substring-shadow needles", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-verify-result-flags";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const blockStart = guard.indexOf("VERIFY_RESULT_FAIL_CLOSED_COVERAGE = {");
+  const blockEnd = guard.indexOf("PAYLOAD_BENCH_SOURCE_COVERAGE = {", blockStart);
+  assert.notEqual(blockStart, -1, "policy guard must define VERIFY_RESULT_FAIL_CLOSED_COVERAGE");
+  assert.notEqual(blockEnd, -1, "policy guard must terminate verify-result coverage before payload-bench coverage");
+  const block = guard.slice(blockStart, blockEnd);
+  assertContainsAll(
+    block,
+    [
+      "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\\n            &bundle.recursive_proof.verifier_key_id.name,\\n            bundle.accumulator.hop_count,",
+      "let lineage_witness_required_for_redeem = !witnessless_redeem_supported;",
+      "iroha_data_model::offline::can_redeem_kagemusha_recursive_spend_witnessless(\\n                &two_hop_lineage_bundle.recursive_proof.verifier_key_id.name,\\n                two_hop_lineage_bundle.accumulator.hop_count,",
+      "metadata-valid two-hop append lineage profile must remain witnessless-redeem capable",
+    ],
+    "verify-result fail-closed coverage",
+  );
+  const entries = [
+    ...block.matchAll(/^    "(?<path>[^"]+)": \(\n(?<body>[\s\S]*?)^    \),/gmu),
+  ];
+  assert.ok(entries.length > 0, "policy guard must expose verify-result coverage entries");
+  const literalNeedles = (body) =>
+    body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.endsWith(","))
+      .map((line) => line.slice(0, -1))
+      .filter((line) => line.length >= 2 && ["\"", "'"].includes(line[0]) && line.at(-1) === line[0])
+      .map((line) => line.slice(1, -1));
+
+  for (const match of entries) {
+    const path = match.groups.path;
+    if (path.startsWith("csharp/")) {
+      continue;
+    }
+    const needles = literalNeedles(match.groups.body);
+    const counts = new Map();
+    for (const needle of needles) {
+      counts.set(needle, (counts.get(needle) ?? 0) + 1);
+    }
+    const duplicates = [...counts]
+      .filter(([, count]) => count > 1)
+      .map(([needle, count]) => `${count}x ${needle}`);
+    assert.deepEqual(duplicates, [], `${path} verify-result coverage needles must be duplicate-free`);
+
+    const shadows = [];
+    for (const needle of needles) {
+      if (needle.length < 12) {
+        continue;
+      }
+      const shadow = needles.find((other) => other !== needle && other.includes(needle));
+      if (shadow !== undefined) {
+        shadows.push(`${needle} -> ${shadow}`);
+      }
+    }
+    assert.deepEqual(shadows, [], `${path} verify-result coverage needles must avoid substring shadows`);
+  }
+
+  const branch = guard.slice(
+    guard.indexOf(`if mode == "${mode}":`),
+    guard.indexOf("if mode:", guard.indexOf(`if mode == "${mode}":`)),
+  );
+  assert.match(
+    branch,
+    /cases\s*=\s*\([\s\S]*?bundle\.accumulator\.hop_count[\s\S]*?lineage_witness_required_for_redeem = !witnessless_redeem_supported[\s\S]*?two_hop_lineage_bundle\.accumulator\.hop_count[\s\S]*?for before, after, label in cases:/u,
+    "verify-result fail-closed negative control must mutate runtime flags and two-hop witnessless coverage",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?verify-result flag drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise SystemExit\("negative control failed: verify-result flag drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "verify-result fail-closed negative control must only pass after every case detects injected drift",
   );
 });
 
@@ -11283,6 +12119,56 @@ test("recursive Kagemusha policy negative controls pin append verifier-slice exa
   );
 });
 
+test("recursive Kagemusha policy negative controls pin JS append-boundary output-set exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-js-host-append-boundary-current-output-set";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-host-append-boundary-current-output-set":'),
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-vk-hash":'),
+  );
+  assert.match(
+    branch,
+    /JS host append-boundary helper must reject duplicate current-hop outputs[\s\S]*?JS host append-boundary helper may accept duplicate current-hop outputs[\s\S]*?repeats an output commitment[\s\S]*?accepts duplicate output commitment/u,
+    "JS append-boundary output-set negative control must weaken duplicate-output coverage",
+  );
+  assert.match(
+    branch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "JS append-boundary output-set negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage adversarial coverage:[\s\S]*?JS host append-boundary helper must reject duplicate current-hop outputs[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "JS append-boundary output-set negative control must require the exact missing-coverage diagnostic",
+  );
+  assert.match(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS host append-boundary current-hop output-set drift was not detected"\)/u,
+    "JS append-boundary output-set negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS append-boundary output-set negative control must not unconditionally pass after run_checks",
+  );
+});
+
 test("recursive Kagemusha policy negative controls pin Python append-boundary binding exactness", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -11330,6 +12216,56 @@ test("recursive Kagemusha policy negative controls pin Python append-boundary bi
     branch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Python append-boundary negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin fixed-window manifest digest splice", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-fixed-window-manifest-digest-splice";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-fixed-window-manifest-digest-splice":'),
+    guard.indexOf('if mode == "--negative-control-workflow":'),
+  );
+  assert.match(
+    branch,
+    /manifest row splice must change digest[\s\S]*?manifest row splice should change digest/u,
+    "fixed-window manifest negative control must weaken the manifest splice assertion",
+  );
+  assert.match(
+    branch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "fixed-window manifest negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /expected = \([\s\S]*?\{target\} is missing Reserved-lineage one-hop\/append profile split coverage:[\s\S]*?manifest row splice must change digest[\s\S]*?expected not in message[\s\S]*?wrong reason/u,
+    "fixed-window manifest negative control must require the exact profile-split diagnostic",
+  );
+  assert.match(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: fixed-window manifest digest splice drift was not detected"\)/u,
+    "fixed-window manifest negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "fixed-window manifest negative control must not unconditionally pass after run_checks",
   );
 });
 
@@ -11457,6 +12393,7 @@ test("recursive Kagemusha SDK parity inventories avoid shadowed method names", (
       '"7 "',
       '" 7"',
       '"18446744073709551616"',
+      '"    -0,\\n"',
     ],
     "JavaScript typed recursive spend block-height string vector inventory",
   );
@@ -11549,6 +12486,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-note-amount-vectors",
     "--negative-control-js-redeem-public-amount-vectors",
     "--negative-control-js-block-height-vectors",
+    "--negative-control-js-package-dist-pallas-opening-vectors",
+    "--negative-control-js-package-dist-raw-lineage-key-vectors",
     "--negative-control-js-python-native-output-headers",
     "--negative-control-python-kagemusha-instruction-transaction-builder",
     "--negative-control-csharp-kagemusha-instruction-transaction-builder",
@@ -11573,7 +12512,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-lineage-witness-append-availability-probe",
     "--negative-control-android-lineage-witness-availability-probe",
     "--negative-control-android-lineage-witness-append-availability-probe",
-    "--negative-control-jvm-sdk-direct-javac-harness-script",
     "--negative-control-jvm-android-hop-evidence-shape",
     "--negative-control-jvm-note-amount-vectors",
     "--negative-control-jvm-redeem-public-amount-vectors",
@@ -11924,6 +12862,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     REQUIRED_HEADER_NEGATIVE_CONTROL_MODES,
     "NoritoBridge header guard",
   );
+  const expectedModeSet = new Set(expectedModes);
+  assert.equal(
+    expectedModeSet.size,
+    expectedModes.length,
+    "Kagemusha SDK parity expectedModes must not contain duplicates",
+  );
+  const actualModeSet = new Set(
+    [...guard.matchAll(/^if mode == "(--negative-control[^"]*)":/gmu)].map(
+      ([, mode]) => mode,
+    ),
+  );
+  assert.deepEqual(
+    [...actualModeSet].sort(),
+    [...expectedModeSet].sort(),
+    "Kagemusha SDK parity expectedModes must equal implemented guard modes",
+  );
   for (const mode of expectedModes) {
     assert.ok(
       guard.includes(`if mode == "${mode}":`),
@@ -11938,6 +12892,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha workflow must run SDK parity ${mode}`,
     );
   }
+  const genericSdkSurfaceBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control":'),
+    guard.indexOf('if mode == "--negative-control-workflow":'),
+  );
+  assert.match(
+    genericSdkSurfaceBranch,
+    /kagemushaRecursiveSpendTransitionProfileAppend[\s\S]*?kagemushaRecursiveSpendTransitionProfileAppendMissing[\s\S]*?JavaScript native availability gate missing typeof native\.kagemushaRecursiveSpendTransitionProfileAppend !== "function"[\s\S]*?expected not in message/u,
+    "generic SDK parity negative control must require the exact JavaScript native availability drift label",
+  );
+  assert.match(
+    genericSdkSurfaceBranch,
+    /for detected_message in first_lines_for_labels\(message, \(expected,\)\):[\s\S]*?print\(detected_message\)/u,
+    "generic SDK parity negative control must print the exact detected surface label",
+  );
   const jvmOfflineNoteV2DecoderPlaceholderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":'),
     guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":'),
@@ -12000,7 +12968,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftOfflineNoteV2DecoderPlaceholderBranch,
-    /label\s*=\s*"Swift Offline Note V2 decoder placeholder removal"[\s\S]*?for detected_message in first_lines_for_labels\(message, \(label,\)\):[\s\S]*?print\(detected_message\)/u,
+    /expected_labels\s*=\s*\("Swift Offline Note V2 decoder placeholder removal",\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
     "Swift Offline Note V2 decoder placeholder negative control must use the shared diagnostic fan-out helper",
   );
   const swiftOfflineNoteV2InstructionDecoderBranch = guard.slice(
@@ -12167,12 +13135,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     assert.match(
       branch,
       new RegExp(
-        `${escapeRegExp(marker)}[\\s\\S]*?expected not in message[\\s\\S]*?rejected for the wrong reason`,
+        `expected_labels\\s*=\\s*\\([\\s\\S]*?${escapeRegExp(marker)}[\\s\\S]*?missing\\s*=\\s*\\[label for label in expected_labels if label not in message\\][\\s\\S]*?first_lines_for_labels\\(message, expected_labels\\)`,
         "u",
       ),
       label,
     );
   }
+  const identifierReceiptProofBase64ExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-signature-exactness-guard":'),
+  );
+  assert.match(
+    identifierReceiptProofBase64ExactnessBranch,
+    /replacements\s*=\s*\([\s\S]*?identifier receipt attestation\.proof_b64[\s\S]*?attestation\.proof_b64[\s\S]*?for old, new in replacements:[\s\S]*?next_mutated = mutated\.replace\(old, new, 1\)[\s\S]*?if next_mutated == mutated:/u,
+    "identifier receipt proof-base64 exactness negative control must fail if either exactness guard mutation stops matching",
+  );
+  const identifierReceiptSignatureExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-signature-exactness-guard":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":'),
+  );
+  assert.match(
+    identifierReceiptSignatureExactnessBranch,
+    /replacements\s*=\s*\([\s\S]*?payload\.opening\.signature[\s\S]*?identifier receipt attestation\.signature[\s\S]*?for old, new in replacements:[\s\S]*?next_mutated = mutated\.replace\(old, new, 1\)[\s\S]*?if next_mutated == mutated:/u,
+    "identifier receipt signature exactness negative control must fail if either signature exactness mutation stops matching",
+  );
   const swiftIdentifierAccountIdExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":'),
     guard.indexOf('if mode == "--negative-control-identifier-receipt-hash-exactness-guard":'),
@@ -12212,6 +13198,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "native bridge identifier receipt exactness negative control must mutate padded payload coverage",
   );
   assert.match(
+    nativeBridgeIdentifierReceiptExactnessBranch,
+    /cases\s*=\s*\([\s\S]*?parse_identifier_receipt_rejects_padded_proof_attestation_fields[\s\S]*?for old, new, label in cases:[\s\S]*?updated = original\.replace\(old, new, 1\)[\s\S]*?if updated == original:/u,
+    "native bridge identifier receipt exactness negative control must fail if any intended mutation stops matching",
+  );
+  assert.match(
+    nativeBridgeIdentifierReceiptExactnessBranch,
+    /expected_labels\s*=\s*\([\s\S]*?label,[\s\S]*?Rust native identifier receipt exactness[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in dict\.fromkeys\(first_lines_for_labels\(message, expected_labels\)\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+    "native bridge identifier receipt exactness negative control must check and print each mutated surface independently",
+  );
+  assert.match(
     guard,
     /let kind =\\n\s+parse_identifier_exact_str[\s\S]*?vec!\["payload", "opaque_id"\][\s\S]*?vec!\["payload", "uaid"\][\s\S]*?vec!\["payload", "account_id"\][\s\S]*?vec!\["attestation", "kind"\][\s\S]*?Rust native identifier receipt exactness/u,
     "native bridge identifier receipt exactness guard must pin padded opaque_id, uaid, account_id, and attestation kind coverage",
@@ -12223,8 +13219,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /fn validate_identifier_claim_account\([\s\S]*?if &receipt\.payload\.account_id != account[\s\S]*?validate_identifier_claim_account\(&account, &receipt\)\?;[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?Rust native claim identifier account binding/u,
-    "native bridge claim-identifier guard must pin account/receipt account binding before transaction encoding",
+    /fn validate_identifier_claim_account\([\s\S]*?if &receipt\.payload\.account_id != account[\s\S]*?validate_identifier_claim_account\(&account, &receipt\)\?;[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?Rust native claim identifier account binding[\s\S]*?Rust native claim identifier transaction account binding[\s\S]*?Rust native claim identifier algorithm transaction account binding/u,
+    "native bridge claim-identifier guard must pin account/receipt account binding in both transaction encoders",
   );
   const nativeBridgeClaimIdentifierAccountBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-bridge-claim-identifier-account-binding":'),
@@ -12232,8 +13228,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     nativeBridgeClaimIdentifierAccountBindingBranch,
-    /validate_identifier_claim_account\(&account, &receipt\)\?;\\n[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?validate_identifier_claim_account_allows_mismatched_receipt_account/u,
-    "native bridge claim-identifier negative control must remove account binding and mutate its regression test",
+    /parse_private_key\(key_slice\)\?;\\n[\s\S]*?validate_identifier_claim_account\(&account, &receipt\)\?;\\n[\s\S]*?Rust native claim identifier transaction account binding[\s\S]*?parse_private_key_with_algorithm\(key_slice, algorithm\)\?;\\n[\s\S]*?validate_identifier_claim_account\(&account, &receipt\)\?;\\n[\s\S]*?Rust native claim identifier algorithm transaction account binding[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?validate_identifier_claim_account_allows_mismatched_receipt_account/u,
+    "native bridge claim-identifier negative control must remove both production account-binding calls and mutate its regression test independently",
+  );
+  assert.match(
+    nativeBridgeClaimIdentifierAccountBindingBranch,
+    /cases\s*=\s*\([\s\S]*?Rust native claim identifier transaction account binding[\s\S]*?Rust native claim identifier algorithm transaction account binding[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?for old, new, label in cases:[\s\S]*?updated = original\.replace\(old, new, 1\)[\s\S]*?if updated == original:/u,
+    "native bridge claim-identifier negative control must fail if any intended mutation stops matching",
+  );
+  assert.match(
+    nativeBridgeClaimIdentifierAccountBindingBranch,
+    /expected_labels\s*=\s*\(label,\)[\s\S]*?if label == "validate_identifier_claim_account_rejects_mismatched_receipt_account":[\s\S]*?Rust native claim identifier account binding[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in dict\.fromkeys\(first_lines_for_labels\(message, expected_labels\)\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+    "native bridge claim-identifier negative control must check and print each mutated surface independently",
   );
   assert.match(
     nativeBridgeClaimIdentifierAccountBindingBranch,
@@ -12268,8 +13274,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     identifierResolverKeyExactnessBranch,
-    /cases\s*=\s*\([\s\S]*?for before, after, label in cases:[\s\S]*?if label not in message and "Python identifier receipt resolver-key parser exactness" not in message/u,
-    "Python identifier receipt resolver-key negative control must check each resolver-key parser case independently",
+    /cases\s*=\s*\([\s\S]*?detected_messages\s*=\s*\[\][\s\S]*?for before, after, label in cases:[\s\S]*?expected_labels\s*=\s*\([\s\S]*?label,[\s\S]*?Python identifier receipt resolver-key parser exactness[\s\S]*?detected_labels\s*=\s*\[expected_label for expected_label in expected_labels if expected_label in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, detected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+    "Python identifier receipt resolver-key negative control must check and print each resolver-key parser case independently",
   );
   assert.match(
     identifierResolverKeyExactnessBranch,
@@ -12282,8 +13288,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmCompactProjectionBlockHeightVectorBranch,
-    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"01"[\s\S]*?run_checks\(mutated_texts\)/u,
-    "JVM/Android compact projection blockHeight vector negative control must mutate Kotlin and Android Java vector lists",
+    /mutation_cases\s*=\s*\{[\s\S]*?KagemushaRecursiveSpendProverTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?expected_labels\.append\(expected_label\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JVM/Android compact projection blockHeight vector negative control must mutate Kotlin and Android Java vector families",
+  );
+  assertContainsAll(
+    jvmCompactProjectionBlockHeightVectorBranch,
+    [
+      "Kotlin compact projection blockHeight test vectors missing -1L",
+      "Kotlin compact projection blockHeight test vectors missing Long.MAX_VALUE",
+      'Kotlin compact projection blockHeight test vectors missing "9223372036854775808"',
+      'Kotlin compact projection blockHeight test vectors missing BigInteger("18446744073709551615")',
+      'Kotlin compact projection blockHeight test vectors missing "01"',
+      'Kotlin compact projection blockHeight test vectors missing " 1"',
+      'Kotlin compact projection blockHeight test vectors missing "18446744073709551616"',
+      'Kotlin compact projection blockHeight test vectors missing BigInteger("-1")',
+      "Android Java compact projection blockHeight test vectors missing -1L",
+      "Android Java compact projection blockHeight test vectors missing Long.MAX_VALUE",
+      'Android Java compact projection blockHeight test vectors missing "9223372036854775808"',
+      'Android Java compact projection blockHeight test vectors missing new BigInteger("18446744073709551615")',
+      'Android Java compact projection blockHeight test vectors missing "01"',
+      'Android Java compact projection blockHeight test vectors missing " 1"',
+      'Android Java compact projection blockHeight test vectors missing "18446744073709551616"',
+      'Android Java compact projection blockHeight test vectors missing new BigInteger("-1")',
+    ],
+    "JVM/Android compact projection blockHeight vector negative control must require exact missing vector diagnostics",
   );
   assertContainsAll(
     guard,
@@ -12291,6 +13319,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Kotlin compact projection blockHeight test vectors",
       "Android Java compact projection blockHeight test vectors",
       "require_block_contains",
+      "-1L",
       "Long.MAX_VALUE",
       '"9223372036854775808"',
       'BigInteger("18446744073709551615")',
@@ -12307,13 +13336,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmCompactProjectionBlockHeightVectorBranch,
-    /missing\s*=\s*\[[\s\S]*?for _target, \(_needle, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?JVM\/Android compact projection blockHeight vector drift was not detected for/u,
-    "JVM/Android compact projection blockHeight vector negative control must require both SDK labels to fail",
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?JVM\/Android compact projection blockHeight vector drift was not detected for/u,
+    "JVM/Android compact projection blockHeight vector negative control must require every exact vector label to fail",
   );
   assert.match(
     jvmCompactProjectionBlockHeightVectorBranch,
-    /for detected_message in first_lines_for_labels\([\s\S]*?message,[\s\S]*?\[label for _target, \(_needle, label\) in replacements\.items\(\)\],[\s\S]*?\):[\s\S]*?print\(detected_message\)/u,
-    "JVM/Android compact projection blockHeight vector negative control must print diagnostics for both SDK labels",
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android compact projection blockHeight vector negative control must print diagnostics for every exact vector label",
   );
   assert.match(
     jvmCompactProjectionBlockHeightVectorBranch,
@@ -12423,6 +13452,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmClaimIdentifierAccountBindingBranch,
     /ClaimIdentifier accountId must match receipt\.accountId[\s\S]*?ClaimIdentifier account mismatch may be checked by core/u,
     "JVM ClaimIdentifier negative control must remove the explicit mismatch assertion marker",
+  );
+  assert.match(
+    jvmClaimIdentifierAccountBindingBranch,
+    /java_replacements\s*=\s*\([\s\S]*?kotlin_replacements\s*=\s*\([\s\S]*?for old, new in java_replacements:[\s\S]*?next_mutated = java_mutated\.replace\(old, new, 1\)[\s\S]*?for old, new in kotlin_replacements:[\s\S]*?next_mutated = kotlin_mutated\.replace\(old, new, 1\)/u,
+    "JVM ClaimIdentifier negative control must fail if any Java or Kotlin mutation stops matching",
   );
   assert.match(
     jvmClaimIdentifierAccountBindingBranch,
@@ -13015,6 +14049,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /expected\s*=\s*"Kagemusha payload benchmark job must wait for the native bridge test job"[\s\S]*?expected not in message[\s\S]*?rejected for the wrong reason/u,
     "native bridge dependency workflow branch must require the benchmark dependency label",
   );
+  assert.match(
+    nativeBridgeNeedsWorkflowBranch,
+    /expected_labels\s*=\s*\(expected,\)[\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "native bridge dependency workflow branch must print the exact benchmark dependency label",
+  );
   for (const { start, end, expected, label } of [
     {
       start: 'if mode == "--negative-control-python-sdk-job-workflow":',
@@ -13085,6 +14124,56 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
         "u",
       ),
       label,
+    );
+  }
+  for (const { start, end, sourceLabel, testLabel, label } of [
+    {
+      start: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
+      end: 'if mode == "--negative-control-swift-connect-parse-surface-script":',
+      sourceLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
+      testLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
+      label: "Swift SDK parse-surface branch must validate every parse target mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-connect-parse-surface-script":',
+      end: 'if mode == "--negative-control-swift-sdk-privacy-parse-script":',
+      sourceLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
+      testLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift",
+      label: "Swift Connect parse branch must validate every parse target mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-privacy-parse-script":',
+      end: 'if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":',
+      sourceLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+      testLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+      label: "Swift privacy parse branch must validate every parse target mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":',
+      end: 'if mode == "--negative-control-swift-sdk-workflow-inventory":',
+      sourceLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+      testLabel: "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+      label: "Swift Torii verifier parse branch must validate every parse target mutation",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `cases\\s*=\\s*\\([\\s\\S]*?${escapeRegExp(sourceLabel)}[\\s\\S]*?${escapeRegExp(testLabel)}[\\s\\S]*?for old, new, label in cases:[\\s\\S]*?mutated = original\\.replace\\(old, new, 1\\)[\\s\\S]*?if mutated == original:`,
+        "u",
+      ),
+      label,
+    );
+    assert.match(
+      branch,
+      /expected_labels\s*=\s*\(label,\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+      `${label} must check and print each parse label independently`,
+    );
+    assert.match(
+      branch,
+      /finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?if not detected_messages:[\s\S]*?raise SystemExit\("negative control failed: Swift [^"]+ drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+      `${label} must reset mutated snapshots and only pass after detected drift`,
     );
   }
   for (const { start, end, expected, label } of [
@@ -13159,18 +14248,160 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label,
     );
   }
+  for (const { start, end, firstLabel, lastLabel, label } of [
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-test-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":',
+      firstLabel: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
+      lastLabel: "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest",
+      label: "JVM SDK test filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":',
+      firstLabel: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest",
+      lastLabel: "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
+      label: "JVM SDK canonical request filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":',
+      firstLabel: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
+      lastLabel: "Kagemusha JVM SDK script must run Android signing algorithm exactness tests",
+      label: "JVM SDK signing/verifier filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":',
+      firstLabel: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
+      lastLabel: "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests",
+      label: "JVM SDK Torii event-stream filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":',
+      end: 'if mode == "--negative-control-jvm-sdk-workflow-inventory":',
+      firstLabel: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+      lastLabel: "Kagemusha JVM SDK script must run Android harness org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
+      label: "JVM SDK identifier receipt filter branch must validate every selector mutation",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `cases\\s*=\\s*\\([\\s\\S]*?${escapeRegExp(firstLabel)}[\\s\\S]*?${escapeRegExp(lastLabel)}[\\s\\S]*?for old, new, label in cases:[\\s\\S]*?mutated = original\\.replace\\(old, new, 1\\)[\\s\\S]*?if mutated == original:`,
+        "u",
+      ),
+      label,
+    );
+    assert.match(
+      branch,
+      /expected_labels\s*=\s*\(label,\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+      `${label} must check and print each precise label independently`,
+    );
+    assert.match(
+      branch,
+      /finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?if not detected_messages:[\s\S]*?raise SystemExit\([\s\S]*?negative control failed: JVM SDK [^"]+ drift was not detected[\s\S]*?raise\s+SystemExit\(0\)/u,
+      `${label} must reset mutated snapshots and only pass after detected drift`,
+    );
+  }
+  for (const { start, end, selectorLabel, testFileLabel, label } of [
+    {
+      start: 'if mode == "--negative-control-js-sdk-privacy-native-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-offline-cash-filter-script":',
+      selectorLabel: "JavaScript SDK privacy native focused selectors",
+      testFileLabel: "JavaScript SDK privacy native test file",
+      label: "JS SDK privacy native filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-offline-cash-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-canonical-request-filter-script":',
+      selectorLabel: "JavaScript SDK offline cash focused selector",
+      testFileLabel: "JavaScript SDK offline cash test file",
+      label: "JS SDK offline cash filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-canonical-request-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-event-filter-filter-script":',
+      selectorLabel: "JavaScript SDK canonical request focused selector",
+      testFileLabel: "JavaScript SDK canonical request test file",
+      label: "JS SDK canonical request filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-event-filter-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-verifier-key-filter-script":',
+      selectorLabel: "JavaScript SDK event-filter focused selectors",
+      testFileLabel: "JavaScript SDK event-filter test file",
+      label: "JS SDK event-filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-verifier-key-filter-script":',
+      end: 'if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":',
+      selectorLabel: "JavaScript SDK verifier-key focused selectors",
+      testFileLabel: "JavaScript SDK verifier-key test file",
+      label: "JS SDK verifier-key filter branch must validate every selector mutation",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":',
+      end: 'if mode == "--negative-control-js-torii-runner-coverage":',
+      selectorLabel: "JavaScript SDK identifier receipt focused selectors",
+      testFileLabel: "JavaScript SDK identifier receipt test file",
+      label: "JS SDK identifier receipt filter branch must validate every selector mutation",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `cases\\s*=\\s*\\([\\s\\S]*?${escapeRegExp(selectorLabel)}[\\s\\S]*?${escapeRegExp(testFileLabel)}[\\s\\S]*?for old, new, label in cases:[\\s\\S]*?mutated = original\\.replace\\(old, new, 1\\)[\\s\\S]*?if mutated == original:`,
+        "u",
+      ),
+      label,
+    );
+    assert.match(
+      branch,
+      /expected_labels\s*=\s*\(label,\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+      `${label} must check and print each precise label independently`,
+    );
+    assert.match(
+      branch,
+      /finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?if not detected_messages:[\s\S]*?raise SystemExit\("negative control failed: JavaScript SDK [^"]+ filter drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+      `${label} must reset mutated snapshots and only pass after detected drift`,
+    );
+  }
+  assertContainsAll(
+    guard,
+    [
+      "JavaScript SDK transaction-builder focused selector",
+      "JavaScript SDK transaction-builder test file",
+    ],
+    "JavaScript SDK runner guard must expose precise transaction-builder labels",
+  );
+  const jsSdkTransactionBuilderFilterBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-sdk-transaction-builder-filter-script":'),
+    guard.indexOf('if mode == "--negative-control-js-sdk-privacy-native-filter-script":'),
+  );
+  assert.match(
+    jsSdkTransactionBuilderFilterBranch,
+    /cases\s*=\s*\([\s\S]*?JavaScript SDK transaction-builder focused selector[\s\S]*?JavaScript SDK transaction-builder test file[\s\S]*?for old, new, label in cases:[\s\S]*?mutated = original\.replace\(old, new, 1\)[\s\S]*?if mutated == original:/u,
+    "JS SDK transaction-builder filter branch must validate each selector mutation independently",
+  );
+  assert.match(
+    jsSdkTransactionBuilderFilterBranch,
+    /expected_labels\s*=\s*\(label,\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+    "JS SDK transaction-builder filter branch must check and print each precise label independently",
+  );
+  assert.match(
+    jsSdkTransactionBuilderFilterBranch,
+    /finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?if not detected_messages:[\s\S]*?raise SystemExit\("negative control failed: JavaScript SDK transaction-builder filter drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS SDK transaction-builder filter branch must reset mutated snapshots and only pass after detected drift",
+  );
   for (const { start, end, marker, label } of [
     {
       start: 'if mode == "--negative-control-python-connect-runner-coverage":',
       end: 'if mode == "--negative-control-python-connect-test-exactness":',
       marker: "Kagemusha Python SDK script must run tests/testconnect_codec.py",
       label: "Python Connect runner branch must require the Connect test path label",
-    },
-    {
-      start: 'if mode == "--negative-control-python-connect-test-exactness":',
-      end: 'if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":',
-      marker: "SID/preview bootstrap exactness",
-      label: "Python Connect exactness branch must require the Connect exactness label",
     },
     {
       start: 'if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":',
@@ -13196,12 +14427,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       marker: "Kagemusha Python SDK script must run Torii event-filter verifier/proof exactness regressions",
       label: "Python event-filter branch must require the event-filter regression label",
     },
-    {
-      start: 'if mode == "--negative-control-python-lineage-frozen-copy":',
-      end: 'if mode == "--negative-control-python-sdk-test-workflow":',
-      marker: "Python native output Norito guard tests missing proving_key[:] =",
-      label: "Python lineage frozen-copy branch must require the proving-key copy label",
-    },
   ]) {
     const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
     assert.match(
@@ -13213,6 +14438,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label,
     );
   }
+  const pythonLineageFrozenCopyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-lineage-frozen-copy":'),
+    guard.indexOf('if mode == "--negative-control-python-sdk-test-workflow":'),
+  );
+  assert.match(
+    pythonLineageFrozenCopyBranch,
+    /from dataclasses import FrozenInstanceError[\s\S]*?from dataclasses import dataclass[\s\S]*?proving_key\[:\] =[\s\S]*?proving_key_copy\[:\] =/u,
+    "Python lineage frozen-copy negative control must mutate the import and proving-key copy guard",
+  );
+  assert.match(
+    pythonLineageFrozenCopyBranch,
+    /for old, new in replacements:[\s\S]*?next_updated = updated\.replace\(old, new, 1\)[\s\S]*?if next_updated == updated:/u,
+    "Python lineage frozen-copy negative control must fail if either intended mutation stops matching",
+  );
+  assert.match(
+    pythonLineageFrozenCopyBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Python native output Norito guard tests missing from dataclasses import FrozenInstanceError[\s\S]*?Python native output Norito guard tests missing proving_key\[:\] =[\s\S]*?Python lineage key artifact copy tests missing proving_key\[:\] = b\\"\\\\x00\\" \* len\(proving_key\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Python lineage frozen-copy negative control must require every affected diagnostic",
+  );
+  assert.match(
+    pythonLineageFrozenCopyBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Python lineage frozen-copy negative control must print each detected diagnostic",
+  );
   for (const { start, end, expected, label } of [
     {
       start: 'if mode == "--negative-control-jvm-sdk-job-workflow":',
@@ -13274,36 +14523,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     );
   }
   for (const { start, end, marker, label } of [
-    {
-      start: 'if mode == "--negative-control-jvm-sdk-test-filter-script":',
-      end: 'if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":',
-      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
-      label: "JVM SDK test filter branch must require the offline cash test label",
-    },
-    {
-      start: 'if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":',
-      end: 'if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":',
-      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest",
-      label: "JVM SDK canonical request filter branch must require the canonical signer label",
-    },
-    {
-      start: 'if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":',
-      end: 'if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":',
-      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
-      label: "JVM SDK signing/verifier filter branch must require the verifier-key instruction label",
-    },
-    {
-      start: 'if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":',
-      end: 'if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":',
-      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
-      label: "JVM SDK Torii event-stream filter branch must require the event-stream label",
-    },
-    {
-      start: 'if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":',
-      end: 'if mode == "--negative-control-jvm-sdk-workflow-inventory":',
-      marker: "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
-      label: "JVM SDK identifier receipt filter branch must require the claim-identifier label",
-    },
     {
       start: 'if mode == "--negative-control-jvm-sdk-jdk21-script":',
       end: 'if mode == "--negative-control-jvm-sdk-java-home-override-script":',
@@ -13420,30 +14639,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   }
   for (const { start, end, marker, label } of [
     {
-      start: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
-      end: 'if mode == "--negative-control-swift-connect-parse-surface-script":',
-      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
-      label: "Swift SDK parse-surface branch must require the instruction encoder parse label",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-connect-parse-surface-script":',
-      end: 'if mode == "--negative-control-swift-sdk-privacy-parse-script":',
-      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
-      label: "Swift Connect parse branch must require the ConnectClient parse label",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-sdk-privacy-parse-script":',
-      end: 'if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":',
-      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-      label: "Swift privacy parse branch must require the PrivacyNativeBridge parse label",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":',
-      end: 'if mode == "--negative-control-swift-sdk-workflow-inventory":',
-      marker: "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
-      label: "Swift Torii verifier parse branch must require the ToriiClient parse label",
-    },
-    {
       start: 'if mode == "--negative-control-swift-sdk-uc4-skip":',
       end: 'if mode == "--negative-control-swift-lineage-data-copy":',
       marker: "Swift UC4 payment-token diagnostic test missing throw XCTSkip",
@@ -13466,18 +14661,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       end: 'if mode == "--negative-control-swift-kagemusha-native-output-cap":',
       marker: "Swift recursive compact wrapper missing bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
       label: "Swift recursive compact verifier availability branch must require the verifier availability marker",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-kagemusha-native-output-cap":',
-      end: 'if mode == "--negative-control-swift-native-output-headers":',
-      marker: "Swift recursive compact verifier tests missing testNativeBridgeRejectsOversizedKagemushaOutputBeforeCopying",
-      label: "Swift native output cap branch must require the oversized output test marker",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":',
-      end: 'if mode == "--negative-control-swift-note-amount-vectors":',
-      marker: "Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem(",
-      label: "Swift instruction transaction builder branch must require the redeem builder marker",
     },
     {
       start: 'if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":',
@@ -13598,6 +14781,49 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label,
     );
   }
+  const jvmSdkNeedsWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-sdk-needs-workflow":'),
+    guard.indexOf('if mode == "--negative-control-swift-sdk-job-workflow":'),
+  );
+  assert.match(
+    jvmSdkNeedsWorkflowBranch,
+    /expected_labels\s*=\s*\(expected,\)[\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM SDK dependency workflow branch must print the exact benchmark dependency label",
+  );
+  for (const { start, end, label } of [
+    {
+      start: 'if mode == "--negative-control-jvm-sdk-test-order-workflow":',
+      end: 'if mode == "--negative-control-jvm-sdk-needs-workflow":',
+      label: "JVM SDK test-order branch must validate both move replacements",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-install-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-test-order-workflow":',
+      label: "JS SDK install-order branch must validate both move replacements",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-test-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-native-build-order-workflow":',
+      label: "JS SDK test-order branch must validate both move replacements",
+    },
+    {
+      start: 'if mode == "--negative-control-js-sdk-native-build-order-workflow":',
+      end: 'if mode == "--negative-control-js-sdk-needs-workflow":',
+      label: "JS SDK native-build-order branch must validate both move replacements",
+    },
+    {
+      start: 'if mode == "--negative-control-sdk-negative-controls-order-workflow":',
+      end: 'if mode == "--negative-control-js-browser-helper":',
+      label: "SDK negative-control order branch must validate both move replacements",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      /replacements\s*=\s*\([\s\S]*?for old, new in replacements:[\s\S]*?next_mutated = mutated\.replace\(old, new, 1\)[\s\S]*?if next_mutated == mutated:/u,
+      label,
+    );
+  }
   for (const { start, end, path, label } of [
     {
       start: 'if mode == "--negative-control-workflow":',
@@ -13666,36 +14892,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   }
   for (const { start, end, marker, label } of [
     {
-      start: 'if mode == "--negative-control-swift-nfc-receive-success-preservation":',
-      end: 'if mode == "--negative-control-swift-nfc-receipt-ack-single-success":',
-      marker: "Swift NFC receive/send success runtime wiring missing hasSuccessState: didPublishReceiveSuccess || didComplete",
-      label: "Swift NFC receive-success branch must require the receive-success marker",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-nfc-receipt-ack-single-success":',
-      end: 'if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":',
-      marker: "Swift NFC receive/send success runtime wiring missing let shouldNotifyReceiptAckReady = markReceiptAckReady()",
-      label: "Swift NFC receipt-ACK branch must require the ACK-ready marker",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":',
-      end: 'if mode == "--negative-control-swift-nfc-emulation-progress-after-success":',
-      marker: "Swift NFC receive/send success runtime wiring missing shouldPublishReceiveSuccessOnAckRead(",
-      label: "Swift NFC ACK-read branch must require the ACK-read marker",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-nfc-emulation-progress-after-success":',
-      end: 'if mode == "--negative-control-swift-nfc-send-terminal-success-policy":',
-      marker: "Swift NFC receive emulation progress suppression after success missing pattern",
-      label: "Swift NFC emulation-progress branch must require the progress-suppression marker",
-    },
-    {
-      start: 'if mode == "--negative-control-swift-nfc-send-terminal-success-policy":',
-      end: 'if mode == "--negative-control-swift-sdk-version-script":',
-      marker: "Swift NFC send progress terminal-success gate missing pattern",
-      label: "Swift NFC send terminal-success branch must require the terminal-success marker",
-    },
-    {
       start: 'if mode == "--negative-control-js-sdk-node-version-script":',
       end: 'if mode == "--negative-control-js-sdk-node-override-script":',
       marker: "Kagemusha JavaScript SDK script must emit the selected Node version",
@@ -13720,48 +14916,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label: "JavaScript SDK Node major branch must require the Node 20 rejection label",
     },
     {
-      start: 'if mode == "--negative-control-js-sdk-transaction-builder-filter-script":',
-      end: 'if mode == "--negative-control-js-sdk-privacy-native-filter-script":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK transaction-builder filter branch must require the full runner label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-sdk-privacy-native-filter-script":',
-      end: 'if mode == "--negative-control-js-sdk-offline-cash-filter-script":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK privacy-native filter branch must require the full runner label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-sdk-offline-cash-filter-script":',
-      end: 'if mode == "--negative-control-js-sdk-canonical-request-filter-script":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK offline-cash filter branch must require the full runner label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-sdk-canonical-request-filter-script":',
-      end: 'if mode == "--negative-control-js-sdk-event-filter-filter-script":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK canonical-request filter branch must require the full runner label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-sdk-event-filter-filter-script":',
-      end: 'if mode == "--negative-control-js-sdk-verifier-key-filter-script":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK event-filter branch must require the full runner label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-sdk-verifier-key-filter-script":',
-      end: 'if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK verifier-key filter branch must require the full runner label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":',
-      end: 'if mode == "--negative-control-js-torii-runner-coverage":',
-      marker: "Kagemusha JavaScript SDK script must run recursive spend, address exactness,",
-      label: "JavaScript SDK identifier-receipt filter branch must require the full runner label",
-    },
-    {
       start: 'if mode == "--negative-control-js-browser-helper":',
       end: 'if mode == "--negative-control-js-lineage-key-artifact-copy":',
       marker: "javascript/iroha_js/dist/crypto.browser.js constants missing KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
@@ -13784,12 +14938,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       end: 'if mode == "--negative-control-js-lineage-key-artifact-request-object":',
       marker: "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing if (suppliedLineageKeyMaterial && !appendNeedsLineageKeyArtifacts) {",
       label: "JavaScript append lineage key boundary branch must require the append boundary label",
-    },
-    {
-      start: 'if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":',
-      end: 'if mode == "--negative-control-js-note-amount-vectors":',
-      marker: "javascript/iroha_js/src/transaction.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction",
-      label: "JavaScript instruction transaction builder branch must require the builder label",
     },
     {
       start: 'if mode == "--negative-control-python-lineage-key-package-binding":',
@@ -13874,10 +15022,124 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     assert.match(
       branch,
       new RegExp(
-        `${escapeRegExp(marker)}[\\s\\S]*?(?:expected|expected_label) not in message[\\s\\S]*?rejected for the wrong reason`,
+        `${escapeRegExp(marker)}[\\s\\S]*?(?:(?:expected|expected_label) not in message[\\s\\S]*?rejected for the wrong reason|missing\\s*=\\s*\\[label for label in expected_labels if label not in message\\][\\s\\S]*?first_lines_for_labels\\(message, expected_labels\\))`,
         "u",
       ),
       label,
+    );
+  }
+  for (const { start, end, marker, label } of [
+    {
+      start: 'if mode == "--negative-control-js-browser-helper":',
+      end: 'if mode == "--negative-control-js-lineage-key-artifact-copy":',
+      marker: "javascript/iroha_js/dist/crypto.browser.js constants missing KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
+      label: "JavaScript browser helper branch",
+    },
+    {
+      start: 'if mode == "--negative-control-js-lineage-key-artifact-copy":',
+      end: 'if mode == "--negative-control-js-lineage-key-package-binding":',
+      marker: "javascript/iroha_js/src/crypto.js portable lineage key artifact package missing get lineageVerifierKey()",
+      label: "JavaScript lineage key artifact copy branch",
+    },
+    {
+      start: 'if mode == "--negative-control-js-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-js-append-lineage-key-boundary":',
+      marker: "javascript/iroha_js/src/crypto.js portable lineage key artifact package missing archivePayload.includes(verifierKeyCommitment)",
+      label: "JavaScript lineage key package binding branch",
+    },
+    {
+      start: 'if mode == "--negative-control-js-append-lineage-key-boundary":',
+      end: 'if mode == "--negative-control-js-lineage-key-artifact-request-object":',
+      marker: "javascript/iroha_js/src/crypto.js typed recursive spend request codecs missing if (suppliedLineageKeyMaterial && !appendNeedsLineageKeyArtifacts) {",
+      label: "JavaScript append lineage key boundary branch",
+    },
+    {
+      start: 'if mode == "--negative-control-python-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-csharp-lineage-key-package-binding":',
+      marker: "Python portable lineage key artifact package missing archive_payload.find(verifier_key_commitment)",
+      label: "Python lineage key package binding branch",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-swift-compact-projection-hardening":',
+      marker: "Swift portable lineage key artifact package missing archivePayload.range(of: verifierKeyCommitment)",
+      label: "Swift lineage key package binding branch",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-witness-availability-probe":',
+      end: 'if mode == "--negative-control-swift-lineage-witness-append-availability-probe":',
+      marker: "Swift native availability probe missing probeKagemushaLineageWitnessFromInitResultFunction(",
+      label: "Swift lineage witness availability branch",
+    },
+    {
+      start: 'if mode == "--negative-control-swift-lineage-witness-append-availability-probe":',
+      end: 'if mode == "--negative-control-jvm-lineage-key-package-binding":',
+      marker: "Swift native availability probe missing probeKagemushaLineageWitnessAppendResultFunction(",
+      label: "Swift lineage witness append availability branch",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-android-lineage-key-package-binding":',
+      marker: "Kotlin witnessless Reserved-lineage helper bounds missing archivePayload.indexOfSlice(verifierKeyCommitment) >= 0",
+      label: "Kotlin lineage key package binding branch",
+    },
+    {
+      start: 'if mode == "--negative-control-android-lineage-key-package-binding":',
+      end: 'if mode == "--negative-control-jvm-lineage-witness-availability-probe":',
+      marker: "Android witnessless Reserved-lineage helper bounds missing indexOfSlice(archivePayload, verifierKeyCommitment) < 0",
+      label: "Android lineage key package binding branch",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-lineage-witness-availability-probe":',
+      end: 'if mode == "--negative-control-jvm-lineage-witness-append-availability-probe":',
+      marker: "Kotlin JVM SDK native availability probes missing nativeLineageWitnessFromInitResult(probe, probe)",
+      label: "Kotlin lineage witness availability branch",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-lineage-witness-append-availability-probe":',
+      end: 'if mode == "--negative-control-android-lineage-witness-availability-probe":',
+      marker: "Kotlin JVM SDK native availability probes missing nativeLineageWitnessAppendResult(probe, probe, probe)",
+      label: "Kotlin lineage witness append availability branch",
+    },
+    {
+      start: 'if mode == "--negative-control-android-lineage-witness-availability-probe":',
+      end: 'if mode == "--negative-control-android-lineage-witness-append-availability-probe":',
+      marker: "Android Java SDK native availability probes missing nativeLineageWitnessFromInitResult(probe, probe)",
+      label: "Android lineage witness availability branch",
+    },
+    {
+      start: 'if mode == "--negative-control-android-lineage-witness-append-availability-probe":',
+      end: 'if mode == "--negative-control-jvm-android-hop-evidence-shape":',
+      marker: "Android Java SDK native availability probes missing nativeLineageWitnessAppendResult(probe, probe, probe)",
+      label: "Android lineage witness append availability branch",
+    },
+    {
+      start: 'if mode == "--negative-control-jvm-pallas-builder-input-guards":',
+      end: 'if mode == "--negative-control-non-csharp-pallas-builder-input-guards":',
+      marker: "Kotlin recursive spend input Norito guard tests missing previousBundleArchive must be a valid Norito archive",
+      label: "JVM Pallas builder input branch",
+    },
+    {
+      start: 'if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":',
+      end: 'if mode == "--negative-control-offline-doc-localnet-lifecycle-release-evidence":',
+      marker: "offline Kagemusha docs missing native-owned accumulator boundary:",
+      label: "offline Kagemusha accumulator doc branch",
+    },
+    {
+      start: 'if mode == "--negative-control-offline-doc-instruction-transaction-surface":',
+      end: 'if mode == "--negative-control-sdk-proof-chain-accumulator-input":',
+      marker: "offline Kagemusha docs missing all-SDK instruction transaction boundary:",
+      label: "offline Kagemusha instruction transaction doc branch",
+    },
+  ]) {
+    const branch = guard.slice(guard.indexOf(start), guard.indexOf(end));
+    assert.match(
+      branch,
+      new RegExp(
+        `expected_labels\\s*=\\s*\\([\\s\\S]*?${escapeRegExp(marker)}[\\s\\S]*?missing\\s*=\\s*\\[label for label in expected_labels if label not in message\\][\\s\\S]*?for detected_message in first_lines_for_labels\\(message, expected_labels\\):[\\s\\S]*?print\\(detected_message\\)`,
+        "u",
+      ),
+      `${label} must require expected_labels and print exact diagnostics`,
     );
   }
   const pythonRecursiveCompactProbeArityExactLabelBranch = guard.slice(
@@ -14937,8 +16199,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     offlineDocAccumulatorBranch,
-    /previous recursive proof bytes and per-hop[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?SDKs must not derive, supply[\s\S]*?accumulator state themselves[\s\S]*?SDKs supply accumulator digests as optional metadata[\s\S]*?run_checks\(mutated\)/u,
-    "offline Kagemusha doc accumulator negative control must mutate the native-owned accumulator boundary",
+    /previous recursive proof bytes and per-hop[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?SDKs must not derive, supply[\s\S]*?accumulator state themselves[\s\S]*?SDKs supply accumulator digests as optional metadata[\s\S]*?generic proof-state[\s\S]*?proofState[\s\S]*?ProofState[\s\S]*?proof_state[\s\S]*?recursive\/lineage proof-state[\s\S]*?aggregation-transcript[\s\S]*?fixed-window[\s\S]*?verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive[\s\S]*?verifier scalar-projection[\s\S]*?previous\/resulting accumulator aliases[\s\S]*?native-owned accumulator bytes[\s\S]*?proof-state and native material aliases may be SDK metadata[\s\S]*?run_checks\(mutated\)/u,
+    "offline Kagemusha doc accumulator negative control must mutate the native-owned accumulator and proof-state boundaries",
+  );
+  assert.match(
+    offlineDocAccumulatorBranch,
+    /expected_labels\s*=\s*\([\s\S]*?native-owned accumulator digests[\s\S]*?generic proof-state \(`proofState`, `ProofState`, `proof_state`\)[\s\S]*?previous\/resulting accumulator aliases as native-owned accumulator bytes[\s\S]*?\)/u,
+    "offline Kagemusha doc accumulator negative control must require the generic proof-state and material-alias doc markers",
   );
   assert.match(
     offlineDocAccumulatorBranch,
@@ -15151,6 +16418,31 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorMaterialInputBranch,
+    /recursiveSnapshot[\s\S]*?lineageSnapshot[\s\S]*?recursive_snapshot[\s\S]*?lineage_snapshot/u,
+    "SDK accumulator material input negative control must inject recursive and lineage snapshot aliases",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /proofState[\s\S]*?ProofStateBytes[\s\S]*?proof_state/u,
+    "SDK accumulator material input negative control must inject generic proof-state aliases",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /expected_snapshot_alias_labels\s*=\s*\([\s\S]*?\\b\[A-Za-z0-9_\]\*recursiveSnapshot[\s\S]*?\\b\[A-Za-z0-9_\]\*lineageSnapshot[\s\S]*?\\b\[A-Za-z0-9_\]\*recursive_snapshot[\s\S]*?\\b\[A-Za-z0-9_\]\*lineage_snapshot/u,
+    "SDK accumulator material input negative control must require exact snapshot-alias scanner diagnostics",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /expected_proof_state_alias_labels\s*=\s*\([\s\S]*?\\b\[A-Za-z0-9_\]\*proofState[\s\S]*?\\b\[A-Za-z0-9_\]\*ProofState[\s\S]*?\\b\[A-Za-z0-9_\]\*proof_state/u,
+    "SDK accumulator material input negative control must require exact generic proof-state scanner diagnostics",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /expected_messages\s*=\s*\([\s\S]*?tuple\(expected_labels\)[\s\S]*?\+\s*expected_snapshot_alias_labels[\s\S]*?\+\s*expected_proof_state_alias_labels[\s\S]*?\)[\s\S]*?missing\s*=\s*\[label for label in expected_messages if label not in message\]/u,
+    "SDK accumulator material input negative control must check snapshot and proof-state aliases in addition to surface labels",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
     /IrohaSwift\/Sources\/IrohaSwift\/NativeBridge\.swift[\s\S]*?WalletRecursiveProofChainBytes[\s\S]*?accumulatorState[\s\S]*?recursiveAccumulatorV1[\s\S]*?RecursiveProofStateBytes[\s\S]*?python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?accumulator_state[\s\S]*?append_accumulator_bytes[\s\S]*?lineage_proof_state[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?WalletRecursiveProofChainBytes[\s\S]*?appendAccumulator[\s\S]*?lineageProofState/u,
     "SDK accumulator material input negative control must cover secondary Swift, Python root, and JS dist surfaces",
   );
@@ -15161,8 +16453,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorMaterialInputBranch,
-    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
-    "SDK accumulator material input negative control must print diagnostics for every mutated surface",
+    /for detected_message in first_lines_for_labels\(message, expected_messages\):[\s\S]*?print\(detected_message\)/u,
+    "SDK accumulator material input negative control must print diagnostics for every mutated surface, snapshot alias, and proof-state alias",
   );
   assert.match(
     sdkAccumulatorMaterialInputBranch,
@@ -15539,7 +16831,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkCurrentNoteAmountTrailingFieldVectorBranch,
-    /current-note amount trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
+    /current-note-amount-trailing-field[\s\S]*?numericPayloadWithTrailingField/u,
     "SDK current-note amount trailing-field vector negative control must keep trailing-field labels visible",
   );
   assert.match(
@@ -15951,7 +17243,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkRedeemChangeOutputFixed32Branch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
   );
   assert.match(
     sdkRedeemChangeOutputFixed32Branch,
@@ -16378,8 +17670,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAppendPreviousLineageRecordParsePreflightBranch,
-    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?malformedPreviousLineageRecordAfterOpenings[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?malformedPreviousLineageRecordAfterOpenings/u,
-    "SDK append previous-lineage parse preflight negative control must mutate JS and Python combined malformed-record regressions",
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?malformedPreviousLineageRecordAfterOpenings[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?malformedPreviousLineageRecordAfterOpeningsPackageDist[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?malformedPreviousLineageRecordAfterOpenings/u,
+    "SDK append previous-lineage parse preflight negative control must mutate JS, package-dist, and Python combined malformed-record regressions",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /JavaScript package dist previous-lineage record parse ordering tests[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "SDK append previous-lineage parse preflight negative control must require the package-dist diagnostic",
   );
   assert.doesNotMatch(
     sdkAppendPreviousLineageRecordParsePreflightBranch,
@@ -16627,7 +17924,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     rustKagemushaHopPublicInstanceShapeBranch,
-    /expected\s*=\s*\([\s\S]*?Rust Kagemusha hop public-instance shape missing[\s\S]*?ensure_kagemusha_confidential_v2_public_instance_shape\(&instance_columns\)\?;[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    /expected_labels\s*=\s*\([\s\S]*?Rust Kagemusha hop public-instance shape missing[\s\S]*?ensure_kagemusha_confidential_v2_public_instance_shape\(&instance_columns\)\?;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "Rust Kagemusha hop public-instance shape negative control must require the exact missing enforcement diagnostic",
   );
   assert.match(
@@ -16651,7 +17948,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     rustKagemushaFoldRootTransitionBranch,
-    /expected\s*=\s*\([\s\S]*?Rust Kagemusha fold root-transition preflight missing[\s\S]*?if step\.root_before == step\.root_after[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
+    /expected_labels\s*=\s*\([\s\S]*?Rust Kagemusha fold root-transition preflight missing[\s\S]*?if step\.root_before == step\.root_after[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "Rust Kagemusha fold root-transition negative control must require the exact missing preflight diagnostic",
   );
   assert.match(
@@ -16816,7 +18113,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRecursiveCompactKeyPackageDispatchBranch,
-    /expected\s*=\s*\([\s\S]*?JavaScript package dist recursive compact key-package dispatch coverage missing[\s\S]*?package dist Kagemusha recursive compact requires key packages before native dispatch[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist recursive compact key-package dispatch coverage missing[\s\S]*?package dist Kagemusha recursive compact requires key packages before native dispatch[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS recursive compact key-package dispatch negative control must require the exact missing test marker",
   );
   assert.match(
@@ -16845,7 +18142,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistRecursiveCompactDeclarationsBranch,
-    /expected\s*=\s*\([\s\S]*?JavaScript package dist recursive compact declaration coverage missing[\s\S]*?package declarations expose recursive compact key-package signatures[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist recursive compact declaration coverage missing[\s\S]*?package declarations expose recursive compact key-package signatures[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist recursive compact declarations negative control must require the exact missing test marker",
   );
   assert.match(
@@ -16874,7 +18171,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorDigestDeclarationsBranch,
-    /expected\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?package declarations keep accumulator digests native-owned[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?package declarations keep accumulator digests native-owned[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist accumulator digest declarations negative control must require the exact missing test marker",
   );
   assert.match(
@@ -16918,8 +18215,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     digestExactSelfCheckScanner,
-    /"ProofChainDigestBytes",[\s\S]*?"terminalAccumulatorDigest",[\s\S]*?"walletRecursiveProofChainDigest",/u,
-    "JS package dist digest exact self-check scanner must pin quoted ambiguous digest entries",
+    /"lineageDigestV1",[\s\S]*?"aggregationTranscriptDigestV1",[\s\S]*?"fixedWindowTableScheduleDigestV1",[\s\S]*?"fixedWindowSharedTableManifestDigestV1",[\s\S]*?"fixedWindowTableBaseDigestV1",[\s\S]*?"verifierWitnessBatchDigestV1",[\s\S]*?"recursiveProofChainDigestV1",[\s\S]*?"ProofChainDigestBytes",[\s\S]*?"transitionProfileBindingDigestV1",[\s\S]*?"appendOpeningPreflightDigestV1",[\s\S]*?"appendBoundaryDigestV1",[\s\S]*?"recursiveVerifierScalarProjectionDigestV1",[\s\S]*?"previousAccumulatorDigestV1",[\s\S]*?"resultingAccumulatorDigestV1",[\s\S]*?"terminalAccumulatorDigest",[\s\S]*?"walletRecursiveProofChainDigest",[\s\S]*?"accumulatorDigestV1",/u,
+    "JS package dist digest exact self-check scanner must pin quoted digest entries for every family",
   );
   const jsPackageDistAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-digest-denylist":'),
@@ -16965,8 +18262,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
-    /"ProofChainDigestBytes",[\s\S]*?"terminalAccumulatorDigest",[\s\S]*?"walletRecursiveProofChainDigest",/u,
-    "JS package dist accumulator digest self-check exactness negative control must mutate ambiguous quoted entries",
+    /"lineageDigestV1",[\s\S]*?"aggregationTranscriptDigestV1",[\s\S]*?"fixedWindowTableScheduleDigestV1",[\s\S]*?"fixedWindowSharedTableManifestDigestV1",[\s\S]*?"fixedWindowTableBaseDigestV1",[\s\S]*?"verifierWitnessBatchDigestV1",[\s\S]*?"recursiveProofChainDigestV1",[\s\S]*?"ProofChainDigestBytes",[\s\S]*?"transitionProfileBindingDigestV1",[\s\S]*?"appendOpeningPreflightDigestV1",[\s\S]*?"appendBoundaryDigestV1",[\s\S]*?"recursiveVerifierScalarProjectionDigestV1",[\s\S]*?"previousAccumulatorDigestV1",[\s\S]*?"resultingAccumulatorDigestV1",[\s\S]*?"terminalAccumulatorDigest",[\s\S]*?"walletRecursiveProofChainDigest",[\s\S]*?"accumulatorDigestV1",/u,
+    "JS package dist accumulator digest self-check exactness negative control must mutate every quoted digest family",
   );
   assert.match(
     jsPackageDistAccumulatorDigestSelfCheckExactnessBranch,
@@ -17035,8 +18332,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorMaterialDenylistBranch,
-    /lineageAccumulator\|LineageAccumulator\|lineage_accumulator\|[\s\S]*?recursiveProofChain\|RecursiveProofChain\|recursive_proof_chain\|[\s\S]*?proofChain\|ProofChain\|proof_chain\|[\s\S]*?appendAccumulator\|AppendAccumulator\|append_accumulator\|[\s\S]*?recursiveAccumulator\|RecursiveAccumulator\|recursive_accumulator\|[\s\S]*?terminalAccumulator\|TerminalAccumulator\|terminal_accumulator\|[\s\S]*?walletRecursiveProofChain\|WalletRecursiveProofChain\|wallet_recursive_proof_chain\|[\s\S]*?accumulatorSnapshot\|AccumulatorSnapshot\|accumulator_snapshot\|[\s\S]*?recursiveProofState\|RecursiveProofState\|recursive_proof_state\|[\s\S]*?lineageProofState\|LineageProofState\|lineage_proof_state\|[\s\S]*?accumulatorState\|AccumulatorState\|accumulator_state/u,
+    /lineageAccumulator\|LineageAccumulator\|lineage_accumulator\|[\s\S]*?recursiveProofChain\|RecursiveProofChain\|recursive_proof_chain\|[\s\S]*?proofChain\|ProofChain\|proof_chain\|[\s\S]*?appendAccumulator\|AppendAccumulator\|append_accumulator\|[\s\S]*?recursiveAccumulator\|RecursiveAccumulator\|recursive_accumulator\|[\s\S]*?terminalAccumulator\|TerminalAccumulator\|terminal_accumulator\|[\s\S]*?walletRecursiveProofChain\|WalletRecursiveProofChain\|wallet_recursive_proof_chain\|[\s\S]*?accumulatorSnapshot\|AccumulatorSnapshot\|accumulator_snapshot\|[\s\S]*?recursiveSnapshot\|RecursiveSnapshot\|recursive_snapshot\|[\s\S]*?lineageSnapshot\|LineageSnapshot\|lineage_snapshot\|[\s\S]*?proofState\|ProofState\|proof_state\|[\s\S]*?recursiveProofState\|RecursiveProofState\|recursive_proof_state\|[\s\S]*?lineageProofState\|LineageProofState\|lineage_proof_state\|[\s\S]*?accumulatorState\|AccumulatorState\|accumulator_state/u,
     "JS package dist accumulator material denylist negative control must cover representative material token groups",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /aggregationTranscript\|AggregationTranscript\|aggregation_transcript\|[\s\S]*?fixedWindowTableSchedule\|FixedWindowTableSchedule\|fixed_window_table_schedule\|[\s\S]*?fixedWindowSharedTableManifest\|FixedWindowSharedTableManifest\|fixed_window_shared_table_manifest\|[\s\S]*?fixedWindowTableBase\|FixedWindowTableBase\|fixed_window_table_base\|[\s\S]*?verifierWitnessBatch\|VerifierWitnessBatch\|verifier_witness_batch\|[\s\S]*?transitionProfileBinding\|TransitionProfileBinding\|transition_profile_binding\|[\s\S]*?appendOpeningPreflight\|AppendOpeningPreflight\|append_opening_preflight\|[\s\S]*?recursiveVerifierScalarProjection\|RecursiveVerifierScalarProjection\|recursive_verifier_scalar_projection\|[\s\S]*?previousAccumulator\|PreviousAccumulator\|previous_accumulator\|[\s\S]*?resultingAccumulator\|ResultingAccumulator\|resulting_accumulator\|/u,
+    "JS package dist accumulator material denylist negative control must cover non-digest accumulator material token groups",
   );
   assert.ok(
     guard.includes("JavaScript package dist accumulator material declaration coverage"),
@@ -17073,8 +18375,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     materialExactSelfCheckScanner,
-    /"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"proofChain",[\s\S]*?"accumulatorSnapshot",/u,
-    "JS package dist material exact self-check scanner must pin quoted ambiguous material entries",
+    /"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"recursiveProofChainBytes",[\s\S]*?"proofChain",[\s\S]*?"appendAccumulator",[\s\S]*?"recursiveAccumulator",[\s\S]*?"lineageAccumulatorState",[\s\S]*?"accumulatorSnapshot",[\s\S]*?"recursiveSnapshot",[\s\S]*?"lineageSnapshot",[\s\S]*?"proofState",[\s\S]*?"recursiveProofState",[\s\S]*?"lineageProofState",[\s\S]*?"accumulatorState",/u,
+    "JS package dist material exact self-check scanner must pin quoted material entries for every family",
+  );
+  assert.match(
+    materialExactSelfCheckScanner,
+    /"aggregationTranscript",[\s\S]*?"fixedWindowTableSchedule",[\s\S]*?"fixedWindowSharedTableManifest",[\s\S]*?"fixedWindowTableBase",[\s\S]*?"verifierWitnessBatch",[\s\S]*?"transitionProfileBinding",[\s\S]*?"appendOpeningPreflight",[\s\S]*?"recursiveVerifierScalarProjection",[\s\S]*?"previousAccumulator",[\s\S]*?"resultingAccumulator",/u,
+    "JS package dist material exact self-check scanner must pin non-digest accumulator material entries",
   );
   assert.match(
     jsPackageDistAccumulatorMaterialDenylistBranch,
@@ -17109,8 +18416,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
-    /"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"proofChain",[\s\S]*?"accumulatorSnapshot",/u,
-    "JS package dist accumulator material self-check exactness negative control must mutate ambiguous quoted entries",
+    /"lineageAccumulatorState",[\s\S]*?"recursiveProofChainBytes",[\s\S]*?"terminalAccumulator",[\s\S]*?"walletRecursiveProofChain",[\s\S]*?"proofChain",[\s\S]*?"appendAccumulator",[\s\S]*?"recursiveAccumulator",[\s\S]*?"accumulatorSnapshot",[\s\S]*?"recursiveSnapshot",[\s\S]*?"lineageSnapshot",[\s\S]*?"proofState",[\s\S]*?"recursiveProofState",[\s\S]*?"lineageProofState",[\s\S]*?"accumulatorState",/u,
+    "JS package dist accumulator material self-check exactness negative control must mutate every quoted material family",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
+    /"aggregationTranscript",[\s\S]*?"fixedWindowTableSchedule",[\s\S]*?"fixedWindowSharedTableManifest",[\s\S]*?"fixedWindowTableBase",[\s\S]*?"verifierWitnessBatch",[\s\S]*?"transitionProfileBinding",[\s\S]*?"appendOpeningPreflight",[\s\S]*?"recursiveVerifierScalarProjection",[\s\S]*?"previousAccumulator",[\s\S]*?"resultingAccumulator",/u,
+    "JS package dist accumulator material self-check exactness negative control must mutate every non-digest accumulator material family",
   );
   assert.match(
     jsPackageDistAccumulatorMaterialSelfCheckExactnessBranch,
@@ -17148,7 +18460,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistPrefixedAccumulatorMaterialDenylistBranch,
-    /JavaScript package dist accumulator material prefix denial missing[\s\S]*?\\b\[A-Za-z0-9_\]\*\(\?:lineageAccumulator[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator material prefix denial missing[\s\S]*?\\b\[A-Za-z0-9_\]\*\(\?:lineageAccumulator[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist prefixed accumulator material denylist negative control must require the exact missing prefix marker",
   );
   assert.match(
@@ -17182,7 +18494,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistSuffixedAccumulatorMaterialDenylistBranch,
-    /JavaScript package dist accumulator material suffix denial contains forbidden pattern[\s\S]*?accumulatorMaterialDeclarationPattern\\s\*=\\s\*\/\[\^\\n\]\*\\\)\\s\*\\\\b\/u[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator material suffix denial contains forbidden pattern[\s\S]*?accumulatorMaterialDeclarationPattern\\s\*=\\s\*\/\[\^\\n\]\*\\\)\\s\*\\\\b\/u[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist suffixed accumulator material denylist negative control must require the exact forbidden suffix regex",
   );
   assert.match(
@@ -17214,7 +18526,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
-    /JavaScript package dist accumulator digest prefix denial missing[\s\S]*?\\b\[A-Za-z0-9_\]\*\(\?:lineageDigest[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest prefix denial missing[\s\S]*?\\b\[A-Za-z0-9_\]\*\(\?:lineageDigest[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist prefixed accumulator digest denylist negative control must require the exact missing prefix marker",
   );
   assert.match(
@@ -17248,7 +18560,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
-    /JavaScript package dist accumulator digest suffix denial contains forbidden pattern[\s\S]*?accumulatorDigestDeclarationPattern\\s\*=\\s\*\/\[\^\\n\]\*\\\)\\s\*\\\\b\/u[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest suffix denial contains forbidden pattern[\s\S]*?accumulatorDigestDeclarationPattern\\s\*=\\s\*\/\[\^\\n\]\*\\\)\\s\*\\\\b\/u[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist suffixed accumulator digest denylist negative control must require the exact forbidden suffix regex",
   );
   assert.match(
@@ -17277,7 +18589,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistDeclarationSweepBranch,
-    /JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?connect\.browser\.d\.ts[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?connect\.browser\.d\.ts[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist declaration sweep negative control must require the exact missing declaration file marker",
   );
   assert.match(
@@ -17306,7 +18618,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistNexusDeclarationSweepBranch,
-    /JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?nexus-app\.d\.ts[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?nexus-app\.d\.ts[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist Nexus declaration sweep negative control must require the exact missing declaration file marker",
   );
   assert.match(
@@ -17335,7 +18647,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsPackageDistKotodamaDeclarationSweepBranch,
-    /JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?kotodama-compiler\.d\.ts[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript package dist accumulator digest declaration coverage missing[\s\S]*?kotodama-compiler\.d\.ts[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS package dist Kotodama declaration sweep negative control must require the exact missing declaration file marker",
   );
   assert.match(
@@ -17466,7 +18778,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsCompactProjectionBlockHeightValidationBranch,
-    /JavaScript recursive spend compact projection gate missing[\s\S]*?const checkedBlockHeight = normalizeKagemushaBlockHeight\(blockHeight\);[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript recursive spend compact projection gate missing[\s\S]*?const checkedBlockHeight = normalizeKagemushaBlockHeight\(blockHeight\);[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "JS compact projection block-height negative control must require the exact missing normalization marker",
   );
   assert.match(
@@ -17485,7 +18797,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRecursiveSpendCompactProjectionRootExportBranch,
-    /python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?method\s*=\s*"kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"[\s\S]*?replace\(f'    "\{method\}",\\n'/u,
+    /python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?method\s*=\s*"kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"[\s\S]*?replacements\s*=\s*\([\s\S]*?f'    "\{method\}",\\n'[\s\S]*?f"        \{method\},\\n"[\s\S]*?for needle in replacements:[\s\S]*?next_mutated = mutated\.replace\(needle, "", 1\)[\s\S]*?if next_mutated == mutated:/u,
     "Python recursive spend compact projection root export negative control must remove the at-height root export",
   );
   assert.match(
@@ -17495,7 +18807,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRecursiveSpendCompactProjectionRootExportBranch,
-    /Python package recursive spend compact projection re-exports missing[\s\S]*?\+ method[\s\S]*?if expected not in message/u,
+    /expected_labels\s*=\s*\([\s\S]*?Python package recursive spend compact projection re-exports missing[\s\S]*?\+ method[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "Python recursive spend compact projection root export negative control must require the exact missing export marker",
   );
   assert.match(
@@ -18999,6 +20311,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftKagemushaNativeOutputCapBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact bridge verifier probe missing guard length <= CUnsignedLong\(KagemushaRecursiveSpendProver\.nativeArchiveMaxBytes\)[\s\S]*?Swift recursive compact verifier tests missing testNativeBridgeRejectsOversizedKagemushaOutputBeforeCopying[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift Kagemusha native output cap negative control must require both source and test diagnostics",
+  );
+  assert.match(
+    swiftKagemushaNativeOutputCapBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift Kagemusha native output cap negative control must print each detected diagnostic",
+  );
+  assert.match(
+    swiftKagemushaNativeOutputCapBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift Kagemusha native output cap drift was not detected"\)/u,
     "Swift Kagemusha native output cap negative control must only pass after detecting injected drift",
   );
@@ -19091,6 +20413,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftInstructionTransactionBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem\([\s\S]*?Swift Kagemusha instruction transaction builder tests missing testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift instruction transaction builder negative control must require source and test diagnostics",
+  );
+  assert.match(
+    swiftInstructionTransactionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift instruction transaction builder negative control must print both detected diagnostics",
+  );
+  assert.match(
+    swiftInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
     "Swift instruction transaction builder negative control must only pass after detecting injected drift",
   );
@@ -19105,8 +20437,36 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNoteAmountVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?"0007"[\s\S]*?"7"[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Swift note amount vector negative control must mutate a padded decimal vector and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?for amount in \[[\s\S]*?""[\s\S]*?Self\.u128MaxPlusOne[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?"13"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift note amount vector negative control must mutate the whole shared amount loop and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    swiftNoteAmountVectorBranch,
+    [
+      'Swift typed recursive spend note amount test vectors missing ""',
+      'Swift typed recursive spend note amount test vectors missing "0"',
+      'Swift typed recursive spend note amount test vectors missing "00"',
+      'Swift typed recursive spend note amount test vectors missing "01"',
+      'Swift typed recursive spend note amount test vectors missing "0007"',
+      'Swift typed recursive spend note amount test vectors missing "-1"',
+      'Swift typed recursive spend note amount test vectors missing "+1"',
+      'Swift typed recursive spend note amount test vectors missing "1.0"',
+      'Swift typed recursive spend note amount test vectors missing "1e3"',
+      'Swift typed recursive spend note amount test vectors missing "7 "',
+      'Swift typed recursive spend note amount test vectors missing " 7"',
+      "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
+      'Swift typed recursive spend public amount test vectors missing "00"',
+      'Swift typed recursive spend public amount test vectors missing "01"',
+      'Swift typed recursive spend public amount test vectors missing "0007"',
+      'Swift typed recursive spend public amount test vectors missing "-1"',
+      'Swift typed recursive spend public amount test vectors missing "+1"',
+      'Swift typed recursive spend public amount test vectors missing "1.0"',
+      'Swift typed recursive spend public amount test vectors missing "1e3"',
+      'Swift typed recursive spend public amount test vectors missing "7 "',
+      'Swift typed recursive spend public amount test vectors missing " 7"',
+      "Swift typed recursive spend public amount test vectors missing Self.u128MaxPlusOne",
+    ],
+    "Swift note amount vector negative control must require exact shared-loop diagnostics",
   );
   assertContainsAll(
     guard,
@@ -19130,8 +20490,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNoteAmountVectorBranch,
-    /expected\s*=\s*'Swift typed recursive spend note amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "Swift note amount vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?Swift typed recursive spend note amount test vectors missing ""[\s\S]*?Swift typed recursive spend public amount test vectors missing Self\.u128MaxPlusOne[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "Swift note amount vector negative control must require every exact shared-loop diagnostic",
   );
   assert.match(
     swiftNoteAmountVectorBranch,
@@ -19149,8 +20509,36 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftRedeemPublicAmountVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?"0007"[\s\S]*?"7"[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Swift publicAmount vector negative control must mutate a padded decimal vector and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?for amount in \[[\s\S]*?""[\s\S]*?Self\.u128MaxPlusOne[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?"13"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift publicAmount vector negative control must mutate the whole shared amount loop and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    swiftRedeemPublicAmountVectorBranch,
+    [
+      'Swift typed recursive spend note amount test vectors missing ""',
+      'Swift typed recursive spend note amount test vectors missing "0"',
+      'Swift typed recursive spend note amount test vectors missing "00"',
+      'Swift typed recursive spend note amount test vectors missing "01"',
+      'Swift typed recursive spend note amount test vectors missing "0007"',
+      'Swift typed recursive spend note amount test vectors missing "-1"',
+      'Swift typed recursive spend note amount test vectors missing "+1"',
+      'Swift typed recursive spend note amount test vectors missing "1.0"',
+      'Swift typed recursive spend note amount test vectors missing "1e3"',
+      'Swift typed recursive spend note amount test vectors missing "7 "',
+      'Swift typed recursive spend note amount test vectors missing " 7"',
+      "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
+      'Swift typed recursive spend public amount test vectors missing "00"',
+      'Swift typed recursive spend public amount test vectors missing "01"',
+      'Swift typed recursive spend public amount test vectors missing "0007"',
+      'Swift typed recursive spend public amount test vectors missing "-1"',
+      'Swift typed recursive spend public amount test vectors missing "+1"',
+      'Swift typed recursive spend public amount test vectors missing "1.0"',
+      'Swift typed recursive spend public amount test vectors missing "1e3"',
+      'Swift typed recursive spend public amount test vectors missing "7 "',
+      'Swift typed recursive spend public amount test vectors missing " 7"',
+      "Swift typed recursive spend public amount test vectors missing Self.u128MaxPlusOne",
+    ],
+    "Swift publicAmount vector negative control must require exact shared-loop diagnostics",
   );
   assertContainsAll(
     guard,
@@ -19171,8 +20559,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftRedeemPublicAmountVectorBranch,
-    /expected\s*=\s*'Swift typed recursive spend public amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "Swift publicAmount vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?Swift typed recursive spend note amount test vectors missing ""[\s\S]*?Swift typed recursive spend public amount test vectors missing Self\.u128MaxPlusOne[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "Swift publicAmount vector negative control must require every exact shared-loop diagnostic",
   );
   assert.match(
     swiftRedeemPublicAmountVectorBranch,
@@ -19224,6 +20612,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNfcReceiveSuccessBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift NFC receive\/send success runtime wiring missing hasSuccessState: didPublishReceiveSuccess \|\| didComplete[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift NFC receive success preservation negative control must require the exact receive-success diagnostic",
+  );
+  assert.match(
+    swiftNfcReceiveSuccessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift NFC receive success preservation negative control must print the exact diagnostic",
+  );
+  assert.match(
+    swiftNfcReceiveSuccessBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC receive success preservation drift was not detected"\)/u,
     "Swift NFC receive success preservation negative control must only pass after detecting injected drift",
   );
@@ -19245,6 +20643,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftNfcAckSingleSuccessBranch,
     /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
     "Swift NFC receipt ACK single-success negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcAckSingleSuccessBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift NFC receive\/send success runtime wiring missing let shouldNotifyReceiptAckReady = markReceiptAckReady\(\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift NFC receipt ACK single-success negative control must require the exact ACK-ready diagnostic",
+  );
+  assert.match(
+    swiftNfcAckSingleSuccessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift NFC receipt ACK single-success negative control must print the exact diagnostic",
   );
   assert.match(
     swiftNfcAckSingleSuccessBranch,
@@ -19272,6 +20680,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNfcAckReadSingleSuccessBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift NFC receive\/send success runtime wiring missing shouldPublishReceiveSuccessOnAckRead\([\s\S]*?Swift NFC receive ACK-read single-success state transition missing pattern private func markReceiptAckReadComplete[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift NFC receipt ACK-read single-success negative control must require the runtime and exact state-transition diagnostics",
+  );
+  assert.match(
+    swiftNfcAckReadSingleSuccessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift NFC receipt ACK-read single-success negative control must print both exact diagnostics",
+  );
+  assert.match(
+    swiftNfcAckReadSingleSuccessBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC receipt ACK-read single-success drift was not detected"\)/u,
     "Swift NFC receipt ACK-read single-success negative control must only pass after detecting injected drift",
   );
@@ -19293,6 +20711,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftNfcEmulationProgressBranch,
     /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
     "Swift NFC emulation progress-after-success negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcEmulationProgressBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift NFC receive emulation progress suppression after success missing pattern private func notifyEmulationStarted[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift NFC emulation progress-after-success negative control must require the exact progress-suppression diagnostic",
+  );
+  assert.match(
+    swiftNfcEmulationProgressBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift NFC emulation progress-after-success negative control must print the exact diagnostic",
   );
   assert.match(
     swiftNfcEmulationProgressBranch,
@@ -19320,6 +20748,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftNfcSendTerminalSuccessBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift NFC send progress terminal-success gate missing pattern private func log[\s\S]*?hasTerminalSuccess:\\s\*hasTerminalSendSuccess[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift NFC send terminal-success negative control must require the exact terminal-success diagnostic",
+  );
+  assert.match(
+    swiftNfcSendTerminalSuccessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift NFC send terminal-success negative control must print the exact diagnostic",
+  );
+  assert.match(
+    swiftNfcSendTerminalSuccessBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC send terminal-success policy drift was not detected"\)/u,
     "Swift NFC send terminal-success negative control must only pass after detecting injected drift",
   );
@@ -19344,6 +20782,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsInstructionTransactionBranch,
+    /expected_labels\s*=\s*\([\s\S]*?javascript\/iroha_js\/src\/transaction\.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction[\s\S]*?JavaScript Kagemusha instruction transaction builder tests missing buildKagemushaRecursiveRedeemTransaction derives instruction before signing[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS instruction transaction builder negative control must require source and test diagnostics",
+  );
+  assert.match(
+    jsInstructionTransactionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS instruction transaction builder negative control must print both detected diagnostics",
+  );
+  assert.match(
+    jsInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
     "JS instruction transaction builder negative control must only pass after detecting injected drift",
   );
@@ -19358,15 +20806,53 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsNoteAmountVectorBranch,
-    /invalidPositiveU128Amounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
-    "JS note amount vector negative control must mutate the invalidPositiveU128Amounts array and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?invalidPositiveU128Amounts[\s\S]*?""[\s\S]*?String\(1n << 128n\)[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?String\(1n << 127n\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS note amount vector negative control must mutate the whole invalidPositiveU128Amounts array and validate the mutated text snapshot",
+  );
+  assert.match(
+    jsNoteAmountVectorBranch,
+    /package_target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?packageDistInvalidPositiveU128Amounts[\s\S]*?""[\s\S]*?String\(1n << 128n\)[\s\S]*?updated_package[\s\S]*?mutated\[package_target\]\s*=\s*updated_package/u,
+    "JS note amount vector negative control must also mutate the package-dist invalid amount array",
+  );
+  assertContainsAll(
+    jsNoteAmountVectorBranch,
+    [
+      'JavaScript typed recursive spend note amount test vectors missing ""',
+      'JavaScript typed recursive spend note amount test vectors missing "0"',
+      'JavaScript typed recursive spend note amount test vectors missing "00"',
+      'JavaScript typed recursive spend note amount test vectors missing "01"',
+      'JavaScript typed recursive spend note amount test vectors missing "0007"',
+      'JavaScript typed recursive spend note amount test vectors missing "-1"',
+      'JavaScript typed recursive spend note amount test vectors missing "+1"',
+      'JavaScript typed recursive spend note amount test vectors missing "1.0"',
+      'JavaScript typed recursive spend note amount test vectors missing "1e3"',
+      'JavaScript typed recursive spend note amount test vectors missing "7 "',
+      'JavaScript typed recursive spend note amount test vectors missing " 7"',
+      "JavaScript typed recursive spend note amount test vectors missing String(1n << 128n)",
+      'JavaScript package dist recursive spend note amount vector coverage missing ""',
+      'JavaScript package dist recursive spend note amount vector coverage missing "0"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "00"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "01"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "0007"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "-1"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "+1"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "1.0"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "1e3"',
+      'JavaScript package dist recursive spend note amount vector coverage missing "7 "',
+      'JavaScript package dist recursive spend note amount vector coverage missing " 7"',
+      "JavaScript package dist recursive spend note amount vector coverage missing String(1n << 128n)",
+    ],
+    "JS note amount vector negative control must require every exact missing amount vector diagnostic",
   );
   assertContainsAll(
     guard,
     [
       "JavaScript typed recursive spend note amount test vectors",
+      "JavaScript package dist recursive spend note amount vector coverage",
       "require_block_contains",
       "invalidPositiveU128Amounts",
+      "packageDistInvalidPositiveU128Amounts",
+      "buildKagemushaRecursiveSpendableNoteDescriptor",
       '""',
       '"0"',
       '"00"',
@@ -19384,8 +20870,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsNoteAmountVectorBranch,
-    /expected\s*=\s*'JavaScript typed recursive spend note amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "JS note amount vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript typed recursive spend note amount test vectors missing ""[\s\S]*?JavaScript typed recursive spend note amount test vectors missing String\(1n << 128n\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "JS note amount vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
     jsNoteAmountVectorBranch,
@@ -19403,15 +20889,54 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRedeemPublicAmountVectorBranch,
-    /invalidPublicAmounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
-    "JS publicAmount vector negative control must mutate the invalidPublicAmounts array and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?invalidPublicAmounts[\s\S]*?""[\s\S]*?String\(1n << 128n\)[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?String\(1n << 127n\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS publicAmount vector negative control must mutate the whole invalidPublicAmounts array and validate the mutated text snapshot",
+  );
+  assert.match(
+    jsRedeemPublicAmountVectorBranch,
+    /package_target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?packageDistInvalidPublicAmounts[\s\S]*?""[\s\S]*?String\(1n << 128n\)[\s\S]*?updated_package[\s\S]*?mutated\[package_target\]\s*=\s*updated_package/u,
+    "JS publicAmount vector negative control must also mutate the package-dist invalid amount array",
+  );
+  assertContainsAll(
+    jsRedeemPublicAmountVectorBranch,
+    [
+      'JavaScript typed recursive spend public amount test vectors missing ""',
+      'JavaScript typed recursive spend public amount test vectors missing "0"',
+      'JavaScript typed recursive spend public amount test vectors missing "00"',
+      'JavaScript typed recursive spend public amount test vectors missing "01"',
+      'JavaScript typed recursive spend public amount test vectors missing "0007"',
+      'JavaScript typed recursive spend public amount test vectors missing "-1"',
+      'JavaScript typed recursive spend public amount test vectors missing "+1"',
+      'JavaScript typed recursive spend public amount test vectors missing "1.0"',
+      'JavaScript typed recursive spend public amount test vectors missing "1e3"',
+      'JavaScript typed recursive spend public amount test vectors missing "7 "',
+      'JavaScript typed recursive spend public amount test vectors missing " 7"',
+      "JavaScript typed recursive spend public amount test vectors missing String(1n << 128n)",
+      'JavaScript package dist recursive spend public amount vector coverage missing ""',
+      'JavaScript package dist recursive spend public amount vector coverage missing "0"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "00"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "01"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "0007"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "-1"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "+1"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "1.0"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "1e3"',
+      'JavaScript package dist recursive spend public amount vector coverage missing "7 "',
+      'JavaScript package dist recursive spend public amount vector coverage missing " 7"',
+      "JavaScript package dist recursive spend public amount vector coverage missing String(1n << 128n)",
+    ],
+    "JS publicAmount vector negative control must require every exact missing amount vector diagnostic",
   );
   assertContainsAll(
     guard,
     [
       "JavaScript typed recursive spend public amount test vectors",
+      "JavaScript package dist recursive spend public amount vector coverage",
+      "JavaScript package dist recursive spend public amount snake-case coverage",
       "require_block_contains",
       "invalidPublicAmounts",
+      "packageDistInvalidPublicAmounts",
+      'public_amount: "0007"',
       '""',
       '"0"',
       '"00"',
@@ -19429,8 +20954,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRedeemPublicAmountVectorBranch,
-    /expected\s*=\s*'JavaScript typed recursive spend public amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "JS publicAmount vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript typed recursive spend public amount test vectors missing ""[\s\S]*?JavaScript typed recursive spend public amount test vectors missing String\(1n << 128n\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "JS publicAmount vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
     jsRedeemPublicAmountVectorBranch,
@@ -19444,6 +20969,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsBlockHeightVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-block-height-vectors":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-pallas-opening-vectors":'),
+  );
+  const jsPackageDistPallasOpeningVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-pallas-opening-vectors":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":'),
+  );
+  const jsPackageDistRawLineageKeyVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":'),
     guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
   );
   assertContainsAll(
@@ -19453,11 +20986,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "'    \"7 \",\\n'",
       "'    \" 7\",\\n'",
       "'    \"18446744073709551616\",\\n'",
+      '"    -0,\\n"',
       "mutated[package_target] = updated_package",
       "JavaScript package dist recursive spend blockHeight vector coverage",
       "run_checks(mutated)",
     ],
     "JS blockHeight vector negative control must mutate source and package-dist blockHeight arrays and validate the mutated text snapshot",
+  );
+  assert.match(
+    jsBlockHeightVectorBranch,
+    /expected_labels\s*=\s*\([\s\S]*?JavaScript typed recursive spend blockHeight test vectors missing " 7"[\s\S]*?JavaScript typed recursive spend blockHeight test vectors missing\s+-0,[\s\S]*?JavaScript package dist recursive spend blockHeight vector coverage missing " 7"[\s\S]*?JavaScript package dist recursive spend blockHeight vector coverage missing\s+-0,[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "JS blockHeight vector negative control must require exact missing whitespace and numeric negative-zero diagnostics",
   );
   assert.match(
     jsBlockHeightVectorBranch,
@@ -19473,6 +21012,85 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsBlockHeightVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS blockHeight vector negative control must not unconditionally pass after run_checks",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "JavaScript dist typed recursive spend Pallas preflight tests",
+      "package dist Kagemusha recursive spend typed requests reject malformed Pallas opening archives before native dispatch",
+      "malformedPallasOpenEnvelopes",
+      "malformedPreviousProofOpenEnvelopes",
+      "Buffer.from([1, 2, 3])",
+      'syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72)',
+      "syntheticPallasOpenEnvelopesArchive(2)",
+      "syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false })",
+    ],
+    "SDK parity guard must pin package-dist malformed Pallas opening vector inventory",
+  );
+  assert.match(
+    jsPackageDistPallasOpeningVectorBranch,
+    /target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?includeDomainTag: false[\s\S]*?run_checks\(mutated\)/u,
+    "JS package-dist Pallas opening vector negative control must mutate every malformed Pallas vector and validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistPallasOpeningVectorBranch,
+    /JavaScript dist typed recursive spend Pallas preflight tests missing Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?missing syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(1, \{ includeDomainTag: false \}\)[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS package-dist Pallas opening vector negative control must require every exact missing vector diagnostic",
+  );
+  assert.match(
+    jsPackageDistPallasOpeningVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS package-dist Pallas opening vector negative control must print diagnostics for every mutated vector",
+  );
+  assert.match(
+    jsPackageDistPallasOpeningVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS package-dist Pallas opening vector drift was not detected"\s*\)/u,
+    "JS package-dist Pallas opening vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistPallasOpeningVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package-dist Pallas opening vector negative control must not unconditionally pass after run_checks",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "JavaScript dist typed recursive spend raw lineage key request tests",
+      "package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch",
+      "package dist accepted init raw lineage proving key without verifier key",
+      "package dist accepted init raw lineage verifier key without proving key",
+      "package dist accepted init raw lineage key profile mismatch",
+      "package dist accepted append raw lineage keys without previous proof openings",
+      "package dist accepted append raw lineage proving key without verifier key",
+      "package dist accepted append raw lineage verifier key without proving key",
+      "package dist accepted append raw lineage key profile mismatch",
+    ],
+    "SDK parity guard must pin package-dist raw lineage key vector inventory",
+  );
+  assert.match(
+    jsPackageDistRawLineageKeyVectorBranch,
+    /target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?package dist accepted init raw lineage proving key without verifier key[\s\S]*?package dist accepted init raw lineage verifier key without proving key[\s\S]*?package dist accepted append raw lineage keys without previous proof openings[\s\S]*?run_checks\(mutated\)/u,
+    "JS package-dist raw lineage key vector negative control must mutate every raw lineage vector and validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistRawLineageKeyVectorBranch,
+    /JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage proving key without verifier key[\s\S]*?JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage key profile mismatch[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS package-dist raw lineage key vector negative control must require every exact missing vector diagnostic",
+  );
+  assert.match(
+    jsPackageDistRawLineageKeyVectorBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS package-dist raw lineage key vector negative control must print diagnostics for every mutated vector",
+  );
+  assert.match(
+    jsPackageDistRawLineageKeyVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS package-dist raw lineage key vector drift was not detected"\s*\)/u,
+    "JS package-dist raw lineage key vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistRawLineageKeyVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package-dist raw lineage key vector negative control must not unconditionally pass after run_checks",
   );
   const jsPythonNativeOutputHeaderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
@@ -19614,7 +21232,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     abi7SdkManifestCoverageBranch,
-    /detected_messages\s*=\s*\[\][\s\S]*?expected\s*=\s*f"ABI-7 SDK fixture manifest coverage missing \{target\}: \{needle\}"[\s\S]*?detected_messages\.append\(first_lines_for_labels\(message, \(expected,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    /detected_messages\s*=\s*\[\][\s\S]*?expected\s*=\s*f"ABI-7 SDK fixture manifest coverage missing \{target\}: \{needle\}"[\s\S]*?expected_labels\s*=\s*\(expected,\)[\s\S]*?detected_messages\.append\(first_lines_for_labels\(message, expected_labels\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
     "ABI-7 SDK fixture manifest coverage negative control must print every exact mutated manifest marker",
   );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
@@ -19772,8 +21390,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftConnectBranch,
-    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift Connect parse surface drift was not detected"\)/u,
-    "Swift Connect parse negative control must only pass after detecting injected drift",
+    /expected_labels\s*=\s*\(label,\)[\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)[\s\S]*?finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Swift Connect parse negative control must only pass after detected per-file drift",
   );
   assert.match(
     csharpRunner,
@@ -19888,6 +21506,15 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha Python Connect tests must keep ${requiredPythonConnectTest}`,
     );
   }
+  assertContainsAll(
+    guard,
+    [
+      "Python Connect SID deterministic vector exactness test",
+      "Python Connect preview bootstrap bad-options exactness test",
+      "Python Connect wallet signature confusable algorithm exactness test",
+    ],
+    "Python Connect guard must expose precise labels for each exactness test",
+  );
   const pythonConnectExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-connect-test-exactness":'),
     guard.indexOf('if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":'),
@@ -19899,7 +21526,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonConnectExactnessBranch,
-    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Python Connect exactness test drift was not detected"\)/u,
+    /cases\s*=\s*\([\s\S]*?Python Connect SID deterministic vector exactness test[\s\S]*?Python Connect preview bootstrap bad-options exactness test[\s\S]*?Python Connect wallet signature confusable algorithm exactness test[\s\S]*?for old, new, label in cases:[\s\S]*?mutated = original\.replace\(old, new, 1\)[\s\S]*?if mutated == original:[\s\S]*?unable to mutate Python Connect exactness test/u,
+    "Python Connect exactness negative control must fail if any intended test mutation stops matching",
+  );
+  assert.match(
+    pythonConnectExactnessBranch,
+    /expected_labels\s*=\s*\(label,\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?detected_messages\.append\(f"\{label\}: \{detected_message\}"\)/u,
+    "Python Connect exactness negative control must check and print each exactness label independently",
+  );
+  assert.match(
+    pythonConnectExactnessBranch,
+    /if not detected_messages:[\s\S]*?raise SystemExit\("negative control failed: Python Connect exactness test drift was not detected"\)[\s\S]*?print\("negative control rejected Python Connect exactness test drift"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
     "Python Connect exactness negative control must only pass after detecting injected drift",
   );
   assert.match(
@@ -19932,8 +21569,28 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonBlockHeightVectorBranch,
-    /invalid_block_heights[\s\S]*?" 7"[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Python blockHeight vector negative control must mutate the invalid_block_heights tuple and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?invalid_block_heights[\s\S]*?True,[\s\S]*?"18446744073709551616"[\s\S]*?1 << 64,[\s\S]*?new\s*=\s*\([\s\S]*?None,[\s\S]*?1 << 63,[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python blockHeight vector negative control must mutate the whole invalid_block_heights tuple and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    pythonBlockHeightVectorBranch,
+    [
+      "Python typed recursive spend blockHeight test vectors missing True",
+      "Python typed recursive spend blockHeight test vectors missing False",
+      "Python typed recursive spend blockHeight test vectors missing 1.5",
+      'Python typed recursive spend blockHeight test vectors missing "1"',
+      'Python typed recursive spend blockHeight test vectors missing "00"',
+      'Python typed recursive spend blockHeight test vectors missing "01"',
+      'Python typed recursive spend blockHeight test vectors missing "0007"',
+      'Python typed recursive spend blockHeight test vectors missing "-0"',
+      'Python typed recursive spend blockHeight test vectors missing "+7"',
+      'Python typed recursive spend blockHeight test vectors missing "7 "',
+      'Python typed recursive spend blockHeight test vectors missing " 7"',
+      'Python typed recursive spend blockHeight test vectors missing "18446744073709551616"',
+      "Python typed recursive spend blockHeight test vectors missing -1",
+      "Python typed recursive spend blockHeight test vectors missing 1 << 64",
+    ],
+    "Python blockHeight vector negative control must require every exact missing vector diagnostic",
   );
   assertContainsAll(
     guard,
@@ -19960,8 +21617,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonBlockHeightVectorBranch,
-    /expected\s*=\s*'Python typed recursive spend blockHeight test vectors missing " 7"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "Python blockHeight vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend blockHeight test vectors missing True[\s\S]*?Python typed recursive spend blockHeight test vectors missing 1 << 64[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "Python blockHeight vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
     pythonBlockHeightVectorBranch,
@@ -19979,8 +21636,26 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonNoteAmountVectorBranch,
-    /invalid_amounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Python note amount vector negative control must mutate the invalid_amounts tuple and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?invalid_amounts[\s\S]*?""[\s\S]*?str\(1 << 128\)[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?str\(1 << 127\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python note amount vector negative control must mutate the whole invalid_amounts tuple and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    pythonNoteAmountVectorBranch,
+    [
+      'Python typed recursive spend note amount test vectors missing ""',
+      'Python typed recursive spend note amount test vectors missing "0"',
+      'Python typed recursive spend note amount test vectors missing "00"',
+      'Python typed recursive spend note amount test vectors missing "01"',
+      'Python typed recursive spend note amount test vectors missing "0007"',
+      'Python typed recursive spend note amount test vectors missing "-1"',
+      'Python typed recursive spend note amount test vectors missing "+1"',
+      'Python typed recursive spend note amount test vectors missing "1.0"',
+      'Python typed recursive spend note amount test vectors missing "1e3"',
+      'Python typed recursive spend note amount test vectors missing "7 "',
+      'Python typed recursive spend note amount test vectors missing " 7"',
+      "Python typed recursive spend note amount test vectors missing str(1 << 128)",
+    ],
+    "Python note amount vector negative control must require every exact missing amount vector diagnostic",
   );
   assertContainsAll(
     guard,
@@ -20005,8 +21680,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonNoteAmountVectorBranch,
-    /expected\s*=\s*'Python typed recursive spend note amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "Python note amount vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend note amount test vectors missing ""[\s\S]*?Python typed recursive spend note amount test vectors missing str\(1 << 128\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "Python note amount vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
     pythonNoteAmountVectorBranch,
@@ -20024,8 +21699,26 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRedeemPublicAmountVectorBranch,
-    /invalid_public_amounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Python public_amount vector negative control must mutate the invalid_public_amounts tuple and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?invalid_public_amounts[\s\S]*?""[\s\S]*?str\(1 << 128\)[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?str\(1 << 127\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python public_amount vector negative control must mutate the whole invalid_public_amounts tuple and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    pythonRedeemPublicAmountVectorBranch,
+    [
+      'Python typed recursive spend public amount test vectors missing ""',
+      'Python typed recursive spend public amount test vectors missing "0"',
+      'Python typed recursive spend public amount test vectors missing "00"',
+      'Python typed recursive spend public amount test vectors missing "01"',
+      'Python typed recursive spend public amount test vectors missing "0007"',
+      'Python typed recursive spend public amount test vectors missing "-1"',
+      'Python typed recursive spend public amount test vectors missing "+1"',
+      'Python typed recursive spend public amount test vectors missing "1.0"',
+      'Python typed recursive spend public amount test vectors missing "1e3"',
+      'Python typed recursive spend public amount test vectors missing "7 "',
+      'Python typed recursive spend public amount test vectors missing " 7"',
+      "Python typed recursive spend public amount test vectors missing str(1 << 128)",
+    ],
+    "Python public_amount vector negative control must require every exact missing amount vector diagnostic",
   );
   assertContainsAll(
     guard,
@@ -20050,8 +21743,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRedeemPublicAmountVectorBranch,
-    /expected\s*=\s*'Python typed recursive spend public amount test vectors missing "0007"'[\s\S]*?if expected not in message[\s\S]*?first_lines_for_labels\(message, \(expected,\)\)\[0\]/u,
-    "Python public_amount vector negative control must require the exact missing vector diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend public amount test vectors missing ""[\s\S]*?Python typed recursive spend public amount test vectors missing str\(1 << 128\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    "Python public_amount vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
     pythonRedeemPublicAmountVectorBranch,

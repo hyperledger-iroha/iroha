@@ -380,6 +380,10 @@ def eth_source_bridge_config_hash(
         )
         if network_id != expected_network_id:
             raise ValueError("source_bridge_network_id must be Ethereum mainnet chain id 1")
+    if source_bridge_code_hash == network_id:
+        raise ValueError(
+            "source_bridge_emitter_code_hash must not match source_bridge_network_id"
+        )
 
     return _keccak_256(
         b"".join(
