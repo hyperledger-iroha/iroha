@@ -909,8 +909,12 @@ fn minimal_config_snapshot() {
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
                     default_slash_penalty_nano: 1000000000,
-                    auditor_rate_per_sec: 4,
-                    auditor_burst: 16,
+                    auditor_rate_per_sec: Some(
+                        4,
+                    ),
+                    auditor_burst: Some(
+                        16,
+                    ),
                 },
                 sorafs_gc: SorafsGc {
                     enabled: false,

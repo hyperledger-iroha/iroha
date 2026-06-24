@@ -307,6 +307,15 @@ Last updated: 2026-06-24
   - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_data_model/src/validation_fee.rs crates/iroha_core/src/validation_fee.rs crates/iroha_core/tests/validation_fee_admission.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_torii/src/routing.rs status.md`
     (no matches)
 
+## 2026-06-23 Iroha Config Minimal Snapshot Alignment
+
+- Refreshed the `minimal_config_snapshot` expectation so the SoraFS repair
+  auditor rate-limit defaults match the current actual config debug output:
+  `Some(4)` for `auditor_rate_per_sec` and `Some(16)` for `auditor_burst`.
+- Validation passed:
+  - `UPDATE_EXPECT=1 CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_config --test fixtures -- --nocapture`
+
 ## 2026-06-23 SCCP proof-request SDK deployment-binding mirror negatives
 
 - Mirrored the Rust source-adapter deployment-binding receipt-only negative in
