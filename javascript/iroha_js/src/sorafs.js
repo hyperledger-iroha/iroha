@@ -21,17 +21,89 @@ function toBuffer(value) {
   throw new TypeError("bytes must be a Buffer, ArrayBuffer, or typed array");
 }
 
-function requireSorafsNativeBinding() {
+function requireSorafsNativeFunction(functionName, capability) {
   const binding = getNativeBinding();
-  if (
-    !binding ||
-    typeof binding.sorafsDecodeReplicationOrder !== "function"
-  ) {
+  if (!binding || typeof binding[functionName] !== "function") {
     throw new Error(
-      "SoraFS decoding requires the native iroha_js_host module. Run `npm run build:native` before using these helpers.",
+      `SoraFS ${capability} requires the native iroha_js_host module. Run \`npm run build:native\` before using these helpers.`,
     );
   }
   return binding;
+}
+
+function requireSorafsNativeBinding() {
+  return requireSorafsNativeFunction(
+    "sorafsDecodeReplicationOrder",
+    "decoding",
+  );
+}
+
+export const SORAFS_ORDERBOOK_PAYLOAD_KINDS = Object.freeze({
+  ORDER_REQUEST: "order-request",
+  ORDER_CANCEL: "order-cancel",
+  TRADE_EVENT: "trade-event",
+  SETTLEMENT_CHANNEL: "settlement-channel",
+  SETTLEMENT_RECEIPT: "settlement-receipt",
+  RUNTIME_SNAPSHOT: "runtime-snapshot",
+});
+
+const ORDERBOOK_KIND_ALIASES = Object.freeze({
+  order: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+  "order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+  "orderbook-order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+  request: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+  cancel: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_CANCEL,
+  "order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_CANCEL,
+  "orderbook-order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_CANCEL,
+  trade: SORAFS_ORDERBOOK_PAYLOAD_KINDS.TRADE_EVENT,
+  "trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS.TRADE_EVENT,
+  "orderbook-trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS.TRADE_EVENT,
+  channel: SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_CHANNEL,
+  "settlement-channel": SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_CHANNEL,
+  receipt: SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_RECEIPT,
+  "settlement-receipt": SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_RECEIPT,
+  snapshot: SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
+  "runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
+  "orderbook-runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
+});
+
+function normalizeOrderbookPayloadKind(kind) {
+  if (typeof kind !== "string") {
+    throw new TypeError("kind must be a string");
+  }
+  const normalized = kind.trim().toLowerCase().replace(/_/g, "-");
+  const canonical = ORDERBOOK_KIND_ALIASES[normalized];
+  if (!canonical) {
+    throw new TypeError(`unsupported SoraFS orderbook payload kind: ${kind}`);
+  }
+  return canonical;
+}
+
+export const SORAFS_PDP_PAYLOAD_KINDS = Object.freeze({
+  COMMITMENT: "commitment",
+  CHALLENGE: "challenge",
+  PROOF: "proof",
+});
+
+const PDP_KIND_ALIASES = Object.freeze({
+  commitment: SORAFS_PDP_PAYLOAD_KINDS.COMMITMENT,
+  "pdp-commitment": SORAFS_PDP_PAYLOAD_KINDS.COMMITMENT,
+  challenge: SORAFS_PDP_PAYLOAD_KINDS.CHALLENGE,
+  "pdp-challenge": SORAFS_PDP_PAYLOAD_KINDS.CHALLENGE,
+  proof: SORAFS_PDP_PAYLOAD_KINDS.PROOF,
+  "pdp-proof": SORAFS_PDP_PAYLOAD_KINDS.PROOF,
+});
+
+function normalizePdpPayloadKind(kind) {
+  if (typeof kind !== "string") {
+    throw new TypeError("kind must be a string");
+  }
+  const normalized = kind.trim().toLowerCase().replace(/_/g, "-");
+  const canonical = PDP_KIND_ALIASES[normalized];
+  if (!canonical) {
+    throw new TypeError(`unsupported SoraFS PDP payload kind: ${kind}`);
+  }
+  return canonical;
 }
 
 function readPayloadField(object, ...names) {
@@ -241,6 +313,434 @@ export function decodeReplicationOrder(bytes) {
   };
 }
 
+/**
+ * Validate a Norito-encoded orderbook payload with the Rust reference validator.
+ * @param {string} kind
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validateOrderbookPayload(kind, bytes, options = {}) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const canonicalKind = normalizeOrderbookPayloadKind(kind);
+  const buffer = toBuffer(bytes);
+  const label =
+    typeof options.label === "string" && options.label.trim() !== ""
+      ? options.label.trim()
+      : `sdk:sorafs.orderbook.${canonicalKind}`;
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidateOrderbookPayloadJson",
+    "orderbook validation",
+  );
+  const payload = binding.sorafsValidateOrderbookPayloadJson(
+    canonicalKind,
+    buffer,
+    label,
+    generatedAtUnix,
+  );
+  if (typeof payload !== "string") {
+    throw new Error("Native binding returned a non-string orderbook validation payload");
+  }
+  const outcome = JSON.parse(payload);
+  if (!isPlainObject(outcome)) {
+    throw new Error("Native binding returned an invalid orderbook validation outcome");
+  }
+  return outcome;
+}
+
+/**
+ * Sign a Norito-encoded mutable orderbook payload with an Ed25519 private key.
+ * @param {string} kind
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @returns {Buffer}
+ */
+export function signOrderbookPayload(kind, bytes, privateKey) {
+  const canonicalKind = normalizeOrderbookPayloadKind(kind);
+  const buffer = toBuffer(bytes);
+  const key = toBuffer(privateKey);
+  const binding = requireSorafsNativeFunction(
+    "sorafsSignOrderbookPayload",
+    "orderbook signing",
+  );
+  const signed = binding.sorafsSignOrderbookPayload(canonicalKind, buffer, key);
+  if (Buffer.isBuffer(signed)) {
+    return signed;
+  }
+  if (ArrayBuffer.isView(signed) || signed instanceof ArrayBuffer) {
+    return toBuffer(signed);
+  }
+  throw new Error("Native binding returned a non-buffer orderbook signing payload");
+}
+
+function requireSignedBuilderBuffer(value, context) {
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    return toBuffer(value);
+  }
+  throw new Error(`Native binding returned a non-buffer ${context} payload`);
+}
+
+/**
+ * Build and sign canonical Norito `OrderRequestV1` bytes from field values.
+ * @param {Record<string, any>} fields
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @returns {Buffer}
+ */
+export function buildSignedOrderbookOrderRequest(fields, privateKey) {
+  if (!isPlainObject(fields)) {
+    throw new TypeError("fields must be an object");
+  }
+  const quantityGib = decimalIntegerString(
+    requiredField(fields, "quantityGib", "quantityGib", "quantity_gib"),
+    "quantityGib",
+    { positive: true },
+  );
+  const remainingValue = optionalField(fields, "remainingGib", "remaining_gib");
+  const binding = requireSorafsNativeFunction(
+    "sorafsBuildSignedOrderbookOrderRequest",
+    "orderbook order request builder",
+  );
+  return requireSignedBuilderBuffer(
+    binding.sorafsBuildSignedOrderbookOrderRequest(
+      fixedBytesField(fields, "orderId", "orderId", "order_id"),
+      String(requiredField(fields, "side", "side")),
+      String(requiredField(fields, "tier", "tier")),
+      decimalIntegerString(
+        requiredField(
+          fields,
+          "pricePerGibMicroXor",
+          "pricePerGibMicroXor",
+          "price_per_gib_micro_xor",
+        ),
+        "pricePerGibMicroXor",
+        { positive: true },
+      ),
+      quantityGib,
+      remainingValue === undefined
+        ? undefined
+        : decimalIntegerString(remainingValue, "remainingGib", { positive: true }),
+      bytesField(fields, "ownerAccount", "ownerAccount", "owner_account"),
+      decimalIntegerString(
+        requiredField(fields, "expiryUnix", "expiryUnix", "expiry_unix"),
+        "expiryUnix",
+        { positive: true },
+      ),
+      decimalIntegerString(
+        requiredField(fields, "nonce", "nonce"),
+        "nonce",
+        { positive: true },
+      ),
+      normalizeOrderbookFeeBps(
+        requiredField(fields, "makerFeeBps", "makerFeeBps", "maker_fee_bps"),
+        "makerFeeBps",
+      ),
+      normalizeOrderbookFeeBps(
+        requiredField(fields, "takerFeeBps", "takerFeeBps", "taker_fee_bps"),
+        "takerFeeBps",
+      ),
+      toBuffer(privateKey),
+    ),
+    "orderbook order request builder",
+  );
+}
+
+/**
+ * Build and sign canonical Norito `OrderCancelV1` bytes from field values.
+ * @param {Record<string, any>} fields
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @returns {Buffer}
+ */
+export function buildSignedOrderbookOrderCancel(fields, privateKey) {
+  if (!isPlainObject(fields)) {
+    throw new TypeError("fields must be an object");
+  }
+  const binding = requireSorafsNativeFunction(
+    "sorafsBuildSignedOrderbookOrderCancel",
+    "orderbook cancel builder",
+  );
+  return requireSignedBuilderBuffer(
+    binding.sorafsBuildSignedOrderbookOrderCancel(
+      fixedBytesField(fields, "orderId", "orderId", "order_id"),
+      bytesField(fields, "ownerAccount", "ownerAccount", "owner_account"),
+      String(requiredField(fields, "reason", "reason")),
+      decimalIntegerString(
+        requiredField(fields, "nonce", "nonce"),
+        "nonce",
+        { positive: true },
+      ),
+      toBuffer(privateKey),
+    ),
+    "orderbook cancel builder",
+  );
+}
+
+/**
+ * Build and sign canonical Norito `SettlementReceiptV1` bytes from field values.
+ * @param {Record<string, any>} fields
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @returns {Buffer}
+ */
+export function buildSignedOrderbookSettlementReceipt(fields, privateKey) {
+  if (!isPlainObject(fields)) {
+    throw new TypeError("fields must be an object");
+  }
+  const binding = requireSorafsNativeFunction(
+    "sorafsBuildSignedOrderbookSettlementReceipt",
+    "orderbook settlement receipt builder",
+  );
+  return requireSignedBuilderBuffer(
+    binding.sorafsBuildSignedOrderbookSettlementReceipt(
+      fixedBytesField(fields, "receiptId", "receiptId", "receipt_id"),
+      fixedBytesField(fields, "channelId", "channelId", "channel_id"),
+      fixedBytesField(fields, "tradeId", "tradeId", "trade_id"),
+      decimalIntegerString(
+        requiredField(fields, "rangeStart", "rangeStart", "range_start"),
+        "rangeStart",
+      ),
+      decimalIntegerString(
+        requiredField(fields, "rangeEnd", "rangeEnd", "range_end"),
+        "rangeEnd",
+        { positive: true },
+      ),
+      fixedBytesField(fields, "chunkHash", "chunkHash", "chunk_hash"),
+      decimalIntegerString(
+        requiredField(fields, "bytesDelivered", "bytesDelivered", "bytes_delivered"),
+        "bytesDelivered",
+        { positive: true },
+      ),
+      decimalIntegerString(
+        requiredField(
+          fields,
+          "xorDebitedMicroXor",
+          "xorDebitedMicroXor",
+          "xor_debited_micro_xor",
+        ),
+        "xorDebitedMicroXor",
+        { positive: true },
+      ),
+      decimalIntegerString(
+        requiredField(
+          fields,
+          "providerCreditMicroXor",
+          "providerCreditMicroXor",
+          "provider_credit_micro_xor",
+        ),
+        "providerCreditMicroXor",
+      ),
+      decimalIntegerString(
+        requiredField(fields, "feeAmountMicroXor", "feeAmountMicroXor", "fee_amount_micro_xor"),
+        "feeAmountMicroXor",
+      ),
+      decimalIntegerString(
+        requiredField(fields, "issuedAtUnix", "issuedAtUnix", "issued_at_unix"),
+        "issuedAtUnix",
+        { positive: true },
+      ),
+      toBuffer(privateKey),
+    ),
+    "orderbook settlement receipt builder",
+  );
+}
+
+function parseReferenceOutcomePayload(payload, capability) {
+  if (typeof payload !== "string") {
+    throw new Error(`Native binding returned a non-string ${capability} payload`);
+  }
+  const outcome = JSON.parse(payload);
+  if (!isPlainObject(outcome)) {
+    throw new Error(`Native binding returned an invalid ${capability} outcome`);
+  }
+  return outcome;
+}
+
+function referenceLabel(options, names, fallback) {
+  for (const name of names) {
+    const value = readPayloadField(options, name);
+    if (typeof value === "string" && value.trim() !== "") {
+      return value.trim();
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Validate one Norito-encoded PDP payload with the Rust reference validator.
+ * @param {string} kind
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validatePdpPayload(kind, bytes, options = {}) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const canonicalKind = normalizePdpPayloadKind(kind);
+  const buffer = toBuffer(bytes);
+  const label = referenceLabel(
+    options,
+    ["label"],
+    `sdk:sorafs.pdp.${canonicalKind}`,
+  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidatePdpPayloadJson",
+    "PDP validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidatePdpPayloadJson(
+      canonicalKind,
+      buffer,
+      label,
+      generatedAtUnix,
+    ),
+    "PDP validation",
+  );
+}
+
+/**
+ * Validate PDP commitment/challenge binding with the Rust reference validator.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} commitmentBytes
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
+ * @param {{ commitmentLabel?: string, commitment_label?: string, challengeLabel?: string, challenge_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validatePdpCommitmentChallenge(
+  commitmentBytes,
+  challengeBytes,
+  options = {},
+) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidatePdpCommitmentChallengeJson",
+    "PDP commitment/challenge validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidatePdpCommitmentChallengeJson(
+      toBuffer(commitmentBytes),
+      referenceLabel(
+        options,
+        ["commitmentLabel", "commitment_label"],
+        "sdk:sorafs.pdp.commitment",
+      ),
+      toBuffer(challengeBytes),
+      referenceLabel(
+        options,
+        ["challengeLabel", "challenge_label"],
+        "sdk:sorafs.pdp.challenge",
+      ),
+      generatedAtUnix,
+    ),
+    "PDP commitment/challenge validation",
+  );
+}
+
+/**
+ * Validate PDP challenge/proof binding with the Rust reference validator.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} proofBytes
+ * @param {{ challengeLabel?: string, challenge_label?: string, proofLabel?: string, proof_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validatePdpChallengeProof(
+  challengeBytes,
+  proofBytes,
+  options = {},
+) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidatePdpChallengeProofJson",
+    "PDP challenge/proof validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidatePdpChallengeProofJson(
+      toBuffer(challengeBytes),
+      referenceLabel(
+        options,
+        ["challengeLabel", "challenge_label"],
+        "sdk:sorafs.pdp.challenge",
+      ),
+      toBuffer(proofBytes),
+      referenceLabel(
+        options,
+        ["proofLabel", "proof_label"],
+        "sdk:sorafs.pdp.proof",
+      ),
+      generatedAtUnix,
+    ),
+    "PDP challenge/proof validation",
+  );
+}
+
+/**
+ * Validate PDP commitment/challenge/proof binding with the Rust reference validator.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} commitmentBytes
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} challengeBytes
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} proofBytes
+ * @param {{ commitmentLabel?: string, commitment_label?: string, challengeLabel?: string, challenge_label?: string, proofLabel?: string, proof_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validatePdpBundle(
+  commitmentBytes,
+  challengeBytes,
+  proofBytes,
+  options = {},
+) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidatePdpBundleJson",
+    "PDP bundle validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidatePdpBundleJson(
+      toBuffer(commitmentBytes),
+      referenceLabel(
+        options,
+        ["commitmentLabel", "commitment_label"],
+        "sdk:sorafs.pdp.commitment",
+      ),
+      toBuffer(challengeBytes),
+      referenceLabel(
+        options,
+        ["challengeLabel", "challenge_label"],
+        "sdk:sorafs.pdp.challenge",
+      ),
+      toBuffer(proofBytes),
+      referenceLabel(
+        options,
+        ["proofLabel", "proof_label"],
+        "sdk:sorafs.pdp.proof",
+      ),
+      generatedAtUnix,
+    ),
+    "PDP bundle validation",
+  );
+}
+
 function assertNonEmptyString(value, label) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new TypeError(`${label} must be a non-empty string`);
@@ -354,6 +854,84 @@ function assertNonNegativeIntegerLike(value, label) {
     return coerced;
   }
   throw new TypeError(`${label} must be a non-negative integer`);
+}
+
+function decimalIntegerString(value, label, { positive = false } = {}) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) {
+      throw new TypeError(`${label} must be an unsigned decimal integer`);
+    }
+    if (positive && BigInt(trimmed) <= 0n) {
+      throw new TypeError(`${label} must be greater than zero`);
+    }
+    return trimmed;
+  }
+  const normalized = positive
+    ? assertPositiveIntegerLike(value, label)
+    : assertNonNegativeIntegerLike(value, label);
+  return normalized.toString();
+}
+
+function requiredField(object, label, ...names) {
+  const value = readPayloadField(object, ...names);
+  if (value === undefined || value === null) {
+    throw new TypeError(`${label} is required`);
+  }
+  return value;
+}
+
+function optionalField(object, ...names) {
+  const value = readPayloadField(object, ...names);
+  return value === undefined || value === null ? undefined : value;
+}
+
+function fixedBytesField(object, label, ...names) {
+  const bytes = toBuffer(requiredField(object, label, ...names));
+  if (bytes.length !== 32) {
+    throw new TypeError(`${label} must be exactly 32 bytes`);
+  }
+  return bytes;
+}
+
+function bytesField(object, label, ...names) {
+  const bytes = toBuffer(requiredField(object, label, ...names));
+  if (bytes.length === 0) {
+    throw new TypeError(`${label} must not be empty`);
+  }
+  return bytes;
+}
+
+function normalizeOrderbookFeeBps(value, label) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) {
+      throw new TypeError(`${label} must be an unsigned decimal integer`);
+    }
+    const parsed = BigInt(trimmed);
+    if (parsed > 65535n) {
+      throw new TypeError(`${label} must fit within a 16-bit unsigned integer`);
+    }
+    return Number(parsed);
+  }
+  const normalized = assertNonNegativeIntegerLike(value, label);
+  const numeric = typeof normalized === "bigint" ? normalized : BigInt(normalized);
+  if (numeric > 65535n) {
+    throw new TypeError(`${label} must fit within a 16-bit unsigned integer`);
+  }
+  return Number(numeric);
+}
+
+function normalizeGeneratedAtUnix(value) {
+  const raw = value ?? Math.floor(Date.now() / 1000);
+  const normalized = assertNonNegativeIntegerLike(raw, "options.generatedAtUnix");
+  if (typeof normalized === "bigint") {
+    if (normalized > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new TypeError("options.generatedAtUnix must be a safe integer");
+    }
+    return Number(normalized);
+  }
+  return normalized;
 }
 
 function toSafeNumber(value) {

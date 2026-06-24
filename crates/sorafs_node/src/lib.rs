@@ -22,6 +22,7 @@ pub mod repair;
 pub mod scheduler;
 pub mod store;
 pub mod telemetry;
+mod transparency;
 
 pub use deal::{
     ClientSnapshot, DealEngine, DealEngineError, DealSettlementOutcome, DealSnapshot,
@@ -31,7 +32,12 @@ pub use moderation::{
     ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotCommitOutcome,
     ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
-    ModerationVoteCounts, local_moderation_panel_roster_hash,
+    ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistrySnapshot,
+    ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
+    ModerationQuarantineState, ModerationReproRegistryRecord, ModerationScreeningError,
+    ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
+    ModerationScreeningSnapshot, ModerationScreeningVerdict, ModerationVoteCounts,
+    local_moderation_panel_roster_hash,
 };
 pub use orderbook::{
     OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
@@ -149,13 +155,25 @@ enum GcEvictionPolicy {
 const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
 const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
+const ORDERBOOK_STATE_DIR: &str = "orderbook";
+const ORDERBOOK_RUNTIME_SNAPSHOT_FILE: &str = "runtime-snapshot.to";
+const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
+const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
+const MODERATION_SCREENING_DIR: &str = "moderation-screening";
+const MODERATION_SCREENING_SNAPSHOT_FILE: &str = "screening-snapshot.to";
+const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
+const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     env, fs,
-    io::Read,
-    path::{Component, Path},
-    sync::{Arc, RwLock},
+    io::{self, ErrorKind, Read},
+    path::{Component, Path, PathBuf},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -163,16 +181,21 @@ use capacity::{
     CapacityError, CapacityManager, CapacityUsageSnapshot, DeclarationWindow, ReplicationPlan,
     ReplicationRelease,
 };
-use config::{GcConfig, RepairConfig, StorageConfig};
+use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
         deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
+        gar::GarEnforcementReceiptV1,
         moderation::{
-            SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1,
-            SoraFsModerationVoteChoice,
+            AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
+            SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
+        },
+        transparency::{
+            ModerationLedgerCyclePublicationV1, ModerationLedgerEntryV1,
+            ModerationLedgerMetadataV1, ModerationPrivacyAggregateV1, ProofTokenIssuanceV1,
         },
     },
 };
@@ -189,12 +212,13 @@ pub use repair::{
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
     AppealFinanceReconciliationSummaryV1, ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
-    OrderTierV1, ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotV1,
-    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementReceiptV1, SoraFsAppealFinanceAccountFlowV1,
-    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
-    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
-    SorafsReconciliationReportV1,
+    OrderTierV1, OrderbookRuntimeSnapshotV1, ReconciliationValidationError,
+    ReputationSnapshotEventV1, ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementReceiptV1,
+    SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
+    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::DealSettlementV1,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -209,11 +233,20 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
+pub use transparency::{
+    PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow, PrivacyAggregateScheduleConfig,
+    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, ProofTokenIssuanceIngestError,
+    TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
+    TransparencySourceEntryAdapterError, appeal_finance_report_source_entry,
+    appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
+    moderation_ballot_governance_event_source_entry, proof_token_issuance_from_base64,
+    proof_token_issuance_from_frame,
+};
 
 use crate::{
     governance::FilesystemGovernancePublisher,
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
-    moderation::ModerationBallotRuntime,
+    moderation::{ModerationBallotRuntime, ModerationModelRegistry, ModerationScreeningRuntime},
     orderbook::OrderbookRuntime,
     potr::PotrTracker,
     scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
@@ -250,6 +283,22 @@ fn repair_idempotency_key(
     format!("{action}-{digest_hex}")
 }
 
+fn privacy_aggregate_entry_id(
+    cycle_id: [u8; 16],
+    aggregate_hash: [u8; 32],
+    aggregate_id: &str,
+) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1);
+    hasher.update(&cycle_id);
+    hasher.update(&aggregate_hash);
+    hasher.update(aggregate_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut entry_id = [0u8; 16];
+    entry_id.copy_from_slice(&digest.as_bytes()[..16]);
+    entry_id
+}
+
 fn unix_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -269,6 +318,64 @@ fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
         OrderTierV1::Hot => "hot",
         OrderTierV1::Warm => "warm",
         OrderTierV1::Archive => "archive",
+    }
+}
+
+fn validate_orderbook_admission_policy(
+    policy: OrderbookAdmissionPolicy,
+    order: &OrderRequestV1,
+) -> Result<(), OrderbookRuntimeError> {
+    if order.quantity_gib < policy.min_order_gib() {
+        return Err(OrderbookRuntimeError::OrderBelowMinimum {
+            quantity_gib: order.quantity_gib,
+            min_order_gib: policy.min_order_gib(),
+        });
+    }
+    let price_micro_xor = order.price_per_gib.as_micro();
+    if !price_micro_xor.is_multiple_of(u128::from(policy.price_tick_micro_xor())) {
+        return Err(OrderbookRuntimeError::OrderPriceTickMismatch {
+            price_micro_xor,
+            tick_micro_xor: policy.price_tick_micro_xor(),
+        });
+    }
+    Ok(())
+}
+
+fn orderbook_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(ORDERBOOK_STATE_DIR)
+        .join(ORDERBOOK_RUNTIME_SNAPSHOT_FILE)
+}
+
+fn moderation_model_registry_checkpoint_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(MODERATION_MODEL_REGISTRY_DIR)
+        .join(MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE)
+}
+
+fn moderation_screening_checkpoint_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(MODERATION_SCREENING_DIR)
+        .join(MODERATION_SCREENING_SNAPSHOT_FILE)
+}
+
+fn write_local_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let counter = LOCAL_RUNTIME_SNAPSHOT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = local_checkpoint_tmp_path(path, std::process::id(), counter);
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+fn local_checkpoint_tmp_path(path: &Path, pid: u32, counter: u64) -> PathBuf {
+    let suffix = format!("{LOCAL_RUNTIME_SNAPSHOT_TMP_EXT}-{pid}-{counter}");
+    let candidate = path.with_added_extension(&suffix);
+    match candidate.file_name().and_then(|name| name.to_str()) {
+        Some(name) => candidate.with_file_name(format!(".{name}")),
+        None => candidate,
     }
 }
 
@@ -812,6 +919,18 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         event: &SoraFsModerationBallotGovernanceEventV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
+    /// Persist a moderation transparency ledger cycle publication to the governance pipeline.
+    fn publish_transparency_ledger_publication(
+        &self,
+        publication: &ModerationLedgerCyclePublicationV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a proof-token issuance summary to the governance pipeline.
+    fn publish_proof_token_issuance(
+        &self,
+        issuance: &ProofTokenIssuanceV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
     /// Persist an appeal finance report to the governance pipeline.
     fn publish_appeal_finance_report(
         &self,
@@ -822,6 +941,18 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     fn publish_appeal_finance_weekly_rollup(
         &self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist an appeal finance settlement receipt to the governance pipeline.
+    fn publish_appeal_finance_settlement_receipt(
+        &self,
+        receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist an orderbook settlement receipt to the governance pipeline.
+    fn publish_orderbook_settlement_receipt(
+        &self,
+        receipt: &SettlementReceiptV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
 }
@@ -843,6 +974,43 @@ impl GovernancePublishError {
     pub fn other(message: impl Into<String>) -> Self {
         Self::Other(message.into())
     }
+}
+
+/// Result of one scheduled privacy aggregate publication attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrivacyAggregateScheduleOutcome {
+    /// Config-backed scheduling is disabled.
+    Disabled,
+    /// No cycle is old enough to publish at the supplied timestamp.
+    NotDue,
+    /// The due cycle was already published by this node runtime.
+    AlreadyPublished {
+        /// Due window that was skipped.
+        window: PrivacyAggregateCycleWindow,
+        /// Deterministic cycle id.
+        cycle_id: [u8; 16],
+    },
+    /// The due cycle had no source events.
+    NoSourceEvents {
+        /// Due window that was skipped.
+        window: PrivacyAggregateCycleWindow,
+        /// Deterministic cycle id.
+        cycle_id: [u8; 16],
+    },
+    /// The due cycle had source events, but every bucket was suppressed.
+    AllBucketsSuppressed {
+        /// Due window that was skipped.
+        window: PrivacyAggregateCycleWindow,
+        /// Deterministic cycle id.
+        cycle_id: [u8; 16],
+    },
+    /// The due cycle was published.
+    Published {
+        /// Due window that was published.
+        window: PrivacyAggregateCycleWindow,
+        /// Published transparency ledger cycle.
+        publication: ModerationLedgerCyclePublicationV1,
+    },
 }
 
 /// Payload returned by a repair orchestrator for a missing chunk.
@@ -919,14 +1087,24 @@ pub struct NodeHandle {
     reputation_events: Arc<RwLock<Vec<ReputationSnapshotEventV1>>>,
     reputation_event_sender: broadcast::Sender<ReputationSnapshotEventV1>,
     orderbook: Arc<RwLock<OrderbookRuntime>>,
+    orderbook_checkpoint_path: Option<PathBuf>,
     orderbook_events: Arc<RwLock<Vec<OrderbookEvent>>>,
     orderbook_event_sender: broadcast::Sender<OrderbookEvent>,
+    moderation_model_registry_checkpoint_path: Option<PathBuf>,
+    moderation_model_registry: Arc<RwLock<ModerationModelRegistry>>,
+    moderation_screening_checkpoint_path: Option<PathBuf>,
+    moderation_screening: Arc<RwLock<ModerationScreeningRuntime>>,
     moderation: Arc<RwLock<ModerationBallotRuntime>>,
     moderation_events: Arc<RwLock<Vec<ModerationBallotEvent>>>,
     moderation_event_sender: broadcast::Sender<ModerationBallotEvent>,
+    transparency_ledger_source_entries:
+        Arc<RwLock<BTreeMap<String, TransparencyLedgerSourceEntry>>>,
+    privacy_aggregate_source_events: Arc<RwLock<BTreeMap<String, PrivacyAggregateSourceEvent>>>,
+    published_privacy_aggregate_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
 }
 
 type PorHistoryKey = ([u8; 32], [u8; 32]);
+static LOCAL_RUNTIME_SNAPSHOT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Default, Clone)]
 struct PorHistoryEntry {
@@ -1025,6 +1203,15 @@ impl NodeHandle {
         let governance_dir = config.governance_dir().cloned();
         let governance_dag_publisher_peer_id = config.governance_dag_publisher_peer_id().cloned();
         let governance_dag_signing_key_path = config.governance_dag_signing_key_path().cloned();
+        let orderbook_checkpoint_path = storage
+            .as_ref()
+            .map(|_| orderbook_runtime_snapshot_path(config.data_dir()));
+        let moderation_model_registry_checkpoint_path = storage
+            .as_ref()
+            .map(|_| moderation_model_registry_checkpoint_path(config.data_dir()));
+        let moderation_screening_checkpoint_path = storage
+            .as_ref()
+            .map(|_| moderation_screening_checkpoint_path(config.data_dir()));
         let (repair_event_sender, _) = broadcast::channel(REPAIR_EVENT_CHANNEL_CAPACITY);
         let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
         let (orderbook_event_sender, _) = broadcast::channel(ORDERBOOK_EVENT_CHANNEL_CAPACITY);
@@ -1058,14 +1245,25 @@ impl NodeHandle {
             reputation_events: Arc::new(RwLock::new(Vec::new())),
             reputation_event_sender,
             orderbook: Arc::new(RwLock::new(OrderbookRuntime::default())),
+            orderbook_checkpoint_path,
             orderbook_events: Arc::new(RwLock::new(Vec::new())),
             orderbook_event_sender,
+            moderation_model_registry_checkpoint_path,
+            moderation_model_registry: Arc::new(RwLock::new(ModerationModelRegistry::default())),
+            moderation_screening_checkpoint_path,
+            moderation_screening: Arc::new(RwLock::new(ModerationScreeningRuntime::default())),
             moderation: Arc::new(RwLock::new(ModerationBallotRuntime::default())),
             moderation_events: Arc::new(RwLock::new(Vec::new())),
             moderation_event_sender,
+            transparency_ledger_source_entries: Arc::new(RwLock::new(BTreeMap::new())),
+            privacy_aggregate_source_events: Arc::new(RwLock::new(BTreeMap::new())),
+            published_privacy_aggregate_cycles: Arc::new(RwLock::new(BTreeSet::new())),
         };
 
         if node.storage.is_some() {
+            node.load_orderbook_checkpoint();
+            node.load_moderation_model_registry_checkpoint();
+            node.load_moderation_screening_checkpoint();
             if let Some(dir) = governance_dir.clone() {
                 match FilesystemGovernancePublisher::try_new(dir.clone()) {
                     Ok(publisher) => {
@@ -1282,7 +1480,579 @@ impl NodeHandle {
         if let Some(publisher) = self.governance_publisher() {
             publisher.publish_appeal_finance_report(&report, &encoded)?;
         }
+        self.record_transparency_source_entry_lossy(
+            transparency::appeal_finance_report_source_entry(&report),
+            "appeal_finance_report",
+            &report.case_id,
+        );
         Ok(())
+    }
+
+    /// Publish a typed SoraFS transparency ledger cycle to the governance pipeline.
+    pub fn publish_transparency_ledger_publication(
+        &self,
+        publication: ModerationLedgerCyclePublicationV1,
+    ) -> Result<(), GovernancePublishError> {
+        publication.validate().map_err(|err| {
+            GovernancePublishError::other(format!("invalid transparency ledger publication: {err}"))
+        })?;
+        let encoded = norito::to_bytes(&publication).map_err(|err| {
+            GovernancePublishError::other(format!("encode transparency ledger publication: {err}"))
+        })?;
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_transparency_ledger_publication(&publication, &encoded)?;
+        }
+        Ok(())
+    }
+
+    /// Publish a typed proof-token issuance summary to the governance pipeline.
+    pub fn publish_proof_token_issuance(
+        &self,
+        issuance: ProofTokenIssuanceV1,
+    ) -> Result<(), GovernancePublishError> {
+        issuance.validate().map_err(|err| {
+            GovernancePublishError::other(format!("invalid proof-token issuance: {err}"))
+        })?;
+        let encoded = norito::to_bytes(&issuance).map_err(|err| {
+            GovernancePublishError::other(format!("encode proof-token issuance: {err}"))
+        })?;
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_proof_token_issuance(&issuance, &encoded)?;
+        }
+        Ok(())
+    }
+
+    /// Derive and publish a proof-token issuance summary from an issued `SFGT` frame.
+    ///
+    /// The frame signature is verified with `signer_key` before publication.
+    /// Runtime digest keys are deliberately not accepted or persisted here.
+    pub fn publish_proof_token_frame_issuance(
+        &self,
+        encoded_token: &[u8],
+        signer_key: [u8; 32],
+        evidence_digest: Option<[u8; 32]>,
+        policy_digest: Option<[u8; 32]>,
+        metadata: Vec<ModerationLedgerMetadataV1>,
+    ) -> Result<ProofTokenIssuanceV1, GovernancePublishError> {
+        let issuance = transparency::proof_token_issuance_from_frame(
+            encoded_token,
+            signer_key,
+            evidence_digest,
+            policy_digest,
+            metadata,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!("ingest proof-token issuance: {err}"))
+        })?;
+        self.publish_proof_token_issuance(issuance.clone())?;
+        Ok(issuance)
+    }
+
+    /// Derive and publish a proof-token issuance summary from URL-safe base64.
+    ///
+    /// This is the transport-friendly counterpart to
+    /// [`Self::publish_proof_token_frame_issuance`].
+    pub fn publish_proof_token_base64_issuance(
+        &self,
+        token_b64: &str,
+        signer_key: [u8; 32],
+        evidence_digest: Option<[u8; 32]>,
+        policy_digest: Option<[u8; 32]>,
+        metadata: Vec<ModerationLedgerMetadataV1>,
+    ) -> Result<ProofTokenIssuanceV1, GovernancePublishError> {
+        let issuance = transparency::proof_token_issuance_from_base64(
+            token_b64,
+            signer_key,
+            evidence_digest,
+            policy_digest,
+            metadata,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!("ingest proof-token issuance: {err}"))
+        })?;
+        self.publish_proof_token_issuance(issuance.clone())?;
+        Ok(issuance)
+    }
+
+    /// Record one privacy-safe source entry for later transparency ledger publication.
+    pub fn record_transparency_ledger_source_entry(
+        &self,
+        entry: TransparencyLedgerSourceEntry,
+    ) -> Result<(), GovernancePublishError> {
+        entry.validate().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid transparency ledger source entry: {err}"
+            ))
+        })?;
+        let mut guard = self
+            .transparency_ledger_source_entries
+            .write()
+            .map_err(|_| {
+                GovernancePublishError::other("transparency ledger source-entry index poisoned")
+            })?;
+        if guard.contains_key(&entry.event_id) {
+            return Err(GovernancePublishError::other(format!(
+                "duplicate transparency ledger source entry `{}`",
+                entry.event_id
+            )));
+        }
+        guard.insert(entry.event_id.clone(), entry);
+        Ok(())
+    }
+
+    /// Derive and record a transparency source entry from a GAR enforcement receipt.
+    pub fn record_gar_enforcement_receipt_transparency_entry(
+        &self,
+        receipt: &GarEnforcementReceiptV1,
+    ) -> Result<(), GovernancePublishError> {
+        let entry = transparency::gar_enforcement_receipt_source_entry(receipt).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "derive GAR enforcement receipt transparency source entry: {err}"
+            ))
+        })?;
+        self.record_transparency_ledger_source_entry(entry)
+    }
+
+    /// Derive and record a transparency source entry from a moderation governance event.
+    pub fn record_moderation_ballot_governance_transparency_entry(
+        &self,
+        event: &SoraFsModerationBallotGovernanceEventV1,
+    ) -> Result<(), GovernancePublishError> {
+        let entry = transparency::moderation_ballot_governance_event_source_entry(event).map_err(
+            |err| {
+                GovernancePublishError::other(format!(
+                    "derive moderation governance transparency source entry: {err}"
+                ))
+            },
+        )?;
+        self.record_transparency_ledger_source_entry(entry)
+    }
+
+    /// Derive and record a transparency source entry from an appeal finance report.
+    pub fn record_appeal_finance_report_transparency_entry(
+        &self,
+        report: &SoraFsAppealFinanceReportV1,
+    ) -> Result<(), GovernancePublishError> {
+        let entry = transparency::appeal_finance_report_source_entry(report).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "derive appeal finance report transparency source entry: {err}"
+            ))
+        })?;
+        self.record_transparency_ledger_source_entry(entry)
+    }
+
+    /// Derive and record a transparency source entry from an appeal finance settlement receipt.
+    pub fn record_appeal_finance_settlement_receipt_transparency_entry(
+        &self,
+        receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+    ) -> Result<(), GovernancePublishError> {
+        let entry = transparency::appeal_finance_settlement_receipt_source_entry(receipt).map_err(
+            |err| {
+                GovernancePublishError::other(format!(
+                    "derive appeal finance settlement receipt transparency source entry: {err}"
+                ))
+            },
+        )?;
+        self.record_transparency_ledger_source_entry(entry)
+    }
+
+    /// Return the number of source entries currently retained by the transparency worker.
+    #[must_use]
+    pub fn transparency_ledger_source_entry_count(&self) -> usize {
+        self.transparency_ledger_source_entries
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or_default()
+    }
+
+    /// Build and publish a transparency cycle from locally recorded source entries.
+    ///
+    /// The worker selects retained source entries whose occurrence timestamps
+    /// fall inside the requested cycle window, sorts them deterministically,
+    /// assigns stable entry ids and sequence numbers, and publishes the
+    /// resulting `ModerationLedgerCyclePublicationV1`.
+    pub fn publish_transparency_ledger_cycle_from_source_entries(
+        &self,
+        cycle_id: [u8; 16],
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        generated_at_unix: u64,
+        previous_block_hash: Option<[u8; 32]>,
+    ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
+        let events = self
+            .transparency_ledger_source_entries
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("transparency ledger source-entry index poisoned")
+            })?
+            .values()
+            .filter(|entry| {
+                entry.occurred_at_unix >= cycle_start_unix
+                    && entry.occurred_at_unix < cycle_end_unix
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let entries: Vec<ModerationLedgerEntryV1> =
+            transparency::build_transparency_ledger_entries_from_source_events(
+                cycle_id,
+                cycle_start_unix,
+                cycle_end_unix,
+                generated_at_unix,
+                &events,
+            )
+            .map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "build transparency ledger source cycle: {err}"
+                ))
+            })?;
+        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            previous_block_hash,
+            &entries,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!(
+                "build transparency ledger source publication: {err}"
+            ))
+        })?;
+        self.publish_transparency_ledger_publication(publication.clone())?;
+        Ok(publication)
+    }
+
+    /// Record one source event for later SFM-4c privacy aggregate publication.
+    pub fn record_privacy_aggregate_source_event(
+        &self,
+        event: PrivacyAggregateSourceEvent,
+    ) -> Result<(), GovernancePublishError> {
+        event.validate().map_err(|err| {
+            GovernancePublishError::other(format!("invalid privacy aggregate source event: {err}"))
+        })?;
+        let mut guard = self
+            .privacy_aggregate_source_events
+            .write()
+            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?;
+        if guard.contains_key(&event.event_id) {
+            return Err(GovernancePublishError::other(format!(
+                "duplicate privacy aggregate source event `{}`",
+                event.event_id
+            )));
+        }
+        guard.insert(event.event_id.clone(), event);
+        Ok(())
+    }
+
+    /// Return the number of source events currently retained by the aggregate worker.
+    #[must_use]
+    pub fn privacy_aggregate_source_event_count(&self) -> usize {
+        self.privacy_aggregate_source_events
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or_default()
+    }
+
+    /// Return the config-backed privacy aggregate scheduler, when enabled.
+    #[must_use]
+    pub fn configured_privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
+        self.config.privacy_aggregate_schedule()
+    }
+
+    /// Build and publish a transparency cycle from privacy-safe moderation aggregates.
+    ///
+    /// Aggregates are validated, required to fit inside the supplied cycle
+    /// window, sorted deterministically by source window and aggregate id, then
+    /// converted into `PrivacyAggregate` ledger entries before being published
+    /// through the configured governance pipeline.
+    pub fn publish_privacy_aggregate_cycle(
+        &self,
+        cycle_id: [u8; 16],
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        generated_at_unix: u64,
+        previous_block_hash: Option<[u8; 32]>,
+        aggregates: Vec<ModerationPrivacyAggregateV1>,
+    ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
+        if aggregates.is_empty() {
+            return Err(GovernancePublishError::other(
+                "privacy aggregate cycle requires at least one aggregate",
+            ));
+        }
+
+        let mut seen_aggregate_ids = BTreeSet::new();
+        let mut keyed = Vec::with_capacity(aggregates.len());
+        for aggregate in aggregates {
+            aggregate.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid privacy aggregate: {err}"))
+            })?;
+            if aggregate.window_start_unix < cycle_start_unix
+                || aggregate.window_end_unix > cycle_end_unix
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "privacy aggregate `{}` window must be contained in the publication cycle",
+                    aggregate.aggregate_id
+                )));
+            }
+            if aggregate.generated_at_unix > generated_at_unix {
+                return Err(GovernancePublishError::other(format!(
+                    "privacy aggregate `{}` generated_at timestamp must not exceed publication generated_at",
+                    aggregate.aggregate_id
+                )));
+            }
+            if !seen_aggregate_ids.insert(aggregate.aggregate_id.clone()) {
+                return Err(GovernancePublishError::other(format!(
+                    "duplicate privacy aggregate id `{}` in cycle",
+                    aggregate.aggregate_id
+                )));
+            }
+            let aggregate_hash = aggregate.aggregate_hash().map_err(|err| {
+                GovernancePublishError::other(format!("hash privacy aggregate: {err}"))
+            })?;
+            keyed.push((
+                aggregate.window_start_unix,
+                aggregate.window_end_unix,
+                aggregate.aggregate_id.clone(),
+                aggregate_hash,
+                aggregate,
+            ));
+        }
+        keyed.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+
+        let mut entries = Vec::with_capacity(keyed.len());
+        for (index, (_, _, _, aggregate_hash, aggregate)) in keyed.iter().enumerate() {
+            let sequence = u64::try_from(index)
+                .map_err(|_| GovernancePublishError::other("privacy aggregate index overflow"))?
+                .saturating_add(1);
+            let entry_id =
+                privacy_aggregate_entry_id(cycle_id, *aggregate_hash, &aggregate.aggregate_id);
+            let entry = aggregate
+                .to_ledger_entry(cycle_id, entry_id, sequence)
+                .map_err(|err| {
+                    GovernancePublishError::other(format!(
+                        "convert privacy aggregate `{}` to ledger entry: {err}",
+                        aggregate.aggregate_id
+                    ))
+                })?;
+            entries.push(entry);
+        }
+
+        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            previous_block_hash,
+            &entries,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!(
+                "build privacy aggregate transparency publication: {err}"
+            ))
+        })?;
+        self.publish_transparency_ledger_publication(publication.clone())?;
+        Ok(publication)
+    }
+
+    /// Build and publish a privacy aggregate cycle from locally recorded source events.
+    ///
+    /// The worker filters recorded events to the requested cycle window, applies
+    /// suppression/noise policy from `config`, builds aggregate payloads, and
+    /// publishes the resulting transparency cycle through
+    /// [`Self::publish_privacy_aggregate_cycle`].
+    pub fn publish_privacy_aggregate_cycle_from_source_events(
+        &self,
+        cycle_id: [u8; 16],
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        generated_at_unix: u64,
+        previous_block_hash: Option<[u8; 32]>,
+        config: PrivacyAggregateCycleConfig,
+    ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
+        let events = self
+            .privacy_aggregate_source_events
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
+            .values()
+            .filter(|event| {
+                event.occurred_at_unix >= cycle_start_unix
+                    && event.occurred_at_unix < cycle_end_unix
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let aggregates = transparency::build_privacy_aggregates_from_source_events(
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            &config,
+            &events,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!("build privacy aggregate cycle: {err}"))
+        })?;
+        self.publish_privacy_aggregate_cycle(
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            previous_block_hash,
+            aggregates,
+        )
+    }
+
+    /// Publish the oldest due privacy aggregate cycle with retained source events.
+    ///
+    /// This method derives the latest due cycle from `schedule`, then catches up
+    /// older unpublished event-backed cycles first so delayed scheduler ticks do
+    /// not strand stale source events. Duplicate publication of the same cycle
+    /// id is suppressed within the node runtime, and the method returns a
+    /// structured skip reason when no cycle is due, the latest due cycle is
+    /// empty, already published, or every due event-backed cycle is fully
+    /// suppressed by privacy policy.
+    pub fn publish_due_privacy_aggregate_cycle_from_source_events(
+        &self,
+        now_unix: u64,
+        schedule: PrivacyAggregateScheduleConfig,
+        config: PrivacyAggregateCycleConfig,
+        previous_block_hash: Option<[u8; 32]>,
+    ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        let Some(latest_window) = schedule.due_window(now_unix).map_err(|err| {
+            GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
+        })?
+        else {
+            return Ok(PrivacyAggregateScheduleOutcome::NotDue);
+        };
+        let published_cycles = self
+            .published_privacy_aggregate_cycles
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy aggregate published-cycle index poisoned")
+            })?
+            .clone();
+
+        let source_events = self
+            .privacy_aggregate_source_events
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut due_windows = BTreeMap::<PrivacyAggregateCycleWindow, Vec<_>>::new();
+        for event in source_events {
+            let Some(window) = schedule
+                .event_window(event.occurred_at_unix)
+                .map_err(|err| {
+                    GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
+                })?
+            else {
+                continue;
+            };
+            if window.due_at_unix > now_unix || window.cycle_end_unix > latest_window.cycle_end_unix
+            {
+                continue;
+            }
+            let cycle_id = transparency::privacy_aggregate_cycle_id(window);
+            if published_cycles.contains(&cycle_id) {
+                continue;
+            }
+            due_windows.entry(window).or_default().push(event);
+        }
+
+        if due_windows.is_empty() {
+            let cycle_id = transparency::privacy_aggregate_cycle_id(latest_window);
+            if published_cycles.contains(&cycle_id) {
+                return Ok(PrivacyAggregateScheduleOutcome::AlreadyPublished {
+                    window: latest_window,
+                    cycle_id,
+                });
+            }
+            return Ok(PrivacyAggregateScheduleOutcome::NoSourceEvents {
+                window: latest_window,
+                cycle_id,
+            });
+        }
+
+        let mut first_suppressed = None;
+        for (window, events) in due_windows {
+            let cycle_id = transparency::privacy_aggregate_cycle_id(window);
+            let aggregates = match transparency::build_privacy_aggregates_from_source_events(
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+                now_unix,
+                &config,
+                &events,
+            ) {
+                Ok(aggregates) => aggregates,
+                Err(transparency::PrivacyAggregateWorkerError::AllBucketsSuppressed) => {
+                    first_suppressed.get_or_insert((window, cycle_id));
+                    continue;
+                }
+                Err(err) => {
+                    return Err(GovernancePublishError::other(format!(
+                        "build scheduled privacy aggregate cycle: {err}"
+                    )));
+                }
+            };
+            let publication = self.publish_privacy_aggregate_cycle(
+                cycle_id,
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+                now_unix,
+                previous_block_hash,
+                aggregates,
+            )?;
+            self.published_privacy_aggregate_cycles
+                .write()
+                .map_err(|_| {
+                    GovernancePublishError::other(
+                        "privacy aggregate published-cycle index poisoned",
+                    )
+                })?
+                .insert(cycle_id);
+            return Ok(PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            });
+        }
+
+        if let Some((window, cycle_id)) = first_suppressed {
+            Ok(PrivacyAggregateScheduleOutcome::AllBucketsSuppressed { window, cycle_id })
+        } else {
+            let cycle_id = transparency::privacy_aggregate_cycle_id(latest_window);
+            Ok(PrivacyAggregateScheduleOutcome::NoSourceEvents {
+                window: latest_window,
+                cycle_id,
+            })
+        }
+    }
+
+    /// Publish the next due privacy aggregate cycle using storage configuration.
+    ///
+    /// Privacy policy and runtime noise seed material remain explicit runtime
+    /// inputs; the persisted config only controls whether scheduled publication
+    /// is enabled and which cadence is used.
+    pub fn publish_due_configured_privacy_aggregate_cycle_from_source_events(
+        &self,
+        now_unix: u64,
+        config: PrivacyAggregateCycleConfig,
+        previous_block_hash: Option<[u8; 32]>,
+    ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        let Some(schedule) = self.configured_privacy_aggregate_schedule() else {
+            return Ok(PrivacyAggregateScheduleOutcome::Disabled);
+        };
+        self.publish_due_privacy_aggregate_cycle_from_source_events(
+            now_unix,
+            schedule,
+            config,
+            previous_block_hash,
+        )
     }
 
     /// Publish a typed SoraFS weekly appeal finance rollup to the governance pipeline.
@@ -1299,6 +2069,32 @@ impl NodeHandle {
         if let Some(publisher) = self.governance_publisher() {
             publisher.publish_appeal_finance_weekly_rollup(&rollup, &encoded)?;
         }
+        Ok(())
+    }
+
+    /// Publish a typed SoraFS appeal finance settlement receipt to the governance pipeline.
+    pub fn publish_appeal_finance_settlement_receipt(
+        &self,
+        receipt: SoraFsAppealFinanceSettlementReceiptV1,
+    ) -> Result<(), GovernancePublishError> {
+        receipt.validate().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid appeal finance settlement receipt: {err}"
+            ))
+        })?;
+        let encoded = norito::to_bytes(&receipt).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "encode appeal finance settlement receipt: {err}"
+            ))
+        })?;
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_appeal_finance_settlement_receipt(&receipt, &encoded)?;
+        }
+        self.record_transparency_source_entry_lossy(
+            transparency::appeal_finance_settlement_receipt_source_entry(&receipt),
+            "appeal_finance_settlement_receipt",
+            &receipt.case_id,
+        );
         Ok(())
     }
 
@@ -1429,6 +2225,222 @@ impl NodeHandle {
     #[must_use]
     pub fn subscribe_orderbook_events(&self) -> broadcast::Receiver<OrderbookEvent> {
         self.orderbook_event_sender.subscribe()
+    }
+
+    /// Admit a governance-signed moderation reproducibility manifest into the local registry.
+    ///
+    /// The manifest is validated with the canonical data-model validator before
+    /// it is recorded. Re-admitting the same manifest id is idempotent when the
+    /// recorded summary matches and fails closed when the summary conflicts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails, the registry lock is poisoned, or
+    /// the manifest id conflicts with a previously admitted record.
+    pub fn admit_moderation_repro_manifest(
+        &self,
+        manifest: ModerationReproManifestV1,
+    ) -> Result<ModerationReproRegistryRecord, ModerationModelRegistryError> {
+        let record = {
+            let mut registry = self
+                .moderation_model_registry
+                .write()
+                .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?;
+            registry.admit_repro_manifest(manifest)?
+        };
+        self.save_moderation_model_registry_checkpoint();
+        Ok(record)
+    }
+
+    /// Admit an adversarial corpus manifest into the local moderation registry.
+    ///
+    /// The corpus is validated and keyed by the BLAKE3 digest of its canonical
+    /// Norito bytes. Re-admission of the same corpus digest is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation, canonical encoding, or registry locking fails.
+    pub fn admit_moderation_corpus_manifest(
+        &self,
+        manifest: AdversarialCorpusManifestV1,
+    ) -> Result<ModerationCorpusRegistryRecord, ModerationModelRegistryError> {
+        let record = {
+            let mut registry = self
+                .moderation_model_registry
+                .write()
+                .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?;
+            registry.admit_corpus_manifest(manifest)?
+        };
+        self.save_moderation_model_registry_checkpoint();
+        Ok(record)
+    }
+
+    /// Return a deterministic snapshot of the local moderation model registry.
+    ///
+    /// If the registry lock is poisoned, an empty snapshot is returned so callers
+    /// can treat the local registry as unavailable without panicking.
+    #[must_use]
+    pub fn moderation_model_registry_snapshot(&self) -> ModerationModelRegistrySnapshot {
+        self.moderation_model_registry.read().map_or_else(
+            |_| ModerationModelRegistrySnapshot::default(),
+            |guard| guard.snapshot(),
+        )
+    }
+
+    /// Export a deterministic snapshot of the local moderation model registry.
+    ///
+    /// Unlike [`Self::moderation_model_registry_snapshot`], this method reports
+    /// lock poisoning so callers can distinguish an unavailable registry from an
+    /// empty registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registry lock is poisoned.
+    pub fn export_moderation_model_registry_snapshot(
+        &self,
+    ) -> Result<ModerationModelRegistrySnapshot, ModerationModelRegistryError> {
+        Ok(self
+            .moderation_model_registry
+            .read()
+            .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?
+            .snapshot())
+    }
+
+    /// Replace the local moderation model registry from a validated snapshot.
+    ///
+    /// The snapshot is duplicate-checked before it replaces local state, then it
+    /// is persisted to the local checkpoint when SoraFS storage is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot is internally inconsistent or the
+    /// registry lock is poisoned.
+    pub fn restore_moderation_model_registry_snapshot(
+        &self,
+        snapshot: ModerationModelRegistrySnapshot,
+    ) -> Result<(), ModerationModelRegistryError> {
+        self.moderation_model_registry
+            .write()
+            .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?
+            .restore_snapshot(snapshot)?;
+        self.save_moderation_model_registry_checkpoint();
+        Ok(())
+    }
+
+    /// Record one deterministic local moderation screening result.
+    ///
+    /// `quarantine` and `escalate` verdicts also create a pending quarantine
+    /// queue record. Successful updates are persisted to the local checkpoint
+    /// when SoraFS storage is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is invalid, the screening id conflicts
+    /// with existing local state, or the runtime lock is poisoned.
+    pub fn record_moderation_screening_result(
+        &self,
+        input: ModerationScreeningInput,
+    ) -> Result<ModerationScreeningOutcome, ModerationScreeningError> {
+        let outcome = {
+            let mut runtime = self
+                .moderation_screening
+                .write()
+                .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+            runtime.record_screening(input)?
+        };
+        self.save_moderation_screening_checkpoint();
+        Ok(outcome)
+    }
+
+    /// Mark a pending local quarantine record as reviewed.
+    ///
+    /// Successful updates are persisted to the local checkpoint when SoraFS
+    /// storage is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the quarantine id is unknown, the transition is
+    /// invalid, or the runtime lock is poisoned.
+    pub fn review_moderation_quarantine_record(
+        &self,
+        input: ModerationQuarantineReviewInput,
+    ) -> Result<ModerationQuarantineRecord, ModerationScreeningError> {
+        let record = {
+            let mut runtime = self
+                .moderation_screening
+                .write()
+                .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+            runtime.review_quarantine(input)?
+        };
+        self.save_moderation_screening_checkpoint();
+        Ok(record)
+    }
+
+    /// Release a reviewed local quarantine record.
+    ///
+    /// Successful updates are persisted to the local checkpoint when SoraFS
+    /// storage is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the quarantine id is unknown, the record has not
+    /// been reviewed, the transition is invalid, or the runtime lock is
+    /// poisoned.
+    pub fn release_moderation_quarantine_record(
+        &self,
+        input: ModerationQuarantineReleaseInput,
+    ) -> Result<ModerationQuarantineRecord, ModerationScreeningError> {
+        let record = {
+            let mut runtime = self
+                .moderation_screening
+                .write()
+                .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+            runtime.release_quarantine(input)?
+        };
+        self.save_moderation_screening_checkpoint();
+        Ok(record)
+    }
+
+    /// Return a deterministic snapshot of local screening and quarantine state.
+    #[must_use]
+    pub fn moderation_screening_snapshot(&self) -> ModerationScreeningSnapshot {
+        self.moderation_screening.read().map_or_else(
+            |_| ModerationScreeningSnapshot::default(),
+            |guard| guard.snapshot(),
+        )
+    }
+
+    /// Export local screening and quarantine state, reporting lock failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime lock is poisoned.
+    pub fn export_moderation_screening_snapshot(
+        &self,
+    ) -> Result<ModerationScreeningSnapshot, ModerationScreeningError> {
+        Ok(self
+            .moderation_screening
+            .read()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .snapshot())
+    }
+
+    /// Replace local screening/quarantine state from a validated snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot is internally inconsistent or the
+    /// runtime lock is poisoned.
+    pub fn restore_moderation_screening_snapshot(
+        &self,
+        snapshot: ModerationScreeningSnapshot,
+    ) -> Result<(), ModerationScreeningError> {
+        self.moderation_screening
+            .write()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .restore_snapshot(snapshot)?;
+        self.save_moderation_screening_checkpoint();
+        Ok(())
     }
 
     /// Return local moderation ballot events after `since_sequence`, capped by `limit`.
@@ -1609,11 +2621,14 @@ impl NodeHandle {
     ) -> Result<OrderbookSubmitOutcome, OrderbookRuntimeError> {
         let side = order.side;
         let tier = order.tier;
-        let outcome = self
-            .orderbook
-            .write()
-            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
-            .submit_order(order, now_unix);
+        let outcome =
+            validate_orderbook_admission_policy(self.config.orderbook_admission_policy(), &order)
+                .and_then(|()| {
+                    self.orderbook
+                        .write()
+                        .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+                        .submit_order(order, now_unix)
+                });
         match &outcome {
             Ok(outcome) => {
                 global_or_default().record_sorafs_orderbook_order(
@@ -1623,6 +2638,7 @@ impl NodeHandle {
                     "accepted",
                 );
                 self.record_orderbook_snapshot_metrics(now_unix);
+                self.save_orderbook_checkpoint(now_unix);
                 self.publish_orderbook_event(
                     OrderbookEventKind::OrderAccepted,
                     now_unix,
@@ -1644,7 +2660,9 @@ impl NodeHandle {
             Err(err) => {
                 let status = match err {
                     OrderbookRuntimeError::DuplicateOrderId { .. } => "duplicate",
-                    OrderbookRuntimeError::Validation(_) => "rejected",
+                    OrderbookRuntimeError::Validation(_)
+                    | OrderbookRuntimeError::OrderBelowMinimum { .. }
+                    | OrderbookRuntimeError::OrderPriceTickMismatch { .. } => "rejected",
                     OrderbookRuntimeError::SequenceOverflow
                     | OrderbookRuntimeError::MissingMatchedOrder
                     | OrderbookRuntimeError::InvalidMatchedSides
@@ -1685,6 +2703,7 @@ impl NodeHandle {
                 "cancelled",
             );
             self.record_orderbook_snapshot_metrics(now_unix);
+            self.save_orderbook_checkpoint(now_unix);
             self.publish_orderbook_event(
                 OrderbookEventKind::OrderCancelled,
                 now_unix,
@@ -1715,6 +2734,8 @@ impl NodeHandle {
             .submit_receipt(receipt);
         if let Ok(outcome) = &outcome {
             self.record_orderbook_snapshot_metrics(now_unix);
+            self.save_orderbook_checkpoint(now_unix);
+            self.publish_orderbook_settlement_receipt(&outcome.accepted_receipt);
             self.publish_orderbook_event(
                 OrderbookEventKind::SettlementReceiptAccepted,
                 now_unix,
@@ -1743,6 +2764,303 @@ impl NodeHandle {
             },
             |orderbook| orderbook.snapshot(generated_at_unix),
         )
+    }
+
+    /// Export the local orderbook mirror as a canonical Norito replay snapshot.
+    ///
+    /// The returned payload is a checkpoint for the local mirror only. It does
+    /// not replace contract state or escrow custody mutation.
+    pub fn export_orderbook_runtime_snapshot(
+        &self,
+        generated_at_unix: u64,
+    ) -> Result<OrderbookRuntimeSnapshotV1, OrderbookRuntimeError> {
+        let snapshot = self
+            .orderbook
+            .read()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+            .runtime_snapshot(generated_at_unix);
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    /// Replace the local orderbook mirror from a validated replay snapshot.
+    ///
+    /// Event backlog replay is intentionally out of scope for this checkpoint;
+    /// live event streams resume from subsequent local events after restore.
+    pub fn restore_orderbook_runtime_snapshot(
+        &self,
+        snapshot: OrderbookRuntimeSnapshotV1,
+    ) -> Result<(), OrderbookRuntimeError> {
+        let generated_at_unix = snapshot.generated_at_unix;
+        self.orderbook
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+            .restore_runtime_snapshot(snapshot)?;
+        self.record_orderbook_snapshot_metrics(generated_at_unix);
+        self.save_orderbook_checkpoint(generated_at_unix);
+        Ok(())
+    }
+
+    fn load_moderation_model_registry_checkpoint(&self) {
+        let Some(path) = self.moderation_model_registry_checkpoint_path.as_ref() else {
+            return;
+        };
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == ErrorKind::NotFound => return,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to read SoraFS moderation model registry checkpoint"
+                );
+                return;
+            }
+        };
+        let snapshot = match norito::decode_from_bytes::<ModerationModelRegistrySnapshot>(&bytes) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to decode SoraFS moderation model registry checkpoint"
+                );
+                return;
+            }
+        };
+        let repro_count = snapshot.reproducibility_manifests.len();
+        let corpus_count = snapshot.adversarial_corpora.len();
+        match self
+            .moderation_model_registry
+            .write()
+            .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)
+            .and_then(|mut registry| registry.restore_snapshot(snapshot))
+        {
+            Ok(()) => {
+                iroha_logger::info!(
+                    path = %path.display(),
+                    repro_count,
+                    corpus_count,
+                    "restored SoraFS moderation model registry checkpoint"
+                );
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "rejected SoraFS moderation model registry checkpoint"
+                );
+            }
+        }
+    }
+
+    fn save_moderation_model_registry_checkpoint(&self) {
+        let Some(path) = self.moderation_model_registry_checkpoint_path.as_ref() else {
+            return;
+        };
+        let snapshot = match self.export_moderation_model_registry_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to build SoraFS moderation model registry checkpoint"
+                );
+                return;
+            }
+        };
+        let bytes = match norito::to_bytes(&snapshot) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to encode SoraFS moderation model registry checkpoint"
+                );
+                return;
+            }
+        };
+        if let Err(err) = write_local_checkpoint_atomic(path, &bytes) {
+            iroha_logger::warn!(
+                %err,
+                path = %path.display(),
+                "failed to persist SoraFS moderation model registry checkpoint"
+            );
+        }
+    }
+
+    fn load_moderation_screening_checkpoint(&self) {
+        let Some(path) = self.moderation_screening_checkpoint_path.as_ref() else {
+            return;
+        };
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == ErrorKind::NotFound => return,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to read SoraFS moderation screening checkpoint"
+                );
+                return;
+            }
+        };
+        let snapshot = match norito::decode_from_bytes::<ModerationScreeningSnapshot>(&bytes) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to decode SoraFS moderation screening checkpoint"
+                );
+                return;
+            }
+        };
+        let screening_count = snapshot.screening_records.len();
+        let quarantine_count = snapshot.quarantine_records.len();
+        match self
+            .moderation_screening
+            .write()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)
+            .and_then(|mut runtime| runtime.restore_snapshot(snapshot))
+        {
+            Ok(()) => {
+                iroha_logger::info!(
+                    path = %path.display(),
+                    screening_count,
+                    quarantine_count,
+                    "restored SoraFS moderation screening checkpoint"
+                );
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "rejected SoraFS moderation screening checkpoint"
+                );
+            }
+        }
+    }
+
+    fn save_moderation_screening_checkpoint(&self) {
+        let Some(path) = self.moderation_screening_checkpoint_path.as_ref() else {
+            return;
+        };
+        let snapshot = match self.export_moderation_screening_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to build SoraFS moderation screening checkpoint"
+                );
+                return;
+            }
+        };
+        let bytes = match norito::to_bytes(&snapshot) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to encode SoraFS moderation screening checkpoint"
+                );
+                return;
+            }
+        };
+        if let Err(err) = write_local_checkpoint_atomic(path, &bytes) {
+            iroha_logger::warn!(
+                %err,
+                path = %path.display(),
+                "failed to persist SoraFS moderation screening checkpoint"
+            );
+        }
+    }
+
+    fn load_orderbook_checkpoint(&self) {
+        let Some(path) = self.orderbook_checkpoint_path.as_ref() else {
+            return;
+        };
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == ErrorKind::NotFound => return,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to read SoraFS orderbook runtime checkpoint"
+                );
+                return;
+            }
+        };
+        let snapshot = match norito::decode_from_bytes::<OrderbookRuntimeSnapshotV1>(&bytes) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to decode SoraFS orderbook runtime checkpoint"
+                );
+                return;
+            }
+        };
+        let generated_at_unix = snapshot.generated_at_unix;
+        match self
+            .orderbook
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)
+            .and_then(|mut orderbook| orderbook.restore_runtime_snapshot(snapshot))
+        {
+            Ok(()) => {
+                self.record_orderbook_snapshot_metrics(generated_at_unix);
+                iroha_logger::info!(
+                    path = %path.display(),
+                    "restored SoraFS orderbook runtime checkpoint"
+                );
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "rejected SoraFS orderbook runtime checkpoint"
+                );
+            }
+        }
+    }
+
+    fn save_orderbook_checkpoint(&self, generated_at_unix: u64) {
+        let Some(path) = self.orderbook_checkpoint_path.as_ref() else {
+            return;
+        };
+        let snapshot = match self.export_orderbook_runtime_snapshot(generated_at_unix) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to build SoraFS orderbook runtime checkpoint"
+                );
+                return;
+            }
+        };
+        let bytes = match norito::to_bytes(&snapshot) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to encode SoraFS orderbook runtime checkpoint"
+                );
+                return;
+            }
+        };
+        if let Err(err) = write_local_checkpoint_atomic(path, &bytes) {
+            iroha_logger::warn!(
+                %err,
+                path = %path.display(),
+                "failed to persist SoraFS orderbook runtime checkpoint"
+            );
+        }
     }
 
     fn record_orderbook_snapshot_metrics(&self, now_unix: u64) {
@@ -1861,6 +3179,33 @@ impl NodeHandle {
         let _ = self.orderbook_event_sender.send(event);
     }
 
+    fn publish_orderbook_settlement_receipt(&self, receipt: &SettlementReceiptV1) {
+        let Some(publisher) = self.governance_publisher() else {
+            return;
+        };
+        let encoded = match norito::to_bytes(receipt) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                iroha_logger::error!(
+                    %err,
+                    receipt_id = %hex::encode(receipt.receipt_id),
+                    channel_id = %hex::encode(receipt.channel_id),
+                    "failed to encode SoraFS orderbook settlement receipt"
+                );
+                return;
+            }
+        };
+        if let Err(err) = publisher.publish_orderbook_settlement_receipt(receipt, &encoded) {
+            iroha_logger::error!(
+                %err,
+                receipt_id = %hex::encode(receipt.receipt_id),
+                channel_id = %hex::encode(receipt.channel_id),
+                trade_id = %hex::encode(receipt.trade_id),
+                "failed to publish SoraFS orderbook settlement receipt to governance DAG"
+            );
+        }
+    }
+
     fn publish_moderation_ballot_event(
         &self,
         kind: ModerationBallotEventKind,
@@ -1900,10 +3245,15 @@ impl NodeHandle {
     }
 
     fn publish_moderation_ballot_governance_event(&self, event: &ModerationBallotEvent) {
+        let governance_event = event.to_governance_event_v1();
+        self.record_transparency_source_entry_lossy(
+            transparency::moderation_ballot_governance_event_source_entry(&governance_event),
+            "moderation_ballot_governance_event",
+            &event.case_id,
+        );
         let Some(publisher) = self.governance_publisher() else {
             return;
         };
-        let governance_event = event.to_governance_event_v1();
         let encoded = match norito::to_bytes(&governance_event) {
             Ok(encoded) => encoded,
             Err(err) => {
@@ -1924,6 +3274,34 @@ impl NodeHandle {
                 round_id = %event.round_id,
                 sequence = event.sequence,
                 "failed to publish SoraFS moderation ballot event to governance DAG"
+            );
+        }
+    }
+
+    fn record_transparency_source_entry_lossy(
+        &self,
+        entry: Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError>,
+        source_kind: &'static str,
+        source_id: &str,
+    ) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                iroha_logger::warn!(
+                    %err,
+                    source_kind,
+                    source_id,
+                    "failed to derive SoraFS transparency source entry"
+                );
+                return;
+            }
+        };
+        if let Err(err) = self.record_transparency_ledger_source_entry(entry) {
+            iroha_logger::warn!(
+                %err,
+                source_kind,
+                source_id,
+                "failed to record SoraFS transparency source entry"
             );
         }
     }
@@ -3983,7 +5361,7 @@ mod tests {
         },
     };
 
-    use iroha_crypto::{Algorithm, Signature as IrohaSignature};
+    use iroha_crypto::{Algorithm, Signature as IrohaSignature, SignatureOf};
     use iroha_data_model::{
         metadata::Metadata,
         name::Name,
@@ -3994,6 +5372,11 @@ mod tests {
                 GIB_HOURS_PER_MONTH, MicropaymentTicket, TicketId,
             },
             moderation::{
+                ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
+                AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
+                MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
+                ModerationReproBodyV1, ModerationReproManifestV1, ModerationReproSignatureV1,
+                ModerationSeedMaterialV1, ModerationThresholdsV1,
                 SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
                 SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotCommitV1,
@@ -4014,10 +5397,12 @@ mod tests {
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
-        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-        SettlementChannelV1, SettlementReceiptV1, SoraFsAppealFinanceAccountFlowV1,
-        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
-        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1,
+        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1,
+        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+        SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
         SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
         SoraFsModerationVoteChoiceV1, SorafsReconciliationReportV1, build_reputation_snapshot,
         capacity::{
@@ -4056,6 +5441,128 @@ mod tests {
         (cfg, temp_dir)
     }
 
+    fn moderation_repro_manifest_fixture(
+        manifest_id_byte: u8,
+        manifest_digest_byte: u8,
+        runner_hash_byte: u8,
+    ) -> ModerationReproManifestV1 {
+        let body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [manifest_id_byte; 16],
+            manifest_digest: [manifest_digest_byte; 32],
+            runner_hash: [runner_hash_byte; 32],
+            runtime_version: format!("sorafs-ai-runner {runner_hash_byte}.0.0"),
+            issued_at_unix: 1_800_000_000 + u64::from(runner_hash_byte),
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:calibration".to_string(),
+                seed_version: 1,
+                run_nonce: [0x44; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![ModerationModelFingerprintV1 {
+                model_id: [0x55; 16],
+                artifact_digest: [0x66; 32],
+                weights_digest: [0x77; 32],
+                opset: 17,
+                weight: Some(10_000),
+            }],
+            notes: Some("registry fixture".to_string()),
+        };
+        let keypair = iroha_crypto::KeyPair::try_from_seed(vec![0x9A; 32], Algorithm::Ed25519)
+            .expect("moderation fixture seed must derive keypair");
+        let signature = SignatureOf::try_new(keypair.private_key(), &body)
+            .expect("moderation fixture signature");
+        ModerationReproManifestV1 {
+            body,
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "council".to_string(),
+                public_key: keypair.public_key().clone(),
+                signature,
+            }],
+        }
+    }
+
+    fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
+        AdversarialCorpusManifestV1 {
+            schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
+            issued_at_unix: 1_800_000_010,
+            cohort_label: Some("sfm4a-2026-q1".to_string()),
+            families: vec![AdversarialPerceptualFamilyV1 {
+                family_id: [0x21; 16],
+                description: "jpeg jitter corpus".to_string(),
+                variants: vec![
+                    AdversarialPerceptualVariantV1 {
+                        variant_id: [0x31; 16],
+                        attack_vector: "jpeg_jitter".to_string(),
+                        reference_cid_b64: None,
+                        perceptual_hash: Some([0x41; 32]),
+                        hamming_radius: 8,
+                        embedding_digest: None,
+                        notes: Some("hash match".to_string()),
+                    },
+                    AdversarialPerceptualVariantV1 {
+                        variant_id: [0x32; 16],
+                        attack_vector: "mosaic".to_string(),
+                        reference_cid_b64: None,
+                        perceptual_hash: None,
+                        hamming_radius: 0,
+                        embedding_digest: Some([0x42; 32]),
+                        notes: Some("embedding match".to_string()),
+                    },
+                ],
+            }],
+        }
+    }
+
+    fn moderation_screening_input_fixture(
+        subject: &str,
+        verdict: ModerationScreeningVerdict,
+    ) -> ModerationScreeningInput {
+        ModerationScreeningInput {
+            subject: subject.to_string(),
+            subject_digest: [0xA1; 32],
+            manifest_id: [0x12; 16],
+            runner_hash: [0x34; 32],
+            combined_score_bps: match verdict {
+                ModerationScreeningVerdict::Pass => 1_000,
+                ModerationScreeningVerdict::Warn => 3_000,
+                ModerationScreeningVerdict::Quarantine => 6_500,
+                ModerationScreeningVerdict::Escalate => 8_700,
+                ModerationScreeningVerdict::Block => 9_900,
+            },
+            verdict,
+            screened_at_unix: 1_800_000_050,
+            evidence_digest: Some([0xE1; 32]),
+            policy_digest: Some([0xC1; 32]),
+            notes: Some("local screening fixture".to_string()),
+        }
+    }
+
+    fn moderation_quarantine_review_input(
+        quarantine_id: [u8; 16],
+    ) -> ModerationQuarantineReviewInput {
+        ModerationQuarantineReviewInput {
+            quarantine_id,
+            reviewed_by: "operator@moderation".to_string(),
+            reviewed_at_unix: 1_800_000_060,
+            notes: Some("reviewed locally".to_string()),
+        }
+    }
+
+    fn moderation_quarantine_release_input(
+        quarantine_id: [u8; 16],
+    ) -> ModerationQuarantineReleaseInput {
+        ModerationQuarantineReleaseInput {
+            quarantine_id,
+            release_authority: "release-authority@moderation".to_string(),
+            released_at_unix: 1_800_000_070,
+            notes: Some("released locally".to_string()),
+        }
+    }
+
     fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
         let metrics = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
@@ -4084,6 +5591,222 @@ mod tests {
             None,
         )
         .expect("reputation snapshot fixture")
+    }
+
+    fn transparency_ledger_publication_fixture() -> ModerationLedgerCyclePublicationV1 {
+        use iroha_data_model::sorafs::transparency::{
+            MODERATION_LEDGER_ENTRY_VERSION_V1, ModerationLedgerEntryKindV1,
+            ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
+        };
+
+        let cycle_id = *b"cycle-2026-wk-02";
+        let entries = [
+            ModerationLedgerEntryV1 {
+                version: MODERATION_LEDGER_ENTRY_VERSION_V1,
+                cycle_id,
+                entry_id: [0x22; 16],
+                sequence: 2,
+                occurred_at_unix: 1_800_000_020,
+                kind: ModerationLedgerEntryKindV1::GarEnforcementReceipt,
+                subject: "gar-receipt-22".to_string(),
+                subject_digest: [0x22; 32],
+                payload_digest: [0x23; 32],
+                summary_digest: [0x24; 32],
+                policy_digest: Some([0x25; 32]),
+                evidence_uris: vec!["sora://transparency/22".to_string()],
+                metadata: vec![ModerationLedgerMetadataV1 {
+                    key: "source".to_string(),
+                    value: "gar".to_string(),
+                }],
+            },
+            ModerationLedgerEntryV1 {
+                version: MODERATION_LEDGER_ENTRY_VERSION_V1,
+                cycle_id,
+                entry_id: [0x11; 16],
+                sequence: 1,
+                occurred_at_unix: 1_800_000_010,
+                kind: ModerationLedgerEntryKindV1::AppealOutcome,
+                subject: "appeal-case-11".to_string(),
+                subject_digest: [0x11; 32],
+                payload_digest: [0x12; 32],
+                summary_digest: [0x13; 32],
+                policy_digest: Some([0x14; 32]),
+                evidence_uris: vec!["sora://transparency/11".to_string()],
+                metadata: vec![ModerationLedgerMetadataV1 {
+                    key: "source".to_string(),
+                    value: "appeal".to_string(),
+                }],
+            },
+        ];
+        ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id,
+            1_800_000_000,
+            1_800_604_800,
+            1_800_604_801,
+            None,
+            &entries,
+        )
+        .expect("transparency ledger publication fixture")
+    }
+
+    fn privacy_aggregate_fixture(aggregate_id: &str, seed: u8) -> ModerationPrivacyAggregateV1 {
+        use iroha_data_model::sorafs::transparency::{
+            MODERATION_PRIVACY_AGGREGATE_VERSION_V1, MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            ModerationLedgerMetadataV1, ModerationPrivacyAggregateMetricV1,
+            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
+        };
+
+        ModerationPrivacyAggregateV1 {
+            version: MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
+            aggregate_id: aggregate_id.to_string(),
+            window_start_unix: 1_800_000_000,
+            window_end_unix: 1_800_604_800,
+            generated_at_unix: 1_800_604_801,
+            population_label: format!("{aggregate_id}-population"),
+            population_digest: [seed; 32],
+            privacy: ModerationPrivacyParametersV1 {
+                version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+                mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
+                epsilon_micros: Some(800_000),
+                delta_ppb: Some(10),
+                noise_scale_micros: Some(1_000_000),
+                suppression_threshold: Some(25),
+                suppressed_count: 2,
+            },
+            source_event_count: 128,
+            source_payload_digest: [seed.wrapping_add(1); 32],
+            metrics: vec![
+                ModerationPrivacyAggregateMetricV1 {
+                    key: "appeals_upheld".to_string(),
+                    value: u64::from(seed),
+                    unit: "count".to_string(),
+                },
+                ModerationPrivacyAggregateMetricV1 {
+                    key: "moderation_actions".to_string(),
+                    value: u64::from(seed) + 10,
+                    unit: "count".to_string(),
+                },
+            ],
+            policy_digest: Some([seed.wrapping_add(2); 32]),
+            metadata: vec![ModerationLedgerMetadataV1 {
+                key: "publisher".to_string(),
+                value: "sfm4c".to_string(),
+            }],
+        }
+    }
+
+    fn privacy_source_event(
+        event_id: &str,
+        population_label: &str,
+        seed: u8,
+        occurred_at_unix: u64,
+    ) -> PrivacyAggregateSourceEvent {
+        PrivacyAggregateSourceEvent {
+            event_id: event_id.to_string(),
+            occurred_at_unix,
+            population_label: population_label.to_string(),
+            population_digest: Some([seed; 32]),
+            metrics: vec![
+                PrivacyAggregateSourceMetric {
+                    key: "appeals_upheld".to_string(),
+                    value: 1,
+                    unit: "count".to_string(),
+                },
+                PrivacyAggregateSourceMetric {
+                    key: "moderation_actions".to_string(),
+                    value: 3,
+                    unit: "count".to_string(),
+                },
+            ],
+            policy_digest: Some([0xC0; 32]),
+        }
+    }
+
+    fn transparency_ledger_source_entry(
+        event_id: &str,
+        occurred_at_unix: u64,
+        kind: iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1,
+        subject: &str,
+        seed: u8,
+    ) -> TransparencyLedgerSourceEntry {
+        TransparencyLedgerSourceEntry {
+            event_id: event_id.to_string(),
+            occurred_at_unix,
+            kind,
+            subject: subject.to_string(),
+            subject_digest: [seed; 32],
+            payload_digest: [seed.wrapping_add(1); 32],
+            summary_digest: [seed.wrapping_add(2); 32],
+            policy_digest: Some([seed.wrapping_add(3); 32]),
+            evidence_uris: vec![format!("sora://transparency/{event_id}")],
+            metadata: vec![
+                ModerationLedgerMetadataV1 {
+                    key: "pipeline".to_string(),
+                    value: "sfm4c".to_string(),
+                },
+                ModerationLedgerMetadataV1 {
+                    key: "source".to_string(),
+                    value: "unit-test".to_string(),
+                },
+            ],
+        }
+    }
+
+    fn gar_enforcement_receipt_fixture(
+        action: iroha_data_model::sorafs::gar::GarEnforcementActionV1,
+    ) -> GarEnforcementReceiptV1 {
+        GarEnforcementReceiptV1 {
+            receipt_id: *b"gar-receipt-0001",
+            gar_name: "docs.sora".to_string(),
+            canonical_host: "docs.gateway.sora.net".to_string(),
+            action,
+            triggered_at_unix: 1_800_000_010,
+            expires_at_unix: Some(1_800_086_410),
+            policy_version: Some("2026-q2".to_string()),
+            policy_digest: Some([0xAB; 32]),
+            operator: iroha_data_model::account::AccountId::parse_encoded(
+                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+            )
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("account id"),
+            reason: "Guardian freeze window".to_string(),
+            notes: Some("Escalated during SFM-4c drill".to_string()),
+            evidence_uris: vec!["sora://gar/receipts/docs/0001".to_string()],
+            labels: vec!["guardian-freeze".to_string(), "sfm4c".to_string()],
+        }
+    }
+
+    fn privacy_aggregate_cycle_config(noise_seed: Option<[u8; 32]>) -> PrivacyAggregateCycleConfig {
+        use iroha_data_model::sorafs::transparency::{
+            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerMetadataV1,
+            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
+        };
+
+        PrivacyAggregateCycleConfig {
+            aggregate_id_prefix: "sfm4c-weekly".to_string(),
+            privacy: ModerationPrivacyParametersV1 {
+                version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+                mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
+                epsilon_micros: Some(800_000),
+                delta_ppb: Some(10),
+                noise_scale_micros: Some(1_000_000),
+                suppression_threshold: Some(2),
+                suppressed_count: 0,
+            },
+            noise_seed,
+            policy_digest: Some([0xC0; 32]),
+            metadata: vec![ModerationLedgerMetadataV1 {
+                key: "publisher".to_string(),
+                value: "sfm4c-worker".to_string(),
+            }],
+        }
+    }
+
+    fn privacy_aggregate_schedule_config() -> PrivacyAggregateScheduleConfig {
+        PrivacyAggregateScheduleConfig {
+            cycle_seconds: 100,
+            publish_delay_seconds: 10,
+        }
     }
 
     fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
@@ -4131,6 +5854,39 @@ mod tests {
         }
     }
 
+    fn proof_token_issuance_fixture() -> ProofTokenIssuanceV1 {
+        ProofTokenIssuanceV1 {
+            version: iroha_data_model::sorafs::transparency::PROOF_TOKEN_ISSUANCE_VERSION_V1,
+            token_id: [0x61; 16],
+            issued_at_unix: 1_800_000_030,
+            expires_at_unix: Some(1_800_086_430),
+            moderation_action_code: 2,
+            signer_key: [0x62; 32],
+            token_blake3: [0x63; 32],
+            blinded_digest: [0x64; 32],
+            entry_ids: vec!["denylist/global".to_string(), "gar/policy/42".to_string()],
+            evidence_digest: Some([0x65; 32]),
+            policy_digest: Some([0x66; 32]),
+            metadata: vec![
+                iroha_data_model::sorafs::transparency::ModerationLedgerMetadataV1 {
+                    key: "issuer".to_string(),
+                    value: "gateway-a".to_string(),
+                },
+            ],
+        }
+    }
+
+    const VALID_PROOF_TOKEN_SIGNER_HEX: &str =
+        "f4bfda67d38a409557e4a910dbdf0a862ee5aa6cf6c2284aa38b0b82c4f16532";
+    const VALID_PROOF_TOKEN_B64: &str = "U0ZHVAEBAgAAAABrSdIeAAAAAGtLI55hYWFhYWFhYWFhYWFhYWFhAAIAD2RlbnlsaXN0L2dsb2JhbAANZ2FyL3BvbGljeS80MmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkAEDHmshANx2cvkpmh1mCkrE94PJ6hL0A0qX4vQ-T3rWyTUKZG6uGoYM2sXbL36cYTahpsgcQ35z4R9bb1owinokB";
+
+    fn proof_token_signer_key_fixture() -> [u8; 32] {
+        hex::decode(VALID_PROOF_TOKEN_SIGNER_HEX)
+            .expect("valid proof-token signer hex")
+            .try_into()
+            .expect("proof-token signer key length")
+    }
+
     fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
         let report = appeal_finance_report_fixture();
         SoraFsAppealFinanceWeeklyRollupV1::from_reports(
@@ -4142,6 +5898,36 @@ mod tests {
             &[report],
         )
         .expect("appeal finance weekly rollup fixture")
+    }
+
+    fn appeal_finance_settlement_receipt_fixture() -> SoraFsAppealFinanceSettlementReceiptV1 {
+        SoraFsAppealFinanceSettlementReceiptV1 {
+            version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: [0x52; 16],
+            case_id: "case-42".to_string(),
+            round_id: Some("round-1".to_string()),
+            generated_at_unix_ms: 1_800_000_032_000,
+            appeal_finance_config_version: "baseline-v1".to_string(),
+            outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
+            escrow_id_hex: "11".repeat(32),
+            payer_account: "payer-account".to_string(),
+            destination_account: "escrow-account".to_string(),
+            release_authority_account: Some("release-authority".to_string()),
+            submitted_step: "drawdown_non_refund".to_string(),
+            required_authority: "release-authority".to_string(),
+            amount_xor: "420".to_string(),
+            tx_hash_hex: "22".repeat(32),
+            reconciliation_digest_hex: "33".repeat(32),
+            reconciliation_status: "pending_client_submission".to_string(),
+            observed_lifecycle_status: "locked".to_string(),
+            observed_remaining_xor: "420".to_string(),
+            deposit_xor: "420".to_string(),
+            refund_xor: "0".to_string(),
+            treasury_xor: "210".to_string(),
+            held_xor: "210".to_string(),
+            panel_size: 7,
+            configured_signer_count: 1,
+        }
     }
 
     fn approval_for_default_policy(escalated_at_unix: u64) -> RepairEscalationApprovalV1 {
@@ -4160,6 +5946,325 @@ mod tests {
             approved_at_unix,
             finalized_at_unix,
         }
+    }
+
+    #[test]
+    fn moderation_model_registry_admits_repro_manifest_and_rejects_conflict() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let manifest = moderation_repro_manifest_fixture(0x10, 0x20, 0x30);
+
+        let record = handle
+            .admit_moderation_repro_manifest(manifest.clone())
+            .expect("admit repro manifest");
+        assert_eq!(record.manifest_id, [0x10; 16]);
+        assert_eq!(record.manifest_digest, [0x20; 32]);
+        assert_eq!(record.runner_hash, [0x30; 32]);
+        assert_eq!(record.model_count, 1);
+        assert_eq!(record.signer_count, 1);
+
+        let repeated = handle
+            .admit_moderation_repro_manifest(manifest)
+            .expect("re-admit matching repro manifest");
+        assert_eq!(repeated, record);
+
+        let err = handle
+            .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x10, 0x21, 0x31))
+            .expect_err("conflicting manifest id rejected");
+        assert!(matches!(
+            err,
+            ModerationModelRegistryError::ConflictingReproManifest { .. }
+        ));
+
+        let snapshot = handle.moderation_model_registry_snapshot();
+        assert_eq!(snapshot.reproducibility_manifests, vec![record]);
+        assert!(snapshot.adversarial_corpora.is_empty());
+    }
+
+    #[test]
+    fn moderation_model_registry_admits_corpus_manifest_snapshot() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let manifest = adversarial_corpus_manifest_fixture();
+        let expected_digest =
+            *blake3::hash(&to_bytes(&manifest).expect("encode corpus fixture")).as_bytes();
+
+        let record = handle
+            .admit_moderation_corpus_manifest(manifest.clone())
+            .expect("admit corpus manifest");
+        assert_eq!(record.corpus_digest, expected_digest);
+        assert_eq!(record.cohort_label.as_deref(), Some("sfm4a-2026-q1"));
+        assert_eq!(record.family_count, 1);
+        assert_eq!(record.variant_count, 2);
+
+        let repeated = handle
+            .admit_moderation_corpus_manifest(manifest)
+            .expect("re-admit matching corpus manifest");
+        assert_eq!(repeated, record);
+
+        let snapshot = handle.moderation_model_registry_snapshot();
+        assert!(snapshot.reproducibility_manifests.is_empty());
+        assert_eq!(snapshot.adversarial_corpora, vec![record]);
+    }
+
+    #[test]
+    fn moderation_model_registry_checkpoint_persists_and_reloads_snapshot() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let source = NodeHandle::new(cfg.clone());
+        let repro_record = source
+            .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x12, 0x22, 0x32))
+            .expect("admit repro manifest");
+        let corpus_record = source
+            .admit_moderation_corpus_manifest(adversarial_corpus_manifest_fixture())
+            .expect("admit corpus manifest");
+
+        let checkpoint_path = moderation_model_registry_checkpoint_path(cfg.data_dir());
+        let checkpoint_bytes = fs::read(&checkpoint_path).expect("read registry checkpoint");
+        let checkpoint: ModerationModelRegistrySnapshot =
+            norito::decode_from_bytes(&checkpoint_bytes).expect("decode registry checkpoint");
+        assert_eq!(
+            checkpoint.reproducibility_manifests,
+            vec![repro_record.clone()]
+        );
+        assert_eq!(checkpoint.adversarial_corpora, vec![corpus_record.clone()]);
+
+        let restored = NodeHandle::new(cfg);
+        let restored_snapshot = restored
+            .export_moderation_model_registry_snapshot()
+            .expect("export restored registry snapshot");
+        assert_eq!(
+            restored_snapshot,
+            ModerationModelRegistrySnapshot {
+                reproducibility_manifests: vec![repro_record],
+                adversarial_corpora: vec![corpus_record],
+            }
+        );
+    }
+
+    #[test]
+    fn moderation_model_registry_restore_rejects_duplicate_records() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let record = ModerationReproRegistryRecord {
+            manifest_id: [0x14; 16],
+            manifest_digest: [0x24; 32],
+            runner_hash: [0x34; 32],
+            runtime_version: "sorafs-ai-runner 1.0.0".to_string(),
+            issued_at_unix: 1_800_000_040,
+            model_count: 1,
+            signer_count: 1,
+        };
+        let err = handle
+            .restore_moderation_model_registry_snapshot(ModerationModelRegistrySnapshot {
+                reproducibility_manifests: vec![record.clone(), record],
+                adversarial_corpora: Vec::new(),
+            })
+            .expect_err("duplicate manifest ids rejected");
+        assert!(matches!(
+            err,
+            ModerationModelRegistryError::InvalidRegistrySnapshot { .. }
+        ));
+        assert_eq!(
+            handle.moderation_model_registry_snapshot(),
+            ModerationModelRegistrySnapshot::default()
+        );
+    }
+
+    #[test]
+    fn moderation_screening_records_deterministic_quarantine_queue() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let input = moderation_screening_input_fixture(
+            "cid:bafy-screening",
+            ModerationScreeningVerdict::Quarantine,
+        );
+
+        let outcome = handle
+            .record_moderation_screening_result(input.clone())
+            .expect("record screening result");
+        assert_eq!(outcome.record.subject, "cid:bafy-screening");
+        assert_eq!(
+            outcome.record.verdict,
+            ModerationScreeningVerdict::Quarantine
+        );
+        assert_eq!(outcome.record.combined_score_bps, 6_500);
+        assert_eq!(
+            &outcome.record.record_digest[..16],
+            outcome.record.record_id
+        );
+        let quarantine = outcome.quarantine.expect("quarantine record");
+        assert_eq!(quarantine.screening_record_id, outcome.record.record_id);
+        assert_eq!(quarantine.subject_digest, outcome.record.subject_digest);
+        assert_eq!(quarantine.verdict, ModerationScreeningVerdict::Quarantine);
+        assert_eq!(quarantine.state, ModerationQuarantineState::PendingReview);
+        assert!(quarantine.reviewed_at_unix.is_none());
+        assert!(quarantine.released_at_unix.is_none());
+
+        let repeated = handle
+            .record_moderation_screening_result(input)
+            .expect("idempotent screening result");
+        assert_eq!(repeated.record, outcome.record);
+        assert_eq!(repeated.quarantine, Some(quarantine.clone()));
+
+        let snapshot = handle.moderation_screening_snapshot();
+        assert_eq!(snapshot.screening_records, vec![outcome.record]);
+        assert_eq!(snapshot.quarantine_records, vec![quarantine]);
+    }
+
+    #[test]
+    fn moderation_screening_pass_does_not_create_quarantine_record() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+
+        let outcome = handle
+            .record_moderation_screening_result(moderation_screening_input_fixture(
+                "cid:bafy-pass",
+                ModerationScreeningVerdict::Pass,
+            ))
+            .expect("record pass result");
+        assert!(outcome.quarantine.is_none());
+        let snapshot = handle.moderation_screening_snapshot();
+        assert_eq!(snapshot.screening_records, vec![outcome.record]);
+        assert!(snapshot.quarantine_records.is_empty());
+    }
+
+    #[test]
+    fn moderation_screening_checkpoint_persists_and_reloads_snapshot() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let source = NodeHandle::new(cfg.clone());
+        let quarantine_outcome = source
+            .record_moderation_screening_result(moderation_screening_input_fixture(
+                "cid:bafy-quarantine",
+                ModerationScreeningVerdict::Quarantine,
+            ))
+            .expect("record quarantine result");
+        let pass_outcome = source
+            .record_moderation_screening_result(moderation_screening_input_fixture(
+                "cid:bafy-pass",
+                ModerationScreeningVerdict::Pass,
+            ))
+            .expect("record pass result");
+
+        let checkpoint_path = moderation_screening_checkpoint_path(cfg.data_dir());
+        let checkpoint_bytes = fs::read(&checkpoint_path).expect("read screening checkpoint");
+        let checkpoint: ModerationScreeningSnapshot =
+            norito::decode_from_bytes(&checkpoint_bytes).expect("decode screening checkpoint");
+        assert_eq!(checkpoint.screening_records.len(), 2);
+        assert_eq!(checkpoint.quarantine_records.len(), 1);
+
+        let restored = NodeHandle::new(cfg);
+        let restored_snapshot = restored
+            .export_moderation_screening_snapshot()
+            .expect("export restored screening snapshot");
+        let mut expected_records = vec![quarantine_outcome.record, pass_outcome.record];
+        expected_records.sort_by_key(|record| record.record_id);
+        assert_eq!(
+            restored_snapshot,
+            ModerationScreeningSnapshot {
+                screening_records: expected_records,
+                quarantine_records: vec![quarantine_outcome.quarantine.expect("quarantine")],
+            }
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_review_and_release_updates_checkpoint() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let source = NodeHandle::new(cfg.clone());
+        let outcome = source
+            .record_moderation_screening_result(moderation_screening_input_fixture(
+                "cid:bafy-review-release",
+                ModerationScreeningVerdict::Quarantine,
+            ))
+            .expect("record quarantine result");
+        let quarantine_id = outcome
+            .quarantine
+            .as_ref()
+            .expect("quarantine record")
+            .quarantine_id;
+
+        let reviewed = source
+            .review_moderation_quarantine_record(moderation_quarantine_review_input(quarantine_id))
+            .expect("review quarantine record");
+        assert_eq!(reviewed.state, ModerationQuarantineState::Reviewed);
+        assert_eq!(reviewed.reviewed_at_unix, Some(1_800_000_060));
+        assert_eq!(reviewed.reviewed_by.as_deref(), Some("operator@moderation"));
+        assert!(reviewed.released_at_unix.is_none());
+
+        let released = source
+            .release_moderation_quarantine_record(moderation_quarantine_release_input(
+                quarantine_id,
+            ))
+            .expect("release quarantine record");
+        assert_eq!(released.state, ModerationQuarantineState::Released);
+        assert_eq!(released.reviewed_at_unix, Some(1_800_000_060));
+        assert_eq!(released.released_at_unix, Some(1_800_000_070));
+        assert_eq!(
+            released.release_authority.as_deref(),
+            Some("release-authority@moderation")
+        );
+
+        let restored = NodeHandle::new(cfg);
+        let snapshot = restored
+            .export_moderation_screening_snapshot()
+            .expect("export restored screening snapshot");
+        assert_eq!(snapshot.screening_records, vec![outcome.record]);
+        assert_eq!(snapshot.quarantine_records, vec![released]);
+    }
+
+    #[test]
+    fn moderation_quarantine_release_requires_review() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let outcome = handle
+            .record_moderation_screening_result(moderation_screening_input_fixture(
+                "cid:bafy-release-before-review",
+                ModerationScreeningVerdict::Quarantine,
+            ))
+            .expect("record quarantine result");
+        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
+
+        let err = handle
+            .release_moderation_quarantine_record(moderation_quarantine_release_input(
+                quarantine_id,
+            ))
+            .expect_err("release before review rejected");
+        assert!(matches!(
+            err,
+            ModerationScreeningError::InvalidTransition { .. }
+        ));
+        assert_eq!(
+            handle
+                .moderation_screening_snapshot()
+                .quarantine_records
+                .first()
+                .map(|record| record.state),
+            Some(ModerationQuarantineState::PendingReview)
+        );
+    }
+
+    #[test]
+    fn moderation_screening_restore_rejects_tampered_digest() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let outcome = handle
+            .record_moderation_screening_result(moderation_screening_input_fixture(
+                "cid:bafy-tamper",
+                ModerationScreeningVerdict::Quarantine,
+            ))
+            .expect("record screening result");
+        let mut tampered = outcome.record;
+        tampered.record_digest[0] ^= 0xFF;
+        let err = handle
+            .restore_moderation_screening_snapshot(ModerationScreeningSnapshot {
+                screening_records: vec![tampered],
+                quarantine_records: Vec::new(),
+            })
+            .expect_err("tampered digest rejected");
+        assert!(matches!(
+            err,
+            ModerationScreeningError::InvalidSnapshot { .. }
+        ));
     }
 
     #[test]
@@ -4404,6 +6509,7 @@ mod tests {
             deposit_xor: "420".to_owned(),
             expires_at_ms: Some(1_800_100_000_000),
             idempotency_key: "case-appeal-round-1".to_owned(),
+            evidence_hashes_hex: vec![blake3::hash(b"case-appeal-round-1").to_string()],
         }
     }
 
@@ -4488,6 +6594,58 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_orderbook_rejects_orders_below_configured_minimum() {
+        let cfg = StorageConfig::builder()
+            .enabled(false)
+            .orderbook_admission_policy(OrderbookAdmissionPolicy::new(8, 1_000))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+
+        let err = handle
+            .submit_orderbook_order(
+                orderbook_order(61, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                now,
+            )
+            .expect_err("below-minimum order should be rejected");
+
+        assert_eq!(
+            err,
+            OrderbookRuntimeError::OrderBelowMinimum {
+                quantity_gib: 4,
+                min_order_gib: 8,
+            }
+        );
+        assert!(handle.orderbook_snapshot(now).open_orders.is_empty());
+    }
+
+    #[test]
+    fn node_handle_orderbook_rejects_prices_outside_configured_tick() {
+        let cfg = StorageConfig::builder()
+            .enabled(false)
+            .orderbook_admission_policy(OrderbookAdmissionPolicy::new(1, 10_000))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+
+        let err = handle
+            .submit_orderbook_order(
+                orderbook_order(62, OrderSideV1::Ask, 1_605_000, b"provider"),
+                now,
+            )
+            .expect_err("off-tick order should be rejected");
+
+        assert_eq!(
+            err,
+            OrderbookRuntimeError::OrderPriceTickMismatch {
+                price_micro_xor: 1_605_000,
+                tick_micro_xor: 10_000,
+            }
+        );
+        assert!(handle.orderbook_snapshot(now).open_orders.is_empty());
+    }
+
+    #[test]
     fn node_handle_orderbook_cancels_owner_order_only() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
@@ -4560,6 +6718,181 @@ mod tests {
                 .settlement_receipts
                 .first()
                 .map(|receipt| receipt.receipt_id)
+        );
+    }
+
+    #[test]
+    fn node_handle_orderbook_receipts_publish_governance_receipt() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let now = 1_800_000_000;
+        let ask = orderbook_order(16, OrderSideV1::Ask, 1_500_000, b"provider");
+        let bid = orderbook_order(17, OrderSideV1::Bid, 1_600_000, b"buyer");
+        handle.submit_orderbook_order(ask, now).expect("accept ask");
+        handle.submit_orderbook_order(bid, now).expect("match bid");
+        let channel = handle.orderbook_snapshot(now).settlement_channels[0].clone();
+        let receipt = orderbook_receipt(
+            18,
+            &channel,
+            0,
+            channel.total_bytes,
+            now.saturating_add(10),
+            channel.xor_locked.as_micro(),
+        );
+
+        handle
+            .submit_orderbook_receipt(receipt.clone(), now.saturating_add(10))
+            .expect("apply receipt");
+
+        let payloads = publisher.take();
+        assert_eq!(payloads.len(), 1);
+        let decoded =
+            norito::decode_from_bytes::<SettlementReceiptV1>(&payloads[0]).expect("decode receipt");
+        assert_eq!(decoded.receipt_id, receipt.receipt_id);
+        assert_eq!(decoded.channel_id, channel.channel_id);
+        assert_eq!(decoded.trade_id, channel.trade_id);
+        assert_eq!(decoded.bytes_delivered, channel.total_bytes);
+    }
+
+    #[test]
+    fn node_handle_orderbook_runtime_snapshot_round_trips_local_state() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let source = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        source
+            .submit_orderbook_order(
+                orderbook_order(19, OrderSideV1::Ask, 1_500_000, b"provider"),
+                now,
+            )
+            .expect("accept ask");
+        source
+            .submit_orderbook_order(
+                orderbook_order(20, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                now,
+            )
+            .expect("match bid");
+        let channel = source.orderbook_snapshot(now).settlement_channels[0].clone();
+        source
+            .submit_orderbook_receipt(
+                orderbook_receipt(
+                    21,
+                    &channel,
+                    0,
+                    channel.total_bytes,
+                    now.saturating_add(10),
+                    channel.xor_locked.as_micro(),
+                ),
+                now.saturating_add(10),
+            )
+            .expect("apply receipt");
+        source
+            .submit_orderbook_order(
+                orderbook_order(22, OrderSideV1::Ask, 1_700_000, b"provider-next"),
+                now,
+            )
+            .expect("leave open ask");
+
+        let exported = source
+            .export_orderbook_runtime_snapshot(now.saturating_add(20))
+            .expect("export orderbook snapshot");
+        let encoded = norito::to_bytes(&exported).expect("encode orderbook snapshot");
+        let decoded: OrderbookRuntimeSnapshotV1 =
+            norito::decode_from_bytes(&encoded).expect("decode orderbook snapshot");
+        let restored = NodeHandle::new(cfg);
+        restored
+            .restore_orderbook_runtime_snapshot(decoded)
+            .expect("restore orderbook snapshot");
+
+        let source_snapshot = source.orderbook_snapshot(now.saturating_add(20));
+        let restored_snapshot = restored.orderbook_snapshot(now.saturating_add(20));
+        assert_eq!(
+            restored_snapshot.next_sequence,
+            source_snapshot.next_sequence
+        );
+        assert_eq!(restored_snapshot.open_orders, source_snapshot.open_orders);
+        assert_eq!(restored_snapshot.trades, source_snapshot.trades);
+        assert_eq!(
+            restored_snapshot.settlement_channels,
+            source_snapshot.settlement_channels
+        );
+        assert_eq!(
+            restored_snapshot.settlement_receipts,
+            source_snapshot.settlement_receipts
+        );
+        assert_eq!(
+            restored_snapshot.expired_order_ids,
+            source_snapshot.expired_order_ids
+        );
+    }
+
+    #[test]
+    fn node_handle_orderbook_checkpoint_persists_and_reloads_local_state() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let source = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        source
+            .submit_orderbook_order(
+                orderbook_order(23, OrderSideV1::Ask, 1_500_000, b"provider"),
+                now,
+            )
+            .expect("accept ask");
+        source
+            .submit_orderbook_order(
+                orderbook_order(24, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                now,
+            )
+            .expect("match bid");
+        let channel = source.orderbook_snapshot(now).settlement_channels[0].clone();
+        source
+            .submit_orderbook_receipt(
+                orderbook_receipt(
+                    25,
+                    &channel,
+                    0,
+                    channel.total_bytes,
+                    now.saturating_add(10),
+                    channel.xor_locked.as_micro(),
+                ),
+                now.saturating_add(10),
+            )
+            .expect("apply receipt");
+        source
+            .submit_orderbook_order(
+                orderbook_order(26, OrderSideV1::Ask, 1_700_000, b"provider-next"),
+                now.saturating_add(20),
+            )
+            .expect("leave open ask");
+
+        let checkpoint_path = orderbook_runtime_snapshot_path(cfg.data_dir());
+        let checkpoint_bytes = fs::read(&checkpoint_path).expect("read orderbook checkpoint");
+        let checkpoint: OrderbookRuntimeSnapshotV1 =
+            norito::decode_from_bytes(&checkpoint_bytes).expect("decode orderbook checkpoint");
+        checkpoint.validate().expect("checkpoint validates");
+        assert_eq!(checkpoint.generated_at_unix, now.saturating_add(20));
+
+        let restored = NodeHandle::new(cfg);
+        let source_snapshot = source.orderbook_snapshot(now.saturating_add(20));
+        let restored_snapshot = restored.orderbook_snapshot(now.saturating_add(20));
+        assert_eq!(
+            restored_snapshot.next_sequence,
+            source_snapshot.next_sequence
+        );
+        assert_eq!(restored_snapshot.open_orders, source_snapshot.open_orders);
+        assert_eq!(restored_snapshot.trades, source_snapshot.trades);
+        assert_eq!(
+            restored_snapshot.settlement_channels,
+            source_snapshot.settlement_channels
+        );
+        assert_eq!(
+            restored_snapshot.settlement_receipts,
+            source_snapshot.settlement_receipts
+        );
+        assert_eq!(
+            restored_snapshot.expired_order_ids,
+            source_snapshot.expired_order_ids
         );
     }
 
@@ -4876,6 +7209,8 @@ mod tests {
 
     #[test]
     fn node_handle_moderation_tally_publishes_appeal_finance_report_for_confirmed_deposit() {
+        use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
+
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
@@ -4957,6 +7292,31 @@ mod tests {
         assert_eq!(report.rewards_forfeited_treasury_xor, "25");
         assert_eq!(report.juror_payouts.len(), 2);
         assert_eq!(report.no_show_juror_ids, vec!["juror-c".to_owned()]);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 7);
+
+        let publication = handle
+            .publish_transparency_ledger_cycle_from_source_entries(
+                *b"cycle-src-pub003",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+            )
+            .expect("publish moderation/appeal source cycle");
+        publication.validate().expect("publication validates");
+        assert_eq!(publication.block.entry_count, 7);
+        assert!(
+            publication
+                .proofs
+                .iter()
+                .any(|proof| proof.entry.kind == ModerationLedgerEntryKindV1::ModerationAction)
+        );
+        assert!(
+            publication
+                .proofs
+                .iter()
+                .any(|proof| proof.entry.kind == ModerationLedgerEntryKindV1::AppealOutcome)
+        );
     }
 
     #[test]
@@ -5286,6 +7646,785 @@ mod tests {
     }
 
     #[test]
+    fn publish_transparency_ledger_publication_writes_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let publication = transparency_ledger_publication_fixture();
+        let expected = to_bytes(&publication).expect("encode transparency ledger publication");
+
+        handle
+            .publish_transparency_ledger_publication(publication.clone())
+            .expect("publish transparency ledger publication");
+
+        let published = publisher.take();
+        assert_eq!(published, vec![expected]);
+        let decoded: ModerationLedgerCyclePublicationV1 = norito::decode_from_bytes(&published[0])
+            .expect("decode transparency ledger publication");
+        assert_eq!(decoded.block.entry_count, 2);
+        decoded.validate().expect("publication validates");
+    }
+
+    #[test]
+    fn publish_proof_token_issuance_writes_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let issuance = proof_token_issuance_fixture();
+        let expected = to_bytes(&issuance).expect("encode proof-token issuance");
+
+        handle
+            .publish_proof_token_issuance(issuance.clone())
+            .expect("publish proof-token issuance");
+
+        let published = publisher.take();
+        assert_eq!(published, vec![expected]);
+        let decoded: ProofTokenIssuanceV1 =
+            norito::decode_from_bytes(&published[0]).expect("decode proof-token issuance");
+        assert_eq!(decoded, issuance);
+        decoded.validate().expect("issuance validates");
+    }
+
+    #[test]
+    fn publish_proof_token_base64_issuance_derives_and_writes_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let issuance = handle
+            .publish_proof_token_base64_issuance(
+                VALID_PROOF_TOKEN_B64,
+                proof_token_signer_key_fixture(),
+                Some([0x65; 32]),
+                Some([0x66; 32]),
+                vec![
+                    iroha_data_model::sorafs::transparency::ModerationLedgerMetadataV1 {
+                        key: "issuer".to_string(),
+                        value: "gateway-a".to_string(),
+                    },
+                ],
+            )
+            .expect("publish proof-token issuance from base64");
+
+        assert_eq!(issuance.token_id, [0x61; 16]);
+        assert_eq!(issuance.issued_at_unix, 1_800_000_030);
+        assert_eq!(issuance.expires_at_unix, Some(1_800_086_430));
+        assert_eq!(issuance.moderation_action_code, 2);
+        assert_eq!(issuance.signer_key, proof_token_signer_key_fixture());
+        assert_eq!(issuance.blinded_digest, [0x64; 32]);
+        assert_eq!(
+            issuance.entry_ids,
+            vec!["denylist/global".to_string(), "gar/policy/42".to_string()]
+        );
+
+        let published = publisher.take();
+        assert_eq!(published.len(), 1);
+        let decoded: ProofTokenIssuanceV1 =
+            norito::decode_from_bytes(&published[0]).expect("decode proof-token issuance");
+        assert_eq!(decoded, issuance);
+    }
+
+    #[test]
+    fn record_transparency_ledger_source_entry_rejects_duplicates() {
+        use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let entry = transparency_ledger_source_entry(
+            "gar-1",
+            1_800_000_010,
+            ModerationLedgerEntryKindV1::GarEnforcementReceipt,
+            "gar-receipt-1",
+            0x50,
+        );
+
+        handle
+            .record_transparency_ledger_source_entry(entry.clone())
+            .expect("record source entry");
+        let err = handle
+            .record_transparency_ledger_source_entry(entry)
+            .expect_err("duplicate source entry rejected");
+
+        assert!(
+            err.to_string()
+                .contains("duplicate transparency ledger source entry")
+        );
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
+    }
+
+    #[test]
+    fn publish_transparency_ledger_source_entries_builds_and_publishes_publication() {
+        use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        for entry in [
+            transparency_ledger_source_entry(
+                "redaction-1",
+                1_800_000_030,
+                ModerationLedgerEntryKindV1::Redaction,
+                "redaction-case-1",
+                0x70,
+            ),
+            transparency_ledger_source_entry(
+                "gar-1",
+                1_800_000_010,
+                ModerationLedgerEntryKindV1::GarEnforcementReceipt,
+                "gar-receipt-1",
+                0x50,
+            ),
+            transparency_ledger_source_entry(
+                "hold-1",
+                1_800_000_030,
+                ModerationLedgerEntryKindV1::LegalHold,
+                "hold-case-1",
+                0x60,
+            ),
+            transparency_ledger_source_entry(
+                "appeal-1",
+                1_800_000_005,
+                ModerationLedgerEntryKindV1::AppealOutcome,
+                "appeal-case-1",
+                0x40,
+            ),
+            transparency_ledger_source_entry(
+                "future-1",
+                1_800_604_900,
+                ModerationLedgerEntryKindV1::EvidenceAccess,
+                "evidence-view-1",
+                0x80,
+            ),
+        ] {
+            handle
+                .record_transparency_ledger_source_entry(entry)
+                .expect("record source entry");
+        }
+
+        let publication = handle
+            .publish_transparency_ledger_cycle_from_source_entries(
+                *b"cycle-src-pub001",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                Some([0x44; 32]),
+            )
+            .expect("publish transparency source cycle");
+
+        publication.validate().expect("publication validates");
+        assert_eq!(publication.block.entry_count, 4);
+        assert_eq!(publication.block.previous_block_hash, Some([0x44; 32]));
+        let subjects = publication
+            .proofs
+            .iter()
+            .map(|proof| proof.entry.subject.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            subjects,
+            vec![
+                "appeal-case-1",
+                "gar-receipt-1",
+                "hold-case-1",
+                "redaction-case-1"
+            ]
+        );
+        for (index, proof) in publication.proofs.iter().enumerate() {
+            assert_eq!(proof.entry.sequence, u64::try_from(index).unwrap() + 1);
+            assert_eq!(proof.entry.cycle_id, publication.block.cycle_id);
+            assert_ne!(proof.entry.entry_id, [0; 16]);
+        }
+
+        let published = publisher.take();
+        assert_eq!(published.len(), 1);
+        let decoded: ModerationLedgerCyclePublicationV1 = norito::decode_from_bytes(&published[0])
+            .expect("decode transparency source publication");
+        assert_eq!(decoded, publication);
+    }
+
+    #[test]
+    fn publish_transparency_ledger_source_entries_rejects_empty_window() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let err = handle
+            .publish_transparency_ledger_cycle_from_source_entries(
+                *b"cycle-src-pub001",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+            )
+            .expect_err("empty source window rejected");
+
+        assert!(err.to_string().contains("no source entries"));
+        assert!(publisher.take().is_empty());
+    }
+
+    #[test]
+    fn record_concrete_transparency_source_entries_builds_publication() {
+        use iroha_data_model::sorafs::{
+            gar::GarEnforcementActionV1, transparency::ModerationLedgerEntryKindV1,
+        };
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        handle
+            .record_gar_enforcement_receipt_transparency_entry(&gar_enforcement_receipt_fixture(
+                GarEnforcementActionV1::LegalHold,
+            ))
+            .expect("record GAR receipt source entry");
+        let moderation_event = ModerationBallotEvent {
+            sequence: 7,
+            kind: ModerationBallotEventKind::BallotTallied,
+            generated_at_unix_ms: 1_800_000_020_000,
+            case_id: "case-42".to_string(),
+            round_id: "round-1".to_string(),
+            juror_id: None,
+            committed_count: 3,
+            revealed_count: 3,
+            tally: Some(ModerationBallotTally {
+                case_id: "case-42".to_string(),
+                round_id: "round-1".to_string(),
+                counts: ModerationVoteCounts {
+                    uphold: 1,
+                    overturn: 2,
+                    modify: 0,
+                    escalate: 0,
+                },
+                votes_total: 3,
+                quorum: 2,
+                winning_choice: Some(SoraFsModerationVoteChoice::Overturn),
+                contested: false,
+                tallied_at_unix_ms: 1_800_000_020_000,
+            }),
+        }
+        .to_governance_event_v1();
+        handle
+            .record_moderation_ballot_governance_transparency_entry(&moderation_event)
+            .expect("record moderation governance source entry");
+        let report = appeal_finance_report_fixture();
+        handle
+            .record_appeal_finance_report_transparency_entry(&report)
+            .expect("record appeal report source entry");
+        let receipt = appeal_finance_settlement_receipt_fixture();
+        handle
+            .record_appeal_finance_settlement_receipt_transparency_entry(&receipt)
+            .expect("record appeal settlement source entry");
+
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 4);
+        let publication = handle
+            .publish_transparency_ledger_cycle_from_source_entries(
+                *b"cycle-src-pub002",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+            )
+            .expect("publish concrete source cycle");
+
+        publication.validate().expect("publication validates");
+        assert_eq!(publication.block.entry_count, 4);
+        let kinds = publication
+            .proofs
+            .iter()
+            .map(|proof| proof.entry.kind.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                ModerationLedgerEntryKindV1::LegalHold,
+                ModerationLedgerEntryKindV1::ModerationAction,
+                ModerationLedgerEntryKindV1::AppealOutcome,
+                ModerationLedgerEntryKindV1::AppealOutcome,
+            ]
+        );
+        assert!(
+            publication
+                .proofs
+                .iter()
+                .any(|proof| proof.entry.subject == "docs.sora@docs.gateway.sora.net")
+        );
+        assert!(
+            publication
+                .proofs
+                .iter()
+                .any(|proof| proof.entry.subject == "case-42:drawdown_non_refund")
+        );
+    }
+
+    #[test]
+    fn publish_privacy_aggregate_cycle_builds_and_publishes_publication() {
+        use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let cycle_id = *b"cycle-2026-wk-03";
+        let aggregate_b = privacy_aggregate_fixture("sfm4c-jurisdiction-b", 0xB0);
+        let aggregate_a = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
+
+        let publication = handle
+            .publish_privacy_aggregate_cycle(
+                cycle_id,
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+                vec![aggregate_b, aggregate_a],
+            )
+            .expect("publish privacy aggregate cycle");
+
+        publication.validate().expect("publication validates");
+        assert_eq!(publication.block.entry_count, 2);
+        let subjects = publication
+            .proofs
+            .iter()
+            .map(|proof| proof.entry.subject.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            subjects,
+            vec!["sfm4c-jurisdiction-a", "sfm4c-jurisdiction-b"]
+        );
+        assert!(
+            publication
+                .proofs
+                .iter()
+                .all(|proof| proof.entry.kind == ModerationLedgerEntryKindV1::PrivacyAggregate)
+        );
+
+        let published = publisher.take();
+        assert_eq!(published.len(), 1);
+        let decoded: ModerationLedgerCyclePublicationV1 =
+            norito::decode_from_bytes(&published[0]).expect("decode privacy aggregate publication");
+        assert_eq!(decoded, publication);
+    }
+
+    #[test]
+    fn publish_privacy_aggregate_cycle_rejects_out_of_window_without_publishing() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let mut aggregate = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
+        aggregate.window_start_unix = 1_799_999_999;
+
+        let err = handle
+            .publish_privacy_aggregate_cycle(
+                *b"cycle-2026-wk-03",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+                vec![aggregate],
+            )
+            .expect_err("out-of-window aggregate is rejected");
+
+        assert!(
+            err.to_string()
+                .contains("window must be contained in the publication cycle")
+        );
+        assert!(publisher.take().is_empty());
+    }
+
+    #[test]
+    fn record_privacy_aggregate_source_event_rejects_duplicates() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let event = privacy_source_event("event-a", "jurisdiction-a", 0xA0, 1_800_000_010);
+
+        handle
+            .record_privacy_aggregate_source_event(event.clone())
+            .expect("record source event");
+        let err = handle
+            .record_privacy_aggregate_source_event(event)
+            .expect_err("duplicate source event rejected");
+
+        assert!(
+            err.to_string()
+                .contains("duplicate privacy aggregate source event")
+        );
+        assert_eq!(handle.privacy_aggregate_source_event_count(), 1);
+    }
+
+    #[test]
+    fn publish_privacy_aggregate_cycle_from_source_events_suppresses_and_publishes() {
+        use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 1_800_000_010),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 1_800_000_020),
+            privacy_source_event("beta-1", "jurisdiction-b", 0xB0, 1_800_000_030),
+            privacy_source_event("future-1", "jurisdiction-c", 0xC0, 1_800_604_900),
+        ] {
+            handle
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+
+        let publication = handle
+            .publish_privacy_aggregate_cycle_from_source_events(
+                *b"cycle-2026-wk-04",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+            )
+            .expect("publish aggregate cycle from source events");
+
+        publication.validate().expect("publication validates");
+        assert_eq!(publication.block.entry_count, 1);
+        let entry = &publication.proofs[0].entry;
+        assert_eq!(entry.kind, ModerationLedgerEntryKindV1::PrivacyAggregate);
+        assert!(entry.subject.contains("jurisdiction-a"));
+        assert_eq!(entry.evidence_uris.len(), 0);
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "suppressed_count" && item.value == "1")
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "source_event_count" && item.value == "2")
+        );
+
+        let published = publisher.take();
+        assert_eq!(published.len(), 1);
+        let decoded: ModerationLedgerCyclePublicationV1 =
+            norito::decode_from_bytes(&published[0]).expect("decode aggregate publication");
+        assert_eq!(decoded, publication);
+    }
+
+    #[test]
+    fn publish_privacy_aggregate_cycle_from_source_events_requires_noise_seed() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        handle
+            .record_privacy_aggregate_source_event(privacy_source_event(
+                "alpha-1",
+                "jurisdiction-a",
+                0xA0,
+                1_800_000_010,
+            ))
+            .expect("record source event");
+        handle
+            .record_privacy_aggregate_source_event(privacy_source_event(
+                "alpha-2",
+                "jurisdiction-a",
+                0xA0,
+                1_800_000_020,
+            ))
+            .expect("record source event");
+
+        let err = handle
+            .publish_privacy_aggregate_cycle_from_source_events(
+                *b"cycle-2026-wk-04",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+                privacy_aggregate_cycle_config(None),
+            )
+            .expect_err("missing noise seed rejected");
+
+        assert!(err.to_string().contains("runtime noise seed"));
+        assert!(publisher.take().is_empty());
+    }
+
+    #[test]
+    fn publish_due_privacy_aggregate_cycle_from_source_events_publishes_once() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+            privacy_source_event("future-1", "jurisdiction-a", 0xA0, 220),
+        ] {
+            handle
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+
+        let outcome = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                211,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("publish due aggregate cycle");
+        let publication = match outcome {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 100);
+                assert_eq!(window.cycle_end_unix, 200);
+                publication
+            }
+            other => panic!("expected published outcome, got {other:?}"),
+        };
+        assert_eq!(publication.block.cycle_start_unix, 100);
+        assert_eq!(publication.block.cycle_end_unix, 200);
+        assert_eq!(publication.block.generated_at_unix, 211);
+        assert_eq!(publication.block.entry_count, 1);
+
+        let repeated = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                211,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("repeat due aggregate cycle");
+        assert!(matches!(
+            repeated,
+            PrivacyAggregateScheduleOutcome::AlreadyPublished { .. }
+        ));
+        assert_eq!(publisher.take().len(), 1);
+    }
+
+    #[test]
+    fn publish_due_privacy_aggregate_cycle_from_source_events_catches_up_stale_windows() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+            privacy_source_event("beta-1", "jurisdiction-b", 0xB0, 210),
+            privacy_source_event("beta-2", "jurisdiction-b", 0xB0, 220),
+        ] {
+            handle
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+
+        let first = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                311,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("publish first stale aggregate cycle");
+        match first {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 100);
+                assert_eq!(window.cycle_end_unix, 200);
+                assert_eq!(publication.block.cycle_start_unix, 100);
+                assert_eq!(publication.block.cycle_end_unix, 200);
+                assert_eq!(publication.block.generated_at_unix, 311);
+            }
+            other => panic!("expected stale published outcome, got {other:?}"),
+        }
+
+        let second = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                311,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("publish latest aggregate cycle after catch-up");
+        match second {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 200);
+                assert_eq!(window.cycle_end_unix, 300);
+                assert_eq!(publication.block.cycle_start_unix, 200);
+                assert_eq!(publication.block.cycle_end_unix, 300);
+            }
+            other => panic!("expected latest published outcome, got {other:?}"),
+        }
+        assert_eq!(publisher.take().len(), 2);
+    }
+
+    #[test]
+    fn publish_due_privacy_aggregate_cycle_from_source_events_skips_stale_suppressed_window() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("beta-1", "jurisdiction-b", 0xB0, 210),
+            privacy_source_event("beta-2", "jurisdiction-b", 0xB0, 220),
+        ] {
+            handle
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+
+        let outcome = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                311,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("publish due aggregate cycle with stale suppressed window");
+        match outcome {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 200);
+                assert_eq!(window.cycle_end_unix, 300);
+                assert_eq!(publication.block.entry_count, 1);
+            }
+            other => panic!("expected later published outcome, got {other:?}"),
+        }
+        assert_eq!(publisher.take().len(), 1);
+    }
+
+    #[test]
+    fn publish_due_configured_privacy_aggregate_cycle_uses_storage_config() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let schedule = privacy_aggregate_schedule_config();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .privacy_aggregate_schedule(Some(schedule))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        assert_eq!(
+            handle.configured_privacy_aggregate_schedule(),
+            Some(schedule)
+        );
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+        ] {
+            handle
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+
+        let outcome = handle
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                211,
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("publish configured aggregate cycle");
+        let publication = match outcome {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 100);
+                assert_eq!(window.cycle_end_unix, 200);
+                publication
+            }
+            other => panic!("expected published outcome, got {other:?}"),
+        };
+        assert_eq!(publication.block.generated_at_unix, 211);
+        assert_eq!(publisher.take().len(), 1);
+    }
+
+    #[test]
+    fn publish_due_configured_privacy_aggregate_cycle_skips_when_disabled() {
+        let cfg = StorageConfig::builder()
+            .enabled(false)
+            .privacy_aggregate_schedule(None)
+            .build();
+        let handle = NodeHandle::new(cfg);
+        assert_eq!(handle.configured_privacy_aggregate_schedule(), None);
+
+        let outcome = handle
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                211,
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("disabled configured aggregate cycle");
+        assert_eq!(outcome, PrivacyAggregateScheduleOutcome::Disabled);
+    }
+
+    #[test]
+    fn publish_due_privacy_aggregate_cycle_from_source_events_skips_empty_and_suppressed() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let empty = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                211,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("empty due aggregate cycle");
+        assert!(matches!(
+            empty,
+            PrivacyAggregateScheduleOutcome::NoSourceEvents { .. }
+        ));
+
+        handle
+            .record_privacy_aggregate_source_event(privacy_source_event(
+                "alpha-1",
+                "jurisdiction-a",
+                0xA0,
+                110,
+            ))
+            .expect("record source event");
+        let suppressed = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                211,
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                None,
+            )
+            .expect("suppressed due aggregate cycle");
+        assert!(matches!(
+            suppressed,
+            PrivacyAggregateScheduleOutcome::AllBucketsSuppressed { .. }
+        ));
+        assert!(publisher.take().is_empty());
+    }
+
+    #[test]
     fn governance_publisher_presence_tracks_set_and_clear() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -5313,6 +8452,24 @@ mod tests {
         handle
             .publish_appeal_finance_weekly_rollup(rollup)
             .expect("publish appeal finance weekly rollup");
+
+        let published = publisher.take();
+        assert_eq!(published, vec![expected]);
+    }
+
+    #[test]
+    fn publish_appeal_finance_settlement_receipt_writes_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let receipt = appeal_finance_settlement_receipt_fixture();
+        let expected = to_bytes(&receipt).expect("encode appeal finance settlement receipt");
+
+        handle
+            .publish_appeal_finance_settlement_receipt(receipt)
+            .expect("publish appeal finance settlement receipt");
 
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
@@ -7634,6 +10791,26 @@ mod tests {
             Ok(())
         }
 
+        fn publish_transparency_ledger_publication(
+            &self,
+            _publication: &ModerationLedgerCyclePublicationV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_proof_token_issuance(
+            &self,
+            _issuance: &ProofTokenIssuanceV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
         fn publish_appeal_finance_report(
             &self,
             _report: &SoraFsAppealFinanceReportV1,
@@ -7647,6 +10824,26 @@ mod tests {
         fn publish_appeal_finance_weekly_rollup(
             &self,
             _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_appeal_finance_settlement_receipt(
+            &self,
+            _receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_orderbook_settlement_receipt(
+            &self,
+            _receipt: &SettlementReceiptV1,
             encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
@@ -7738,6 +10935,26 @@ mod tests {
             Err(GovernancePublishError::other("simulated publish failure"))
         }
 
+        fn publish_transparency_ledger_publication(
+            &self,
+            _publication: &ModerationLedgerCyclePublicationV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_proof_token_issuance(
+            &self,
+            _issuance: &ProofTokenIssuanceV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
         fn publish_appeal_finance_report(
             &self,
             _report: &SoraFsAppealFinanceReportV1,
@@ -7751,6 +10968,26 @@ mod tests {
         fn publish_appeal_finance_weekly_rollup(
             &self,
             _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_appeal_finance_settlement_receipt(
+            &self,
+            _receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_orderbook_settlement_receipt(
+            &self,
+            _receipt: &SettlementReceiptV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

@@ -1649,6 +1649,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
+    sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
+    #[cfg(feature = "app_api")]
     offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
@@ -35733,6 +35735,56 @@ struct AccountOnboardingSigner {
     alias_auto_renew_subscription_domain: Option<DomainId>,
 }
 
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct SoraFsAppealSettlementSubmitter {
+    signers: BTreeMap<AccountId, KeyPair>,
+    worker_scan_interval: Duration,
+    worker_max_retry_attempts: u32,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsAppealSettlementSubmitter {
+    fn from_config(
+        config: &iroha_config::parameters::actual::SorafsAppealFinanceSettlement,
+    ) -> Option<Self> {
+        if config.submitter_signers.is_empty() {
+            return None;
+        }
+
+        let mut signers = BTreeMap::new();
+        for key_pair in &config.submitter_signers {
+            let account = AccountId::new(key_pair.public_key().clone());
+            if signers.insert(account.clone(), key_pair.clone()).is_some() {
+                panic!(
+                    "duplicate torii.sorafs.appeal_finance_settlement submitter for `{account}`"
+                );
+            }
+        }
+        Some(Self {
+            signers,
+            worker_scan_interval: config.worker_scan_interval,
+            worker_max_retry_attempts: config.worker_max_retry_attempts,
+        })
+    }
+
+    fn signer_for(&self, authority: &AccountId) -> Option<&KeyPair> {
+        self.signers.get(authority)
+    }
+
+    fn signer_count(&self) -> usize {
+        self.signers.len()
+    }
+
+    fn worker_scan_interval(&self) -> Duration {
+        self.worker_scan_interval
+    }
+
+    fn worker_max_retry_attempts(&self) -> u32 {
+        self.worker_max_retry_attempts
+    }
+}
+
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -35880,6 +35932,8 @@ pub struct Torii {
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
     offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
@@ -36864,6 +36918,10 @@ impl Torii {
                     post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle),
                 )
                 .route(
+                    "/v1/sorafs/appeals/finance/deposits/submit-settlement",
+                    post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_submit_settlement),
+                )
+                .route(
                     "/v1/sorafs/appeals/finance/deposits/reconcile",
                     post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile),
                 )
@@ -36895,6 +36953,35 @@ impl Torii {
                 .route(
                     "/v1/sorafs/moderation/ballots/events",
                     get(sorafs::api::handle_get_sorafs_moderation_ballot_events),
+                )
+                .route(
+                    "/v1/sorafs/moderation/model-registry",
+                    get(sorafs::api::handle_get_sorafs_moderation_model_registry),
+                )
+                .route(
+                    "/v1/sorafs/moderation/model-registry/repro-manifests",
+                    post(sorafs::api::handle_post_sorafs_moderation_model_registry_repro_manifest),
+                )
+                .route(
+                    "/v1/sorafs/moderation/model-registry/corpora",
+                    post(sorafs::api::handle_post_sorafs_moderation_model_registry_corpus_manifest),
+                )
+                .route(
+                    "/v1/sorafs/moderation/screening-results",
+                    post(sorafs::api::handle_post_sorafs_moderation_screening_result)
+                        .get(sorafs::api::handle_get_sorafs_moderation_screening_results),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine",
+                    get(sorafs::api::handle_get_sorafs_moderation_quarantine),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_review),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_release),
                 );
             let group = group
                 .route(
@@ -37936,6 +38023,58 @@ impl Torii {
                         ),
                     )
                     .route(
+                        "/v1/sorafs/transparency/cycles",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_cycles),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/cycles/{cycle_id_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_cycle),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_cycle_entry),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/explorer",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_transparency_explorer),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/source-entries/{source_kind}",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_source_entry,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/privacy-aggregates/source-events",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_source_event,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/privacy-aggregates/publish-due",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_publish_due,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/tokens",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_transparency_token_issuances,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/tokens/issuances",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_token_issuance,
+                        ),
+                    )
+                    .route(
+                        "/v1/sorafs/transparency/tokens/verify",
+                        axum::routing::post(
+                            sorafs::api::handle_post_sorafs_transparency_token_verify,
+                        ),
+                    )
+                    .route(
                         "/v1/sorafs/appeals/finance/reports",
                         axum::routing::post(sorafs::api::handle_post_sorafs_appeal_finance_report)
                             .get(sorafs::api::handle_get_sorafs_appeal_finance_reports),
@@ -37946,6 +38085,12 @@ impl Torii {
                             sorafs::api::handle_get_sorafs_appeal_finance_weekly_rollups,
                         )
                         .post(sorafs::api::handle_post_sorafs_appeal_finance_weekly_rollup),
+                    )
+                    .route(
+                        "/v1/sorafs/appeals/finance/settlement-receipts",
+                        axum::routing::get(
+                            sorafs::api::handle_get_sorafs_appeal_finance_settlement_receipts,
+                        ),
                     )
                     .route(
                         "/v1/sorafs/governance/dag/car-queue",
@@ -38931,6 +39076,9 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
+        let sorafs_appeal_settlement_submitter =
+            SoraFsAppealSettlementSubmitter::from_config(&config.sorafs_appeal_finance_settlement);
+        #[cfg(feature = "app_api")]
         let offline_issuer = config
             .offline_issuer
             .clone()
@@ -39121,6 +39269,8 @@ impl Torii {
             stream_token_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_settlement_submitter,
             #[cfg(feature = "app_api")]
             offline_issuer,
             #[cfg(feature = "app_api")]
@@ -39333,9 +39483,9 @@ impl Torii {
         }
     }
 
-    /// Helper function to create router. This router can be tested without starting up an HTTP server
+    /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
-    fn create_api_router(&self) -> axum::Router {
+    fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
         // Ensure the erased iterable-query registry is initialized before any
         // request decoding happens (the Norito extractor deserializes queries).
         #[allow(let_underscore_drop)]
@@ -39569,6 +39719,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
+            sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
+            #[cfg(feature = "app_api")]
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             offline_v2_issuer: self.offline_v2_issuer.clone(),
@@ -39631,6 +39783,7 @@ impl Torii {
             &app_state.stream_token_concurrency,
             &app_state.sorafs_chunk_range_overrides,
             &app_state.account_faucet,
+            &app_state.sorafs_appeal_settlement_submitter,
             &app_state.uaid_onboarding,
             &app_state.soracloud_runtime,
         );
@@ -39663,7 +39816,13 @@ impl Torii {
             attach_torii_proxy_network(app_state.clone(), network);
         }
 
-        self.compose_api_router(app_state)
+        let router = self.compose_api_router(app_state.clone());
+        (router, app_state)
+    }
+
+    /// Helper function to create router. This router can be tested without starting up an HTTP server
+    fn create_api_router(&self) -> axum::Router {
+        self.create_api_router_with_state().0
     }
 
     /// Compose the HTTP router from prepared runtime state.
@@ -39968,7 +40127,14 @@ impl Torii {
         .attach("failed to bind to the specified address")
         .attach_with(|| self.address.clone().into_attachment())?;
 
-        let api_router = self.create_api_router();
+        let (api_router, app_state) = self.create_api_router_with_state();
+        #[cfg(feature = "app_api")]
+        sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
+            app_state,
+            shutdown_signal.clone(),
+        );
+        #[cfg(not(feature = "app_api"))]
+        drop(app_state);
         let make = api_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
@@ -43569,6 +43735,8 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             account_faucet: None,
             #[cfg(feature = "app_api")]
+            sorafs_appeal_settlement_submitter: None,
+            #[cfg(feature = "app_api")]
             offline_issuer: None,
             #[cfg(feature = "app_api")]
             offline_v2_issuer: None,
@@ -44707,9 +44875,14 @@ pub(crate) mod tests_runtime_handlers {
             "test setup should make queue age saturation observable"
         );
 
+        let pressure = app.queue.pressure_snapshot();
         assert!(
-            app.queue.current_backpressure().is_saturated(),
-            "age saturation should still be observable"
+            pressure.saturated_by_age,
+            "age saturation should still be observable in queue pressure telemetry"
+        );
+        assert!(
+            !app.queue.current_backpressure().is_saturated(),
+            "age-only queue pressure must not reject ingress before capacity"
         );
 
         let second = super::handler_post_transaction(
@@ -50738,6 +50911,7 @@ pub(crate) mod tests_runtime_handlers {
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
             proving_key_hash: None,
+            deployment_evidence_sha256: None,
             destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
             destination_binding_hash: format!("0x{}", "33".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"

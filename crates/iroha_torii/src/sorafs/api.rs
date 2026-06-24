@@ -11,6 +11,7 @@ use std::{
     io::{self, Read, Write},
     net::SocketAddr,
     num::NonZeroU32,
+    path::{Component, Path as StdPath, PathBuf},
     str::FromStr,
     sync::{
         LazyLock, Mutex,
@@ -23,7 +24,7 @@ use axum::{
     Json,
     body::{Body, Bytes},
     extract::{
-        ConnectInfo, Path, Query, State,
+        ConnectInfo, Path, State,
         ws::{Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
@@ -37,6 +38,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use blake3::hash as blake3_hash;
+use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
 use futures::{SinkExt, StreamExt, stream};
 use hex::{ToHex, encode};
 use http::header::{AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, WARNING};
@@ -45,7 +47,12 @@ use iroha_core::{
     smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
     state::{StateReadOnly, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
+use iroha_crypto::{
+    Algorithm, Hash, HashOf, PublicKey, Signature,
+    sorafs::proof_token::{
+        ModerationAction as ProofTokenModerationAction, ProofToken, ProofTokenDigestKey,
+    },
+};
 use iroha_data_model::{
     ChainId,
     account::{AccountId, ParsedAccountId},
@@ -61,14 +68,23 @@ use iroha_data_model::{
     },
     soracloud::SoraRouteVisibilityV1,
     sorafs::{
+        gar::GarEnforcementReceiptV1,
         moderation::{
+            AdversarialCorpusManifestV1, ModerationReproManifestV1,
             SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
             SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
             SoraFsModerationVoteChoice,
         },
         pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
+        transparency::{
+            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerCyclePublicationV1,
+            ModerationLedgerEntryKindV1, ModerationLedgerMetadataV1, ModerationPrivacyModeV1,
+            ModerationPrivacyParametersV1, ProofTokenIssuanceV1,
+        },
     },
+    transaction::{SignedTransaction, TransactionBuilder},
 };
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, warn};
 use mv::storage::StorageReadOnly;
 use norito::derive::JsonDeserialize;
@@ -76,22 +92,23 @@ use norito::json::{self, Map, Number, Value};
 #[cfg(test)]
 use sorafs_car::verifier::CarVerifier;
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarStreamingWriter, FileEntry, FilePlan,
-    compute_chunk_plan_digest_sha3, fetch_plan::chunk_fetch_specs_to_json, por_json::sample_to_map,
-    verifier::CarVerifyError,
+    CarBuildPlan, CarChunk, CarStreamingWriter, ChunkFetchSpec, FileEntry, FilePlan,
+    compute_chunk_plan_digest_sha3, por_json::sample_to_map, verifier::CarVerifyError,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, ManifestV1, OrderBookEntryV1, OrderCancelReasonV1,
-    OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1, OrderTierV1,
-    OrderbookSignatureV1, PathDiversityPolicy, ProofStreamKind, ProofStreamRequestError,
-    ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1, ProviderAdvertV1,
-    ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
+    EndpointMetadata, EndpointMetadataKey, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
+    OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
+    OrderSideV1, OrderTierV1, OrderbookSignatureV1, PathDiversityPolicy, ProofStreamKind,
+    ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1,
+    ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
     ReputationDegradationFlagV1, ReputationMerkleProofV1, ReputationSnapshotEventV1,
-    ReputationSnapshotV1, SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
-    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer, StreamBudgetV1,
-    StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
+    ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
+    StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -103,24 +120,35 @@ use sorafs_node::{
     ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotCommitOutcome,
     ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
-    NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
-    OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
-    PorTrackerError, RepairEvent,
+    ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistrySnapshot,
+    ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
+    ModerationQuarantineState, ModerationReproRegistryRecord, ModerationScreeningError,
+    ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
+    ModerationScreeningSnapshot, ModerationScreeningVerdict, NodeStorageError,
+    OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
+    OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome, PorTrackerError,
+    PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
+    RepairEvent, TransparencyLedgerSourceEntry, appeal_finance_report_source_entry,
+    appeal_finance_settlement_receipt_source_entry,
     capacity::CapacityUsageSnapshot,
-    local_moderation_panel_roster_hash, local_orderbook_provider_id_for_owner_account,
+    gar_enforcement_receipt_source_entry, local_moderation_panel_roster_hash,
+    local_orderbook_provider_id_for_owner_account,
     metering::{FeeProjection, MeteringSnapshot},
+    moderation_ballot_governance_event_source_entry,
     store::{
-        ChunkFileRecord, ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest,
+        ChunkFileRecord, ChunkRoleMetadata, StorageError as StorageBackendError, StoredFileRecord,
+        StoredManifest,
     },
     telemetry::TelemetryError,
 };
 use sorafs_orchestrator::appeals::{
-    AppealClass, AppealClassConfig, AppealDisbursementInput, AppealDisbursementPlan,
-    AppealPricingConfig, AppealQuote, AppealQuoteInput, AppealSettlementBreakdown,
-    AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_decimal_literal,
+    AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementInput,
+    AppealDisbursementPlan, AppealPricingConfig, AppealQuote, AppealQuoteInput,
+    AppealSettlementBreakdown, AppealSettlementConfig, AppealUrgency, AppealVerdict,
+    parse_appeal_decimal_literal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use urlencoding::decode;
 
@@ -197,6 +225,7 @@ const TELEMETRY_ENDPOINT_MANIFEST: &str = "/v1/sorafs/storage/manifest";
 const TELEMETRY_ENDPOINT_PLAN: &str = "/v1/sorafs/storage/plan";
 const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por/sample";
 const TELEMETRY_ENDPOINT_PROOF_STREAM: &str = "/v1/sorafs/proof/stream";
+const TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY: &str = "/v1/sorafs/transparency/tokens/verify";
 const TELEMETRY_ENDPOINT_ORDERBOOK: &str = "/v1/sorafs/orderbook";
 const ORDERBOOK_ROUTE_ORDERS: &str = "/v1/sorafs/orderbook/orders";
 const ORDERBOOK_ROUTE_CANCEL: &str = "/v1/sorafs/orderbook/cancel";
@@ -212,14 +241,35 @@ const MODERATION_ROUTE_COMMITS: &str = "/v1/sorafs/moderation/ballots/commits";
 const MODERATION_ROUTE_REVEALS: &str = "/v1/sorafs/moderation/ballots/reveals";
 const MODERATION_ROUTE_TALLY: &str = "/v1/sorafs/moderation/ballots/tally";
 const MODERATION_ROUTE_EVENTS: &str = "/v1/sorafs/moderation/ballots/events";
+const MODERATION_ROUTE_MODEL_REGISTRY: &str = "/v1/sorafs/moderation/model-registry";
+const MODERATION_ROUTE_MODEL_REGISTRY_REPRO: &str =
+    "/v1/sorafs/moderation/model-registry/repro-manifests";
+const MODERATION_ROUTE_MODEL_REGISTRY_CORPORA: &str =
+    "/v1/sorafs/moderation/model-registry/corpora";
+const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screening-results";
+const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
+const MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX: &str = "review";
+const MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX: &str = "release";
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_REPORTS: &str = "/v1/sorafs/appeals/finance/reports";
+#[cfg(test)]
+const TRANSPARENCY_SOURCE_ENTRIES_ROUTE: &str = "/v1/sorafs/transparency/source-entries";
+#[cfg(test)]
+const TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE: &str =
+    "/v1/sorafs/transparency/privacy-aggregates/source-events";
+#[cfg(test)]
+const TRANSPARENCY_PRIVACY_AGGREGATE_PUBLISH_DUE_ROUTE: &str =
+    "/v1/sorafs/transparency/privacy-aggregates/publish-due";
+#[cfg(test)]
+const TRANSPARENCY_PROOF_TOKEN_ISSUANCES_ROUTE: &str = "/v1/sorafs/transparency/tokens/issuances";
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSITS: &str = "/v1/sorafs/appeals/finance/deposits";
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSIT_CONFIRM: &str = "/v1/sorafs/appeals/finance/deposits/confirm";
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSIT_SETTLE: &str = "/v1/sorafs/appeals/finance/deposits/settle";
+const APPEAL_FINANCE_ROUTE_DEPOSIT_SUBMIT_SETTLEMENT: &str =
+    "/v1/sorafs/appeals/finance/deposits/submit-settlement";
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSIT_RECONCILE: &str =
     "/v1/sorafs/appeals/finance/deposits/reconcile";
@@ -241,6 +291,20 @@ const GOVERNANCE_DAG_RUNTIME_INDEX_FILE: &str = "runtime-dag-index.json";
 const GOVERNANCE_DAG_CACHE_CONTROL: &str = "public, max-age=15, must-revalidate";
 const APPEAL_FINANCE_REPORT_KIND: &str = "appeal_finance_report";
 const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND: &str = "appeal_finance_settlement_receipt";
+const TRANSPARENCY_LEDGER_PUBLICATION_KIND: &str = "transparency_ledger_publication";
+const PROOF_TOKEN_ISSUANCE_KIND: &str = "proof_token_issuance";
+const TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT: &str = "gar-enforcement-receipt";
+const TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT: &str =
+    "moderation-ballot-governance-event";
+const TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT: &str = "appeal-finance-report";
+const TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT: &str =
+    "appeal-finance-settlement-receipt";
+const TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE: &str = "legal-hold-notice";
+const TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE: &str = "redaction-notice";
+const TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY: &str = "evidence-access-summary";
+const APPEAL_FINANCE_SETTLEMENT_WORKER_STATE_FILE: &str =
+    "appeals/finance/settlement-worker-state.json";
 
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ORDERBOOK_API_ROUTE_COUNTS: LazyLock<Mutex<BTreeMap<&'static str, (u64, u64)>>> =
@@ -412,6 +476,14 @@ fn unix_timestamp_now() -> u64 {
 
 fn unix_timestamp_now_ms() -> u64 {
     SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
+}
+
+fn iroha_network_time_now_ms() -> u64 {
+    iroha_core::time::now()
+        .now
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default()
@@ -591,6 +663,17 @@ fn parse_hex_128bits(value: &str, field: &'static str) -> Result<[u8; 16], Respo
 fn system_time_to_millis(time: SystemTime, field: &'static str) -> Result<u64, Response> {
     time.duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
+        .map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{field} timestamp precedes unix epoch"),
+            )
+        })
+}
+
+fn system_time_to_secs(time: SystemTime, field: &'static str) -> Result<u64, Response> {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
         .map_err(|_| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1589,11 +1672,193 @@ pub struct StreamTokenRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/transparency/tokens/verify`.
+pub struct TransparencyProofTokenVerifyRequestDto {
+    /// URL-safe base64 SoraFS proof-token frame.
+    pub token_b64: String,
+    /// Hex-encoded Ed25519 verifying key for the gateway proof-token signer.
+    pub verifying_key_hex: String,
+    /// Optional hex-encoded evidence digest used for blinded-digest verification.
+    pub evidence_digest_hex: Option<String>,
+    /// Optional hex-encoded blinded-digest key used by the gateway.
+    pub digest_key_hex: Option<String>,
+    /// Optional UNIX timestamp override for deterministic expiry evaluation.
+    pub now_unix: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/transparency/tokens/issuances`.
+pub struct TransparencyProofTokenIssuanceRequestDto {
+    /// URL-safe base64 SoraFS proof-token frame.
+    pub token_b64: String,
+    /// Hex-encoded Ed25519 public key for the gateway proof-token signer.
+    pub signer_key_hex: String,
+    /// Optional hex-encoded evidence digest bound by the proof token.
+    pub evidence_digest_hex: Option<String>,
+    /// Optional hex-encoded policy digest that governed issuance.
+    pub policy_digest_hex: Option<String>,
+    /// Public metadata, sorted by key.
+    pub metadata: Option<Vec<TransparencyLedgerMetadataDto>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by SoraFS moderation model registry admission endpoints.
+pub struct ModerationModelRegistryManifestRequestDto {
+    /// Standard base64 canonical Norito manifest payload.
+    pub manifest_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/screening-results`.
+pub struct ModerationScreeningResultRequestDto {
+    /// Gateway or content subject identifier.
+    pub subject: String,
+    /// Hex-encoded BLAKE3 digest of the screened payload or stable content reference.
+    pub subject_digest_hex: String,
+    /// Hex-encoded governance-approved reproducibility manifest id.
+    pub manifest_id_hex: String,
+    /// Hex-encoded BLAKE3 digest of the deterministic runner binary.
+    pub runner_hash_hex: String,
+    /// Combined moderation score in basis points.
+    pub combined_score_bps: u16,
+    /// Verdict label: pass, warn, quarantine, escalate, or block.
+    pub verdict: String,
+    /// Optional Unix timestamp (seconds) when screening completed.
+    pub screened_at_unix: Option<u64>,
+    /// Optional evidence digest encoded as hexadecimal.
+    pub evidence_digest_hex: Option<String>,
+    /// Optional policy/configuration digest encoded as hexadecimal.
+    pub policy_digest_hex: Option<String>,
+    /// Optional operator note.
+    pub notes: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/review`.
+pub struct ModerationQuarantineReviewRequestDto {
+    /// Canonical operator or panel member that reviewed the quarantine record.
+    pub reviewed_by: String,
+    /// Optional Unix timestamp (seconds) when review completed.
+    pub reviewed_at_unix: Option<u64>,
+    /// Optional review note.
+    pub notes: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/release`.
+pub struct ModerationQuarantineReleaseRequestDto {
+    /// Canonical operator or release authority approving release.
+    pub release_authority: String,
+    /// Optional Unix timestamp (seconds) when release completed.
+    pub released_at_unix: Option<u64>,
+    /// Optional release note.
+    pub notes: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// One raw metric contribution in a SoraFS privacy aggregate source event.
+pub struct TransparencyPrivacyAggregateSourceMetricDto {
+    /// Stable metric key.
+    pub key: String,
+    /// Raw event contribution before privacy processing.
+    pub value: u64,
+    /// Unit label for the metric.
+    pub unit: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/transparency/privacy-aggregates/source-events`.
+pub struct TransparencyPrivacyAggregateSourceEventRequestDto {
+    /// Stable event id used for duplicate suppression.
+    pub event_id: String,
+    /// Unix timestamp in seconds when the source event occurred.
+    pub occurred_at_unix: u64,
+    /// Public population label for the aggregate bucket.
+    pub population_label: String,
+    /// Optional 32-byte private selector digest encoded as hexadecimal.
+    pub population_digest_hex: Option<String>,
+    /// Raw source metrics for this event, sorted by key.
+    pub metrics: Vec<TransparencyPrivacyAggregateSourceMetricDto>,
+    /// Optional 32-byte policy digest encoded as hexadecimal.
+    pub policy_digest_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Public metadata key/value pair for SoraFS transparency aggregate publication.
+pub struct TransparencyLedgerMetadataDto {
+    /// Metadata key.
+    pub key: String,
+    /// Metadata value.
+    pub value: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted for public legal-hold, redaction, and evidence-access source summaries.
+pub struct TransparencyPublicSourceEntryRequestDto {
+    /// Stable event id used for duplicate suppression.
+    pub event_id: String,
+    /// Unix timestamp in seconds when the source event occurred.
+    pub occurred_at_unix: u64,
+    /// Privacy-safe public subject label.
+    pub subject: String,
+    /// Optional 32-byte private subject digest encoded as hexadecimal.
+    pub subject_digest_hex: Option<String>,
+    /// Required 32-byte canonical source payload digest encoded as hexadecimal.
+    pub payload_digest_hex: String,
+    /// Optional 32-byte public summary digest encoded as hexadecimal.
+    pub summary_digest_hex: Option<String>,
+    /// Optional 32-byte policy/configuration digest encoded as hexadecimal.
+    pub policy_digest_hex: Option<String>,
+    /// Optional public evidence URIs safe to disclose.
+    pub evidence_uris: Option<Vec<String>>,
+    /// Public metadata, sorted by key.
+    pub metadata: Option<Vec<TransparencyLedgerMetadataDto>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/transparency/privacy-aggregates/publish-due`.
+pub struct TransparencyPrivacyAggregatePublishDueRequestDto {
+    /// Unix timestamp in seconds used to evaluate the configured due window.
+    pub now_unix: u64,
+    /// Prefix used when deriving public aggregate identifiers.
+    pub aggregate_id_prefix: String,
+    /// Privacy mode: `suppression`, `differential_privacy`, or `differential_privacy_with_suppression`.
+    pub privacy_mode: String,
+    /// Epsilon encoded as fixed-point micros.
+    pub epsilon_micros: Option<u64>,
+    /// Delta encoded in parts per billion.
+    pub delta_ppb: Option<u64>,
+    /// Optional noise scale encoded as fixed-point micros.
+    pub noise_scale_micros: Option<u64>,
+    /// Minimum source-event count required before a bucket can be published.
+    pub suppression_threshold: Option<u64>,
+    /// Optional runtime-only deterministic noise seed encoded as hexadecimal.
+    pub noise_seed_hex: Option<String>,
+    /// Optional aggregate policy/configuration digest encoded as hexadecimal.
+    pub policy_digest_hex: Option<String>,
+    /// Optional previous transparency block hash encoded as hexadecimal.
+    pub previous_block_hash_hex: Option<String>,
+    /// Public metadata copied into every generated aggregate.
+    pub metadata: Option<Vec<TransparencyLedgerMetadataDto>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by the `/v1/sorafs/storage/por-sample` endpoint.
 pub struct StoragePorSampleRequestDto {
     /// Hex-encoded manifest identifier to sample against.
     pub manifest_id_hex: String,
-    /// Desired number of samples (capped by leaf count).
+    /// Desired number of samples (capped by the API limit and leaf count).
     pub count: u64,
     /// Optional deterministic seed for repeatable sampling.
     pub seed: Option<u64>,
@@ -1609,7 +1874,7 @@ pub struct ProofStreamRequestDto {
     pub provider_id_hex: String,
     /// Proof kind requested (`por` or `potr`; `pdp` is reserved for future SF-13 work).
     pub proof_kind: String,
-    /// Optional sample count (required for PoR).
+    /// Optional sample count (required for PoR; capped at 500).
     pub sample_count: Option<u32>,
     /// Optional deadline in milliseconds (required for PoTR).
     pub deadline_ms: Option<u32>,
@@ -1779,7 +2044,7 @@ pub struct ModerationBallotAnnounceRequestDto {
 pub struct ModerationBallotCommitRequestDto {
     /// Base64-encoded Norito `SoraFsModerationBallotCommitV1` payload.
     pub commit_b64: String,
-    /// Optional acceptance timestamp override for deterministic tests.
+    /// Ignored by public handlers; acceptance uses server-side Iroha network time.
     pub now_unix_ms: Option<u64>,
 }
 
@@ -1789,7 +2054,7 @@ pub struct ModerationBallotCommitRequestDto {
 pub struct ModerationBallotRevealRequestDto {
     /// Base64-encoded Norito `SoraFsModerationBallotRevealV1` payload.
     pub reveal_b64: String,
-    /// Optional acceptance timestamp override for deterministic tests.
+    /// Ignored by public handlers; acceptance uses server-side Iroha network time.
     pub now_unix_ms: Option<u64>,
 }
 
@@ -1801,7 +2066,7 @@ pub struct ModerationBallotTallyRequestDto {
     pub case_id: String,
     /// Moderation ballot round identifier.
     pub round_id: String,
-    /// Optional tally timestamp override for deterministic tests.
+    /// Ignored by public handlers; tally uses server-side Iroha network time.
     pub now_unix_ms: Option<u64>,
 }
 
@@ -1885,6 +2150,14 @@ pub struct PorIngestionProviderStatusDto {
 pub struct PorIngestionStatusResponseDto {
     /// Hex-encoded manifest digest.
     pub manifest_digest_hex: String,
+    /// Total provider entries associated with the manifest.
+    pub provider_count: u64,
+    /// Provider entries returned in this response.
+    pub returned_provider_count: u64,
+    /// Applied provider entry limit.
+    pub limit: u64,
+    /// Whether the provider list was truncated by `limit`.
+    pub truncated_providers: bool,
     /// Provider entries associated with the manifest.
     pub providers: Vec<PorIngestionProviderStatusDto>,
 }
@@ -1931,6 +2204,7 @@ pub struct StorageStoredFileDto {
 
 const DEFAULT_LIST_LIMIT: usize = 50;
 const MAX_LIST_LIMIT: usize = 500;
+const MAX_POR_SAMPLE_COUNT: usize = MAX_LIST_LIMIT;
 const REPUTATION_CACHE_CONTROL: &str = "public, max-age=30, must-revalidate";
 
 #[derive(Debug, Default)]
@@ -1938,6 +2212,36 @@ struct PinListQuery {
     limit: Option<u32>,
     offset: Option<u32>,
     status: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct PinManifestReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct ProviderListQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct StoragePeersReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct DenylistCatalogReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct SiteFileListReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct StorageMetadataReadbackQuery {
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -1962,6 +2266,46 @@ struct ReputationEventsQuery {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Default)]
+struct ReputationSnapshotReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct PorIngestionReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct ModerationBallotListQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct ModerationModelRegistryReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct ModerationScreeningReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct OrderbookReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct GovernancePublishReadbackQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct CapacityStateReadbackQuery {
+    limit: Option<u32>,
+}
+
 impl PinListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
@@ -1972,6 +2316,72 @@ impl PinListQuery {
                 query.status = Some(value.to_owned());
                 Ok(())
             }
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl PinManifestReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl ProviderListQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl StoragePeersReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl DenylistCatalogReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl SiteFileListReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl StorageMetadataReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
             _ => Ok(()),
         })?;
         Ok(query)
@@ -2028,6 +2438,98 @@ impl ReputationEventsQuery {
         })?;
         Ok(query)
     }
+}
+
+impl ReputationSnapshotReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl PorIngestionReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl ModerationBallotListQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl ModerationModelRegistryReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl ModerationScreeningReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl OrderbookReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl GovernancePublishReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+impl CapacityStateReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+fn parse_governance_lookup_limit(raw: Option<&str>) -> ApiResult<usize> {
+    GovernancePublishReadbackQuery::parse(raw).map(|query| normalize_limit(query.limit))
 }
 
 fn parse_u64_field(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
@@ -2140,10 +2642,18 @@ enum ReplicationStatusFilter {
     Expired,
 }
 
-pub(crate) async fn handle_get_sorafs_providers(State(state): State<SharedAppState>) -> Response {
+pub(crate) async fn handle_get_sorafs_providers(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
     let Some(cache) = state.sorafs_cache.clone() else {
         return feature_disabled("sorafs discovery API is not enabled on this node");
     };
+    let query = match ProviderListQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
 
     let mut cache_guard = cache.write().await;
     let now = SystemTime::now()
@@ -2155,8 +2665,10 @@ pub(crate) async fn handle_get_sorafs_providers(State(state): State<SharedAppSta
         warn!(removed = pruned, "pruned stale SoraFS provider adverts");
     }
     record_range_capability_metrics(&cache_guard, &state.telemetry);
-    let mut providers = Vec::new();
-    for record in cache_guard.records() {
+    let total_count = cache_guard.len();
+    let truncated = total_count > limit;
+    let mut providers = Vec::with_capacity(total_count.min(limit));
+    for record in cache_guard.records().take(limit) {
         match advert_to_json(
             record.fingerprint(),
             record.advert(),
@@ -2171,7 +2683,10 @@ pub(crate) async fn handle_get_sorafs_providers(State(state): State<SharedAppSta
     }
 
     let response = json_object(vec![
-        json_entry("count", providers.len() as u64),
+        json_entry("count", total_count as u64),
+        json_entry("returned_count", providers.len() as u64),
+        json_entry("limit", limit as u64),
+        json_entry("truncated", truncated),
         json_entry("providers", Value::Array(providers)),
     ]);
     JsonBody(response).into_response()
@@ -2179,8 +2694,23 @@ pub(crate) async fn handle_get_sorafs_providers(State(state): State<SharedAppSta
 
 pub(crate) async fn handle_get_sorafs_storage_peers(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let query = match StoragePeersReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let publish = &state.sorafs_publish_discovery;
+    let count = publish.pin_torii_urls.len();
+    let pin_torii_urls = publish
+        .pin_torii_urls
+        .iter()
+        .take(limit)
+        .cloned()
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    let returned_count = pin_torii_urls.len();
     let mut response = Map::new();
     response.insert("source".into(), Value::from("config"));
     response.insert(
@@ -2190,21 +2720,11 @@ pub(crate) async fn handle_get_sorafs_storage_peers(
             .as_ref()
             .map_or(Value::Null, |url| Value::from(url.clone())),
     );
-    response.insert(
-        "pin_torii_urls".into(),
-        Value::Array(
-            publish
-                .pin_torii_urls
-                .iter()
-                .cloned()
-                .map(Value::from)
-                .collect(),
-        ),
-    );
-    response.insert(
-        "count".into(),
-        Value::from(publish.pin_torii_urls.len() as u64),
-    );
+    response.insert("pin_torii_urls".into(), Value::Array(pin_torii_urls));
+    response.insert("count".into(), Value::from(count as u64));
+    response.insert("returned_count".into(), Value::from(returned_count as u64));
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(count > limit));
     JsonBody(Value::Object(response)).into_response()
 }
 
@@ -2359,7 +2879,126 @@ pub(crate) async fn handle_get_sorafs_governance_dag_node(
 pub(crate) async fn handle_get_sorafs_governance_dag_publish_index(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
+    };
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let etag = governance_dag_limited_etag(&etag, limit);
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    let (index, indexed_entry_count, truncated_entries) =
+        match limit_governance_publish_index_entries(index, limit) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let returned_entry_count = indexed_entry_count.min(limit);
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.governance_dag.publish_index.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "entry_count".into(),
+        index.get("entry_count").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "indexed_entry_count".into(),
+        Value::from(indexed_entry_count as u64),
+    );
+    response.insert(
+        "returned_entry_count".into(),
+        Value::from(returned_entry_count as u64),
+    );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated_entries".into(), Value::from(truncated_entries));
+    response.insert(
+        "payload_kind_counts".into(),
+        index
+            .get("payload_kind_counts")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    response.insert("index".into(), index);
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_publish_digest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(encoded_blake3_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
+    };
+    governance_publish_index_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.publish_index.digest.lookup.v1",
+        "digest",
+        "by_encoded_blake3",
+        &digest_hex,
+        limit,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_governance_dag_publish_kind(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(payload_kind): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
+    };
+    governance_publish_index_lookup_response(
+        &state,
+        headers,
+        "sorafs.governance_dag.publish_index.kind.lookup.v1",
+        "payload_kind",
+        "by_payload_kind",
+        &payload_kind,
+        limit,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_transparency_cycles(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let (index, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_publish_index(&state) {
             Ok(value) => value,
@@ -2369,10 +3008,145 @@ pub(crate) async fn handle_get_sorafs_governance_dag_publish_index(
         return response;
     }
 
+    let entries = match transparency_publication_index_entries(&index) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let cycles = match entries
+        .iter()
+        .map(transparency_cycle_index_summary)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(cycles) => cycles,
+        Err(response) => return response,
+    };
+    let published_cycle_count = cycles.len();
+    let (cycles, truncated) = limit_governance_readback_values(cycles, limit);
+
     let mut response = Map::new();
     response.insert(
         "schema".into(),
-        Value::from("sorafs.governance_dag.publish_index.v1"),
+        Value::from("sorafs.transparency.cycles.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "payload_kind".into(),
+        Value::from(TRANSPARENCY_LEDGER_PUBLICATION_KIND),
+    );
+    response.insert(
+        "published_cycle_count".into(),
+        Value::from(published_cycle_count as u64),
+    );
+    response.insert(
+        "returned_cycle_count".into(),
+        Value::from(cycles.len() as u64),
+    );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
+    response.insert("cycles".into(), Value::Array(cycles));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_transparency_cycle(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(cycle_id_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let cycle_id_hex = match normalize_transparency_hex_id(&cycle_id_hex, "cycle_id_hex", 16) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    transparency_cycle_publication_response(&state, headers, &cycle_id_hex, None, limit)
+}
+
+pub(crate) async fn handle_get_sorafs_transparency_cycle_entry(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path((cycle_id_hex, entry_id_hex)): Path<(String, String)>,
+) -> Response {
+    let cycle_id_hex = match normalize_transparency_hex_id(&cycle_id_hex, "cycle_id_hex", 16) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let entry_id_hex = match normalize_transparency_hex_id(&entry_id_hex, "entry_id_hex", 16) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    transparency_cycle_publication_response(
+        &state,
+        headers,
+        &cycle_id_hex,
+        Some(&entry_id_hex),
+        DEFAULT_LIST_LIMIT,
+    )
+}
+
+pub(crate) async fn handle_get_sorafs_transparency_explorer(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let cycle_entries = match transparency_publication_index_entries(&index) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let cycles = match cycle_entries
+        .iter()
+        .map(transparency_cycle_index_summary)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(cycles) => cycles,
+        Err(response) => return response,
+    };
+    let token_entries = match governance_publish_index_lookup_entries(
+        &index,
+        "by_payload_kind",
+        PROOF_TOKEN_ISSUANCE_KIND,
+    ) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let token_summary = match proof_token_issuance_publish_summary(&token_entries) {
+        Ok(summary) => summary,
+        Err(response) => return response,
+    };
+    let published_cycle_count = cycles.len();
+    let proof_token_issuance_count = token_entries.len();
+    let (cycles, truncated_cycles) = limit_governance_readback_values(cycles, limit);
+    let (token_entries, truncated_proof_token_issuances) =
+        limit_governance_readback_values(token_entries, limit);
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.transparency.explorer_snapshot.v1"),
     );
     response.insert("source".into(), Value::from("local_publish_index"));
     response.insert("source_path".into(), Value::from(source_path));
@@ -2393,52 +3167,1119 @@ pub(crate) async fn handle_get_sorafs_governance_dag_publish_index(
             .cloned()
             .unwrap_or(Value::Null),
     );
-    response.insert("index".into(), index);
+    response.insert(
+        "published_cycle_count".into(),
+        Value::from(published_cycle_count as u64),
+    );
+    response.insert(
+        "returned_cycle_count".into(),
+        Value::from(cycles.len() as u64),
+    );
+    response.insert("cycles".into(), Value::Array(cycles));
+    response.insert(
+        "proof_token_issuance_count".into(),
+        Value::from(proof_token_issuance_count as u64),
+    );
+    response.insert(
+        "returned_proof_token_issuance_count".into(),
+        Value::from(token_entries.len() as u64),
+    );
+    response.insert(
+        "proof_token_summary".into(),
+        proof_token_issuance_summary_json(token_summary),
+    );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated_cycles".into(), Value::from(truncated_cycles));
+    response.insert(
+        "truncated_proof_token_issuances".into(),
+        Value::from(truncated_proof_token_issuances),
+    );
+    response.insert("proof_token_issuances".into(), Value::Array(token_entries));
     governance_dag_json_response(Value::Object(response), &etag)
 }
 
-pub(crate) async fn handle_get_sorafs_governance_dag_publish_digest(
+pub(crate) async fn handle_get_sorafs_transparency_token_issuances(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    Path(encoded_blake3_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
-    let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
-        Ok(value) => value,
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let entries = match governance_publish_index_lookup_entries(
+        &index,
+        "by_payload_kind",
+        PROOF_TOKEN_ISSUANCE_KIND,
+    ) {
+        Ok(entries) => entries,
         Err(response) => return response,
     };
-    governance_publish_index_lookup_response(
-        &state,
-        headers,
-        "sorafs.governance_dag.publish_index.digest.lookup.v1",
-        "digest",
-        "by_encoded_blake3",
-        &digest_hex,
-    )
+    let summary = match proof_token_issuance_publish_summary(&entries) {
+        Ok(summary) => summary,
+        Err(response) => return response,
+    };
+    let published_token_count = entries.len();
+    let (entries, truncated) = limit_governance_readback_values(entries, limit);
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.transparency.proof_token_issuances.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "payload_kind".into(),
+        Value::from(PROOF_TOKEN_ISSUANCE_KIND),
+    );
+    response.insert(
+        "published_token_count".into(),
+        Value::from(published_token_count as u64),
+    );
+    response.insert(
+        "returned_token_count".into(),
+        Value::from(entries.len() as u64),
+    );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
+    response.insert(
+        "latest_published_at_unix".into(),
+        summary
+            .latest_published_at_unix
+            .map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "distinct_token_count".into(),
+        Value::from(summary.distinct_token_count),
+    );
+    response.insert(
+        "distinct_signer_count".into(),
+        Value::from(summary.distinct_signer_count),
+    );
+    response.insert(
+        "bound_entry_count_total".into(),
+        Value::from(summary.bound_entry_count_total),
+    );
+    response.insert(
+        "expiring_token_count".into(),
+        Value::from(summary.expiring_token_count),
+    );
+    response.insert(
+        "evidence_digest_count".into(),
+        Value::from(summary.evidence_digest_count),
+    );
+    response.insert(
+        "action_code_counts".into(),
+        Value::Object(summary.action_code_counts),
+    );
+    response.insert("entries".into(), Value::Array(entries));
+    governance_dag_json_response(Value::Object(response), &etag)
 }
 
-pub(crate) async fn handle_get_sorafs_governance_dag_publish_kind(
+pub(crate) async fn handle_post_sorafs_transparency_token_issuance(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    Path(payload_kind): Path<String>,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
 ) -> Response {
-    let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
-        Ok(value) => value,
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs proof-token issuance feed API is not enabled on this node",
+        );
+    }
+    if let Err(response) =
+        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
+    {
+        return response;
+    }
+    let request = match proof_token_issuance_request_from_body(body.as_ref()) {
+        Ok(request) => request,
         Err(response) => return response,
     };
-    governance_publish_index_lookup_response(
-        &state,
-        headers,
-        "sorafs.governance_dag.publish_index.kind.lookup.v1",
-        "payload_kind",
-        "by_payload_kind",
-        &payload_kind,
+    let has_governance_publisher = state.sorafs_node.has_governance_publisher();
+    let issuance = match state.sorafs_node.publish_proof_token_base64_issuance(
+        &request.token_b64,
+        request.signer_key,
+        request.evidence_digest,
+        request.policy_digest,
+        request.metadata,
+    ) {
+        Ok(issuance) => issuance,
+        Err(err) => {
+            let message = err.to_string();
+            let status = if is_proof_token_issuance_request_error(&message) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return json_error(
+                status,
+                format!("failed to publish SoraFS proof-token issuance: {message}"),
+            );
+        }
+    };
+    (
+        StatusCode::ACCEPTED,
+        JsonBody(proof_token_issuance_ingest_json(
+            &issuance,
+            has_governance_publisher,
+        )),
     )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_transparency_source_entry(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(source_kind): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs transparency source ingest API is not enabled on this node",
+        );
+    }
+    let source_kind = match normalize_transparency_source_kind(&source_kind) {
+        Ok(source_kind) => source_kind,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
+    {
+        return response;
+    }
+    let entry = match transparency_source_entry_from_body(source_kind, body.as_ref()) {
+        Ok(entry) => entry,
+        Err(response) => return response,
+    };
+    if let Err(err) = state
+        .sorafs_node
+        .record_transparency_ledger_source_entry(entry.clone())
+    {
+        let message = err.to_string();
+        let status = if message.contains("duplicate transparency ledger source entry") {
+            StatusCode::CONFLICT
+        } else if message.contains("invalid transparency ledger source entry") {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return json_error(
+            status,
+            format!("failed to record SoraFS transparency source entry: {message}"),
+        );
+    }
+    (
+        StatusCode::ACCEPTED,
+        JsonBody(transparency_source_entry_ingest_json(source_kind, &entry)),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_source_event(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs privacy aggregate source-event ingest API is not enabled on this node",
+        );
+    }
+    if let Err(response) =
+        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
+    {
+        return response;
+    }
+    let event = match privacy_aggregate_source_event_from_body(body.as_ref()) {
+        Ok(event) => event,
+        Err(response) => return response,
+    };
+    if let Err(err) = state
+        .sorafs_node
+        .record_privacy_aggregate_source_event(event.clone())
+    {
+        let message = err.to_string();
+        let status = if message.contains("duplicate privacy aggregate source event") {
+            StatusCode::CONFLICT
+        } else if message.contains("invalid privacy aggregate source event") {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return json_error(
+            status,
+            format!("failed to record SoraFS privacy aggregate source event: {message}"),
+        );
+    }
+    (
+        StatusCode::ACCEPTED,
+        JsonBody(privacy_aggregate_source_event_ingest_json(
+            &event,
+            state.sorafs_node.privacy_aggregate_source_event_count(),
+        )),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_due(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs privacy aggregate due-publication API is not enabled on this node",
+        );
+    }
+    if let Err(response) =
+        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
+    {
+        return response;
+    }
+    let (now_unix, config, previous_block_hash) =
+        match privacy_aggregate_publish_due_request_from_body(body.as_ref()) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+    let outcome = match state
+        .sorafs_node
+        .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+            now_unix,
+            config,
+            previous_block_hash,
+        ) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            let message = err.to_string();
+            let status = if is_privacy_aggregate_publish_due_request_error(&message) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return json_error(
+                status,
+                format!("failed to publish due SoraFS privacy aggregate cycle: {message}"),
+            );
+        }
+    };
+    let body = match privacy_aggregate_publish_due_outcome_json(
+        &outcome,
+        state.sorafs_node.privacy_aggregate_source_event_count(),
+    ) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    (StatusCode::OK, JsonBody(body)).into_response()
+}
+
+fn normalize_transparency_source_kind(raw: &str) -> Result<&'static str, Response> {
+    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "gar" | "gar-receipt" | "gar-enforcement-receipt" => {
+            Ok(TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT)
+        }
+        "moderation-ballot"
+        | "moderation-ballot-governance"
+        | "moderation-ballot-governance-event" => {
+            Ok(TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT)
+        }
+        "appeal-finance-report" => Ok(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT),
+        "appeal-finance-settlement" | "appeal-finance-settlement-receipt" => {
+            Ok(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT)
+        }
+        "legal-hold" | "legal-hold-notice" => Ok(TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE),
+        "redaction" | "redaction-notice" => Ok(TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE),
+        "evidence-access" | "evidence-access-summary" | "evidence-viewer-access" => {
+            Ok(TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY)
+        }
+        _ => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported SoraFS transparency source kind",
+        )),
+    }
+}
+
+fn transparency_source_entry_from_body(
+    source_kind: &'static str,
+    body: &[u8],
+) -> Result<TransparencyLedgerSourceEntry, Response> {
+    match source_kind {
+        TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT => {
+            let receipt = decode_transparency_source_payload::<GarEnforcementReceiptV1>(
+                body,
+                "GAR enforcement receipt",
+            )?;
+            gar_enforcement_receipt_source_entry(&receipt).map_err(|err| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid SoraFS GAR enforcement receipt source: {err}"),
+                )
+            })
+        }
+        TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT => {
+            let event = decode_transparency_source_payload::<
+                sorafs_manifest::SoraFsModerationBallotGovernanceEventV1,
+            >(body, "moderation ballot governance event")?;
+            moderation_ballot_governance_event_source_entry(&event).map_err(|err| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid SoraFS moderation ballot governance source: {err}"),
+                )
+            })
+        }
+        TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT => {
+            let report = decode_transparency_source_payload::<SoraFsAppealFinanceReportV1>(
+                body,
+                "appeal finance report",
+            )?;
+            appeal_finance_report_source_entry(&report).map_err(|err| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid SoraFS appeal finance report source: {err}"),
+                )
+            })
+        }
+        TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT => {
+            let receipt = decode_transparency_source_payload::<
+                SoraFsAppealFinanceSettlementReceiptV1,
+            >(body, "appeal finance settlement receipt")?;
+            appeal_finance_settlement_receipt_source_entry(&receipt).map_err(|err| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid SoraFS appeal finance settlement receipt source: {err}"),
+                )
+            })
+        }
+        TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE => transparency_public_source_entry_from_body(
+            source_kind,
+            ModerationLedgerEntryKindV1::LegalHold,
+            body,
+        ),
+        TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE => transparency_public_source_entry_from_body(
+            source_kind,
+            ModerationLedgerEntryKindV1::Redaction,
+            body,
+        ),
+        TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY => {
+            transparency_public_source_entry_from_body(
+                source_kind,
+                ModerationLedgerEntryKindV1::EvidenceAccess,
+                body,
+            )
+        }
+        _ => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported SoraFS transparency source kind",
+        )),
+    }
+}
+
+fn decode_transparency_source_payload<T>(body: &[u8], source_label: &str) -> Result<T, Response>
+where
+    T: json::JsonDeserialize,
+{
+    json::from_slice(body).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("failed to decode SoraFS transparency {source_label} JSON: {err}"),
+        )
+    })
+}
+
+struct ProofTokenIssuanceRequest {
+    token_b64: String,
+    signer_key: [u8; 32],
+    evidence_digest: Option<[u8; 32]>,
+    policy_digest: Option<[u8; 32]>,
+    metadata: Vec<ModerationLedgerMetadataV1>,
+}
+
+fn proof_token_issuance_request_from_body(
+    body: &[u8],
+) -> Result<ProofTokenIssuanceRequest, Response> {
+    let request: TransparencyProofTokenIssuanceRequestDto =
+        json::from_slice(body).map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS proof-token issuance JSON: {err}"),
+            )
+        })?;
+    let signer_key = decode_hex_32_field(&request.signer_key_hex, "signer_key_hex")?;
+    let evidence_digest = decode_optional_hex_32_field(
+        request.evidence_digest_hex.as_deref(),
+        "evidence_digest_hex",
+    )?;
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    let metadata = request
+        .metadata
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| ModerationLedgerMetadataV1 {
+            key: item.key,
+            value: item.value,
+        })
+        .collect::<Vec<_>>();
+    Ok(ProofTokenIssuanceRequest {
+        token_b64: request.token_b64,
+        signer_key,
+        evidence_digest,
+        policy_digest,
+        metadata,
+    })
+}
+
+fn transparency_public_source_entry_from_body(
+    source_kind: &'static str,
+    kind: ModerationLedgerEntryKindV1,
+    body: &[u8],
+) -> Result<TransparencyLedgerSourceEntry, Response> {
+    let request: TransparencyPublicSourceEntryRequestDto =
+        json::from_slice(body).map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS transparency public source-entry JSON: {err}"),
+            )
+        })?;
+    let payload_digest = decode_hex_32_field(&request.payload_digest_hex, "payload_digest_hex")?;
+    let subject_digest = match request.subject_digest_hex.as_deref() {
+        Some(digest) => decode_hex_32_field(digest, "subject_digest_hex")?,
+        None => public_source_subject_digest(source_kind, &request.subject, &payload_digest),
+    };
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    let evidence_uris = request.evidence_uris.unwrap_or_default();
+    let metadata = request
+        .metadata
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| ModerationLedgerMetadataV1 {
+            key: item.key,
+            value: item.value,
+        })
+        .collect::<Vec<_>>();
+    let summary_digest = match request.summary_digest_hex.as_deref() {
+        Some(digest) => decode_hex_32_field(digest, "summary_digest_hex")?,
+        None => public_source_summary_digest(
+            source_kind,
+            &request.subject,
+            &payload_digest,
+            &evidence_uris,
+            &metadata,
+        ),
+    };
+    Ok(TransparencyLedgerSourceEntry {
+        event_id: request.event_id,
+        occurred_at_unix: request.occurred_at_unix,
+        kind,
+        subject: request.subject,
+        subject_digest,
+        payload_digest,
+        summary_digest,
+        policy_digest,
+        evidence_uris,
+        metadata,
+    })
+}
+
+fn public_source_subject_digest(
+    source_kind: &str,
+    subject: &str,
+    payload_digest: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.torii.transparency.public_source_entry.subject.v1");
+    update_hasher_text(&mut hasher, source_kind);
+    update_hasher_text(&mut hasher, subject);
+    hasher.update(payload_digest);
+    *hasher.finalize().as_bytes()
+}
+
+fn public_source_summary_digest(
+    source_kind: &str,
+    subject: &str,
+    payload_digest: &[u8; 32],
+    evidence_uris: &[String],
+    metadata: &[ModerationLedgerMetadataV1],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.torii.transparency.public_source_entry.summary.v1");
+    update_hasher_text(&mut hasher, source_kind);
+    update_hasher_text(&mut hasher, subject);
+    hasher.update(payload_digest);
+    hasher.update(&(evidence_uris.len() as u64).to_le_bytes());
+    for uri in evidence_uris {
+        update_hasher_text(&mut hasher, uri);
+    }
+    hasher.update(&(metadata.len() as u64).to_le_bytes());
+    for item in metadata {
+        update_hasher_text(&mut hasher, &item.key);
+        update_hasher_text(&mut hasher, &item.value);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn update_hasher_text(hasher: &mut blake3::Hasher, value: &str) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn transparency_source_entry_ingest_json(
+    source_kind: &str,
+    entry: &TransparencyLedgerSourceEntry,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.transparency.source_entry.ingest.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry("source_kind", Value::from(source_kind.to_string())),
+        json_entry("event_id", Value::from(entry.event_id.clone())),
+        json_entry("occurred_at_unix", Value::from(entry.occurred_at_unix)),
+        json_entry(
+            "ledger_kind",
+            Value::from(moderation_ledger_entry_kind_label(&entry.kind).into_owned()),
+        ),
+        json_entry("subject", Value::from(entry.subject.clone())),
+        json_entry(
+            "subject_digest_hex",
+            Value::from(encode(entry.subject_digest)),
+        ),
+        json_entry(
+            "payload_digest_hex",
+            Value::from(encode(entry.payload_digest)),
+        ),
+        json_entry(
+            "summary_digest_hex",
+            Value::from(encode(entry.summary_digest)),
+        ),
+        json_entry(
+            "policy_digest_hex",
+            entry
+                .policy_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "evidence_uris",
+            Value::Array(
+                entry
+                    .evidence_uris
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "metadata",
+            Value::Object(
+                entry
+                    .metadata
+                    .iter()
+                    .map(|item| (item.key.clone(), Value::from(item.value.clone())))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+fn privacy_aggregate_source_event_from_body(
+    body: &[u8],
+) -> Result<PrivacyAggregateSourceEvent, Response> {
+    let request: TransparencyPrivacyAggregateSourceEventRequestDto = json::from_slice(body)
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS privacy aggregate source-event JSON: {err}"),
+            )
+        })?;
+    privacy_aggregate_source_event_from_request(request)
+}
+
+fn proof_token_issuance_ingest_json(
+    issuance: &ProofTokenIssuanceV1,
+    has_governance_publisher: bool,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.transparency.proof_token_issuance.ingest.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry(
+            "publication_status",
+            Value::from(if has_governance_publisher {
+                "published_to_local_governance_dag"
+            } else {
+                "accepted_without_governance_publisher"
+            }),
+        ),
+        json_entry("token_id_hex", Value::from(encode(issuance.token_id))),
+        json_entry("issued_at_unix", Value::from(issuance.issued_at_unix)),
+        json_entry(
+            "expires_at_unix",
+            issuance.expires_at_unix.map_or(Value::Null, Value::from),
+        ),
+        json_entry(
+            "moderation_action_code",
+            Value::from(u64::from(issuance.moderation_action_code)),
+        ),
+        json_entry("signer_key_hex", Value::from(encode(issuance.signer_key))),
+        json_entry(
+            "token_blake3_hex",
+            Value::from(encode(issuance.token_blake3)),
+        ),
+        json_entry(
+            "blinded_digest_hex",
+            Value::from(encode(issuance.blinded_digest)),
+        ),
+        json_entry(
+            "entry_ids",
+            Value::Array(
+                issuance
+                    .entry_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry("entry_count", Value::from(issuance.entry_ids.len() as u64)),
+        json_entry(
+            "evidence_digest_hex",
+            issuance
+                .evidence_digest
+                .map(|digest| Value::from(encode(digest)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "policy_digest_hex",
+            issuance
+                .policy_digest
+                .map(|digest| Value::from(encode(digest)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "metadata",
+            Value::Object(
+                issuance
+                    .metadata
+                    .iter()
+                    .map(|item| (item.key.clone(), Value::from(item.value.clone())))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+fn privacy_aggregate_source_event_from_request(
+    request: TransparencyPrivacyAggregateSourceEventRequestDto,
+) -> Result<PrivacyAggregateSourceEvent, Response> {
+    let population_digest = decode_optional_hex_32_field(
+        request.population_digest_hex.as_deref(),
+        "population_digest_hex",
+    )?;
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    Ok(PrivacyAggregateSourceEvent {
+        event_id: request.event_id,
+        occurred_at_unix: request.occurred_at_unix,
+        population_label: request.population_label,
+        population_digest,
+        metrics: request
+            .metrics
+            .into_iter()
+            .map(|metric| PrivacyAggregateSourceMetric {
+                key: metric.key,
+                value: metric.value,
+                unit: metric.unit,
+            })
+            .collect(),
+        policy_digest,
+    })
+}
+
+fn decode_optional_hex_32_field(
+    value: Option<&str>,
+    field: &str,
+) -> Result<Option<[u8; 32]>, Response> {
+    value
+        .map(|value| decode_hex_32_field(value, field))
+        .transpose()
+}
+
+fn privacy_aggregate_source_event_ingest_json(
+    event: &PrivacyAggregateSourceEvent,
+    retained_source_event_count: usize,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.transparency.privacy_aggregate_source_event.ingest.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry("event_id", Value::from(event.event_id.clone())),
+        json_entry("occurred_at_unix", Value::from(event.occurred_at_unix)),
+        json_entry(
+            "population_label",
+            Value::from(event.population_label.clone()),
+        ),
+        json_entry(
+            "population_digest_hex",
+            event
+                .population_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "policy_digest_hex",
+            event
+                .policy_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("metric_count", Value::from(event.metrics.len() as u64)),
+        json_entry(
+            "retained_source_event_count",
+            Value::from(retained_source_event_count as u64),
+        ),
+    ])
+}
+
+fn privacy_aggregate_publish_due_request_from_body(
+    body: &[u8],
+) -> Result<
+    (
+        u64,
+        sorafs_node::PrivacyAggregateCycleConfig,
+        Option<[u8; 32]>,
+    ),
+    Response,
+> {
+    let request: TransparencyPrivacyAggregatePublishDueRequestDto = json::from_slice(body)
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS privacy aggregate publish-due JSON: {err}"),
+            )
+        })?;
+    let privacy_mode = privacy_aggregate_mode_from_str(&request.privacy_mode)?;
+    let noise_seed =
+        decode_optional_hex_32_field(request.noise_seed_hex.as_deref(), "noise_seed_hex")?;
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    let previous_block_hash = decode_optional_hex_32_field(
+        request.previous_block_hash_hex.as_deref(),
+        "previous_block_hash_hex",
+    )?;
+    let metadata = request
+        .metadata
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| ModerationLedgerMetadataV1 {
+            key: item.key,
+            value: item.value,
+        })
+        .collect();
+    let config = sorafs_node::PrivacyAggregateCycleConfig {
+        aggregate_id_prefix: request.aggregate_id_prefix,
+        privacy: ModerationPrivacyParametersV1 {
+            version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            mode: privacy_mode,
+            epsilon_micros: request.epsilon_micros,
+            delta_ppb: request.delta_ppb,
+            noise_scale_micros: request.noise_scale_micros,
+            suppression_threshold: request.suppression_threshold,
+            suppressed_count: 0,
+        },
+        noise_seed,
+        policy_digest,
+        metadata,
+    };
+    Ok((request.now_unix, config, previous_block_hash))
+}
+
+fn privacy_aggregate_mode_from_str(raw: &str) -> Result<ModerationPrivacyModeV1, Response> {
+    match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "differential_privacy" | "dp" => Ok(ModerationPrivacyModeV1::DifferentialPrivacy),
+        "suppression" => Ok(ModerationPrivacyModeV1::Suppression),
+        "differential_privacy_with_suppression" | "dp_with_suppression" => {
+            Ok(ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression)
+        }
+        _ => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported SoraFS privacy aggregate privacy_mode",
+        )),
+    }
+}
+
+fn privacy_aggregate_publish_due_outcome_json(
+    outcome: &PrivacyAggregateScheduleOutcome,
+    retained_source_event_count: usize,
+) -> Result<Value, Response> {
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.transparency.privacy_aggregate.publish_due.v1"),
+    );
+    response.insert(
+        "retained_source_event_count".into(),
+        Value::from(retained_source_event_count as u64),
+    );
+    match outcome {
+        PrivacyAggregateScheduleOutcome::Disabled => {
+            response.insert("status".into(), Value::from("disabled"));
+            response.insert("published".into(), Value::from(false));
+            response.insert("cycle_id_hex".into(), Value::Null);
+            response.insert("window".into(), Value::Null);
+        }
+        PrivacyAggregateScheduleOutcome::NotDue => {
+            response.insert("status".into(), Value::from("not_due"));
+            response.insert("published".into(), Value::from(false));
+            response.insert("cycle_id_hex".into(), Value::Null);
+            response.insert("window".into(), Value::Null);
+        }
+        PrivacyAggregateScheduleOutcome::AlreadyPublished { window, cycle_id } => {
+            response.insert("status".into(), Value::from("already_published"));
+            response.insert("published".into(), Value::from(false));
+            insert_privacy_aggregate_window(&mut response, *window, *cycle_id);
+        }
+        PrivacyAggregateScheduleOutcome::NoSourceEvents { window, cycle_id } => {
+            response.insert("status".into(), Value::from("no_source_events"));
+            response.insert("published".into(), Value::from(false));
+            insert_privacy_aggregate_window(&mut response, *window, *cycle_id);
+        }
+        PrivacyAggregateScheduleOutcome::AllBucketsSuppressed { window, cycle_id } => {
+            response.insert("status".into(), Value::from("all_buckets_suppressed"));
+            response.insert("published".into(), Value::from(false));
+            insert_privacy_aggregate_window(&mut response, *window, *cycle_id);
+        }
+        PrivacyAggregateScheduleOutcome::Published {
+            window,
+            publication,
+        } => {
+            response.insert("status".into(), Value::from("published"));
+            response.insert("published".into(), Value::from(true));
+            insert_privacy_aggregate_window(&mut response, *window, publication.block.cycle_id);
+            response.insert(
+                "publication".into(),
+                privacy_aggregate_publication_summary_json(publication)?,
+            );
+        }
+    }
+    Ok(Value::Object(response))
+}
+
+fn insert_privacy_aggregate_window(
+    response: &mut Map,
+    window: sorafs_node::PrivacyAggregateCycleWindow,
+    cycle_id: [u8; 16],
+) {
+    response.insert("cycle_id_hex".into(), Value::from(encode(cycle_id)));
+    response.insert(
+        "window".into(),
+        json_object(vec![
+            json_entry("cycle_start_unix", Value::from(window.cycle_start_unix)),
+            json_entry("cycle_end_unix", Value::from(window.cycle_end_unix)),
+            json_entry("due_at_unix", Value::from(window.due_at_unix)),
+        ]),
+    );
+}
+
+fn privacy_aggregate_publication_summary_json(
+    publication: &ModerationLedgerCyclePublicationV1,
+) -> Result<Value, Response> {
+    let block_hash = publication.block.block_hash().map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to hash SoraFS privacy aggregate publication block: {err}"),
+        )
+    })?;
+    let publication_hash = publication.publication_hash().map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to hash SoraFS privacy aggregate publication: {err}"),
+        )
+    })?;
+    Ok(json_object(vec![
+        json_entry(
+            "cycle_id_hex",
+            Value::from(encode(publication.block.cycle_id)),
+        ),
+        json_entry(
+            "cycle_start_unix",
+            Value::from(publication.block.cycle_start_unix),
+        ),
+        json_entry(
+            "cycle_end_unix",
+            Value::from(publication.block.cycle_end_unix),
+        ),
+        json_entry(
+            "generated_at_unix",
+            Value::from(publication.block.generated_at_unix),
+        ),
+        json_entry(
+            "entry_count",
+            Value::from(u64::from(publication.block.entry_count)),
+        ),
+        json_entry("proof_count", Value::from(publication.proofs.len() as u64)),
+        json_entry(
+            "entry_root_hex",
+            Value::from(encode(publication.block.entry_root)),
+        ),
+        json_entry("block_hash_hex", Value::from(encode(block_hash))),
+        json_entry(
+            "publication_hash_hex",
+            Value::from(encode(publication_hash)),
+        ),
+    ]))
+}
+
+fn is_privacy_aggregate_publish_due_request_error(message: &str) -> bool {
+    message.contains("invalid privacy")
+        || message.contains("runtime noise seed")
+        || message.contains("noise_seed")
+        || message.contains("policy_digest")
+        || message.contains("metadata")
+        || message.contains("aggregate_id_prefix")
+        || message.contains("build scheduled privacy aggregate cycle")
+}
+
+fn is_proof_token_issuance_request_error(message: &str) -> bool {
+    message.contains("ingest proof-token issuance")
+        || message.contains("invalid proof-token issuance")
+}
+
+fn moderation_ledger_entry_kind_label(kind: &ModerationLedgerEntryKindV1) -> Cow<'_, str> {
+    match kind {
+        ModerationLedgerEntryKindV1::ModerationAction => Cow::Borrowed("moderation_action"),
+        ModerationLedgerEntryKindV1::AppealOutcome => Cow::Borrowed("appeal_outcome"),
+        ModerationLedgerEntryKindV1::GarEnforcementReceipt => {
+            Cow::Borrowed("gar_enforcement_receipt")
+        }
+        ModerationLedgerEntryKindV1::ProofTokenIssuance => Cow::Borrowed("proof_token_issuance"),
+        ModerationLedgerEntryKindV1::EvidenceAccess => Cow::Borrowed("evidence_access"),
+        ModerationLedgerEntryKindV1::PrivacyAggregate => Cow::Borrowed("privacy_aggregate"),
+        ModerationLedgerEntryKindV1::LegalHold => Cow::Borrowed("legal_hold"),
+        ModerationLedgerEntryKindV1::Redaction => Cow::Borrowed("redaction"),
+        ModerationLedgerEntryKindV1::Custom(slug) => Cow::Borrowed(slug),
+    }
+}
+
+async fn enforce_transparency_proof_token_verify_access(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    remote: SocketAddr,
+) -> Result<(), Response> {
+    if let Err(err) = crate::validate_api_token(state, headers) {
+        return Err(err.into_response());
+    }
+
+    let key = crate::limits::key_from_headers(
+        headers,
+        Some(remote.ip()),
+        Some(TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY),
+        state.api_token_enforced(),
+    );
+    if crate::limits::allow_cost_conditionally(&state.proof_rate_limiter, &key, 1, true).await {
+        return Ok(());
+    }
+
+    state.telemetry.with_metrics(|metrics| {
+        metrics.inc_torii_proof_throttle(TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY);
+        metrics.observe_torii_proof_request(
+            TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY,
+            "rate_limited",
+            0,
+            Duration::from_secs(0),
+        );
+    });
+    let retry_after_secs = state.proof_limits.retry_after.as_secs().max(1);
+    warn!(
+        endpoint = TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY,
+        retry_after_secs, "SoraFS transparency proof-token verifier throttled request"
+    );
+    Err(transparency_proof_token_rate_limited_response(
+        retry_after_secs,
+    ))
+}
+
+fn transparency_proof_token_rate_limited_response(retry_after_secs: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        JsonBody(json_object(vec![
+            json_entry("error", Value::from("rate_limited")),
+            json_entry(
+                "message",
+                Value::from("SoraFS transparency proof-token verification is rate-limited"),
+            ),
+            json_entry("retry_after_secs", Value::from(retry_after_secs)),
+        ])),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
+}
+
+pub(crate) async fn handle_post_sorafs_transparency_token_verify(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    JsonOnly(req): JsonOnly<TransparencyProofTokenVerifyRequestDto>,
+) -> Response {
+    if let Err(response) =
+        enforce_transparency_proof_token_verify_access(&state, &headers, remote).await
+    {
+        return response;
+    }
+    match transparency_proof_token_verification_response(req) {
+        Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
+        Err(response) => response,
+    }
 }
 
 pub(crate) async fn handle_get_sorafs_appeal_finance_reports(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let (index, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_publish_index(&state) {
             Ok(value) => value,
@@ -2460,6 +4301,8 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_reports(
         Ok(summary) => summary,
         Err(response) => return response,
     };
+    let published_report_count = entries.len();
+    let (entries, truncated) = limit_governance_readback_values(entries, limit);
 
     let mut response = Map::new();
     response.insert(
@@ -2480,8 +4323,14 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_reports(
     );
     response.insert(
         "published_report_count".into(),
+        Value::from(published_report_count as u64),
+    );
+    response.insert(
+        "returned_report_count".into(),
         Value::from(entries.len() as u64),
     );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
     response.insert(
         "latest_published_at_unix".into(),
         summary
@@ -2533,7 +4382,13 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_reports(
 pub(crate) async fn handle_get_sorafs_appeal_finance_weekly_rollups(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let (index, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_publish_index(&state) {
             Ok(value) => value,
@@ -2552,6 +4407,8 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_weekly_rollups(
         Err(response) => return response,
     };
     let summary = appeal_finance_weekly_rollup_publish_summary(&entries);
+    let published_rollup_count = entries.len();
+    let (entries, truncated) = limit_governance_readback_values(entries, limit);
 
     let mut response = Map::new();
     response.insert(
@@ -2572,8 +4429,14 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_weekly_rollups(
     );
     response.insert(
         "published_rollup_count".into(),
+        Value::from(published_rollup_count as u64),
+    );
+    response.insert(
+        "returned_rollup_count".into(),
         Value::from(entries.len() as u64),
     );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
     response.insert(
         "latest_published_at_unix".into(),
         summary
@@ -2597,6 +4460,103 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_weekly_rollups(
         Value::from(summary.no_show_count_total),
     );
     response.insert("cycles".into(), Value::Object(summary.cycles));
+    response.insert("entries".into(), Value::Array(entries));
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+pub(crate) async fn handle_get_sorafs_appeal_finance_settlement_receipts(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let query = match GovernancePublishReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let (index, source_path, encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(&state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let entries = match governance_publish_index_lookup_entries(
+        &index,
+        "by_payload_kind",
+        APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND,
+    ) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let summary = match appeal_finance_settlement_receipt_publish_summary(&entries) {
+        Ok(summary) => summary,
+        Err(response) => return response,
+    };
+    let published_receipt_count = entries.len();
+    let (entries, truncated) = limit_governance_readback_values(entries, limit);
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.appeal_finance.settlement_receipts.v1"),
+    );
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("encoded_len".into(), Value::from(encoded_len));
+    response.insert("blake3".into(), Value::from(blake3_hex));
+    response.insert(
+        "generated_at".into(),
+        index.get("generated_at").cloned().unwrap_or(Value::Null),
+    );
+    response.insert(
+        "payload_kind".into(),
+        Value::from(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND),
+    );
+    response.insert(
+        "published_receipt_count".into(),
+        Value::from(published_receipt_count as u64),
+    );
+    response.insert(
+        "returned_receipt_count".into(),
+        Value::from(entries.len() as u64),
+    );
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
+    response.insert(
+        "latest_published_at_unix".into(),
+        summary
+            .latest_published_at_unix
+            .map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "distinct_case_count".into(),
+        Value::from(summary.distinct_case_count),
+    );
+    response.insert(
+        "total_step_amount_xor".into(),
+        Value::from(summary.total_step_amount_xor),
+    );
+    response.insert(
+        "total_deposit_xor".into(),
+        Value::from(summary.total_deposit_xor),
+    );
+    response.insert(
+        "total_refund_xor".into(),
+        Value::from(summary.total_refund_xor),
+    );
+    response.insert(
+        "total_treasury_xor".into(),
+        Value::from(summary.total_treasury_xor),
+    );
+    response.insert("total_held_xor".into(), Value::from(summary.total_held_xor));
+    response.insert("steps".into(), Value::Object(summary.steps));
+    response.insert(
+        "reconciliation_statuses".into(),
+        Value::Object(summary.reconciliation_statuses),
+    );
     response.insert("entries".into(), Value::Array(entries));
     governance_dag_json_response(Value::Object(response), &etag)
 }
@@ -2647,10 +4607,15 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_digest(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     Path(encoded_blake3_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
         Ok(value) => value,
         Err(response) => return response,
+    };
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
     };
     governance_car_queue_lookup_response(
         &state,
@@ -2659,6 +4624,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_digest(
         "digest",
         "by_encoded_blake3",
         &digest_hex,
+        limit,
     )
 }
 
@@ -2666,10 +4632,15 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_kind(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     Path(payload_kind): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
         Ok(value) => value,
         Err(response) => return response,
+    };
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
     };
     governance_car_queue_lookup_response(
         &state,
@@ -2678,6 +4649,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_car_queue_kind(
         "payload_kind",
         "by_payload_kind",
         &payload_kind,
+        limit,
     )
 }
 
@@ -2878,10 +4850,15 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_digest(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     Path(encoded_blake3_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let digest_hex = match normalize_governance_publish_digest_hex(&encoded_blake3_hex) {
         Ok(value) => value,
         Err(response) => return response,
+    };
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
     };
     governance_runtime_dag_index_lookup_response(
         &state,
@@ -2890,6 +4867,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_digest(
         "digest",
         "by_encoded_blake3",
         &digest_hex,
+        limit,
     )
 }
 
@@ -2897,10 +4875,15 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_kind(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     Path(payload_kind): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let payload_kind = match normalize_governance_publish_kind(&payload_kind) {
         Ok(value) => value,
         Err(response) => return response,
+    };
+    let limit = match parse_governance_lookup_limit(raw_query.as_deref()) {
+        Ok(limit) => limit,
+        Err(err) => return err.into_response(),
     };
     governance_runtime_dag_index_lookup_response(
         &state,
@@ -2909,6 +4892,7 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_kind(
         "payload_kind",
         "by_payload_kind",
         &payload_kind,
+        limit,
     )
 }
 
@@ -3134,6 +5118,17 @@ fn governance_dag_index_file_path(
     file_name: &str,
     missing_config_message: &str,
 ) -> Result<std::path::PathBuf, Response> {
+    Ok(governance_dag_root_dir_with_message(state, missing_config_message)?.join(file_name))
+}
+
+fn governance_dag_root_dir(state: &SharedAppState) -> Result<PathBuf, Response> {
+    governance_dag_root_dir_with_message(state, "sorafs governance DAG directory is not configured")
+}
+
+fn governance_dag_root_dir_with_message(
+    state: &SharedAppState,
+    missing_config_message: &str,
+) -> Result<PathBuf, Response> {
     if !state.sorafs_node.is_enabled() {
         return Err(feature_disabled(
             "sorafs governance DAG API is not enabled on this node",
@@ -3142,7 +5137,7 @@ fn governance_dag_index_file_path(
     let Some(governance_dir) = state.sorafs_node.config().governance_dir() else {
         return Err(json_error(StatusCode::NOT_FOUND, missing_config_message));
     };
-    Ok(governance_dir.join(file_name))
+    Ok(governance_dir.to_path_buf())
 }
 
 fn governance_dag_lookup_response(
@@ -3375,6 +5370,7 @@ fn governance_runtime_dag_index_lookup_response(
     query: &str,
     map_name: &str,
     key: &str,
+    limit: usize,
 ) -> Response {
     let (index, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_runtime_index(state) {
@@ -3395,6 +5391,8 @@ fn governance_runtime_dag_index_lookup_response(
         Ok(blocks) => blocks,
         Err(response) => return response,
     };
+    let count = blocks.len();
+    let (blocks, truncated) = limit_governance_readback_values(blocks, limit);
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
@@ -3405,7 +5403,10 @@ fn governance_runtime_dag_index_lookup_response(
     response.insert("query".into(), Value::from(query));
     response.insert("key".into(), Value::from(key.to_string()));
     response.insert("found".into(), Value::from(true));
-    response.insert("count".into(), Value::from(blocks.len() as u64));
+    response.insert("count".into(), Value::from(count as u64));
+    response.insert("returned_count".into(), Value::from(blocks.len() as u64));
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
     response.insert("blocks".into(), Value::Array(blocks));
     governance_dag_json_response(Value::Object(response), &etag)
 }
@@ -3457,6 +5458,7 @@ fn governance_publish_index_lookup_response(
     query: &str,
     map_name: &str,
     key: &str,
+    limit: usize,
 ) -> Response {
     let (index, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_publish_index(state) {
@@ -3477,6 +5479,8 @@ fn governance_publish_index_lookup_response(
         Ok(entries) => entries,
         Err(response) => return response,
     };
+    let count = entries.len();
+    let (entries, truncated) = limit_governance_readback_values(entries, limit);
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
@@ -3487,7 +5491,10 @@ fn governance_publish_index_lookup_response(
     response.insert("query".into(), Value::from(query));
     response.insert("key".into(), Value::from(key.to_string()));
     response.insert("found".into(), Value::from(true));
-    response.insert("count".into(), Value::from(entries.len() as u64));
+    response.insert("count".into(), Value::from(count as u64));
+    response.insert("returned_count".into(), Value::from(entries.len() as u64));
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
     response.insert("entries".into(), Value::Array(entries));
     governance_dag_json_response(Value::Object(response), &etag)
 }
@@ -3538,6 +5545,842 @@ fn governance_publish_index_lookup_entries(
         found.push(entry);
     }
     Ok(found)
+}
+
+struct VerifiedTransparencyPublication {
+    entry: Value,
+    publication: ModerationLedgerCyclePublicationV1,
+    encoded_path: String,
+    json_path: Option<String>,
+    encoded_blake3: String,
+    encoded_len: u64,
+    block_hash_hex: String,
+    publication_hash_hex: String,
+}
+
+fn transparency_publication_index_entries(index: &Value) -> Result<Vec<Value>, Response> {
+    governance_publish_index_lookup_entries(
+        index,
+        "by_payload_kind",
+        TRANSPARENCY_LEDGER_PUBLICATION_KIND,
+    )
+}
+
+fn transparency_cycle_index_summary(entry: &Value) -> Result<Value, Response> {
+    let labels = transparency_entry_labels(entry)?;
+    let mut summary = Map::new();
+    summary.insert(
+        "cycle_id_hex".into(),
+        Value::from(required_map_string(
+            labels,
+            "cycle_id_hex",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "cycle_start_unix".into(),
+        Value::from(required_map_u64(
+            labels,
+            "cycle_start_unix",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "cycle_end_unix".into(),
+        Value::from(required_map_u64(
+            labels,
+            "cycle_end_unix",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "generated_at_unix".into(),
+        Value::from(required_map_u64(
+            labels,
+            "generated_at_unix",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "entry_count".into(),
+        Value::from(required_map_u64(
+            labels,
+            "entry_count",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "entry_root_hex".into(),
+        Value::from(required_map_string(
+            labels,
+            "entry_root_hex",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "block_hash_hex".into(),
+        Value::from(required_map_string(
+            labels,
+            "block_hash_hex",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "publication_hash_hex".into(),
+        Value::from(required_map_string(
+            labels,
+            "publication_hash_hex",
+            "transparency entry labels",
+        )?),
+    );
+    summary.insert(
+        "published_at_unix".into(),
+        entry
+            .get("published_at_unix")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    summary.insert(
+        "encoded_blake3".into(),
+        Value::from(required_value_string(
+            entry,
+            "encoded_blake3",
+            "transparency publish index entry",
+        )?),
+    );
+    summary.insert(
+        "encoded_len".into(),
+        Value::from(required_value_u64(
+            entry,
+            "encoded_len",
+            "transparency publish index entry",
+        )?),
+    );
+    summary.insert("source_entry".into(), entry.clone());
+    Ok(Value::Object(summary))
+}
+
+fn transparency_cycle_publication_response(
+    state: &SharedAppState,
+    headers: HeaderMap,
+    cycle_id_hex: &str,
+    entry_id_hex: Option<&str>,
+    publication_limit: usize,
+) -> Response {
+    let (index, source_path, index_encoded_len, blake3_hex, etag) =
+        match load_governance_dag_publish_index(state) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let entries = match transparency_publication_index_entries(&index) {
+        Ok(entries) => entries,
+        Err(response) => return response,
+    };
+    let verified = match load_verified_transparency_publication(state, &entries, cycle_id_hex) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
+        return response;
+    }
+
+    let mut response = Map::new();
+    response.insert("source".into(), Value::from("local_publish_index"));
+    response.insert("source_path".into(), Value::from(source_path));
+    response.insert("index_encoded_len".into(), Value::from(index_encoded_len));
+    response.insert("index_blake3".into(), Value::from(blake3_hex));
+    response.insert("cycle_id_hex".into(), Value::from(cycle_id_hex.to_string()));
+    response.insert(
+        "encoded_path".into(),
+        Value::from(verified.encoded_path.clone()),
+    );
+    response.insert(
+        "json_path".into(),
+        verified
+            .json_path
+            .as_ref()
+            .map(|path| Value::from(path.clone()))
+            .unwrap_or(Value::Null),
+    );
+    response.insert(
+        "encoded_blake3".into(),
+        Value::from(verified.encoded_blake3.clone()),
+    );
+    response.insert("encoded_len".into(), Value::from(verified.encoded_len));
+    response.insert("entry".into(), verified.entry.clone());
+    response.insert(
+        "verification".into(),
+        transparency_verification_json(&verified),
+    );
+
+    if let Some(entry_id_hex) = entry_id_hex {
+        let entry_id = match decode_transparency_id_16(entry_id_hex, "entry_id_hex") {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+        let proof = match verified
+            .publication
+            .proofs
+            .iter()
+            .find(|proof| proof.entry.entry_id == entry_id)
+        {
+            Some(proof) => proof,
+            None => {
+                return json_error(
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "transparency ledger entry `{entry_id_hex}` was not found in cycle `{cycle_id_hex}`"
+                    ),
+                );
+            }
+        };
+        if let Err(err) = proof.verify_against_block(&verified.publication.block) {
+            return json_error(
+                StatusCode::CONFLICT,
+                format!("transparency ledger proof failed verification: {err}"),
+            );
+        }
+        response.insert(
+            "schema".into(),
+            Value::from("sorafs.transparency.entry_proof.v1"),
+        );
+        response.insert("entry_id_hex".into(), Value::from(entry_id_hex.to_string()));
+        response.insert(
+            "block".into(),
+            match json::to_value(&verified.publication.block) {
+                Ok(value) => value,
+                Err(err) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("failed to serialize transparency ledger block: {err}"),
+                    );
+                }
+            },
+        );
+        response.insert(
+            "proof".into(),
+            match json::to_value(proof) {
+                Ok(value) => value,
+                Err(err) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("failed to serialize transparency ledger proof: {err}"),
+                    );
+                }
+            },
+        );
+    } else {
+        let proof_count = verified.publication.proofs.len();
+        let returned_proof_count = proof_count.min(publication_limit);
+        let truncated_proofs = proof_count > returned_proof_count;
+        response.insert(
+            "schema".into(),
+            Value::from("sorafs.transparency.cycle_publication.v1"),
+        );
+        response.insert("proof_count".into(), Value::from(proof_count as u64));
+        response.insert(
+            "returned_proof_count".into(),
+            Value::from(returned_proof_count as u64),
+        );
+        response.insert("limit".into(), Value::from(publication_limit as u64));
+        response.insert("truncated_proofs".into(), Value::from(truncated_proofs));
+        response.insert(
+            "publication".into(),
+            match transparency_publication_json_with_limit(&verified.publication, publication_limit)
+            {
+                Ok(value) => value,
+                Err(err) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("failed to serialize transparency ledger publication: {err}"),
+                    );
+                }
+            },
+        );
+    }
+
+    governance_dag_json_response(Value::Object(response), &etag)
+}
+
+fn transparency_publication_json_with_limit(
+    publication: &ModerationLedgerCyclePublicationV1,
+    limit: usize,
+) -> Result<Value, norito::json::Error> {
+    let mut value = json::to_value(publication)?;
+    if let Some(proofs) = value.get_mut("proofs").and_then(Value::as_array_mut) {
+        proofs.truncate(limit);
+    }
+    Ok(value)
+}
+
+fn load_verified_transparency_publication(
+    state: &SharedAppState,
+    entries: &[Value],
+    cycle_id_hex: &str,
+) -> Result<VerifiedTransparencyPublication, Response> {
+    let Some(entry) = entries
+        .iter()
+        .rev()
+        .find(|entry| {
+            entry
+                .get("labels")
+                .and_then(Value::as_object)
+                .and_then(|labels| labels.get("cycle_id_hex"))
+                .and_then(Value::as_str)
+                == Some(cycle_id_hex)
+        })
+        .cloned()
+    else {
+        return Err(json_error(
+            StatusCode::NOT_FOUND,
+            format!("transparency ledger cycle `{cycle_id_hex}` was not found"),
+        ));
+    };
+
+    let encoded_path =
+        required_value_string(&entry, "encoded_path", "transparency publish index entry")?;
+    let json_path = entry
+        .get("json_path")
+        .and_then(Value::as_str)
+        .map(|path| {
+            validate_governance_dag_relative_path(path, "json_path")
+                .map(|path| path.display().to_string())
+        })
+        .transpose()?;
+    let encoded_blake3 =
+        required_value_string(&entry, "encoded_blake3", "transparency publish index entry")?;
+    let encoded_len =
+        required_value_u64(&entry, "encoded_len", "transparency publish index entry")?;
+    if normalize_governance_publish_digest_hex(&encoded_blake3).is_err() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "transparency publish index entry has malformed encoded_blake3",
+        ));
+    }
+    let (encoded, resolved_encoded_path) =
+        read_governance_dag_relative_file(state, &encoded_path, "encoded_path")?;
+    let actual_len = encoded.len() as u64;
+    if actual_len != encoded_len {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            format!(
+                "transparency publication length mismatch: index declares {encoded_len}, file has {actual_len}"
+            ),
+        ));
+    }
+    let actual_blake3 = encode(blake3_hash(&encoded).as_bytes());
+    if actual_blake3 != encoded_blake3 {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "transparency publication digest does not match publish index",
+        ));
+    }
+    let publication: ModerationLedgerCyclePublicationV1 = norito::decode_from_bytes(&encoded)
+        .map_err(|err| {
+            json_error(
+                StatusCode::CONFLICT,
+                format!("failed to decode transparency ledger publication: {err}"),
+            )
+        })?;
+    publication.validate().map_err(|err| {
+        json_error(
+            StatusCode::CONFLICT,
+            format!("invalid transparency ledger publication: {err}"),
+        )
+    })?;
+    let publication_cycle_id_hex = encode(publication.block.cycle_id);
+    if publication_cycle_id_hex != cycle_id_hex {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "transparency publication cycle id does not match publish index",
+        ));
+    }
+
+    let block_hash_hex = encode(publication.block.block_hash().map_err(|err| {
+        json_error(
+            StatusCode::CONFLICT,
+            format!("failed to hash transparency ledger block: {err}"),
+        )
+    })?);
+    let publication_hash_hex = encode(publication.publication_hash().map_err(|err| {
+        json_error(
+            StatusCode::CONFLICT,
+            format!("failed to hash transparency ledger publication: {err}"),
+        )
+    })?);
+    let labels = transparency_entry_labels(&entry)?;
+    require_matching_label(labels, "block_hash_hex", &block_hash_hex)?;
+    require_matching_label(labels, "publication_hash_hex", &publication_hash_hex)?;
+    require_matching_label(
+        labels,
+        "entry_root_hex",
+        &encode(publication.block.entry_root),
+    )?;
+    if required_map_u64(labels, "entry_count", "transparency entry labels")?
+        != u64::from(publication.block.entry_count)
+    {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "transparency publication entry_count does not match publish index labels",
+        ));
+    }
+
+    Ok(VerifiedTransparencyPublication {
+        entry,
+        publication,
+        encoded_path: resolved_encoded_path,
+        json_path,
+        encoded_blake3,
+        encoded_len,
+        block_hash_hex,
+        publication_hash_hex,
+    })
+}
+
+fn transparency_verification_json(verified: &VerifiedTransparencyPublication) -> Value {
+    let mut verification = Map::new();
+    verification.insert("valid".into(), Value::from(true));
+    verification.insert(
+        "block_hash_hex".into(),
+        Value::from(verified.block_hash_hex.clone()),
+    );
+    verification.insert(
+        "publication_hash_hex".into(),
+        Value::from(verified.publication_hash_hex.clone()),
+    );
+    verification.insert(
+        "entry_root_hex".into(),
+        Value::from(encode(verified.publication.block.entry_root)),
+    );
+    verification.insert(
+        "entry_count".into(),
+        Value::from(u64::from(verified.publication.block.entry_count)),
+    );
+    verification.insert(
+        "proof_count".into(),
+        Value::from(verified.publication.proofs.len() as u64),
+    );
+    verification.insert("all_proofs_verified".into(), Value::from(true));
+    Value::Object(verification)
+}
+
+fn transparency_entry_labels(entry: &Value) -> Result<&Map, Response> {
+    entry
+        .get("labels")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transparency publish index entry is missing labels",
+            )
+        })
+}
+
+fn required_value_string(value: &Value, field: &str, context: &str) -> Result<String, Response> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} is missing string field `{field}`"),
+            )
+        })
+}
+
+fn required_value_u64(value: &Value, field: &str, context: &str) -> Result<u64, Response> {
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} is missing integer field `{field}`"),
+        )
+    })
+}
+
+fn require_matching_label(labels: &Map, field: &str, expected: &str) -> Result<(), Response> {
+    let found = required_map_string(labels, field, "transparency entry labels")?;
+    if found != expected {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            format!("transparency publication `{field}` does not match publish index labels"),
+        ));
+    }
+    Ok(())
+}
+
+fn required_map_string(map: &Map, field: &str, context: &str) -> Result<String, Response> {
+    map.get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{context} is missing string field `{field}`"),
+            )
+        })
+}
+
+fn required_map_u64(map: &Map, field: &str, context: &str) -> Result<u64, Response> {
+    map.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{context} is missing integer field `{field}`"),
+        )
+    })
+}
+
+fn normalize_transparency_hex_id(
+    raw: &str,
+    field: &str,
+    byte_len: usize,
+) -> Result<String, Response> {
+    let value = normalize_governance_dag_lookup_hex(raw, field)?;
+    if value.len() != byte_len.saturating_mul(2) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must be {byte_len} bytes encoded as lowercase or uppercase hex"),
+        ));
+    }
+    Ok(value)
+}
+
+fn decode_transparency_id_16(raw: &str, field: &str) -> Result<[u8; 16], Response> {
+    let bytes = hex::decode(raw).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid transparency {field}: {err}"),
+        )
+    })?;
+    let bytes: [u8; 16] = bytes.try_into().map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("transparency {field} must be 16 bytes"),
+        )
+    })?;
+    Ok(bytes)
+}
+
+fn transparency_proof_token_verification_response(
+    req: TransparencyProofTokenVerifyRequestDto,
+) -> Result<Value, Response> {
+    let token = ProofToken::decode_base64(req.token_b64.trim()).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("failed to decode SoraFS proof token: {err}"),
+        )
+    })?;
+    let verifying_key_bytes = decode_hex_32_field(&req.verifying_key_hex, "verifying_key_hex")?;
+    let verifying_key = Ed25519VerifyingKey::from_bytes(&verifying_key_bytes).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS proof-token verifying_key_hex: {err}"),
+        )
+    })?;
+    let digest_inputs = match (
+        req.digest_key_hex.as_deref(),
+        req.evidence_digest_hex.as_deref(),
+    ) {
+        (Some(digest_key_hex), Some(evidence_digest_hex)) => {
+            let digest_key =
+                ProofTokenDigestKey::new(decode_hex_32_field(digest_key_hex, "digest_key_hex")?);
+            let evidence_digest = decode_hex_32_field(evidence_digest_hex, "evidence_digest_hex")?;
+            Some((digest_key, evidence_digest))
+        }
+        (None, None) => None,
+        _ => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "SoraFS proof-token digest verification requires both digest_key_hex and evidence_digest_hex",
+            ));
+        }
+    };
+
+    let signature_valid = token.verify_signature(&verifying_key).is_ok();
+    let digest_valid = digest_inputs.as_ref().map(|(digest_key, evidence_digest)| {
+        token
+            .verify_blinded_digest(digest_key, evidence_digest)
+            .is_ok()
+    });
+    let issued_at_unix = system_time_to_secs(token.issued_at(), "proof token issued_at")?;
+    let expires_at_unix = token
+        .expires_at()
+        .map(|time| system_time_to_secs(time, "proof token expires_at"))
+        .transpose()?;
+    let now_unix = req.now_unix.unwrap_or_else(unix_timestamp_now);
+    let not_yet_valid = now_unix < issued_at_unix;
+    let expired = expires_at_unix.is_some_and(|expires_at| now_unix >= expires_at);
+    let digest_checked = digest_valid.is_some();
+    let valid = signature_valid && digest_valid.unwrap_or(true) && !not_yet_valid && !expired;
+    let (moderation_action, moderation_action_code) =
+        proof_token_moderation_action_fields(token.moderation());
+
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.transparency.proof_token_verification.v1"),
+    );
+    response.insert("valid".into(), Value::from(valid));
+    response.insert("signature_valid".into(), Value::from(signature_valid));
+    response.insert("digest_checked".into(), Value::from(digest_checked));
+    response.insert(
+        "digest_valid".into(),
+        digest_valid.map_or(Value::Null, Value::from),
+    );
+    response.insert("not_yet_valid".into(), Value::from(not_yet_valid));
+    response.insert("expired".into(), Value::from(expired));
+    response.insert("now_unix".into(), Value::from(now_unix));
+    response.insert(
+        "verifying_key_hex".into(),
+        Value::from(encode(verifying_key_bytes)),
+    );
+    response.insert(
+        "evidence_digest_hex".into(),
+        req.evidence_digest_hex.map_or(Value::Null, |digest| {
+            Value::from(digest.trim().to_ascii_lowercase())
+        }),
+    );
+    response.insert("token_id_hex".into(), Value::from(encode(token.token_id())));
+    response.insert("moderation_action".into(), Value::from(moderation_action));
+    response.insert(
+        "moderation_action_code".into(),
+        Value::from(u64::from(moderation_action_code)),
+    );
+    response.insert("issued_at_unix".into(), Value::from(issued_at_unix));
+    response.insert(
+        "expires_at_unix".into(),
+        expires_at_unix.map_or(Value::Null, Value::from),
+    );
+    response.insert(
+        "entry_ids".into(),
+        Value::Array(token.entry_ids().iter().cloned().map(Value::from).collect()),
+    );
+    response.insert(
+        "blinded_digest_hex".into(),
+        Value::from(encode(token.blinded_digest())),
+    );
+    Ok(Value::Object(response))
+}
+
+fn proof_token_moderation_action_fields(action: ProofTokenModerationAction) -> (String, u8) {
+    match action {
+        ProofTokenModerationAction::Block => ("block".to_owned(), 0),
+        ProofTokenModerationAction::Quarantine => ("quarantine".to_owned(), 1),
+        ProofTokenModerationAction::RateLimit => ("rate_limit".to_owned(), 2),
+        ProofTokenModerationAction::Redirect => ("redirect".to_owned(), 3),
+        ProofTokenModerationAction::Custom(code) => (format!("custom:{code}"), code),
+    }
+}
+
+#[derive(Debug)]
+struct ProofTokenIssuancePublishSummary {
+    latest_published_at_unix: Option<u64>,
+    distinct_token_count: u64,
+    distinct_signer_count: u64,
+    bound_entry_count_total: u64,
+    expiring_token_count: u64,
+    evidence_digest_count: u64,
+    action_code_counts: Map,
+}
+
+fn proof_token_issuance_summary_json(summary: ProofTokenIssuancePublishSummary) -> Value {
+    json_object(vec![
+        json_entry(
+            "latest_published_at_unix",
+            summary
+                .latest_published_at_unix
+                .map_or(Value::Null, Value::from),
+        ),
+        json_entry(
+            "distinct_token_count",
+            Value::from(summary.distinct_token_count),
+        ),
+        json_entry(
+            "distinct_signer_count",
+            Value::from(summary.distinct_signer_count),
+        ),
+        json_entry(
+            "bound_entry_count_total",
+            Value::from(summary.bound_entry_count_total),
+        ),
+        json_entry(
+            "expiring_token_count",
+            Value::from(summary.expiring_token_count),
+        ),
+        json_entry(
+            "evidence_digest_count",
+            Value::from(summary.evidence_digest_count),
+        ),
+        json_entry(
+            "action_code_counts",
+            Value::Object(summary.action_code_counts),
+        ),
+    ])
+}
+
+fn proof_token_issuance_publish_summary(
+    entries: &[Value],
+) -> Result<ProofTokenIssuancePublishSummary, Response> {
+    let mut latest_published_at_unix = None;
+    let mut token_ids = BTreeSet::new();
+    let mut signer_keys = BTreeSet::new();
+    let mut bound_entry_count_total = 0_u64;
+    let mut expiring_token_count = 0_u64;
+    let mut evidence_digest_count = 0_u64;
+    let mut action_code_counts = BTreeMap::<String, u64>::new();
+
+    for entry in entries {
+        if let Some(published_at) = entry.get("published_at_unix").and_then(Value::as_u64) {
+            latest_published_at_unix = Some(
+                latest_published_at_unix
+                    .map_or(published_at, |current: u64| current.max(published_at)),
+            );
+        }
+
+        let labels = entry
+            .get("labels")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "proof-token issuance publish index entry is missing labels",
+                )
+            })?;
+        token_ids.insert(required_map_string(
+            labels,
+            "token_id_hex",
+            "proof-token issuance labels",
+        )?);
+        signer_keys.insert(required_map_string(
+            labels,
+            "signer_key_hex",
+            "proof-token issuance labels",
+        )?);
+        let action_code = required_map_u64(
+            labels,
+            "moderation_action_code",
+            "proof-token issuance labels",
+        )?;
+        *action_code_counts
+            .entry(action_code.to_string())
+            .or_insert(0) += 1;
+        bound_entry_count_total = bound_entry_count_total.saturating_add(required_map_u64(
+            labels,
+            "entry_count",
+            "proof-token issuance labels",
+        )?);
+        if labels
+            .get("expires_at_unix")
+            .and_then(Value::as_u64)
+            .is_some()
+        {
+            expiring_token_count = expiring_token_count.saturating_add(1);
+        }
+        if labels
+            .get("evidence_digest_hex")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            evidence_digest_count = evidence_digest_count.saturating_add(1);
+        }
+    }
+
+    Ok(ProofTokenIssuancePublishSummary {
+        latest_published_at_unix,
+        distinct_token_count: token_ids.len() as u64,
+        distinct_signer_count: signer_keys.len() as u64,
+        bound_entry_count_total,
+        expiring_token_count,
+        evidence_digest_count,
+        action_code_counts: action_code_counts
+            .into_iter()
+            .map(|(code, count)| (code, Value::from(count)))
+            .collect(),
+    })
+}
+
+fn read_governance_dag_relative_file(
+    state: &SharedAppState,
+    raw_path: &str,
+    field: &str,
+) -> Result<(Vec<u8>, String), Response> {
+    let root = governance_dag_root_dir(state)?;
+    let relative = validate_governance_dag_relative_path(raw_path, field)?;
+    let path = root.join(relative);
+    let canonical_root = fs::canonicalize(&root).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "failed to resolve governance DAG root `{}`: {err}",
+                root.display()
+            ),
+        )
+    })?;
+    let canonical_path = fs::canonicalize(&path).map_err(|err| {
+        let status = if err.kind() == io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        json_error(
+            status,
+            format!(
+                "failed to resolve governance DAG {field} `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            format!("governance DAG {field} escapes the configured root"),
+        ));
+    }
+    let bytes = fs::read(&canonical_path).map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "failed to read governance DAG {field} `{}`: {err}",
+                canonical_path.display()
+            ),
+        )
+    })?;
+    Ok((bytes, canonical_path.display().to_string()))
+}
+
+fn validate_governance_dag_relative_path(raw_path: &str, field: &str) -> Result<PathBuf, Response> {
+    if raw_path.is_empty() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG {field} path is empty"),
+        ));
+    }
+    let path = StdPath::new(raw_path);
+    if path.is_absolute() {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            format!("governance DAG {field} path must be relative"),
+        ));
+    }
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            _ => {
+                return Err(json_error(
+                    StatusCode::FORBIDDEN,
+                    format!("governance DAG {field} path contains an unsafe component"),
+                ));
+            }
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("governance DAG {field} path is empty"),
+        ));
+    }
+    Ok(clean)
 }
 
 struct AppealFinanceReportPublishSummary {
@@ -3860,6 +6703,114 @@ fn appeal_finance_weekly_rollup_publish_summary(
     }
 }
 
+struct AppealFinanceSettlementReceiptPublishSummary {
+    steps: Map,
+    reconciliation_statuses: Map,
+    latest_published_at_unix: Option<u64>,
+    distinct_case_count: u64,
+    total_step_amount_xor: String,
+    total_deposit_xor: String,
+    total_refund_xor: String,
+    total_treasury_xor: String,
+    total_held_xor: String,
+}
+
+fn appeal_finance_settlement_receipt_publish_summary(
+    entries: &[Value],
+) -> Result<AppealFinanceSettlementReceiptPublishSummary, Response> {
+    let mut steps = Map::new();
+    let mut reconciliation_statuses = Map::new();
+    let mut latest_published_at_unix = None;
+    let mut case_ids = BTreeSet::new();
+    let mut total_step_amount_xor = "0".to_string();
+    let mut total_deposit_xor = "0".to_string();
+    let mut total_refund_xor = "0".to_string();
+    let mut total_treasury_xor = "0".to_string();
+    let mut total_held_xor = "0".to_string();
+
+    for entry in entries {
+        if let Some(published_at) = entry.get("published_at_unix").and_then(Value::as_u64) {
+            latest_published_at_unix = Some(
+                latest_published_at_unix
+                    .map_or(published_at, |current: u64| current.max(published_at)),
+            );
+        }
+
+        let labels = entry.get("labels").and_then(Value::as_object);
+        if let Some(case_id) = labels
+            .and_then(|labels| labels.get("case_id"))
+            .and_then(Value::as_str)
+        {
+            case_ids.insert(case_id.to_owned());
+        }
+        add_appeal_finance_report_label_amount(&mut total_step_amount_xor, labels, "amount_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_deposit_xor, labels, "deposit_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_refund_xor, labels, "refund_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_treasury_xor, labels, "treasury_xor")?;
+        add_appeal_finance_report_label_amount(&mut total_held_xor, labels, "held_xor")?;
+
+        let step = labels
+            .and_then(|labels| labels.get("submitted_step"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let mut step_summary = steps
+            .remove(step)
+            .and_then(|value| match value {
+                Value::Object(map) => Some(map),
+                _ => None,
+            })
+            .unwrap_or_else(appeal_finance_settlement_receipt_step_summary_empty);
+        let count = step_summary
+            .get("published_receipt_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .saturating_add(1);
+        step_summary.insert("published_receipt_count".into(), Value::from(count));
+        add_appeal_finance_report_summary_amount(&mut step_summary, labels, "amount_xor")?;
+        if let Some(generated_at) = labels
+            .and_then(|labels| labels.get("generated_at_unix_ms"))
+            .and_then(Value::as_u64)
+        {
+            let latest = step_summary
+                .get("latest_generated_at_unix_ms")
+                .and_then(Value::as_u64)
+                .map_or(generated_at, |current| current.max(generated_at));
+            step_summary.insert("latest_generated_at_unix_ms".into(), Value::from(latest));
+        }
+        steps.insert(step.to_owned(), Value::Object(step_summary));
+
+        let status = labels
+            .and_then(|labels| labels.get("reconciliation_status"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let current = reconciliation_statuses
+            .get(status)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .saturating_add(1);
+        reconciliation_statuses.insert(status.to_owned(), Value::from(current));
+    }
+
+    Ok(AppealFinanceSettlementReceiptPublishSummary {
+        steps,
+        reconciliation_statuses,
+        latest_published_at_unix,
+        distinct_case_count: case_ids.len() as u64,
+        total_step_amount_xor,
+        total_deposit_xor,
+        total_refund_xor,
+        total_treasury_xor,
+        total_held_xor,
+    })
+}
+
+fn appeal_finance_settlement_receipt_step_summary_empty() -> Map {
+    let mut summary = Map::new();
+    summary.insert("published_receipt_count".into(), Value::from(0_u64));
+    summary.insert("amount_xor".into(), Value::from("0"));
+    summary
+}
+
 fn governance_car_queue_lookup_response(
     state: &SharedAppState,
     headers: HeaderMap,
@@ -3867,6 +6818,7 @@ fn governance_car_queue_lookup_response(
     query: &str,
     map_name: &str,
     key: &str,
+    limit: usize,
 ) -> Response {
     let (queue, source_path, encoded_len, blake3_hex, etag) =
         match load_governance_dag_car_queue(state) {
@@ -3887,6 +6839,8 @@ fn governance_car_queue_lookup_response(
         Ok(segments) => segments,
         Err(response) => return response,
     };
+    let count = segments.len();
+    let (segments, truncated) = limit_governance_readback_values(segments, limit);
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
@@ -3897,7 +6851,10 @@ fn governance_car_queue_lookup_response(
     response.insert("query".into(), Value::from(query));
     response.insert("key".into(), Value::from(key.to_string()));
     response.insert("found".into(), Value::from(true));
-    response.insert("count".into(), Value::from(segments.len() as u64));
+    response.insert("count".into(), Value::from(count as u64));
+    response.insert("returned_count".into(), Value::from(segments.len() as u64));
+    response.insert("limit".into(), Value::from(limit as u64));
+    response.insert("truncated".into(), Value::from(truncated));
     response.insert("segments".into(), Value::Array(segments));
     governance_dag_json_response(Value::Object(response), &etag)
 }
@@ -4057,6 +7014,15 @@ fn governance_dag_json_response(value: Value, etag: &str) -> Response {
     response
 }
 
+fn governance_dag_limited_etag(base_etag: &str, limit: usize) -> String {
+    let limit = (limit as u64).to_le_bytes();
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-governance-dag-limit:");
+    material.extend_from_slice(base_etag.as_bytes());
+    material.extend_from_slice(&limit);
+    format!("\"{}\"", encode(blake3_hash(&material).as_bytes()))
+}
+
 fn governance_dag_not_modified_response(headers: &HeaderMap, etag: &str) -> Option<Response> {
     if !if_none_match_matches(headers, etag) {
         return None;
@@ -4075,6 +7041,22 @@ fn insert_governance_dag_cache_headers(response: &mut Response, etag: &str) {
     if let Ok(value) = HeaderValue::from_str(etag) {
         response.headers_mut().insert(ETAG, value);
     }
+}
+
+fn limit_governance_publish_index_entries(
+    mut index: Value,
+    limit: usize,
+) -> Result<(Value, usize, bool), Response> {
+    let Some(entries) = index.get_mut("entries").and_then(Value::as_array_mut) else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG publish index is missing `entries` array",
+        ));
+    };
+    let entry_count = entries.len();
+    let truncated = entry_count > limit;
+    entries.truncate(limit);
+    Ok((index, entry_count, truncated))
 }
 
 pub(crate) async fn handle_post_sorafs_reputation_snapshot(
@@ -4123,7 +7105,8 @@ pub(crate) async fn handle_post_sorafs_reputation_snapshot(
             &provider_scores,
         );
     });
-    match reputation_snapshot_summary_json(&snapshot) {
+    let limit = normalize_limit(None);
+    match reputation_snapshot_summary_json(&snapshot, limit) {
         Ok(mut value) => {
             if let Value::Object(map) = &mut value {
                 map.insert("status".into(), Value::from("accepted"));
@@ -4137,21 +7120,27 @@ pub(crate) async fn handle_post_sorafs_reputation_snapshot(
 pub(crate) async fn handle_get_sorafs_reputation_latest(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs reputation API is not enabled on this node");
     }
+    let query = match ReputationSnapshotReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let Some(snapshot) = state.sorafs_node.latest_reputation_snapshot() else {
         return json_error(
             StatusCode::NOT_FOUND,
             "no reputation snapshot has been published",
         );
     };
-    let etag = reputation_snapshot_etag(&snapshot);
+    let etag = reputation_snapshot_etag(&snapshot, limit);
     if let Some(response) = reputation_not_modified_response(&headers, &etag) {
         return response;
     }
-    match reputation_snapshot_summary_json(&snapshot) {
+    match reputation_snapshot_summary_json(&snapshot, limit) {
         Ok(value) => reputation_json_response(value, &etag),
         Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
     }
@@ -4161,10 +7150,16 @@ pub(crate) async fn handle_get_sorafs_reputation_snapshot(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     Path(snapshot_id_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs reputation API is not enabled on this node");
     }
+    let query = match ReputationSnapshotReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let snapshot_id = match parse_hex_fixed::<16>(&snapshot_id_hex, "snapshot_id_hex") {
         Ok(snapshot_id) => snapshot_id,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
@@ -4175,11 +7170,11 @@ pub(crate) async fn handle_get_sorafs_reputation_snapshot(
             format!("reputation snapshot `{snapshot_id_hex}` was not found"),
         );
     };
-    let etag = reputation_snapshot_etag(&snapshot);
+    let etag = reputation_snapshot_etag(&snapshot, limit);
     if let Some(response) = reputation_not_modified_response(&headers, &etag) {
         return response;
     }
-    match reputation_snapshot_summary_json(&snapshot) {
+    match reputation_snapshot_summary_json(&snapshot, limit) {
         Ok(value) => reputation_json_response(value, &etag),
         Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
     }
@@ -4463,7 +7458,7 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_commit(
     ) {
         return response;
     }
-    let now_unix_ms = request.now_unix_ms.unwrap_or_else(unix_timestamp_now_ms);
+    let now_unix_ms = iroha_network_time_now_ms();
     match state
         .sorafs_node
         .submit_moderation_ballot_commit(commit, now_unix_ms)
@@ -4510,7 +7505,7 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_reveal(
     ) {
         return response;
     }
-    let now_unix_ms = request.now_unix_ms.unwrap_or_else(unix_timestamp_now_ms);
+    let now_unix_ms = iroha_network_time_now_ms();
     match state
         .sorafs_node
         .submit_moderation_ballot_reveal(reveal, now_unix_ms)
@@ -4544,7 +7539,7 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_tally(
             );
         }
     };
-    let now_unix_ms = request.now_unix_ms.unwrap_or_else(unix_timestamp_now_ms);
+    let now_unix_ms = iroha_network_time_now_ms();
     match state.sorafs_node.tally_moderation_ballot(
         &request.case_id,
         &request.round_id,
@@ -4557,18 +7552,35 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_tally(
 
 pub(crate) async fn handle_get_sorafs_moderation_ballots(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation ballot API is not enabled on this node");
     }
+    let query = match ModerationBallotListQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let records = state.sorafs_node.moderation_ballots();
+    let total_count = records.len();
+    let truncated = total_count > limit;
     JsonBody(json_object(vec![
         json_entry("schema", Value::from("sorafs.moderation.ballots.v1")),
         json_entry("source", Value::from("local")),
-        json_entry("count", records.len() as u64),
+        json_entry("count", total_count as u64),
+        json_entry("returned_count", total_count.min(limit) as u64),
+        json_entry("limit", limit as u64),
+        json_entry("truncated", truncated),
         json_entry(
             "ballots",
-            Value::Array(records.iter().map(moderation_ballot_record_json).collect()),
+            Value::Array(
+                records
+                    .iter()
+                    .take(limit)
+                    .map(|record| moderation_ballot_record_json_with_array_limit(record, limit))
+                    .collect(),
+            ),
         ),
     ]))
     .into_response()
@@ -4577,12 +7589,21 @@ pub(crate) async fn handle_get_sorafs_moderation_ballots(
 pub(crate) async fn handle_get_sorafs_moderation_ballot(
     State(state): State<SharedAppState>,
     Path((case_id, round_id)): Path<(String, String)>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation ballot API is not enabled on this node");
     }
+    let query = match ModerationBallotListQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     match state.sorafs_node.moderation_ballot(&case_id, &round_id) {
-        Some(record) => JsonBody(moderation_ballot_record_json(&record)).into_response(),
+        Some(record) => JsonBody(moderation_ballot_record_json_with_array_limit(
+            &record, limit,
+        ))
+        .into_response(),
         None => json_error(
             StatusCode::NOT_FOUND,
             format!("SoraFS moderation ballot `{case_id}` round `{round_id}` was not found"),
@@ -4618,6 +7639,272 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
         moderation_ballot_events_json(query.since, limit, &events),
         &etag,
     )
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_model_registry(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation model registry API is not enabled on this node",
+        );
+    }
+    let query = match ModerationModelRegistryReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let snapshot = state.sorafs_node.moderation_model_registry_snapshot();
+    JsonBody(moderation_model_registry_snapshot_json(&snapshot, limit)).into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_model_registry_repro_manifest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation model registry API is not enabled on this node",
+        );
+    }
+    if let Err(response) =
+        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+    {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationModelRegistryManifestRequestDto>(body.as_ref())
+    {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation model registry JSON: {err}"),
+            );
+        }
+    };
+    let manifest = match decode_moderation_model_registry_manifest::<ModerationReproManifestV1>(
+        &request.manifest_b64,
+        "reproducibility manifest",
+    ) {
+        Ok(manifest) => manifest,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.admit_moderation_repro_manifest(manifest) {
+        Ok(record) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_repro_registry_admission_json(&record)),
+        )
+            .into_response(),
+        Err(err) => moderation_model_registry_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_model_registry_corpus_manifest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation model registry API is not enabled on this node",
+        );
+    }
+    if let Err(response) =
+        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+    {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationModelRegistryManifestRequestDto>(body.as_ref())
+    {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation model registry JSON: {err}"),
+            );
+        }
+    };
+    let manifest = match decode_moderation_model_registry_manifest::<AdversarialCorpusManifestV1>(
+        &request.manifest_b64,
+        "adversarial corpus manifest",
+    ) {
+        Ok(manifest) => manifest,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.admit_moderation_corpus_manifest(manifest) {
+        Ok(record) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_corpus_registry_admission_json(&record)),
+        )
+            .into_response(),
+        Err(err) => moderation_model_registry_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_screening_results(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation screening API is not enabled on this node");
+    }
+    let query = match ModerationScreeningReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    JsonBody(moderation_screening_snapshot_json(&snapshot, limit)).into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_screening_result(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation screening API is not enabled on this node");
+    }
+    if let Err(response) =
+        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+    {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationScreeningResultRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation screening JSON: {err}"),
+            );
+        }
+    };
+    let input = match moderation_screening_input_from_request(request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.record_moderation_screening_result(input) {
+        Ok(outcome) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_screening_outcome_json(&outcome)),
+        )
+            .into_response(),
+        Err(err) => moderation_screening_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_quarantine(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation quarantine API is not enabled on this node");
+    }
+    let query = match ModerationScreeningReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    JsonBody(moderation_quarantine_snapshot_json(&snapshot, limit)).into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_review(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation quarantine API is not enabled on this node");
+    }
+    if let Err(response) =
+        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+    {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationQuarantineReviewRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation quarantine review JSON: {err}"),
+            );
+        }
+    };
+    let input = match moderation_quarantine_review_input_from_request(&quarantine_id_hex, request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.review_moderation_quarantine_record(input) {
+        Ok(record) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_quarantine_transition_json(
+                "sorafs.moderation.quarantine.review.v1",
+                "reviewed",
+                &record,
+            )),
+        )
+            .into_response(),
+        Err(err) => moderation_screening_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_release(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation quarantine API is not enabled on this node");
+    }
+    if let Err(response) =
+        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+    {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationQuarantineReleaseRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation quarantine release JSON: {err}"),
+            );
+        }
+    };
+    let input = match moderation_quarantine_release_input_from_request(&quarantine_id_hex, request)
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    match state
+        .sorafs_node
+        .release_moderation_quarantine_record(input)
+    {
+        Ok(record) => (
+            StatusCode::ACCEPTED,
+            JsonBody(moderation_quarantine_transition_json(
+                "sorafs.moderation.quarantine.release.v1",
+                "released",
+                &record,
+            )),
+        )
+            .into_response(),
+        Err(err) => moderation_screening_error_response(err),
+    }
 }
 
 pub(crate) async fn handle_post_sorafs_orderbook_order(
@@ -4829,6 +8116,11 @@ fn moderation_appeal_deposit_from_confirmation(
         deposit_xor: expected.deposit_xor.to_string(),
         expires_at_ms: expected.expires_at_ms,
         idempotency_key: expected.idempotency_key.clone(),
+        evidence_hashes_hex: expected
+            .evidence_hashes
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     }
 }
 
@@ -5011,6 +8303,33 @@ fn require_appeal_finance_request_auth(
             Err(json_error(
                 StatusCode::UNAUTHORIZED,
                 "invalid SoraFS appeal finance request authentication",
+            ))
+        }
+    }
+}
+
+fn require_transparency_source_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
+    {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS transparency source submissions require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS transparency source canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS transparency source request authentication",
             ))
         }
     }
@@ -5206,13 +8525,19 @@ fn orderbook_provider_capability_response(
 
 pub(crate) async fn handle_get_sorafs_orderbook_book(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let response = (|| {
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
+        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
         let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
-        match orderbook_snapshot_json(&snapshot) {
+        match orderbook_snapshot_json(&snapshot, limit) {
             Ok(value) => JsonBody(value).into_response(),
             Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
@@ -5222,11 +8547,17 @@ pub(crate) async fn handle_get_sorafs_orderbook_book(
 
 pub(crate) async fn handle_get_sorafs_orderbook_trades(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let response = (|| {
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
+        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
         let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
         let trades = snapshot
             .trades
@@ -5234,11 +8565,9 @@ pub(crate) async fn handle_get_sorafs_orderbook_trades(
             .map(orderbook_trade_json)
             .collect::<Result<Vec<_>, _>>();
         match trades {
-            Ok(trades) => JsonBody(json_object(vec![
-                json_entry("count", trades.len() as u64),
-                json_entry("trades", Value::Array(trades)),
-            ]))
-            .into_response(),
+            Ok(trades) => {
+                JsonBody(orderbook_readback_list_json("trades", trades, limit)).into_response()
+            }
             Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
     })();
@@ -5247,11 +8576,17 @@ pub(crate) async fn handle_get_sorafs_orderbook_trades(
 
 pub(crate) async fn handle_get_sorafs_orderbook_channels(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let response = (|| {
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
+        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
         let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
         let channels = snapshot
             .settlement_channels
@@ -5259,11 +8594,9 @@ pub(crate) async fn handle_get_sorafs_orderbook_channels(
             .map(orderbook_channel_json)
             .collect::<Result<Vec<_>, _>>();
         match channels {
-            Ok(channels) => JsonBody(json_object(vec![
-                json_entry("count", channels.len() as u64),
-                json_entry("channels", Value::Array(channels)),
-            ]))
-            .into_response(),
+            Ok(channels) => {
+                JsonBody(orderbook_readback_list_json("channels", channels, limit)).into_response()
+            }
             Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
     })();
@@ -5272,11 +8605,17 @@ pub(crate) async fn handle_get_sorafs_orderbook_channels(
 
 pub(crate) async fn handle_get_sorafs_orderbook_receipts(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     let response = (|| {
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
+        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = normalize_limit(query.limit);
         let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
         let receipts = snapshot
             .settlement_receipts
@@ -5284,15 +8623,29 @@ pub(crate) async fn handle_get_sorafs_orderbook_receipts(
             .map(orderbook_receipt_json)
             .collect::<Result<Vec<_>, _>>();
         match receipts {
-            Ok(receipts) => JsonBody(json_object(vec![
-                json_entry("count", receipts.len() as u64),
-                json_entry("receipts", Value::Array(receipts)),
-            ]))
-            .into_response(),
+            Ok(receipts) => {
+                JsonBody(orderbook_readback_list_json("receipts", receipts, limit)).into_response()
+            }
             Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
+}
+
+fn orderbook_readback_list_json(
+    field_name: &'static str,
+    values: Vec<Value>,
+    limit: usize,
+) -> Value {
+    let count = values.len();
+    let (values, truncated) = limit_governance_readback_values(values, limit);
+    json_object(vec![
+        json_entry("count", count as u64),
+        json_entry("returned_count", values.len() as u64),
+        json_entry("limit", limit as u64),
+        json_entry("truncated", truncated),
+        json_entry(field_name, Value::Array(values)),
+    ])
 }
 
 pub(crate) async fn handle_get_sorafs_orderbook_events(
@@ -5622,6 +8975,1036 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_settle(
         )),
     )
         .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_submit_settlement(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs appeal finance deposit settlement submitter API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let req = match json::from_slice::<AppealFinanceDepositSettleRequestDto>(body.as_ref()) {
+        Ok(req) => req,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "failed to decode SoraFS appeal finance deposit settlement submission JSON: {err}"
+                ),
+            );
+        }
+    };
+    let (expected, record) = match load_appeal_finance_deposit_record_for_reconciliation(
+        &state,
+        &req.deposit_confirmation,
+        &verified.account,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match submit_appeal_finance_deposit_settlement_step(
+        &state,
+        expected,
+        record,
+        &req.outcome,
+        req.panel_size,
+        unix_timestamp_now_ms(),
+    )
+    .await
+    {
+        Ok((status, body)) => (status, JsonBody(body)).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn submit_appeal_finance_deposit_settlement_step(
+    state: &SharedAppState,
+    expected: AppealFinanceDepositExpectation,
+    record: AssetEscrowRecord,
+    outcome: &str,
+    panel_size: Option<u32>,
+    generated_at_unix_ms: u64,
+) -> Result<(StatusCode, Value), Response> {
+    let config = baseline_appeal_settlement_config();
+    let deposit_xor =
+        match parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string()) {
+            Ok(value) => value,
+            Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err.to_string())),
+        };
+    let verdict = match appeal_verdict_from_request(outcome) {
+        Ok(value) => value,
+        Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+    };
+    let panel_size = panel_size.unwrap_or_else(|| config.default_panel_size());
+    let breakdown = match config.settle(deposit_xor, panel_size, verdict) {
+        Ok(value) => value,
+        Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err.to_string())),
+    };
+    let reconciliation = match appeal_finance_deposit_settlement_reconciliation(
+        &expected,
+        &record,
+        config.version(),
+        verdict,
+        panel_size,
+        &breakdown,
+    ) {
+        Ok(value) => value,
+        Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+    };
+    let execution =
+        match appeal_finance_deposit_settlement_execution(&expected, &record, &breakdown) {
+            Ok(value) => value,
+            Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+        };
+
+    if reconciliation.status == "settled" {
+        return Ok((
+            StatusCode::OK,
+            appeal_finance_deposit_settlement_submission_json(
+                &config,
+                &expected,
+                &record,
+                verdict,
+                panel_size,
+                &breakdown,
+                &reconciliation,
+                None,
+                None,
+                0,
+                "already_reconciled",
+                None,
+                "not_applicable",
+                None,
+            ),
+        ));
+    }
+    if reconciliation.status == "mismatch" {
+        return Ok((
+            StatusCode::CONFLICT,
+            appeal_finance_deposit_settlement_submission_json(
+                &config,
+                &expected,
+                &record,
+                verdict,
+                panel_size,
+                &breakdown,
+                &reconciliation,
+                None,
+                None,
+                0,
+                "mismatch",
+                None,
+                "not_applicable",
+                None,
+            ),
+        ));
+    }
+
+    let Some(step) =
+        appeal_finance_deposit_next_settlement_submission_step(&reconciliation, &execution)
+    else {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "SoraFS appeal finance settlement state has no submitter action",
+        ));
+    };
+    let Some(submitter) = state.sorafs_appeal_settlement_submitter.as_ref() else {
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            appeal_finance_deposit_settlement_submission_json(
+                &config,
+                &expected,
+                &record,
+                verdict,
+                panel_size,
+                &breakdown,
+                &reconciliation,
+                Some(step),
+                None,
+                0,
+                "submitter_not_configured",
+                None,
+                "not_applicable",
+                None,
+            ),
+        ));
+    };
+    let Some(key_pair) = submitter.signer_for(&step.required_authority) else {
+        return Ok((
+            StatusCode::CONFLICT,
+            appeal_finance_deposit_settlement_submission_json(
+                &config,
+                &expected,
+                &record,
+                verdict,
+                panel_size,
+                &breakdown,
+                &reconciliation,
+                Some(step),
+                None,
+                submitter.signer_count(),
+                "missing_required_signer",
+                None,
+                "not_applicable",
+                None,
+            ),
+        ));
+    };
+
+    let instruction = match appeal_finance_settlement_step_instruction_box(&expected, step) {
+        Ok(instruction) => instruction,
+        Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+    };
+    let mut builder =
+        TransactionBuilder::new((*state.chain_id).clone(), step.required_authority.clone())
+            .with_instructions([instruction]);
+    builder.set_ttl(Duration::from_secs(300));
+    let tx = match builder.try_sign(key_pair.private_key()) {
+        Ok(tx) => tx,
+        Err(err) => {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to sign SoraFS appeal finance settlement transaction: {err}"),
+            ));
+        }
+    };
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    if let Err(err) = crate::routing::handle_transaction_with_metrics(
+        state.chain_id.clone(),
+        state.queue.clone(),
+        state.state.clone(),
+        tx,
+        state.telemetry.clone(),
+        APPEAL_FINANCE_ROUTE_DEPOSIT_SUBMIT_SETTLEMENT,
+    )
+    .await
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to queue SoraFS appeal finance settlement transaction: {err}"),
+        ));
+    }
+
+    let receipt = appeal_finance_deposit_settlement_receipt(
+        &config,
+        &expected,
+        &record,
+        verdict,
+        panel_size,
+        &breakdown,
+        &reconciliation,
+        step,
+        &tx_hash_hex,
+        submitter.signer_count(),
+        generated_at_unix_ms,
+    );
+    let (receipt_publication_status, receipt_publication_error) =
+        if state.sorafs_node.has_governance_publisher() {
+            match state
+                .sorafs_node
+                .publish_appeal_finance_settlement_receipt(receipt.clone())
+            {
+                Ok(()) => ("published", None),
+                Err(err) => {
+                    let err = err.to_string();
+                    warn!(
+                        error = %err,
+                        tx_hash_hex = %tx_hash_hex,
+                        "failed to publish SoraFS appeal finance settlement receipt",
+                    );
+                    ("publish_failed", Some(err))
+                }
+            }
+        } else {
+            ("governance_publisher_not_configured", None)
+        };
+
+    Ok((
+        StatusCode::ACCEPTED,
+        appeal_finance_deposit_settlement_submission_json(
+            &config,
+            &expected,
+            &record,
+            verdict,
+            panel_size,
+            &breakdown,
+            &reconciliation,
+            Some(step),
+            Some(&tx_hash_hex),
+            submitter.signer_count(),
+            "queued",
+            Some(&receipt),
+            receipt_publication_status,
+            receipt_publication_error.as_deref(),
+        ),
+    ))
+}
+
+pub(crate) fn spawn_sorafs_appeal_finance_settlement_worker(
+    state: SharedAppState,
+    shutdown_signal: ShutdownSignal,
+) {
+    if !state.sorafs_node.is_enabled() {
+        debug!(
+            "SoraFS appeal finance moderation settlement worker disabled: SoraFS storage is disabled"
+        );
+        return;
+    }
+    let Some(worker_scan_interval) = state
+        .sorafs_appeal_settlement_submitter
+        .as_ref()
+        .map(|submitter| submitter.worker_scan_interval())
+    else {
+        debug!(
+            "SoraFS appeal finance moderation settlement worker disabled: no configured submitter signer"
+        );
+        return;
+    };
+
+    let mut receiver = state.sorafs_node.subscribe_moderation_ballot_events();
+    let replay = state
+        .sorafs_node
+        .moderation_ballot_events_since(None, usize::MAX);
+    tokio::spawn(async move {
+        let mut last_processed_sequence = 0_u64;
+        let mut submitted_steps =
+            match load_appeal_finance_settlement_worker_submitted_steps(&state) {
+                Ok(steps) => steps,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "failed to load SoraFS appeal finance settlement worker state",
+                    );
+                    BTreeMap::new()
+                }
+            };
+        let mut scan_interval = tokio::time::interval(worker_scan_interval);
+        scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        for event in replay {
+            last_processed_sequence = last_processed_sequence.max(event.sequence);
+            log_sorafs_appeal_finance_settlement_worker_result(
+                event.sequence,
+                process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
+                    &state,
+                    event,
+                    &mut submitted_steps,
+                )
+                .await,
+            );
+        }
+
+        loop {
+            tokio::select! {
+                () = shutdown_signal.receive() => break,
+                _ = scan_interval.tick() => {
+                    scan_sorafs_appeal_finance_settlement_worker_records(
+                        &state,
+                        &mut submitted_steps,
+                    )
+                    .await;
+                }
+                event = receiver.recv() => {
+                    match event {
+                        Ok(event) => {
+                            if event.sequence <= last_processed_sequence {
+                                continue;
+                            }
+                            last_processed_sequence = event.sequence;
+                            log_sorafs_appeal_finance_settlement_worker_result(
+                                event.sequence,
+                                process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
+                                    &state,
+                                    event,
+                                    &mut submitted_steps,
+                                )
+                                .await,
+                            );
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(
+                                skipped,
+                                "SoraFS appeal finance moderation settlement worker lagged behind moderation event stream",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn log_sorafs_appeal_finance_settlement_worker_result(
+    event_sequence: u64,
+    result: Result<Option<(StatusCode, Value)>, String>,
+) {
+    match result {
+        Ok(Some((status, body))) => {
+            let submission_status = body
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            debug!(
+                event_sequence,
+                http_status = status.as_u16(),
+                submission_status,
+                "processed SoraFS appeal finance moderation settlement event",
+            );
+        }
+        Ok(None) => {}
+        Err(err) => {
+            warn!(
+                event_sequence,
+                error = %err,
+                "failed to process SoraFS appeal finance moderation settlement event",
+            );
+        }
+    }
+}
+
+fn log_sorafs_appeal_finance_settlement_worker_scan_result(
+    case_id: &str,
+    round_id: &str,
+    result: Result<Option<(StatusCode, Value)>, String>,
+) {
+    match result {
+        Ok(Some((status, body))) => {
+            let submission_status = body
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            debug!(
+                case_id,
+                round_id,
+                http_status = status.as_u16(),
+                submission_status,
+                "processed SoraFS appeal finance settlement worker scan candidate",
+            );
+        }
+        Ok(None) => {}
+        Err(err) => {
+            warn!(
+                case_id,
+                round_id,
+                error = %err,
+                "failed to process SoraFS appeal finance settlement worker scan candidate",
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AppealFinanceSettlementWorkerStepKey {
+    escrow_id_hex: String,
+    outcome: String,
+    panel_size: u32,
+    action: String,
+    reconciliation_digest_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppealFinanceSettlementWorkerSubmission {
+    key: AppealFinanceSettlementWorkerStepKey,
+    tx_hash_hex: Option<String>,
+    status: String,
+    attempts: u32,
+    updated_at_unix_ms: u64,
+    last_error: Option<String>,
+}
+
+fn appeal_finance_settlement_worker_state_path(state: &SharedAppState) -> Option<PathBuf> {
+    if !state.sorafs_node.is_enabled() {
+        return None;
+    }
+    Some(
+        state
+            .sorafs_node
+            .config()
+            .data_dir()
+            .join(APPEAL_FINANCE_SETTLEMENT_WORKER_STATE_FILE),
+    )
+}
+
+fn load_appeal_finance_settlement_worker_submitted_steps(
+    state: &SharedAppState,
+) -> Result<
+    BTreeMap<AppealFinanceSettlementWorkerStepKey, AppealFinanceSettlementWorkerSubmission>,
+    String,
+> {
+    let Some(path) = appeal_finance_settlement_worker_state_path(state) else {
+        return Ok(BTreeMap::new());
+    };
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(err) => {
+            return Err(format!(
+                "failed to read SoraFS appeal finance settlement worker state `{}`: {err}",
+                path.display()
+            ));
+        }
+    };
+    let value: Value = json::from_slice(&bytes).map_err(|err| {
+        format!(
+            "failed to decode SoraFS appeal finance settlement worker state `{}`: {err}",
+            path.display()
+        )
+    })?;
+    if value.get("schema").and_then(Value::as_str)
+        != Some("sorafs.appeal_finance.settlement_worker_state.v1")
+    {
+        return Err(format!(
+            "SoraFS appeal finance settlement worker state `{}` has an unsupported schema",
+            path.display()
+        ));
+    }
+    let Some(steps) = value.get("submitted_steps").and_then(Value::as_array) else {
+        return Err(format!(
+            "SoraFS appeal finance settlement worker state `{}` is missing `submitted_steps`",
+            path.display()
+        ));
+    };
+    let mut submissions = BTreeMap::new();
+    for value in steps {
+        let submission = appeal_finance_settlement_worker_submission_from_json(value)?;
+        submissions.insert(submission.key.clone(), submission);
+    }
+    Ok(submissions)
+}
+
+fn persist_appeal_finance_settlement_worker_submitted_steps(
+    state: &SharedAppState,
+    submitted_steps: &BTreeMap<
+        AppealFinanceSettlementWorkerStepKey,
+        AppealFinanceSettlementWorkerSubmission,
+    >,
+    updated_at_unix_ms: u64,
+) -> Result<(), String> {
+    let Some(path) = appeal_finance_settlement_worker_state_path(state) else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create SoraFS appeal finance settlement worker state directory `{}`: {err}",
+                parent.display()
+            )
+        })?;
+    }
+    let value = json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.settlement_worker_state.v1"),
+        ),
+        json_entry("updated_at_unix_ms", Value::from(updated_at_unix_ms)),
+        json_entry(
+            "submitted_steps",
+            Value::Array(
+                submitted_steps
+                    .values()
+                    .map(appeal_finance_settlement_worker_submission_json)
+                    .collect(),
+            ),
+        ),
+    ]);
+    let bytes = json::to_vec(&value).map_err(|err| {
+        format!("failed to encode SoraFS appeal finance settlement worker state: {err}")
+    })?;
+    let tmp_path = path.with_extension("json.tmp");
+    fs::write(&tmp_path, bytes).map_err(|err| {
+        format!(
+            "failed to write SoraFS appeal finance settlement worker state `{}`: {err}",
+            tmp_path.display()
+        )
+    })?;
+    fs::rename(&tmp_path, &path).map_err(|err| {
+        format!(
+            "failed to replace SoraFS appeal finance settlement worker state `{}`: {err}",
+            path.display()
+        )
+    })
+}
+
+fn appeal_finance_settlement_worker_submission_json(
+    submission: &AppealFinanceSettlementWorkerSubmission,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "escrow_id_hex",
+            Value::from(submission.key.escrow_id_hex.clone()),
+        ),
+        json_entry("outcome", Value::from(submission.key.outcome.clone())),
+        json_entry(
+            "panel_size",
+            Value::from(u64::from(submission.key.panel_size)),
+        ),
+        json_entry("action", Value::from(submission.key.action.clone())),
+        json_entry(
+            "reconciliation_digest_hex",
+            Value::from(submission.key.reconciliation_digest_hex.clone()),
+        ),
+        json_entry(
+            "tx_hash_hex",
+            submission
+                .tx_hash_hex
+                .as_ref()
+                .map(|value| Value::from(value.clone()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("status", Value::from(submission.status.clone())),
+        json_entry("attempts", Value::from(u64::from(submission.attempts))),
+        json_entry(
+            "updated_at_unix_ms",
+            Value::from(submission.updated_at_unix_ms),
+        ),
+        json_entry(
+            "last_error",
+            submission
+                .last_error
+                .as_ref()
+                .map(|value| Value::from(value.clone()))
+                .unwrap_or(Value::Null),
+        ),
+    ])
+}
+
+fn appeal_finance_settlement_worker_submission_from_json(
+    value: &Value,
+) -> Result<AppealFinanceSettlementWorkerSubmission, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "submitted worker step must be an object".to_owned())?;
+    let escrow_id_hex =
+        required_string_from_json_object(object, "escrow_id_hex", "submitted worker step")?;
+    let outcome = required_string_from_json_object(object, "outcome", "submitted worker step")?;
+    let action = required_string_from_json_object(object, "action", "submitted worker step")?;
+    let reconciliation_digest_hex = required_string_from_json_object(
+        object,
+        "reconciliation_digest_hex",
+        "submitted worker step",
+    )?;
+    let panel_size = object
+        .get("panel_size")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "submitted worker step `panel_size` must be a u64".to_owned())
+        .and_then(|value| {
+            u32::try_from(value)
+                .map_err(|_| "submitted worker step `panel_size` exceeds u32".to_owned())
+        })?;
+    let key = AppealFinanceSettlementWorkerStepKey {
+        escrow_id_hex,
+        outcome,
+        panel_size,
+        action,
+        reconciliation_digest_hex,
+    };
+    let tx_hash_hex = optional_string_from_json_object(object, "tx_hash_hex")?;
+    let status =
+        optional_string_from_json_object(object, "status")?.unwrap_or_else(|| "queued".to_owned());
+    let attempts = object
+        .get("attempts")
+        .and_then(Value::as_u64)
+        .map_or(Ok(1_u32), |value| {
+            u32::try_from(value).map_err(|_| "submitted worker step `attempts` exceeds u32")
+        })
+        .map_err(str::to_owned)?
+        .max(1);
+    let updated_at_unix_ms = object
+        .get("updated_at_unix_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let last_error = optional_string_from_json_object(object, "last_error")?;
+    Ok(AppealFinanceSettlementWorkerSubmission {
+        key,
+        tx_hash_hex,
+        status,
+        attempts,
+        updated_at_unix_ms,
+        last_error,
+    })
+}
+
+fn required_string_from_json_object(
+    object: &Map,
+    field: &'static str,
+    context: &'static str,
+) -> Result<String, String> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{context} `{field}` must be a string"))
+}
+
+fn optional_string_from_json_object(
+    object: &Map,
+    field: &'static str,
+) -> Result<Option<String>, String> {
+    match object.get(field) {
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(format!("submitted worker step `{field}` must be a string")),
+    }
+}
+
+fn appeal_finance_settlement_worker_signed_tx_hash(
+    tx_hash_hex: &str,
+) -> Result<HashOf<SignedTransaction>, String> {
+    let hash = Hash::from_str(tx_hash_hex)
+        .map_err(|err| format!("invalid worker settlement tx_hash_hex `{tx_hash_hex}`: {err}"))?;
+    Ok(HashOf::<SignedTransaction>::from_untyped_unchecked(hash))
+}
+
+fn refresh_appeal_finance_settlement_worker_submission_status(
+    state: &SharedAppState,
+    submission: &mut AppealFinanceSettlementWorkerSubmission,
+    updated_at_unix_ms: u64,
+) -> Result<bool, String> {
+    let Some(tx_hash_hex) = submission.tx_hash_hex.as_deref() else {
+        return Ok(false);
+    };
+    let tx_hash = appeal_finance_settlement_worker_signed_tx_hash(tx_hash_hex)?;
+    let Some((entry, _resolved_from)) = crate::pipeline_status_local_entry(state, &tx_hash) else {
+        return Ok(false);
+    };
+    let (status, last_error) = match entry.kind.as_str() {
+        "Applied" => ("applied", None),
+        "Rejected" => (
+            "rejected",
+            entry.rejection.as_ref().map(ToString::to_string),
+        ),
+        "Expired" => ("expired", None),
+        _ => ("queued", None),
+    };
+    let status_changed = submission.status != status;
+    let error_changed = submission.last_error != last_error;
+    if status_changed || error_changed {
+        submission.status = status.to_owned();
+        submission.last_error = last_error;
+        submission.updated_at_unix_ms = updated_at_unix_ms;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn appeal_finance_settlement_worker_submission_can_retry(
+    submission: &AppealFinanceSettlementWorkerSubmission,
+    max_retry_attempts: u32,
+) -> bool {
+    matches!(submission.status.as_str(), "rejected" | "expired")
+        && submission.attempts < max_retry_attempts.max(1)
+}
+
+fn appeal_finance_settlement_worker_max_retry_attempts(state: &SharedAppState) -> u32 {
+    state
+        .sorafs_appeal_settlement_submitter
+        .as_ref()
+        .map_or(1, |submitter| submitter.worker_max_retry_attempts())
+        .max(1)
+}
+
+async fn process_sorafs_appeal_finance_settlement_worker_event(
+    state: &SharedAppState,
+    event: ModerationBallotEvent,
+) -> Result<Option<(StatusCode, Value)>, String> {
+    let mut submitted_steps = load_appeal_finance_settlement_worker_submitted_steps(state)?;
+    process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
+        state,
+        event,
+        &mut submitted_steps,
+    )
+    .await
+}
+
+async fn process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
+    state: &SharedAppState,
+    event: ModerationBallotEvent,
+    submitted_steps: &mut BTreeMap<
+        AppealFinanceSettlementWorkerStepKey,
+        AppealFinanceSettlementWorkerSubmission,
+    >,
+) -> Result<Option<(StatusCode, Value)>, String> {
+    if event.kind != ModerationBallotEventKind::BallotTallied {
+        return Ok(None);
+    }
+    let Some(tally) = event.tally.as_ref() else {
+        return Err("tallied moderation event did not include a tally snapshot".to_owned());
+    };
+    let Some(ballot_record) = state
+        .sorafs_node
+        .moderation_ballot(&event.case_id, &event.round_id)
+    else {
+        return Err(format!(
+            "moderation ballot `{}`/`{}` was not found for settlement",
+            event.case_id, event.round_id
+        ));
+    };
+    process_sorafs_appeal_finance_settlement_worker_record(
+        state,
+        &ballot_record,
+        tally,
+        event.generated_at_unix_ms,
+        submitted_steps,
+    )
+    .await
+}
+
+async fn scan_sorafs_appeal_finance_settlement_worker_records(
+    state: &SharedAppState,
+    submitted_steps: &mut BTreeMap<
+        AppealFinanceSettlementWorkerStepKey,
+        AppealFinanceSettlementWorkerSubmission,
+    >,
+) {
+    for ballot_record in state.sorafs_node.moderation_ballots() {
+        let Some(tally) = ballot_record.tally.as_ref() else {
+            continue;
+        };
+        let case_id = ballot_record.announcement.context.case_id.clone();
+        let round_id = ballot_record.announcement.round_id.clone();
+        log_sorafs_appeal_finance_settlement_worker_scan_result(
+            &case_id,
+            &round_id,
+            process_sorafs_appeal_finance_settlement_worker_record(
+                state,
+                &ballot_record,
+                tally,
+                unix_timestamp_now_ms(),
+                submitted_steps,
+            )
+            .await,
+        );
+    }
+}
+
+async fn process_sorafs_appeal_finance_settlement_worker_record(
+    state: &SharedAppState,
+    ballot_record: &ModerationBallotRecord,
+    tally: &ModerationBallotTally,
+    generated_at_unix_ms: u64,
+    submitted_steps: &mut BTreeMap<
+        AppealFinanceSettlementWorkerStepKey,
+        AppealFinanceSettlementWorkerSubmission,
+    >,
+) -> Result<Option<(StatusCode, Value)>, String> {
+    let Some(deposit) = ballot_record.announcement.appeal_deposit.as_ref() else {
+        return Ok(None);
+    };
+    let deposit_confirmation =
+        appeal_finance_deposit_confirm_request_from_moderation_deposit(&ballot_record, deposit);
+    let (expected, escrow_record) =
+        load_appeal_finance_deposit_record_for_worker(state, &deposit_confirmation)?;
+    let outcome = appeal_finance_settlement_outcome_from_moderation_tally(tally);
+    let panel_size = moderation_ballot_panel_size(ballot_record)?;
+    let Some(step_key) =
+        appeal_finance_settlement_worker_step_key(&expected, &escrow_record, outcome, panel_size)?
+    else {
+        return Ok(None);
+    };
+    let max_retry_attempts = appeal_finance_settlement_worker_max_retry_attempts(state);
+    let mut should_skip_submission = false;
+    let mut should_persist_status = false;
+    if let Some(submission) = submitted_steps.get_mut(&step_key) {
+        let status_changed = refresh_appeal_finance_settlement_worker_submission_status(
+            state,
+            submission,
+            generated_at_unix_ms,
+        )?;
+        if !appeal_finance_settlement_worker_submission_can_retry(submission, max_retry_attempts) {
+            should_skip_submission = true;
+            should_persist_status = status_changed;
+        }
+    }
+    if should_skip_submission {
+        if should_persist_status {
+            persist_appeal_finance_settlement_worker_submitted_steps(
+                state,
+                submitted_steps,
+                generated_at_unix_ms,
+            )?;
+        }
+        return Ok(None);
+    }
+
+    let result = submit_appeal_finance_deposit_settlement_step(
+        state,
+        expected,
+        escrow_record,
+        outcome,
+        Some(panel_size),
+        generated_at_unix_ms,
+    )
+    .await
+    .map_err(|response| {
+        format!(
+            "settlement submitter returned HTTP status {}",
+            response.status()
+        )
+    })?;
+    if result.0 == StatusCode::ACCEPTED {
+        let attempts = submitted_steps
+            .get(&step_key)
+            .map_or(0_u32, |submission| submission.attempts)
+            .saturating_add(1);
+        let tx_hash_hex = result
+            .1
+            .get("tx_hash_hex")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        submitted_steps.insert(
+            step_key.clone(),
+            AppealFinanceSettlementWorkerSubmission {
+                key: step_key,
+                tx_hash_hex,
+                status: "queued".to_owned(),
+                attempts,
+                updated_at_unix_ms: generated_at_unix_ms,
+                last_error: None,
+            },
+        );
+        if let Err(err) = persist_appeal_finance_settlement_worker_submitted_steps(
+            state,
+            submitted_steps,
+            generated_at_unix_ms,
+        ) {
+            warn!(
+                error = %err,
+                "failed to persist SoraFS appeal finance settlement worker state",
+            );
+        }
+    }
+    Ok(Some(result))
+}
+
+fn appeal_finance_deposit_confirm_request_from_moderation_deposit(
+    record: &ModerationBallotRecord,
+    deposit: &ModerationAppealDeposit,
+) -> AppealFinanceDepositConfirmRequestDto {
+    AppealFinanceDepositConfirmRequestDto {
+        escrow_id_hex: deposit.escrow_id_hex.clone(),
+        case_id: record.announcement.context.case_id.clone(),
+        round_id: Some(record.announcement.round_id.clone()),
+        payer_account: deposit.payer_account.clone(),
+        destination_account: deposit.destination_account.clone(),
+        release_authority_account: deposit.release_authority_account.clone(),
+        asset_definition_id: deposit.asset_definition_id.clone(),
+        deposit_xor: deposit.deposit_xor.clone(),
+        expires_at_ms: deposit.expires_at_ms,
+        idempotency_key: deposit.idempotency_key.clone(),
+        evidence_hashes_hex: Some(deposit.evidence_hashes_hex.clone()),
+    }
+}
+
+fn load_appeal_finance_deposit_record_for_worker(
+    state: &SharedAppState,
+    req: &AppealFinanceDepositConfirmRequestDto,
+) -> Result<(AppealFinanceDepositExpectation, AssetEscrowRecord), String> {
+    let escrow_id = appeal_finance_escrow_id_from_hex(&req.escrow_id_hex)?;
+    let expected =
+        appeal_finance_deposit_expectation(appeal_finance_deposit_confirm_base_request(req))?;
+    if escrow_id != expected.escrow_id {
+        return Err(
+            "SoraFS appeal finance `escrow_id_hex` does not match the expected deposit parameters"
+                .to_owned(),
+        );
+    }
+
+    let world = state.state.world_view();
+    let record = world
+        .asset_escrows()
+        .get(&escrow_id)
+        .cloned()
+        .ok_or_else(|| {
+            "SoraFS appeal finance deposit asset lock was not found in the runtime ledger"
+                .to_owned()
+        })?;
+    let mismatches = appeal_finance_deposit_static_mismatches(&expected, &record);
+    if !mismatches.is_empty() {
+        return Err(format!(
+            "SoraFS appeal finance moderation deposit does not match runtime ledger: {}",
+            mismatches.join("; ")
+        ));
+    }
+    Ok((expected, record))
+}
+
+fn appeal_finance_settlement_worker_step_key(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    outcome: &str,
+    panel_size: u32,
+) -> Result<Option<AppealFinanceSettlementWorkerStepKey>, String> {
+    let config = baseline_appeal_settlement_config();
+    let deposit_xor =
+        parse_appeal_decimal_literal("deposit_xor", &expected.deposit_xor.to_string())
+            .map_err(|err| err.to_string())?;
+    let verdict = appeal_verdict_from_request(outcome)?;
+    let breakdown = config
+        .settle(deposit_xor, panel_size, verdict)
+        .map_err(|err| err.to_string())?;
+    let reconciliation = appeal_finance_deposit_settlement_reconciliation(
+        expected,
+        record,
+        config.version(),
+        verdict,
+        panel_size,
+        &breakdown,
+    )?;
+    if reconciliation.status == "settled" {
+        return Ok(None);
+    }
+    if reconciliation.status == "mismatch" {
+        return Err(format!(
+            "SoraFS appeal finance moderation settlement reconciliation mismatch: {}",
+            reconciliation.mismatches.join("; ")
+        ));
+    }
+    let execution = appeal_finance_deposit_settlement_execution(expected, record, &breakdown)?;
+    let Some(step) =
+        appeal_finance_deposit_next_settlement_submission_step(&reconciliation, &execution)
+    else {
+        return Err(
+            "SoraFS appeal finance moderation settlement state has no submitter action".to_owned(),
+        );
+    };
+    Ok(Some(AppealFinanceSettlementWorkerStepKey {
+        escrow_id_hex: expected.escrow_id.as_hash().to_string(),
+        outcome: outcome.to_owned(),
+        panel_size,
+        action: step.action.to_owned(),
+        reconciliation_digest_hex: reconciliation.reconciliation_digest_hex,
+    }))
+}
+
+fn appeal_finance_settlement_outcome_from_moderation_tally(
+    tally: &ModerationBallotTally,
+) -> &'static str {
+    match tally.winning_choice {
+        Some(SoraFsModerationVoteChoice::Uphold) => "uphold",
+        Some(SoraFsModerationVoteChoice::Overturn) => "overturn",
+        Some(SoraFsModerationVoteChoice::Modify) => "modify",
+        Some(SoraFsModerationVoteChoice::Escalate) | None => "escalated",
+    }
+}
+
+fn moderation_ballot_panel_size(record: &ModerationBallotRecord) -> Result<u32, String> {
+    let panel_size = u32::try_from(record.announcement.juror_ids.len())
+        .map_err(|_| "moderation panel size exceeds settlement limits".to_owned())?;
+    if panel_size == 0 {
+        return Err("moderation panel size must be non-zero".to_owned());
+    }
+    Ok(panel_size)
 }
 
 pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_reconcile(
@@ -6046,6 +10429,20 @@ fn appeal_pricing_status_json(config: &AppealPricingConfig) -> Value {
             "settlement_reconciliation_api",
             Value::from("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest"),
         ),
+        json_entry(
+            "settlement_submission_api",
+            Value::from(
+                "enabled_canonical_auth_configured_signer_next_step_submitter_governance_receipts",
+            ),
+        ),
+        json_entry(
+            "settlement_receipt_publication",
+            Value::from("enabled_local_governance_dag_on_submit"),
+        ),
+        json_entry(
+            "settlement_receipt_dashboard_api",
+            Value::from("enabled_local_publish_index"),
+        ),
         json_entry("disbursement_plan_api", Value::from("enabled")),
         json_entry(
             "report_publication",
@@ -6290,6 +10687,140 @@ fn appeal_finance_deposit_settlement_execution(
         refund_xor,
         steps,
     })
+}
+
+fn appeal_finance_deposit_next_settlement_submission_step<'a>(
+    reconciliation: &AppealFinanceDepositSettlementReconciliation,
+    execution: &'a AppealFinanceDepositSettlementExecution,
+) -> Option<&'a AppealFinanceSettlementStep> {
+    match reconciliation.status {
+        "pending_client_submission" => execution.steps.first(),
+        "awaiting_refund_cancel" => execution
+            .steps
+            .iter()
+            .find(|step| step.action == "cancel_refund"),
+        _ => None,
+    }
+}
+
+fn appeal_finance_settlement_step_instruction_box(
+    expected: &AppealFinanceDepositExpectation,
+    step: &AppealFinanceSettlementStep,
+) -> Result<InstructionBox, String> {
+    match step.action {
+        "drawdown_non_refund" => {
+            Ok(DrawdownAssetLock::new(expected.escrow_id, step.amount_xor.clone()).into())
+        }
+        "cancel_refund" => Ok(CancelAssetLock::new(expected.escrow_id).into()),
+        other => Err(format!(
+            "SoraFS appeal finance settlement submitter does not support step `{other}`"
+        )),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn appeal_finance_deposit_settlement_receipt(
+    config: &AppealSettlementConfig,
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    verdict: AppealVerdict,
+    panel_size: u32,
+    breakdown: &AppealSettlementBreakdown,
+    reconciliation: &AppealFinanceDepositSettlementReconciliation,
+    step: &AppealFinanceSettlementStep,
+    tx_hash_hex: &str,
+    configured_signer_count: usize,
+    generated_at_unix_ms: u64,
+) -> SoraFsAppealFinanceSettlementReceiptV1 {
+    let configured_signer_count = u32::try_from(configured_signer_count).unwrap_or(u32::MAX);
+    let receipt_id = appeal_finance_settlement_receipt_id(
+        expected,
+        verdict,
+        panel_size,
+        step,
+        tx_hash_hex,
+        &reconciliation.reconciliation_digest_hex,
+        generated_at_unix_ms,
+    );
+    SoraFsAppealFinanceSettlementReceiptV1 {
+        version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+        receipt_id,
+        case_id: expected.case_id.clone(),
+        round_id: expected.round_id.clone(),
+        generated_at_unix_ms,
+        appeal_finance_config_version: config.version().to_owned(),
+        outcome: appeal_finance_manifest_outcome_from_verdict(verdict),
+        escrow_id_hex: expected.escrow_id.as_hash().to_string(),
+        payer_account: expected.payer_account.to_string(),
+        destination_account: expected.destination_account.to_string(),
+        release_authority_account: expected
+            .release_authority_account
+            .as_ref()
+            .map(ToString::to_string),
+        submitted_step: step.action.to_owned(),
+        required_authority: step.required_authority.to_string(),
+        amount_xor: step.amount_xor.to_string(),
+        tx_hash_hex: tx_hash_hex.to_owned(),
+        reconciliation_digest_hex: reconciliation.reconciliation_digest_hex.clone(),
+        reconciliation_status: reconciliation.status.to_owned(),
+        observed_lifecycle_status: asset_escrow_status_label(record.status).to_owned(),
+        observed_remaining_xor: record.remaining_amount.to_string(),
+        deposit_xor: expected.deposit_xor.to_string(),
+        refund_xor: breakdown.refund_xor.to_string(),
+        treasury_xor: breakdown.treasury_xor.to_string(),
+        held_xor: breakdown.held_xor.to_string(),
+        panel_size,
+        configured_signer_count,
+    }
+}
+
+fn appeal_finance_manifest_outcome_from_verdict(
+    verdict: AppealVerdict,
+) -> SoraFsAppealFinanceOutcomeV1 {
+    match verdict {
+        AppealVerdict::Decision(AppealDecision::Uphold) => SoraFsAppealFinanceOutcomeV1::Uphold,
+        AppealVerdict::Decision(AppealDecision::Overturn) => SoraFsAppealFinanceOutcomeV1::Overturn,
+        AppealVerdict::Decision(AppealDecision::Modify) => SoraFsAppealFinanceOutcomeV1::Modify,
+        AppealVerdict::WithdrawnBeforePanel => SoraFsAppealFinanceOutcomeV1::WithdrawnBeforePanel,
+        AppealVerdict::WithdrawnAfterPanel => SoraFsAppealFinanceOutcomeV1::WithdrawnAfterPanel,
+        AppealVerdict::Frivolous => SoraFsAppealFinanceOutcomeV1::Frivolous,
+        AppealVerdict::Escalated => SoraFsAppealFinanceOutcomeV1::Escalated,
+    }
+}
+
+fn appeal_finance_settlement_receipt_id(
+    expected: &AppealFinanceDepositExpectation,
+    verdict: AppealVerdict,
+    panel_size: u32,
+    step: &AppealFinanceSettlementStep,
+    tx_hash_hex: &str,
+    reconciliation_digest_hex: &str,
+    generated_at_unix_ms: u64,
+) -> [u8; 16] {
+    let mut material = String::from("sorafs.appeal_finance.settlement_receipt.id.v1\n");
+    push_digest_field(&mut material, "case_id", &expected.case_id);
+    push_digest_optional_field(&mut material, "round_id", expected.round_id.as_deref());
+    push_digest_field(&mut material, "escrow_id_hex", expected.escrow_id.as_hash());
+    push_digest_field(&mut material, "outcome", verdict);
+    push_digest_field(&mut material, "panel_size", panel_size);
+    push_digest_field(&mut material, "submitted_step", step.action);
+    push_digest_field(
+        &mut material,
+        "required_authority",
+        &step.required_authority,
+    );
+    push_digest_field(&mut material, "amount_xor", &step.amount_xor);
+    push_digest_field(&mut material, "tx_hash_hex", tx_hash_hex);
+    push_digest_field(
+        &mut material,
+        "reconciliation_digest_hex",
+        reconciliation_digest_hex,
+    );
+    push_digest_field(&mut material, "generated_at_unix_ms", generated_at_unix_ms);
+    let digest = blake3_hash(material.as_bytes());
+    let mut receipt_id = [0_u8; 16];
+    receipt_id.copy_from_slice(&digest.as_bytes()[..16]);
+    receipt_id
 }
 
 fn appeal_finance_deposit_settlement_reconciliation(
@@ -7295,6 +11826,136 @@ fn appeal_finance_deposit_settlement_reconciliation_json(
     ])
 }
 
+#[allow(clippy::too_many_arguments)]
+fn appeal_finance_deposit_settlement_submission_json(
+    config: &AppealSettlementConfig,
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+    verdict: AppealVerdict,
+    panel_size: u32,
+    breakdown: &AppealSettlementBreakdown,
+    reconciliation: &AppealFinanceDepositSettlementReconciliation,
+    step: Option<&AppealFinanceSettlementStep>,
+    tx_hash_hex: Option<&str>,
+    configured_signer_count: usize,
+    status: &'static str,
+    receipt: Option<&SoraFsAppealFinanceSettlementReceiptV1>,
+    receipt_publication_status: &'static str,
+    receipt_publication_error: Option<&str>,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.appeal_finance.deposit_settlement_submission.v1"),
+        ),
+        json_entry("status", Value::from(status)),
+        json_entry(
+            "ledger_mutation",
+            Value::from("server_signed_transaction_submission"),
+        ),
+        json_entry(
+            "tx_hash_hex",
+            tx_hash_hex.map(Value::from).unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "configured_signer_count",
+            Value::from(configured_signer_count as u64),
+        ),
+        json_entry(
+            "submitted_step",
+            step.map(appeal_finance_settlement_submission_step_json)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "missing_required_authority",
+            if status == "missing_required_signer" {
+                step.map(|step| Value::from(step.required_authority.to_string()))
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            },
+        ),
+        json_entry(
+            "settlement_receipt",
+            appeal_finance_settlement_receipt_publication_json(
+                receipt,
+                receipt_publication_status,
+                receipt_publication_error,
+            ),
+        ),
+        json_entry(
+            "reconciliation",
+            appeal_finance_deposit_settlement_reconciliation_json(
+                config,
+                expected,
+                record,
+                verdict,
+                panel_size,
+                breakdown,
+                reconciliation,
+            ),
+        ),
+    ])
+}
+
+fn appeal_finance_settlement_receipt_publication_json(
+    receipt: Option<&SoraFsAppealFinanceSettlementReceiptV1>,
+    publication_status: &'static str,
+    publication_error: Option<&str>,
+) -> Value {
+    let receipt_json = receipt
+        .map(|receipt| {
+            json::to_value(receipt).unwrap_or_else(|err| {
+                json_object(vec![json_entry(
+                    "serialization_error",
+                    Value::from(err.to_string()),
+                )])
+            })
+        })
+        .unwrap_or(Value::Null);
+    json_object(vec![
+        json_entry("publication_status", Value::from(publication_status)),
+        json_entry(
+            "publication_error",
+            publication_error.map(Value::from).unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "payload_kind",
+            Value::from("appeal_finance_settlement_receipt"),
+        ),
+        json_entry(
+            "receipt_id_hex",
+            receipt
+                .map(|receipt| Value::from(hex::encode(receipt.receipt_id)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "tx_hash_hex",
+            receipt
+                .map(|receipt| Value::from(receipt.tx_hash_hex.clone()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "reconciliation_digest_hex",
+            receipt
+                .map(|receipt| Value::from(receipt.reconciliation_digest_hex.clone()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("receipt", receipt_json),
+    ])
+}
+
+fn appeal_finance_settlement_submission_step_json(step: &AppealFinanceSettlementStep) -> Value {
+    json_object(vec![
+        json_entry("action", Value::from(step.action)),
+        json_entry(
+            "required_authority",
+            Value::from(step.required_authority.to_string()),
+        ),
+        json_entry("amount_xor", appeal_decimal_json(&step.amount_xor)),
+    ])
+}
+
 fn appeal_finance_deposit_instruction_json(deposit: &AppealFinanceDepositInstruction) -> Value {
     let expected = &deposit.expected;
     let evidence_hashes = expected
@@ -7686,15 +12347,33 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
         | OrderbookRuntimeError::ReceiptRangeOverlap { .. } => StatusCode::CONFLICT,
         OrderbookRuntimeError::OrderNotFound { .. } => StatusCode::NOT_FOUND,
         OrderbookRuntimeError::SettlementChannelNotFound { .. } => StatusCode::NOT_FOUND,
-        OrderbookRuntimeError::Validation(_) | OrderbookRuntimeError::CancelOwnerMismatch => {
-            StatusCode::BAD_REQUEST
-        }
+        OrderbookRuntimeError::Validation(_)
+        | OrderbookRuntimeError::OrderBelowMinimum { .. }
+        | OrderbookRuntimeError::OrderPriceTickMismatch { .. }
+        | OrderbookRuntimeError::CancelOwnerMismatch => StatusCode::BAD_REQUEST,
         OrderbookRuntimeError::SequenceOverflow
         | OrderbookRuntimeError::MissingMatchedOrder
         | OrderbookRuntimeError::InvalidMatchedSides
         | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs orderbook error: {err}"))
+}
+
+#[cfg(test)]
+#[test]
+fn orderbook_admission_policy_errors_map_to_bad_request() {
+    let response = orderbook_runtime_error_response(OrderbookRuntimeError::OrderBelowMinimum {
+        quantity_gib: 1,
+        min_order_gib: 8,
+    });
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response =
+        orderbook_runtime_error_response(OrderbookRuntimeError::OrderPriceTickMismatch {
+            price_micro_xor: 1_605_000,
+            tick_micro_xor: 10_000,
+        });
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
@@ -7728,6 +12407,455 @@ fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -
     json_error(status, format!("sorafs moderation ballot error: {err}"))
 }
 
+fn decode_moderation_model_registry_manifest<T>(
+    manifest_b64: &str,
+    manifest_label: &str,
+) -> Result<T, Response>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    let bytes = match BASE64_STANDARD.decode(manifest_b64.as_bytes()) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid base64 in manifest_b64 for {manifest_label}: {err}"),
+            ));
+        }
+    };
+    norito::decode_from_bytes(&bytes).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS moderation model registry {manifest_label}: {err}"),
+        )
+    })
+}
+
+fn moderation_model_registry_error_response(err: ModerationModelRegistryError) -> Response {
+    let status = match err {
+        ModerationModelRegistryError::ConflictingReproManifest { .. } => StatusCode::CONFLICT,
+        ModerationModelRegistryError::InvalidReproManifest { .. }
+        | ModerationModelRegistryError::InvalidCorpusManifest { .. }
+        | ModerationModelRegistryError::InvalidRegistrySnapshot { .. }
+        | ModerationModelRegistryError::CorpusEncoding { .. } => StatusCode::BAD_REQUEST,
+        ModerationModelRegistryError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(
+        status,
+        format!("sorafs moderation model registry error: {err}"),
+    )
+}
+
+fn moderation_repro_registry_admission_json(record: &ModerationReproRegistryRecord) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.model_registry.repro_manifest_admission.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry("record", moderation_repro_registry_record_json(record)),
+    ])
+}
+
+fn moderation_corpus_registry_admission_json(record: &ModerationCorpusRegistryRecord) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.model_registry.corpus_manifest_admission.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry("record", moderation_corpus_registry_record_json(record)),
+    ])
+}
+
+fn moderation_model_registry_snapshot_json(
+    snapshot: &ModerationModelRegistrySnapshot,
+    limit: usize,
+) -> Value {
+    let repro_count = snapshot.reproducibility_manifests.len();
+    let corpus_count = snapshot.adversarial_corpora.len();
+    let repro_manifests = snapshot
+        .reproducibility_manifests
+        .iter()
+        .take(limit)
+        .map(moderation_repro_registry_record_json)
+        .collect::<Vec<_>>();
+    let adversarial_corpora = snapshot
+        .adversarial_corpora
+        .iter()
+        .take(limit)
+        .map(moderation_corpus_registry_record_json)
+        .collect::<Vec<_>>();
+
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.model_registry.snapshot.v1"),
+        ),
+        json_entry("source", Value::from("local")),
+        json_entry("repro_manifest_count", Value::from(repro_count as u64)),
+        json_entry(
+            "returned_repro_manifest_count",
+            Value::from(repro_manifests.len() as u64),
+        ),
+        json_entry(
+            "truncated_repro_manifests",
+            Value::from(repro_count > limit),
+        ),
+        json_entry("corpus_count", Value::from(corpus_count as u64)),
+        json_entry(
+            "returned_corpus_count",
+            Value::from(adversarial_corpora.len() as u64),
+        ),
+        json_entry("truncated_corpora", Value::from(corpus_count > limit)),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("repro_manifests", Value::Array(repro_manifests)),
+        json_entry("adversarial_corpora", Value::Array(adversarial_corpora)),
+    ])
+}
+
+fn moderation_repro_registry_record_json(record: &ModerationReproRegistryRecord) -> Value {
+    json_object(vec![
+        json_entry("manifest_id_hex", Value::from(encode(record.manifest_id))),
+        json_entry(
+            "manifest_digest_hex",
+            Value::from(encode(record.manifest_digest)),
+        ),
+        json_entry("runner_hash_hex", Value::from(encode(record.runner_hash))),
+        json_entry(
+            "runtime_version",
+            Value::from(record.runtime_version.clone()),
+        ),
+        json_entry("issued_at_unix", Value::from(record.issued_at_unix)),
+        json_entry("model_count", Value::from(u64::from(record.model_count))),
+        json_entry("signer_count", Value::from(u64::from(record.signer_count))),
+    ])
+}
+
+fn moderation_corpus_registry_record_json(record: &ModerationCorpusRegistryRecord) -> Value {
+    json_object(vec![
+        json_entry(
+            "corpus_digest_hex",
+            Value::from(encode(record.corpus_digest)),
+        ),
+        json_entry("issued_at_unix", Value::from(record.issued_at_unix)),
+        json_entry(
+            "cohort_label",
+            record
+                .cohort_label
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("family_count", Value::from(u64::from(record.family_count))),
+        json_entry(
+            "variant_count",
+            Value::from(u64::from(record.variant_count)),
+        ),
+    ])
+}
+
+fn moderation_screening_input_from_request(
+    request: ModerationScreeningResultRequestDto,
+) -> Result<ModerationScreeningInput, Response> {
+    let subject_digest = decode_hex_32_field(&request.subject_digest_hex, "subject_digest_hex")?;
+    let manifest_id = parse_hex_fixed::<16>(&request.manifest_id_hex, "manifest_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let runner_hash = decode_hex_32_field(&request.runner_hash_hex, "runner_hash_hex")?;
+    let verdict = parse_moderation_screening_verdict(&request.verdict)?;
+    let evidence_digest = decode_optional_hex_32_field(
+        request.evidence_digest_hex.as_deref(),
+        "evidence_digest_hex",
+    )?;
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    let screened_at_unix = request
+        .screened_at_unix
+        .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000);
+    Ok(ModerationScreeningInput {
+        subject: request.subject,
+        subject_digest,
+        manifest_id,
+        runner_hash,
+        combined_score_bps: request.combined_score_bps,
+        verdict,
+        screened_at_unix,
+        evidence_digest,
+        policy_digest,
+        notes: request.notes,
+    })
+}
+
+fn parse_moderation_screening_verdict(value: &str) -> Result<ModerationScreeningVerdict, Response> {
+    match value.trim() {
+        "pass" => Ok(ModerationScreeningVerdict::Pass),
+        "warn" => Ok(ModerationScreeningVerdict::Warn),
+        "quarantine" => Ok(ModerationScreeningVerdict::Quarantine),
+        "escalate" => Ok(ModerationScreeningVerdict::Escalate),
+        "block" => Ok(ModerationScreeningVerdict::Block),
+        other => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("unknown SoraFS moderation screening verdict `{other}`"),
+        )),
+    }
+}
+
+fn moderation_quarantine_review_input_from_request(
+    quarantine_id_hex: &str,
+    request: ModerationQuarantineReviewRequestDto,
+) -> Result<ModerationQuarantineReviewInput, Response> {
+    let quarantine_id = parse_hex_fixed::<16>(quarantine_id_hex, "quarantine_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    Ok(ModerationQuarantineReviewInput {
+        quarantine_id,
+        reviewed_by: request.reviewed_by,
+        reviewed_at_unix: request
+            .reviewed_at_unix
+            .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000),
+        notes: request.notes,
+    })
+}
+
+fn moderation_quarantine_release_input_from_request(
+    quarantine_id_hex: &str,
+    request: ModerationQuarantineReleaseRequestDto,
+) -> Result<ModerationQuarantineReleaseInput, Response> {
+    let quarantine_id = parse_hex_fixed::<16>(quarantine_id_hex, "quarantine_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    Ok(ModerationQuarantineReleaseInput {
+        quarantine_id,
+        release_authority: request.release_authority,
+        released_at_unix: request
+            .released_at_unix
+            .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000),
+        notes: request.notes,
+    })
+}
+
+fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
+    let status = match err {
+        ModerationScreeningError::ConflictingRecord { .. } => StatusCode::CONFLICT,
+        ModerationScreeningError::UnknownQuarantine { .. } => StatusCode::NOT_FOUND,
+        ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
+        ModerationScreeningError::InvalidInput { .. }
+        | ModerationScreeningError::InvalidSnapshot { .. } => StatusCode::BAD_REQUEST,
+        ModerationScreeningError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(status, format!("sorafs moderation screening error: {err}"))
+}
+
+fn moderation_screening_outcome_json(outcome: &ModerationScreeningOutcome) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.screening_result.ingest.v1"),
+        ),
+        json_entry("status", Value::from("accepted")),
+        json_entry("record", moderation_screening_record_json(&outcome.record)),
+        json_entry(
+            "quarantine",
+            outcome
+                .quarantine
+                .as_ref()
+                .map(moderation_quarantine_record_json)
+                .unwrap_or(Value::Null),
+        ),
+    ])
+}
+
+fn moderation_quarantine_transition_json(
+    schema: &'static str,
+    status: &'static str,
+    record: &ModerationQuarantineRecord,
+) -> Value {
+    json_object(vec![
+        json_entry("schema", Value::from(schema)),
+        json_entry("status", Value::from(status)),
+        json_entry("record", moderation_quarantine_record_json(record)),
+    ])
+}
+
+fn moderation_screening_snapshot_json(
+    snapshot: &ModerationScreeningSnapshot,
+    limit: usize,
+) -> Value {
+    let screening_count = snapshot.screening_records.len();
+    let quarantine_count = snapshot.quarantine_records.len();
+    let records = snapshot
+        .screening_records
+        .iter()
+        .take(limit)
+        .map(moderation_screening_record_json)
+        .collect::<Vec<_>>();
+    let quarantines = snapshot
+        .quarantine_records
+        .iter()
+        .take(limit)
+        .map(moderation_quarantine_record_json)
+        .collect::<Vec<_>>();
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.screening_results.v1"),
+        ),
+        json_entry("source", Value::from("local")),
+        json_entry("screening_count", Value::from(screening_count as u64)),
+        json_entry(
+            "returned_screening_count",
+            Value::from(records.len() as u64),
+        ),
+        json_entry("truncated_screening", Value::from(screening_count > limit)),
+        json_entry("quarantine_count", Value::from(quarantine_count as u64)),
+        json_entry(
+            "returned_quarantine_count",
+            Value::from(quarantines.len() as u64),
+        ),
+        json_entry(
+            "truncated_quarantine",
+            Value::from(quarantine_count > limit),
+        ),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("records", Value::Array(records)),
+        json_entry("quarantine_records", Value::Array(quarantines)),
+    ])
+}
+
+fn moderation_quarantine_snapshot_json(
+    snapshot: &ModerationScreeningSnapshot,
+    limit: usize,
+) -> Value {
+    let quarantine_count = snapshot.quarantine_records.len();
+    let quarantines = snapshot
+        .quarantine_records
+        .iter()
+        .take(limit)
+        .map(moderation_quarantine_record_json)
+        .collect::<Vec<_>>();
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.moderation.quarantine.v1")),
+        json_entry("source", Value::from("local")),
+        json_entry("quarantine_count", Value::from(quarantine_count as u64)),
+        json_entry(
+            "returned_quarantine_count",
+            Value::from(quarantines.len() as u64),
+        ),
+        json_entry(
+            "truncated_quarantine",
+            Value::from(quarantine_count > limit),
+        ),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("quarantine_records", Value::Array(quarantines)),
+    ])
+}
+
+fn moderation_screening_record_json(record: &ModerationScreeningRecord) -> Value {
+    json_object(vec![
+        json_entry("record_id_hex", Value::from(encode(record.record_id))),
+        json_entry(
+            "record_digest_hex",
+            Value::from(encode(record.record_digest)),
+        ),
+        json_entry("subject", Value::from(record.subject.clone())),
+        json_entry(
+            "subject_digest_hex",
+            Value::from(encode(record.subject_digest)),
+        ),
+        json_entry("manifest_id_hex", Value::from(encode(record.manifest_id))),
+        json_entry("runner_hash_hex", Value::from(encode(record.runner_hash))),
+        json_entry(
+            "combined_score_bps",
+            Value::from(u64::from(record.combined_score_bps)),
+        ),
+        json_entry("verdict", Value::from(record.verdict.as_str())),
+        json_entry("screened_at_unix", Value::from(record.screened_at_unix)),
+        json_entry(
+            "evidence_digest_hex",
+            record
+                .evidence_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "policy_digest_hex",
+            record
+                .policy_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "notes",
+            record
+                .notes
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+    ])
+}
+
+fn moderation_quarantine_record_json(record: &ModerationQuarantineRecord) -> Value {
+    json_object(vec![
+        json_entry(
+            "quarantine_id_hex",
+            Value::from(encode(record.quarantine_id)),
+        ),
+        json_entry(
+            "screening_record_id_hex",
+            Value::from(encode(record.screening_record_id)),
+        ),
+        json_entry("subject", Value::from(record.subject.clone())),
+        json_entry(
+            "subject_digest_hex",
+            Value::from(encode(record.subject_digest)),
+        ),
+        json_entry("verdict", Value::from(record.verdict.as_str())),
+        json_entry("queued_at_unix", Value::from(record.queued_at_unix)),
+        json_entry("state", Value::from(record.state.as_str())),
+        json_entry(
+            "reviewed_at_unix",
+            record.reviewed_at_unix.map_or(Value::Null, Value::from),
+        ),
+        json_entry(
+            "reviewed_by",
+            record
+                .reviewed_by
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "review_notes",
+            record
+                .review_notes
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "released_at_unix",
+            record.released_at_unix.map_or(Value::Null, Value::from),
+        ),
+        json_entry(
+            "release_authority",
+            record
+                .release_authority
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "release_notes",
+            record
+                .release_notes
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+    ])
+}
+
 fn moderation_ballot_commit_outcome_json(outcome: &ModerationBallotCommitOutcome) -> Value {
     json_object(vec![
         json_entry("status", Value::from("accepted")),
@@ -7759,6 +12887,22 @@ fn moderation_ballot_reveal_outcome_json(outcome: &ModerationBallotRevealOutcome
 }
 
 fn moderation_ballot_record_json(record: &ModerationBallotRecord) -> Value {
+    moderation_ballot_record_json_with_array_limit(
+        record,
+        record
+            .commits
+            .len()
+            .max(record.reveals.len())
+            .max(DEFAULT_LIST_LIMIT),
+    )
+}
+
+fn moderation_ballot_record_json_with_array_limit(
+    record: &ModerationBallotRecord,
+    limit: usize,
+) -> Value {
+    let returned_commit_count = record.commits.len().min(limit);
+    let returned_reveal_count = record.reveals.len().min(limit);
     json_object(vec![
         json_entry("schema", Value::from("sorafs.moderation.ballot.local.v1")),
         json_entry("source", Value::from("local")),
@@ -7767,13 +12911,31 @@ fn moderation_ballot_record_json(record: &ModerationBallotRecord) -> Value {
             moderation_ballot_announcement_json(&record.announcement),
         ),
         json_entry("commit_count", Value::from(record.commits.len() as u64)),
+        json_entry(
+            "returned_commit_count",
+            Value::from(returned_commit_count as u64),
+        ),
+        json_entry(
+            "truncated_commits",
+            Value::from(record.commits.len() > returned_commit_count),
+        ),
         json_entry("reveal_count", Value::from(record.reveals.len() as u64)),
+        json_entry(
+            "returned_reveal_count",
+            Value::from(returned_reveal_count as u64),
+        ),
+        json_entry(
+            "truncated_reveals",
+            Value::from(record.reveals.len() > returned_reveal_count),
+        ),
+        json_entry("limit", Value::from(limit as u64)),
         json_entry(
             "commits",
             Value::Array(
                 record
                     .commits
                     .iter()
+                    .take(limit)
                     .map(moderation_ballot_commit_json)
                     .collect(),
             ),
@@ -7784,6 +12946,7 @@ fn moderation_ballot_record_json(record: &ModerationBallotRecord) -> Value {
                 record
                     .reveals
                     .iter()
+                    .take(limit)
                     .map(moderation_ballot_reveal_json)
                     .collect(),
             ),
@@ -7886,6 +13049,17 @@ fn moderation_appeal_deposit_json(deposit: &ModerationAppealDeposit) -> Value {
         json_entry(
             "idempotency_key",
             Value::from(deposit.idempotency_key.clone()),
+        ),
+        json_entry(
+            "evidence_hashes_hex",
+            Value::Array(
+                deposit
+                    .evidence_hashes_hex
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
         ),
     ])
 }
@@ -8165,7 +13339,7 @@ fn orderbook_receipt_outcome_json(outcome: &OrderbookReceiptOutcome) -> Result<V
     Ok(Value::Object(root))
 }
 
-fn orderbook_snapshot_json(snapshot: &OrderbookSnapshot) -> Result<Value, String> {
+fn orderbook_snapshot_json(snapshot: &OrderbookSnapshot, limit: usize) -> Result<Value, String> {
     let orders = snapshot
         .open_orders
         .iter()
@@ -8186,6 +13360,14 @@ fn orderbook_snapshot_json(snapshot: &OrderbookSnapshot) -> Result<Value, String
         .iter()
         .map(orderbook_receipt_json)
         .collect::<Result<Vec<_>, _>>()?;
+    let order_count = orders.len();
+    let trade_count = trades.len();
+    let channel_count = channels.len();
+    let receipt_count = receipts.len();
+    let (orders, truncated_orders) = limit_governance_readback_values(orders, limit);
+    let (trades, truncated_trades) = limit_governance_readback_values(trades, limit);
+    let (channels, truncated_channels) = limit_governance_readback_values(channels, limit);
+    let (receipts, truncated_receipts) = limit_governance_readback_values(receipts, limit);
     let mut root = Map::new();
     root.insert("schema".into(), Value::from("sorafs.orderbook.local.v1"));
     root.insert("source".into(), Value::from("local"));
@@ -8194,15 +13376,45 @@ fn orderbook_snapshot_json(snapshot: &OrderbookSnapshot) -> Result<Value, String
         Value::from(snapshot.generated_at_unix),
     );
     root.insert("next_sequence".into(), Value::from(snapshot.next_sequence));
-    root.insert("open_order_count".into(), Value::from(orders.len() as u64));
-    root.insert("trade_count".into(), Value::from(trades.len() as u64));
+    root.insert("open_order_count".into(), Value::from(order_count as u64));
+    root.insert("trade_count".into(), Value::from(trade_count as u64));
     root.insert(
         "settlement_channel_count".into(),
-        Value::from(channels.len() as u64),
+        Value::from(channel_count as u64),
     );
     root.insert(
         "settlement_receipt_count".into(),
+        Value::from(receipt_count as u64),
+    );
+    root.insert("limit".into(), Value::from(limit as u64));
+    root.insert(
+        "returned_open_order_count".into(),
+        Value::from(orders.len() as u64),
+    );
+    root.insert(
+        "returned_trade_count".into(),
+        Value::from(trades.len() as u64),
+    );
+    root.insert(
+        "returned_settlement_channel_count".into(),
+        Value::from(channels.len() as u64),
+    );
+    root.insert(
+        "returned_settlement_receipt_count".into(),
         Value::from(receipts.len() as u64),
+    );
+    root.insert(
+        "truncated_open_orders".into(),
+        Value::from(truncated_orders),
+    );
+    root.insert("truncated_trades".into(), Value::from(truncated_trades));
+    root.insert(
+        "truncated_settlement_channels".into(),
+        Value::from(truncated_channels),
+    );
+    root.insert(
+        "truncated_settlement_receipts".into(),
+        Value::from(truncated_receipts),
     );
     root.insert("depth".into(), orderbook_depth_json(&snapshot.open_orders));
     root.insert("open_orders".into(), Value::Array(orders));
@@ -9026,10 +14238,15 @@ fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
     })
 }
 
-fn reputation_snapshot_etag(snapshot: &ReputationSnapshotV1) -> String {
+fn reputation_snapshot_etag(snapshot: &ReputationSnapshotV1, limit: usize) -> String {
+    let limit = (limit as u64).to_le_bytes();
     reputation_cache_etag(
         "snapshot",
-        &[snapshot.snapshot_id.as_ref(), snapshot.merkle_root.as_ref()],
+        &[
+            snapshot.snapshot_id.as_ref(),
+            snapshot.merkle_root.as_ref(),
+            limit.as_ref(),
+        ],
     )
 }
 
@@ -9101,10 +14318,16 @@ fn reputation_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
     format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
 }
 
-fn reputation_snapshot_summary_json(snapshot: &ReputationSnapshotV1) -> Result<Value, String> {
+fn reputation_snapshot_summary_json(
+    snapshot: &ReputationSnapshotV1,
+    limit: usize,
+) -> Result<Value, String> {
+    let provider_count = snapshot.providers.len();
+    let returned_provider_count = provider_count.min(limit);
     let providers = snapshot
         .providers
         .iter()
+        .take(limit)
         .map(reputation_provider_json)
         .collect::<Result<Vec<_>, _>>()?;
     let mut root = Map::new();
@@ -9128,9 +14351,15 @@ fn reputation_snapshot_summary_json(snapshot: &ReputationSnapshotV1) -> Result<V
         "merkle_root_hex".into(),
         Value::from(hex::encode(snapshot.merkle_root)),
     );
+    root.insert("provider_count".into(), Value::from(provider_count as u64));
     root.insert(
-        "provider_count".into(),
-        Value::from(snapshot.providers.len() as u64),
+        "returned_provider_count".into(),
+        Value::from(returned_provider_count as u64),
+    );
+    root.insert("limit".into(), Value::from(limit as u64));
+    root.insert(
+        "truncated_providers".into(),
+        Value::from(provider_count > limit),
     );
     root.insert(
         "alpha_bps".into(),
@@ -9548,10 +14777,16 @@ pub(crate) async fn handle_post_sorafs_provider_advert(
 
 pub(crate) async fn handle_get_sorafs_capacity_state(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs capacity registry API is not enabled on this node");
     }
+    let query = match CapacityStateReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
 
     let world = state.state.world_view();
     let snapshot = collect_snapshot(&world);
@@ -9581,6 +14816,7 @@ pub(crate) async fn handle_get_sorafs_capacity_state(
         &local_metering,
         telemetry_preview,
         fee_projection.as_ref(),
+        limit,
     ) {
         Ok(value) => JsonBody(value).into_response(),
         Err(err) => {
@@ -9639,10 +14875,16 @@ pub(crate) async fn handle_get_sorafs_storage_state(
 pub(crate) async fn handle_get_sorafs_por_ingestion(
     State(state): State<SharedAppState>,
     Path(manifest_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
+    let query = match PorIngestionReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let manifest_digest = match parse_hex_fixed::<32>(&manifest_hex, "manifest_digest_hex") {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -9663,9 +14905,11 @@ pub(crate) async fn handle_get_sorafs_por_ingestion(
         );
     }
     record_storage_metrics(&state);
+    let provider_count = status.providers.len();
     let providers = status
         .providers
         .into_iter()
+        .take(limit)
         .map(|entry| PorIngestionProviderStatusDto {
             provider_id_hex: hex::encode(entry.provider_id),
             pending_challenges: entry.pending_challenges,
@@ -9677,8 +14921,13 @@ pub(crate) async fn handle_get_sorafs_por_ingestion(
             consecutive_failures: entry.consecutive_failures,
         })
         .collect::<Vec<_>>();
+    let returned_provider_count = providers.len();
     let response = PorIngestionStatusResponseDto {
         manifest_digest_hex: hex::encode(status.manifest_digest),
+        provider_count: provider_count as u64,
+        returned_provider_count: returned_provider_count as u64,
+        limit: limit as u64,
+        truncated_providers: provider_count > limit,
         providers,
     };
     let value = match norito::json::to_value(&response) {
@@ -9698,10 +14947,15 @@ pub(crate) async fn handle_get_sorafs_por_ingestion(
 pub(crate) async fn handle_get_sorafs_storage_manifest(
     State(state): State<SharedAppState>,
     Path(manifest_id_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
+    let query = match StorageMetadataReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
 
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
@@ -9733,6 +14987,18 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
     };
 
     let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(manifest_bytes.as_slice());
+    let file_count = stored.files().len();
+    let limit = query
+        .limit
+        .map(|limit| normalize_limit(Some(limit)))
+        .unwrap_or(file_count);
+    let files = stored
+        .files()
+        .iter()
+        .take(limit)
+        .map(storage_stored_file_dto)
+        .collect::<Vec<_>>();
+    let returned_file_count = files.len();
 
     let response = StorageManifestResponseDto {
         manifest_id_hex,
@@ -9743,20 +15009,10 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
         chunk_count: stored.chunk_count() as u64,
         chunk_profile_handle: stored.chunk_profile_handle().to_owned(),
         stored_at_unix_secs: stored.stored_at_unix_secs(),
-        files: stored
-            .files()
-            .iter()
-            .map(|file| StorageStoredFileDto {
-                path: file.path.clone(),
-                offset: file.offset,
-                size: file.size,
-                first_chunk: file.first_chunk as u64,
-                chunk_count: file.chunk_count as u64,
-            })
-            .collect(),
+        files,
     };
 
-    let value = match norito::json::to_value(&response) {
+    let mut value = match norito::json::to_value(&response) {
         Ok(value) => value,
         Err(err) => {
             error!(?err, "failed to encode manifest response");
@@ -9766,6 +15022,15 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
             );
         }
     };
+    if let Value::Object(ref mut obj) = value {
+        obj.insert("file_count".into(), Value::from(file_count as u64));
+        obj.insert(
+            "returned_file_count".into(),
+            Value::from(returned_file_count as u64),
+        );
+        obj.insert("limit".into(), Value::from(limit as u64));
+        obj.insert("truncated_files".into(), Value::from(file_count > limit));
+    }
 
     JsonBody(value).into_response()
 }
@@ -9774,10 +15039,16 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
 pub(crate) async fn handle_get_sorafs_storage_plan(
     State(state): State<SharedAppState>,
     Path(manifest_id_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
+    let query = match StorageMetadataReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
 
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
@@ -9824,15 +15095,35 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
 
     let plan = stored.to_car_plan_with_hint(chunk_profile, taikai_hint.clone());
     let specs = plan.chunk_fetch_specs();
+    let file_count = stored.files().len();
+    let files = stored
+        .files()
+        .iter()
+        .take(limit)
+        .map(file_listing_entry_json)
+        .collect::<Vec<_>>();
+    let returned_file_count = files.len();
+    let chunk_count = specs.len();
 
     let chunk_digests = specs
         .iter()
+        .take(limit)
         .map(|spec| Value::String(hex::encode(spec.digest)))
         .collect::<Vec<_>>();
-    let chunks_value = chunk_fetch_specs_to_json(&plan);
+    let chunks = specs
+        .iter()
+        .take(limit)
+        .map(chunk_fetch_spec_json)
+        .collect::<Vec<_>>();
 
     let mut plan_map = Map::new();
-    plan_map.insert("chunk_count".into(), Value::from(specs.len() as u64));
+    plan_map.insert("chunk_count".into(), Value::from(chunk_count as u64));
+    plan_map.insert(
+        "returned_chunk_count".into(),
+        Value::from(chunks.len() as u64),
+    );
+    plan_map.insert("limit".into(), Value::from(limit as u64));
+    plan_map.insert("truncated_chunks".into(), Value::from(chunk_count > limit));
     plan_map.insert("content_length".into(), Value::from(plan.content_length));
     plan_map.insert(
         "payload_digest_blake3".into(),
@@ -9842,29 +15133,24 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         "chunk_profile_handle".into(),
         Value::String(stored.chunk_profile_handle().to_owned()),
     );
+    plan_map.insert("file_count".into(), Value::from(file_count as u64));
     plan_map.insert(
-        "files".into(),
-        Value::Array(
-            stored
-                .files()
-                .iter()
-                .map(|file| {
-                    let mut obj = Map::new();
-                    obj.insert(
-                        "path".into(),
-                        Value::Array(file.path.iter().cloned().map(Value::String).collect()),
-                    );
-                    obj.insert("offset".into(), Value::from(file.offset));
-                    obj.insert("size".into(), Value::from(file.size));
-                    obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
-                    obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
-                    Value::Object(obj)
-                })
-                .collect(),
-        ),
+        "returned_file_count".into(),
+        Value::from(returned_file_count as u64),
+    );
+    plan_map.insert("truncated_files".into(), Value::from(file_count > limit));
+    plan_map.insert("files".into(), Value::Array(files));
+    plan_map.insert("chunk_digest_count".into(), Value::from(chunk_count as u64));
+    plan_map.insert(
+        "returned_chunk_digest_count".into(),
+        Value::from(chunk_digests.len() as u64),
+    );
+    plan_map.insert(
+        "truncated_chunk_digests".into(),
+        Value::from(chunk_count > limit),
     );
     plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
-    plan_map.insert("chunks".into(), chunks_value);
+    plan_map.insert("chunks".into(), Value::Array(chunks));
 
     let mut root = Map::new();
     root.insert("manifest_id_hex".into(), Value::String(manifest_id_hex));
@@ -10021,11 +15307,18 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
 pub(crate) async fn handle_get_sorafs_pin_manifest(
     State(state): State<SharedAppState>,
     Path(digest_hex): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     accept: Option<ExtractAccept>,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs pin registry API is not enabled on this node");
     }
+
+    let query = match PinManifestReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
 
     let format = match crate::utils::negotiate_json_only_response(accept.as_ref().map(|hdr| &hdr.0))
     {
@@ -10098,9 +15391,12 @@ pub(crate) async fn handle_get_sorafs_pin_manifest(
         .iter()
         .filter(|alias| alias.manifest_digest_hex() == canonical_digest)
         .collect::<Vec<_>>();
+    let alias_count = aliases.len();
+    let alias_page_end = limit.min(alias_count);
+    let aliases = &aliases[..alias_page_end];
     let mut alias_presentations = Vec::with_capacity(aliases.len());
     let mut alias_values = Vec::with_capacity(aliases.len());
-    for alias in aliases {
+    for &alias in aliases {
         let manifest_for_alias = match snapshot.manifest_by_digest(alias.manifest_digest_hex()) {
             Some(record) => record,
             None => {
@@ -10165,9 +15461,12 @@ pub(crate) async fn handle_get_sorafs_pin_manifest(
         .iter()
         .filter(|order| order.manifest_digest_hex() == canonical_digest)
         .collect::<Vec<_>>();
+    let replication_order_count = orders.len();
+    let order_page_end = limit.min(replication_order_count);
+    let orders = &orders[..order_page_end];
     let order_values = match orders
         .iter()
-        .map(|order| order.to_json())
+        .map(|&order| order.to_json())
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(values) => values,
@@ -10183,6 +15482,19 @@ pub(crate) async fn handle_get_sorafs_pin_manifest(
     let response = json_object(vec![
         json_entry("attestation", attestation),
         json_entry("manifest", manifest_json),
+        json_entry("alias_count", alias_count as u64),
+        json_entry("returned_alias_count", alias_values.len() as u64),
+        json_entry("truncated_aliases", alias_count > limit),
+        json_entry("replication_order_count", replication_order_count as u64),
+        json_entry(
+            "returned_replication_order_count",
+            order_values.len() as u64,
+        ),
+        json_entry(
+            "truncated_replication_orders",
+            replication_order_count > limit,
+        ),
+        json_entry("limit", limit as u64),
         json_entry("aliases", Value::Array(alias_values)),
         json_entry("replication_orders", Value::Array(order_values)),
     ]);
@@ -11248,25 +16560,28 @@ fn enforce_site_denylist(state: &SharedAppState, stored: &StoredManifest) -> Res
     Ok(())
 }
 
-fn file_listing_json(stored: &StoredManifest) -> Value {
-    Value::Array(
-        stored
-            .files()
-            .iter()
-            .map(|file| {
-                let mut obj = Map::new();
-                obj.insert(
-                    "path".into(),
-                    Value::Array(file.path.iter().cloned().map(Value::String).collect()),
-                );
-                obj.insert("offset".into(), Value::from(file.offset));
-                obj.insert("size".into(), Value::from(file.size));
-                obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
-                obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
-                Value::Object(obj)
-            })
-            .collect(),
-    )
+fn file_listing_entry_json(file: &StoredFileRecord) -> Value {
+    let mut obj = Map::new();
+    obj.insert(
+        "path".into(),
+        Value::Array(file.path.iter().cloned().map(Value::String).collect()),
+    );
+    obj.insert("offset".into(), Value::from(file.offset));
+    obj.insert("size".into(), Value::from(file.size));
+    obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
+    obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+    Value::Object(obj)
+}
+
+fn bounded_file_listing_json(stored: &StoredManifest, limit: usize) -> (Vec<Value>, usize, bool) {
+    let file_count = stored.files().len();
+    let files = stored
+        .files()
+        .iter()
+        .take(limit)
+        .map(file_listing_entry_json)
+        .collect();
+    (files, file_count, file_count > limit)
 }
 
 fn optional_str_json(value: Option<&str>) -> Value {
@@ -11548,7 +16863,13 @@ fn build_site_file_response(
 pub(crate) async fn handle_get_sorafs_site_manifest(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let query = match SiteFileListReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let resolved = match resolve_site_host(&state, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
@@ -11567,6 +16888,8 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
             );
         }
     };
+    let (files, file_count, truncated_files) = bounded_file_listing_json(&resolved.stored, limit);
+    let returned_file_count = files.len();
 
     let value = json_object(vec![
         json_entry("hostname", Value::from(resolved.hostname.clone())),
@@ -11591,7 +16914,14 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
             Value::from(resolved.index_document.clone()),
         ),
         json_entry("spa_fallback", Value::from(resolved.spa_fallback)),
-        json_entry("files", file_listing_json(&resolved.stored)),
+        json_entry("file_count", Value::from(file_count as u64)),
+        json_entry(
+            "returned_file_count",
+            Value::from(returned_file_count as u64),
+        ),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("truncated_files", Value::from(truncated_files)),
+        json_entry("files", Value::Array(files)),
     ]);
     JsonBody(value).into_response()
 }
@@ -11632,11 +16962,19 @@ pub(crate) async fn handle_get_sorafs_site_path(
 pub(crate) async fn handle_get_sorafs_cid_lookup(
     State(state): State<SharedAppState>,
     Path(cid): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let query = match SiteFileListReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let stored = match resolve_site_manifest_by_cid_unchecked(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
+    let (files, file_count, truncated_files) = bounded_file_listing_json(&stored, limit);
+    let returned_file_count = files.len();
 
     let value = json_object(vec![
         json_entry(
@@ -11658,7 +16996,14 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
                 .map(|_| Value::from("index.html"))
                 .unwrap_or(Value::Null),
         ),
-        json_entry("files", file_listing_json(&stored)),
+        json_entry("file_count", Value::from(file_count as u64)),
+        json_entry(
+            "returned_file_count",
+            Value::from(returned_file_count as u64),
+        ),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("truncated_files", Value::from(truncated_files)),
+        json_entry("files", Value::Array(files)),
         json_entry("moderation", cid_lookup_moderation_json(&state, &stored)),
     ]);
     JsonBody(value).into_response()
@@ -11731,10 +17076,110 @@ pub(crate) async fn handle_get_sorafs_cid_path(
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_denylist_catalog(
     State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
+    let query = match DenylistCatalogReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
     let Some(catalog) = &state.sorafs_gateway_denylist_catalog else {
         return StatusCode::NOT_FOUND.into_response();
     };
+
+    let opt_out_pack_count = catalog.opt_out_packs.len();
+    let opt_out_packs = catalog
+        .opt_out_packs
+        .iter()
+        .take(limit)
+        .cloned()
+        .map(Value::String)
+        .collect::<Vec<_>>();
+    let extra_pack_count = catalog.extra_packs.len();
+    let extra_packs = catalog
+        .extra_packs
+        .iter()
+        .take(limit)
+        .cloned()
+        .map(Value::String)
+        .collect::<Vec<_>>();
+    let pack_count = catalog.packs.len();
+    let packs = catalog
+        .packs
+        .iter()
+        .take(limit)
+        .map(|pack| {
+            json_object(vec![
+                json_entry("pack_id", Value::from(pack.pack_id.clone())),
+                json_entry(
+                    "version",
+                    pack.version
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry("default_enabled", Value::from(pack.default_enabled)),
+                json_entry("active", Value::from(pack.active)),
+                json_entry(
+                    "policy_tier",
+                    pack.policy_tier
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "manifest_cid",
+                    pack.manifest_cid
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "merkle_root",
+                    pack.merkle_root
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "issued_by_proposal_id",
+                    pack.issued_by_proposal_id
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "review_reference",
+                    pack.review_reference
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "jurisdiction",
+                    pack.jurisdiction
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "issued_at",
+                    pack.issued_at
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry(
+                    "expires_at",
+                    pack.expires_at
+                        .clone()
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry("entry_count", Value::from(pack.entry_count as u64)),
+            ])
+        })
+        .collect::<Vec<_>>();
 
     let value = json_object(vec![
         json_entry("version", Value::from(catalog.version as u64)),
@@ -11746,108 +17191,31 @@ pub(crate) async fn handle_get_sorafs_denylist_catalog(
                 .map(Value::String)
                 .unwrap_or(Value::Null),
         ),
+        json_entry("limit", Value::from(limit as u64)),
+        json_entry("opt_out_pack_count", Value::from(opt_out_pack_count as u64)),
         json_entry(
-            "opt_out_packs",
-            Value::Array(
-                catalog
-                    .opt_out_packs
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            ),
+            "returned_opt_out_pack_count",
+            Value::from(opt_out_packs.len() as u64),
         ),
         json_entry(
-            "extra_packs",
-            Value::Array(
-                catalog
-                    .extra_packs
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            ),
+            "truncated_opt_out_packs",
+            Value::from(opt_out_pack_count > limit),
+        ),
+        json_entry("opt_out_packs", Value::Array(opt_out_packs)),
+        json_entry("extra_pack_count", Value::from(extra_pack_count as u64)),
+        json_entry(
+            "returned_extra_pack_count",
+            Value::from(extra_packs.len() as u64),
         ),
         json_entry(
-            "packs",
-            Value::Array(
-                catalog
-                    .packs
-                    .iter()
-                    .map(|pack| {
-                        json_object(vec![
-                            json_entry("pack_id", Value::from(pack.pack_id.clone())),
-                            json_entry(
-                                "version",
-                                pack.version
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry("default_enabled", Value::from(pack.default_enabled)),
-                            json_entry("active", Value::from(pack.active)),
-                            json_entry(
-                                "policy_tier",
-                                pack.policy_tier
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "manifest_cid",
-                                pack.manifest_cid
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "merkle_root",
-                                pack.merkle_root
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "issued_by_proposal_id",
-                                pack.issued_by_proposal_id
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "review_reference",
-                                pack.review_reference
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "jurisdiction",
-                                pack.jurisdiction
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "issued_at",
-                                pack.issued_at
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry(
-                                "expires_at",
-                                pack.expires_at
-                                    .clone()
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                            ),
-                            json_entry("entry_count", Value::from(pack.entry_count as u64)),
-                        ])
-                    })
-                    .collect(),
-            ),
+            "truncated_extra_packs",
+            Value::from(extra_pack_count > limit),
         ),
+        json_entry("extra_packs", Value::Array(extra_packs)),
+        json_entry("pack_count", Value::from(pack_count as u64)),
+        json_entry("returned_pack_count", Value::from(packs.len() as u64)),
+        json_entry("truncated_packs", Value::from(pack_count > limit)),
+        json_entry("packs", Value::Array(packs)),
     ]);
 
     JsonBody(value).into_response()
@@ -14968,6 +20336,12 @@ pub(crate) async fn handle_post_sorafs_storage_por_sample(
             "requested sample count exceeds supported range",
         );
     }
+    if req.count > MAX_POR_SAMPLE_COUNT as u64 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("count must be at most {MAX_POR_SAMPLE_COUNT}"),
+        );
+    }
 
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
@@ -15086,18 +20460,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
         Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
     };
 
-    let manifest = match state
-        .sorafs_node
-        .manifest_metadata_by_digest(&manifest_digest)
-    {
-        Ok(manifest) => manifest,
-        Err(err) => return node_storage_error_response(err),
-    };
-
-    let manifest_digest = *manifest.manifest_digest();
-    let manifest_digest_hex = hex::encode(manifest_digest);
-    let manifest_root_cid_hex = hex::encode(manifest.manifest_cid());
-
     let request = ProofStreamRequestV1 {
         manifest_digest,
         provider_id,
@@ -15111,8 +20473,21 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
     };
 
     if let Err(err) = request.validate() {
-        return json_error(StatusCode::BAD_REQUEST, request_error_message(err));
+        let message = request_error_message(err);
+        return json_error(StatusCode::BAD_REQUEST, message.as_ref());
     }
+
+    let manifest = match state
+        .sorafs_node
+        .manifest_metadata_by_digest(&request.manifest_digest)
+    {
+        Ok(manifest) => manifest,
+        Err(err) => return node_storage_error_response(err),
+    };
+
+    let manifest_digest = *manifest.manifest_digest();
+    let manifest_digest_hex = hex::encode(manifest_digest);
+    let manifest_root_cid_hex = hex::encode(manifest.manifest_cid());
 
     if let Err(response) = enforce_chunker_support_gateway(
         &state,
@@ -15786,6 +21161,167 @@ mod app_api_tests {
     }
 
     #[test]
+    fn pin_manifest_readback_query_parses_limits() {
+        let query = PinManifestReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse pin manifest readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = PinManifestReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized pin manifest query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = PinManifestReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn governance_publish_readback_query_parses_limits_and_bounds_entries() {
+        let query = GovernancePublishReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse governance publish readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = GovernancePublishReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized governance publish readback query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = GovernancePublishReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+
+        let (entries, truncated) = limit_governance_readback_values(
+            vec![Value::from(1_u64), Value::from(2_u64), Value::from(3_u64)],
+            2,
+        );
+        assert_eq!(entries.len(), 2);
+        assert!(truncated);
+
+        let (entries, truncated) = limit_governance_readback_values(vec![Value::from(1_u64)], 2);
+        assert_eq!(entries.len(), 1);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn capacity_state_readback_query_parses_limits() {
+        let query = CapacityStateReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse capacity state readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = CapacityStateReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized capacity state readback query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = CapacityStateReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn provider_list_query_parses_limits() {
+        let query = ProviderListQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse provider list query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query =
+            ProviderListQuery::parse(Some("limit=9999")).expect("parse oversized provider query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err =
+            ProviderListQuery::parse(Some("limit=bad")).expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn storage_peers_readback_query_parses_limits() {
+        let query = StoragePeersReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse storage peer readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = StoragePeersReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized storage peer query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = StoragePeersReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn denylist_catalog_readback_query_parses_limits() {
+        let query = DenylistCatalogReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse denylist catalog readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = DenylistCatalogReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized denylist catalog query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = DenylistCatalogReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn storage_metadata_readback_query_parses_limits() {
+        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse storage metadata readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = StorageMetadataReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized storage metadata query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = StorageMetadataReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn site_file_list_readback_query_parses_limits() {
+        let query = SiteFileListReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse site file-list readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = SiteFileListReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized site file-list query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = SiteFileListReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn reputation_snapshot_readback_query_parses_limits() {
+        let query = ReputationSnapshotReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse reputation snapshot readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = ReputationSnapshotReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized reputation snapshot readback query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = ReputationSnapshotReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn por_ingestion_readback_query_parses_limits() {
+        let query = PorIngestionReadbackQuery::parse(Some("limit=2&ignored=true"))
+            .expect("parse PoR ingestion readback query");
+        assert_eq!(normalize_limit(query.limit), 2);
+
+        let query = PorIngestionReadbackQuery::parse(Some("limit=9999"))
+            .expect("parse oversized PoR ingestion readback query");
+        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+
+        let err = PorIngestionReadbackQuery::parse(Some("limit=bad"))
+            .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
     fn parse_range_header_parses_valid_range() {
         let range = parse_range_header("bytes=0-1023", 4096).expect("valid range");
         assert_eq!(range.start, 0);
@@ -15980,39 +21516,65 @@ fn snapshot_to_json(
     metering: &MeteringSnapshot,
     telemetry_preview: Option<Value>,
     fee_projection: Option<&FeeProjection>,
+    limit: usize,
 ) -> Result<Value, json::Error> {
     let declaration_count = snapshot.declarations.len();
     let ledger_count = snapshot.fee_ledger.len();
     let credit_count = snapshot.credit_ledger.len();
+    let dispute_count = snapshot.disputes.len();
+    let truncated_declarations = declaration_count > limit;
+    let truncated_fee_ledger = ledger_count > limit;
+    let truncated_credit_ledger = credit_count > limit;
+    let truncated_disputes = dispute_count > limit;
 
-    let mut declarations_json = Vec::with_capacity(declaration_count);
-    for declaration in snapshot.declarations {
+    let mut declarations_json = Vec::with_capacity(declaration_count.min(limit));
+    for declaration in snapshot.declarations.into_iter().take(limit) {
         declarations_json.push(declaration.into_json()?);
     }
 
-    let mut ledger_json = Vec::with_capacity(ledger_count);
-    for entry in snapshot.fee_ledger {
+    let mut ledger_json = Vec::with_capacity(ledger_count.min(limit));
+    for entry in snapshot.fee_ledger.into_iter().take(limit) {
         ledger_json.push(entry.into_json()?);
     }
 
-    let mut credit_json = Vec::with_capacity(credit_count);
-    for entry in snapshot.credit_ledger {
+    let mut credit_json = Vec::with_capacity(credit_count.min(limit));
+    for entry in snapshot.credit_ledger.into_iter().take(limit) {
         credit_json.push(entry.into_json()?);
     }
 
-    let mut disputes_json = Vec::with_capacity(snapshot.disputes.len());
-    for dispute in snapshot.disputes {
+    let mut disputes_json = Vec::with_capacity(dispute_count.min(limit));
+    for dispute in snapshot.disputes.into_iter().take(limit) {
         disputes_json.push(dispute.into_json()?);
     }
+    let returned_declaration_count = declarations_json.len();
+    let returned_ledger_count = ledger_json.len();
+    let returned_credit_ledger_count = credit_json.len();
+    let returned_dispute_count = disputes_json.len();
 
     Ok(json_object(vec![
         json_entry("declaration_count", declaration_count as u64),
+        json_entry(
+            "returned_declaration_count",
+            returned_declaration_count as u64,
+        ),
         json_entry("declarations", Value::Array(declarations_json)),
         json_entry("ledger_count", ledger_count as u64),
+        json_entry("returned_ledger_count", returned_ledger_count as u64),
         json_entry("fee_ledger", Value::Array(ledger_json)),
         json_entry("credit_ledger_count", credit_count as u64),
+        json_entry(
+            "returned_credit_ledger_count",
+            returned_credit_ledger_count as u64,
+        ),
         json_entry("credit_ledger", Value::Array(credit_json)),
+        json_entry("dispute_count", dispute_count as u64),
+        json_entry("returned_dispute_count", returned_dispute_count as u64),
         json_entry("disputes", Value::Array(disputes_json)),
+        json_entry("limit", limit as u64),
+        json_entry("truncated_declarations", truncated_declarations),
+        json_entry("truncated_fee_ledger", truncated_fee_ledger),
+        json_entry("truncated_credit_ledger", truncated_credit_ledger),
+        json_entry("truncated_disputes", truncated_disputes),
         json_entry(
             "local_usage",
             local_usage_to_json(local_usage, metering, telemetry_preview, fee_projection)?,
@@ -16389,10 +21951,55 @@ fn parse_manifest_digest_hex(hex_str: &str) -> ApiResult<[u8; 32]> {
     }
 }
 
+fn storage_stored_file_dto(file: &StoredFileRecord) -> StorageStoredFileDto {
+    StorageStoredFileDto {
+        path: file.path.clone(),
+        offset: file.offset,
+        size: file.size,
+        first_chunk: file.first_chunk as u64,
+        chunk_count: file.chunk_count as u64,
+    }
+}
+
+fn chunk_fetch_spec_json(spec: &ChunkFetchSpec) -> Value {
+    let mut obj = Map::new();
+    obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
+    obj.insert("offset".into(), Value::from(spec.offset));
+    obj.insert("length".into(), Value::from(spec.length as u64));
+    obj.insert(
+        "digest_blake3".into(),
+        Value::from(hex::encode(spec.digest)),
+    );
+    if let Some(hint) = &spec.taikai_segment_hint {
+        let mut hint_obj = Map::new();
+        hint_obj.insert("event".into(), Value::from(hint.event.clone()));
+        hint_obj.insert("stream".into(), Value::from(hint.stream.clone()));
+        hint_obj.insert("rendition".into(), Value::from(hint.rendition.clone()));
+        hint_obj.insert("sequence".into(), Value::from(hint.sequence));
+        if let Some(len) = hint.payload_len {
+            hint_obj.insert("payload_len".into(), Value::from(len));
+        }
+        if let Some(digest) = hint.payload_digest {
+            hint_obj.insert(
+                "payload_blake3_hex".into(),
+                Value::from(hex::encode(digest)),
+            );
+        }
+        obj.insert("taikai_segment_hint".into(), Value::Object(hint_obj));
+    }
+    Value::Object(obj)
+}
+
 fn normalize_limit(limit: Option<u32>) -> usize {
     let requested = limit.unwrap_or(DEFAULT_LIST_LIMIT as u32);
     let clamped = requested.clamp(1, MAX_LIST_LIMIT as u32);
     clamped as usize
+}
+
+fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (Vec<Value>, bool) {
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+    (entries, truncated)
 }
 
 fn normalize_offset(offset: Option<u32>, total: usize) -> usize {
@@ -16572,20 +22179,29 @@ fn parse_tier(label: Option<&str>) -> Result<Option<ProofStreamTier>, String> {
     })
 }
 
-fn request_error_message(error: ProofStreamRequestError) -> &'static str {
+fn request_error_message(error: ProofStreamRequestError) -> Cow<'static, str> {
     match error {
-        ProofStreamRequestError::InvalidManifestDigest => "manifest_digest_hex must be non-zero",
-        ProofStreamRequestError::InvalidProviderId => "provider_id_hex must be non-zero",
-        ProofStreamRequestError::InvalidNonce => "nonce must be non-zero",
+        ProofStreamRequestError::InvalidManifestDigest => {
+            Cow::Borrowed("manifest_digest_hex must be non-zero")
+        }
+        ProofStreamRequestError::InvalidProviderId => {
+            Cow::Borrowed("provider_id_hex must be non-zero")
+        }
+        ProofStreamRequestError::InvalidNonce => Cow::Borrowed("nonce must be non-zero"),
         ProofStreamRequestError::MissingSampleCount => {
-            "sample_count is required for PoR/PDP proof kinds"
+            Cow::Borrowed("sample_count is required for PoR/PDP proof kinds")
         }
         ProofStreamRequestError::MissingDeadlineMs => {
-            "deadline_ms is required when requesting PoTR proofs"
+            Cow::Borrowed("deadline_ms is required when requesting PoTR proofs")
         }
-        ProofStreamRequestError::ZeroSampleCount => "sample_count must be greater than zero",
+        ProofStreamRequestError::ZeroSampleCount => {
+            Cow::Borrowed("sample_count must be greater than zero")
+        }
+        ProofStreamRequestError::SampleCountTooLarge => Cow::Owned(format!(
+            "sample_count must be at most {MAX_PROOF_STREAM_SAMPLE_COUNT}"
+        )),
         ProofStreamRequestError::ZeroDeadlineMs => {
-            "deadline_ms must be greater than zero milliseconds"
+            Cow::Borrowed("deadline_ms must be greater than zero milliseconds")
         }
     }
 }
@@ -17408,7 +23024,7 @@ mod advert_tests {
             Arc,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use axum::{
@@ -17429,7 +23045,9 @@ mod advert_tests {
         smartcontracts::Execute,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature as IrohaSignature};
+    use iroha_crypto::{
+        Algorithm, Hash, KeyPair, PublicKey, Signature as IrohaSignature, SignatureOf,
+    };
     use iroha_data_model::{
         Encode, Registrable,
         account::{Account, AccountId},
@@ -17445,6 +23063,13 @@ mod advert_tests {
         },
         sorafs::{
             capacity::{CapacityDeclarationRecord, ProviderId},
+            moderation::{
+                ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
+                AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
+                MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
+                ModerationReproBodyV1, ModerationReproManifestV1, ModerationReproSignatureV1,
+                ModerationSeedMaterialV1, ModerationThresholdsV1,
+            },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
                 PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
@@ -17454,6 +23079,7 @@ mod advert_tests {
     };
     use iroha_primitives::json::Json;
     use norito::to_bytes;
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
     use sorafs_manifest::{
         AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier,
         BYTES_PER_GIB as ORDERBOOK_BYTES_PER_GIB, ByteRangeV1, CapabilityTlv, CapabilityType,
@@ -17470,6 +23096,9 @@ mod advert_tests {
         SoraFsAppealFinanceWeeklyRollupV1, StakePointer, build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_proposal_digest,
+        pin_registry::{
+            AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
+        },
         por::{
             AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
             POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
@@ -17480,7 +23109,7 @@ mod advert_tests {
     };
     use sorafs_node::config::StorageConfig;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashSet},
         sync::{LazyLock, Mutex, MutexGuard},
     };
     use tempfile::{NamedTempFile, TempDir};
@@ -17491,11 +23120,115 @@ mod advert_tests {
         build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
         sorafs::{
             StreamTokenIssuer,
-            registry::{RegistryCreditLedgerEntry, RegistryDeclaration, RegistryFeeLedgerEntry},
+            registry::{
+                RegistryCreditLedgerEntry, RegistryDeclaration, RegistryDispute,
+                RegistryFeeLedgerEntry,
+            },
         },
         tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_app_headers},
         utils::extractors::JsonOnly,
     };
+
+    struct FixedProofTokenRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedProofTokenRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedProofTokenRng {}
+
+    fn valid_transparency_proof_token_verify_request(
+        rng_byte: u8,
+    ) -> TransparencyProofTokenVerifyRequestDto {
+        let signing = SigningKey::from_bytes(&[0x47; 32]);
+        let verifying = signing.verifying_key();
+        let digest_key = ProofTokenDigestKey::new([0x22; 32]);
+        let evidence_digest = [0x44; 32];
+        let entries = ["denylist/global"];
+        let issued_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut rng = FixedProofTokenRng { byte: rng_byte };
+        let token = ProofToken::mint(
+            &mut rng,
+            &digest_key,
+            &signing,
+            &iroha_crypto::sorafs::proof_token::ProofTokenParams {
+                moderation: ProofTokenModerationAction::Block,
+                entry_ids: &entries,
+                evidence_digest: &evidence_digest,
+                issued_at,
+                expires_at: None,
+            },
+        )
+        .expect("mint proof token");
+        TransparencyProofTokenVerifyRequestDto {
+            token_b64: token.encode_base64(),
+            verifying_key_hex: hex::encode(verifying.to_bytes()),
+            evidence_digest_hex: Some(hex::encode(evidence_digest)),
+            digest_key_hex: Some(hex::encode([0x22; 32])),
+            now_unix: Some(1_700_000_120),
+        }
+    }
+
+    fn transparency_proof_token_issuance_request(
+        rng_byte: u8,
+    ) -> TransparencyProofTokenIssuanceRequestDto {
+        let signing = SigningKey::from_bytes(&[0x47; 32]);
+        let verifying = signing.verifying_key();
+        let digest_key = ProofTokenDigestKey::new([0x22; 32]);
+        let evidence_digest = [0x44; 32];
+        let entries = ["denylist/global", "case/42"];
+        let issued_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires_at = issued_at + Duration::from_secs(900);
+        let mut rng = FixedProofTokenRng { byte: rng_byte };
+        let token = ProofToken::mint(
+            &mut rng,
+            &digest_key,
+            &signing,
+            &iroha_crypto::sorafs::proof_token::ProofTokenParams {
+                moderation: ProofTokenModerationAction::RateLimit,
+                entry_ids: &entries,
+                evidence_digest: &evidence_digest,
+                issued_at,
+                expires_at: Some(expires_at),
+            },
+        )
+        .expect("mint proof token issuance token");
+        TransparencyProofTokenIssuanceRequestDto {
+            token_b64: token.encode_base64(),
+            signer_key_hex: hex::encode(verifying.to_bytes()),
+            evidence_digest_hex: Some(hex::encode(evidence_digest)),
+            policy_digest_hex: Some(hex::encode([0x55; 32])),
+            metadata: Some(vec![
+                TransparencyLedgerMetadataDto {
+                    key: "feed".to_string(),
+                    value: "torii".to_string(),
+                },
+                TransparencyLedgerMetadataDto {
+                    key: "source".to_string(),
+                    value: "unit-test".to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn proof_token_issuance_body(request: TransparencyProofTokenIssuanceRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(&request).expect("encode proof-token issuance request"))
+    }
 
     #[tokio::test]
     async fn sorafs_storage_peer_discovery_returns_configured_publish_urls() {
@@ -17507,10 +23240,13 @@ mod advert_tests {
             pin_torii_urls: vec![
                 "https://taira-validator-1.sora.org".to_string(),
                 "https://taira-validator-2.sora.org".to_string(),
+                "https://taira-validator-3.sora.org".to_string(),
             ],
         };
 
-        let response = handle_get_sorafs_storage_peers(State(state)).await;
+        let response =
+            handle_get_sorafs_storage_peers(State(state.clone()), axum::extract::RawQuery(None))
+                .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -17524,11 +23260,35 @@ mod advert_tests {
             .get("pin_torii_urls")
             .and_then(Value::as_array)
             .expect("pin URL array");
-        assert_eq!(urls.len(), 2);
+        assert_eq!(urls.len(), 3);
         assert_eq!(
             urls.first().and_then(Value::as_str),
             Some("https://taira-validator-1.sora.org")
         );
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(3));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(50));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
+
+        let response = handle_get_sorafs_storage_peers(
+            State(state),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read capped peer discovery response");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode capped JSON");
+        let urls = value
+            .get("pin_torii_urls")
+            .and_then(Value::as_array)
+            .expect("capped pin URL array");
+        assert_eq!(urls.len(), 1);
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(3));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
     }
 
     fn sorafs_app_state_with_governance_mirror() -> (SharedAppState, TempDir, String, String) {
@@ -17624,6 +23384,8 @@ mod advert_tests {
         let reputation_digest_hex = "bb".repeat(32);
         let rollup_digest_hex = "cc".repeat(32);
         let report_digest_hex = "dd".repeat(32);
+        let receipt_digest_hex = "ee".repeat(32);
+        let proof_token_digest_hex = "ff".repeat(32);
         let mut repair_labels = Map::new();
         repair_labels.insert("ticket_id".into(), Value::from("REP-123"));
         repair_labels.insert("status".into(), Value::from("queued"));
@@ -17743,11 +23505,117 @@ mod advert_tests {
         rollup_entry.insert("published_at_unix".into(), Value::from(1_800_000_303_u64));
         rollup_entry.insert("labels".into(), Value::Object(rollup_labels));
 
+        let mut receipt_labels = Map::new();
+        receipt_labels.insert("case_id".into(), Value::from("case-appeal-dashboard"));
+        receipt_labels.insert("round_id".into(), Value::from("round-1"));
+        receipt_labels.insert("receipt_id_hex".into(), Value::from("52".repeat(16)));
+        receipt_labels.insert(
+            "generated_at_unix_ms".into(),
+            Value::from(1_800_000_110_000_u64),
+        );
+        receipt_labels.insert(
+            "appeal_finance_config_version".into(),
+            Value::from("baseline-v1"),
+        );
+        receipt_labels.insert("outcome".into(), Value::from("frivolous"));
+        receipt_labels.insert("escrow_id_hex".into(), Value::from("11".repeat(32)));
+        receipt_labels.insert("submitted_step".into(), Value::from("drawdown_non_refund"));
+        receipt_labels.insert("required_authority".into(), Value::from("provider@sora"));
+        receipt_labels.insert("tx_hash_hex".into(), Value::from("22".repeat(32)));
+        receipt_labels.insert(
+            "reconciliation_digest_hex".into(),
+            Value::from("33".repeat(32)),
+        );
+        receipt_labels.insert(
+            "reconciliation_status".into(),
+            Value::from("pending_client_submission"),
+        );
+        receipt_labels.insert("observed_lifecycle_status".into(), Value::from("locked"));
+        receipt_labels.insert("amount_xor".into(), Value::from("420"));
+        receipt_labels.insert("deposit_xor".into(), Value::from("420"));
+        receipt_labels.insert("refund_xor".into(), Value::from("0"));
+        receipt_labels.insert("treasury_xor".into(), Value::from("210"));
+        receipt_labels.insert("held_xor".into(), Value::from("210"));
+        receipt_labels.insert("panel_size".into(), Value::from(7_u64));
+        receipt_labels.insert("configured_signer_count".into(), Value::from(1_u64));
+        let mut receipt_entry = Map::new();
+        receipt_entry.insert("position".into(), Value::from(4_u64));
+        receipt_entry.insert(
+            "payload_kind".into(),
+            Value::from(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND),
+        );
+        receipt_entry.insert(
+            "encoded_path".into(),
+            Value::from("appeals/finance/settlement-receipts/case-appeal-dashboard/receipt.to"),
+        );
+        receipt_entry.insert(
+            "json_path".into(),
+            Value::from("appeals/finance/settlement-receipts/case-appeal-dashboard/receipt.json"),
+        );
+        receipt_entry.insert(
+            "encoded_blake3".into(),
+            Value::from(receipt_digest_hex.clone()),
+        );
+        receipt_entry.insert("encoded_len".into(), Value::from(448_u64));
+        receipt_entry.insert("published_at_unix".into(), Value::from(1_800_000_304_u64));
+        receipt_entry.insert("labels".into(), Value::Object(receipt_labels));
+
+        let proof_token_id_hex = "61".repeat(16);
+        let proof_token_signer_key_hex = "62".repeat(32);
+        let mut proof_token_labels = Map::new();
+        proof_token_labels.insert(
+            "token_id_hex".into(),
+            Value::from(proof_token_id_hex.clone()),
+        );
+        proof_token_labels.insert("issued_at_unix".into(), Value::from(1_800_000_305_u64));
+        proof_token_labels.insert("expires_at_unix".into(), Value::from(1_800_086_705_u64));
+        proof_token_labels.insert("moderation_action_code".into(), Value::from(2_u64));
+        proof_token_labels.insert(
+            "signer_key_hex".into(),
+            Value::from(proof_token_signer_key_hex),
+        );
+        proof_token_labels.insert("token_blake3_hex".into(), Value::from("63".repeat(32)));
+        proof_token_labels.insert("blinded_digest_hex".into(), Value::from("64".repeat(32)));
+        proof_token_labels.insert("entry_count".into(), Value::from(2_u64));
+        proof_token_labels.insert("first_entry_id".into(), Value::from("denylist/global"));
+        proof_token_labels.insert("evidence_digest_hex".into(), Value::from("65".repeat(32)));
+        proof_token_labels.insert("policy_digest_hex".into(), Value::from("66".repeat(32)));
+        let mut proof_token_entry = Map::new();
+        proof_token_entry.insert("position".into(), Value::from(5_u64));
+        proof_token_entry.insert(
+            "payload_kind".into(),
+            Value::from(PROOF_TOKEN_ISSUANCE_KIND),
+        );
+        proof_token_entry.insert(
+            "encoded_path".into(),
+            Value::from(format!(
+                "transparency/proof-tokens/{proof_token_id_hex}/issuance.to"
+            )),
+        );
+        proof_token_entry.insert(
+            "json_path".into(),
+            Value::from(format!(
+                "transparency/proof-tokens/{proof_token_id_hex}/issuance.json"
+            )),
+        );
+        proof_token_entry.insert(
+            "encoded_blake3".into(),
+            Value::from(proof_token_digest_hex.clone()),
+        );
+        proof_token_entry.insert("encoded_len".into(), Value::from(512_u64));
+        proof_token_entry.insert("published_at_unix".into(), Value::from(1_800_000_305_u64));
+        proof_token_entry.insert("labels".into(), Value::Object(proof_token_labels));
+
         let mut payload_kind_counts = Map::new();
         payload_kind_counts.insert("repair_audit".into(), Value::from(1_u64));
         payload_kind_counts.insert("reputation_snapshot".into(), Value::from(1_u64));
         payload_kind_counts.insert(APPEAL_FINANCE_REPORT_KIND.into(), Value::from(1_u64));
         payload_kind_counts.insert(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(), Value::from(1_u64));
+        payload_kind_counts.insert(
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND.into(),
+            Value::from(1_u64),
+        );
+        payload_kind_counts.insert(PROOF_TOKEN_ISSUANCE_KIND.into(), Value::from(1_u64));
         let mut by_encoded_blake3 = Map::new();
         by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
         by_encoded_blake3.insert(
@@ -17756,6 +23624,11 @@ mod advert_tests {
         );
         by_encoded_blake3.insert(report_digest_hex, Value::Array(vec![Value::from(2_u64)]));
         by_encoded_blake3.insert(rollup_digest_hex, Value::Array(vec![Value::from(3_u64)]));
+        by_encoded_blake3.insert(receipt_digest_hex, Value::Array(vec![Value::from(4_u64)]));
+        by_encoded_blake3.insert(
+            proof_token_digest_hex,
+            Value::Array(vec![Value::from(5_u64)]),
+        );
         let mut by_payload_kind = Map::new();
         by_payload_kind.insert(
             "repair_audit".into(),
@@ -17773,6 +23646,14 @@ mod advert_tests {
             APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(),
             Value::Array(vec![Value::from(3_u64)]),
         );
+        by_payload_kind.insert(
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND.into(),
+            Value::Array(vec![Value::from(4_u64)]),
+        );
+        by_payload_kind.insert(
+            PROOF_TOKEN_ISSUANCE_KIND.into(),
+            Value::Array(vec![Value::from(5_u64)]),
+        );
 
         let mut index = Map::new();
         index.insert(
@@ -17785,7 +23666,7 @@ mod advert_tests {
             Value::from(governance_dir.display().to_string()),
         );
         index.insert("generated_at".into(), Value::from(1_800_000_400_u64));
-        index.insert("entry_count".into(), Value::from(4_u64));
+        index.insert("entry_count".into(), Value::from(6_u64));
         index.insert(
             "payload_kind_counts".into(),
             Value::Object(payload_kind_counts),
@@ -17799,6 +23680,8 @@ mod advert_tests {
                 Value::Object(reputation_entry),
                 Value::Object(report_entry),
                 Value::Object(rollup_entry),
+                Value::Object(receipt_entry),
+                Value::Object(proof_token_entry),
             ]),
         );
         fs::write(
@@ -17816,6 +23699,184 @@ mod advert_tests {
             .expect("unique app state")
             .sorafs_node = sorafs_node::NodeHandle::new(cfg);
         (app, temp_dir, digest_hex)
+    }
+
+    fn transparency_publication_fixture() -> ModerationLedgerCyclePublicationV1 {
+        use iroha_data_model::sorafs::transparency::{
+            MODERATION_LEDGER_ENTRY_VERSION_V1, ModerationLedgerEntryKindV1,
+            ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
+        };
+
+        let cycle_id = [0xAC; 16];
+        let entries = vec![
+            ModerationLedgerEntryV1 {
+                version: MODERATION_LEDGER_ENTRY_VERSION_V1,
+                cycle_id,
+                entry_id: [0x31; 16],
+                sequence: 0,
+                occurred_at_unix: 1_800_000_010,
+                kind: ModerationLedgerEntryKindV1::GarEnforcementReceipt,
+                subject: "gar:receipt:31".to_string(),
+                subject_digest: [0xA1; 32],
+                payload_digest: [0xB1; 32],
+                summary_digest: [0xC1; 32],
+                policy_digest: Some([0xD1; 32]),
+                evidence_uris: vec!["sora://transparency/31".to_string()],
+                metadata: vec![ModerationLedgerMetadataV1 {
+                    key: "action".to_string(),
+                    value: "deny".to_string(),
+                }],
+            },
+            ModerationLedgerEntryV1 {
+                version: MODERATION_LEDGER_ENTRY_VERSION_V1,
+                cycle_id,
+                entry_id: [0x32; 16],
+                sequence: 1,
+                occurred_at_unix: 1_800_000_020,
+                kind: ModerationLedgerEntryKindV1::AppealOutcome,
+                subject: "appeal:case:32".to_string(),
+                subject_digest: [0xA2; 32],
+                payload_digest: [0xB2; 32],
+                summary_digest: [0xC2; 32],
+                policy_digest: None,
+                evidence_uris: vec!["sora://transparency/32".to_string()],
+                metadata: vec![ModerationLedgerMetadataV1 {
+                    key: "outcome".to_string(),
+                    value: "uphold".to_string(),
+                }],
+            },
+        ];
+        ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id,
+            1_800_000_000,
+            1_800_000_060,
+            1_800_000_070,
+            None,
+            &entries,
+        )
+        .expect("transparency publication fixture")
+    }
+
+    fn sorafs_app_state_with_transparency_publication()
+    -> (SharedAppState, TempDir, String, String, String) {
+        let mut app = mk_app_state_for_tests();
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+
+        let publication = transparency_publication_fixture();
+        let encoded = norito::to_bytes(&publication).expect("encode transparency publication");
+        let digest_hex = hex::encode(blake3_hash(&encoded).as_bytes());
+        let cycle_id_hex = hex::encode(publication.block.cycle_id);
+        let entry_id_hex = hex::encode(publication.proofs[0].entry.entry_id);
+        let block_hash_hex =
+            hex::encode(publication.block.block_hash().expect("block hash fixture"));
+        let publication_hash_hex = hex::encode(
+            publication
+                .publication_hash()
+                .expect("publication hash fixture"),
+        );
+
+        let relative_encoded = format!("transparency/ledger/{cycle_id_hex}/{digest_hex}.to");
+        let relative_json = format!("transparency/ledger/{cycle_id_hex}/{digest_hex}.json");
+        let encoded_path = governance_dir.join(&relative_encoded);
+        fs::create_dir_all(encoded_path.parent().expect("encoded parent"))
+            .expect("create transparency dir");
+        fs::write(&encoded_path, &encoded).expect("write transparency publication");
+        fs::write(
+            governance_dir.join(&relative_json),
+            br#"{"schema":"sorafs.transparency.test_sidecar.v1"}"#,
+        )
+        .expect("write transparency sidecar");
+
+        let mut labels = Map::new();
+        labels.insert("cycle_id_hex".into(), Value::from(cycle_id_hex.clone()));
+        labels.insert(
+            "cycle_start_unix".into(),
+            Value::from(publication.block.cycle_start_unix),
+        );
+        labels.insert(
+            "cycle_end_unix".into(),
+            Value::from(publication.block.cycle_end_unix),
+        );
+        labels.insert(
+            "generated_at_unix".into(),
+            Value::from(publication.block.generated_at_unix),
+        );
+        labels.insert(
+            "entry_count".into(),
+            Value::from(u64::from(publication.block.entry_count)),
+        );
+        labels.insert(
+            "entry_root_hex".into(),
+            Value::from(hex::encode(publication.block.entry_root)),
+        );
+        labels.insert("block_hash_hex".into(), Value::from(block_hash_hex));
+        labels.insert(
+            "publication_hash_hex".into(),
+            Value::from(publication_hash_hex),
+        );
+
+        let mut entry = Map::new();
+        entry.insert("position".into(), Value::from(0_u64));
+        entry.insert(
+            "payload_kind".into(),
+            Value::from(TRANSPARENCY_LEDGER_PUBLICATION_KIND),
+        );
+        entry.insert("encoded_path".into(), Value::from(relative_encoded));
+        entry.insert("json_path".into(), Value::from(relative_json));
+        entry.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
+        entry.insert("encoded_len".into(), Value::from(encoded.len() as u64));
+        entry.insert("published_at_unix".into(), Value::from(1_800_000_080_u64));
+        entry.insert("labels".into(), Value::Object(labels));
+
+        let mut payload_kind_counts = Map::new();
+        payload_kind_counts.insert(
+            TRANSPARENCY_LEDGER_PUBLICATION_KIND.into(),
+            Value::from(1_u64),
+        );
+        let mut by_encoded_blake3 = Map::new();
+        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
+        let mut by_payload_kind = Map::new();
+        by_payload_kind.insert(
+            TRANSPARENCY_LEDGER_PUBLICATION_KIND.into(),
+            Value::Array(vec![Value::from(0_u64)]),
+        );
+
+        let mut index = Map::new();
+        index.insert(
+            "schema".into(),
+            Value::from("sorafs.governance_dag.local_publish_index.v1"),
+        );
+        index.insert("source".into(), Value::from("filesystem"));
+        index.insert(
+            "root".into(),
+            Value::from(governance_dir.display().to_string()),
+        );
+        index.insert("generated_at".into(), Value::from(1_800_000_090_u64));
+        index.insert("entry_count".into(), Value::from(1_u64));
+        index.insert(
+            "payload_kind_counts".into(),
+            Value::Object(payload_kind_counts),
+        );
+        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
+        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
+        index.insert("entries".into(), Value::Array(vec![Value::Object(entry)]));
+        fs::write(
+            governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE),
+            norito::json::to_vec(&Value::Object(index)).expect("encode publish index"),
+        )
+        .expect("write publish index");
+
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_node = sorafs_node::NodeHandle::new(cfg);
+        (app, temp_dir, cycle_id_hex, entry_id_hex, digest_hex)
     }
 
     fn sorafs_app_state_with_governance_car_queue() -> (SharedAppState, TempDir, String, String) {
@@ -18242,9 +24303,12 @@ mod advert_tests {
     async fn governance_dag_publish_index_and_lookups_read_local_index() {
         let (app, _temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
 
-        let response =
-            handle_get_sorafs_governance_dag_publish_index(State(app.clone()), HeaderMap::new())
-                .await;
+        let response = handle_get_sorafs_governance_dag_publish_index(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let index_etag = response.headers().get(ETAG).cloned().expect("index etag");
         assert_eq!(
@@ -18262,7 +24326,28 @@ mod advert_tests {
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.governance_dag.publish_index.v1")
         );
-        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(4));
+        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(6));
+        assert_eq!(
+            value.get("indexed_entry_count").and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(
+            value.get("returned_entry_count").and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_entries").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("index")
+                .and_then(|index| index.get("entries"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(6)
+        );
         assert_eq!(
             value
                 .get("payload_kind_counts")
@@ -18272,10 +24357,51 @@ mod advert_tests {
             Some(1)
         );
 
+        let response = handle_get_sorafs_governance_dag_publish_index(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let capped_etag = response.headers().get(ETAG).cloned().expect("capped etag");
+        assert_ne!(index_etag, capped_etag);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect capped publish index body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode capped publish index");
+        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(6));
+        assert_eq!(
+            value.get("indexed_entry_count").and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(
+            value.get("returned_entry_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_entries").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("index")
+                .and_then(|index| index.get("entries"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, index_etag.clone());
-        let response =
-            handle_get_sorafs_governance_dag_publish_index(State(app.clone()), headers).await;
+        let response = handle_get_sorafs_governance_dag_publish_index(
+            State(app.clone()),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&index_etag));
 
@@ -18283,6 +24409,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path(format!("hex:{digest_hex}")),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -18309,6 +24436,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("repair_audit".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -18332,11 +24460,931 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn transparency_proof_token_verify_accepts_signature_and_digest() {
+        let signing = SigningKey::from_bytes(&[0x47; 32]);
+        let verifying = signing.verifying_key();
+        let digest_key = ProofTokenDigestKey::new([0x22; 32]);
+        let evidence_digest = [0x44; 32];
+        let entries = ["denylist/global"];
+        let issued_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires_at = issued_at + Duration::from_secs(600);
+        let mut rng = FixedProofTokenRng { byte: 0xA7 };
+        let token = ProofToken::mint(
+            &mut rng,
+            &digest_key,
+            &signing,
+            &iroha_crypto::sorafs::proof_token::ProofTokenParams {
+                moderation: ProofTokenModerationAction::Block,
+                entry_ids: &entries,
+                evidence_digest: &evidence_digest,
+                issued_at,
+                expires_at: Some(expires_at),
+            },
+        )
+        .expect("mint proof token");
+        let request = TransparencyProofTokenVerifyRequestDto {
+            token_b64: token.encode_base64(),
+            verifying_key_hex: hex::encode(verifying.to_bytes()),
+            evidence_digest_hex: Some(hex::encode(evidence_digest)),
+            digest_key_hex: Some(hex::encode([0x22; 32])),
+            now_unix: Some(1_700_000_120),
+        };
+
+        let app = mk_app_state_for_tests();
+        let response = handle_post_sorafs_transparency_token_verify(
+            State(app),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect proof-token verification body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode proof-token verification body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.proof_token_verification.v1")
+        );
+        assert_eq!(value.get("valid").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("signature_valid").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("digest_checked").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("digest_valid").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("entry_ids")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(Value::as_str),
+            Some("denylist/global")
+        );
+        assert_eq!(
+            value.get("moderation_action").and_then(Value::as_str),
+            Some("block")
+        );
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_verify_reports_invalid_inputs() {
+        let signing = SigningKey::from_bytes(&[0x47; 32]);
+        let wrong_signing = SigningKey::from_bytes(&[0x48; 32]);
+        let digest_key = ProofTokenDigestKey::new([0x22; 32]);
+        let evidence_digest = [0x44; 32];
+        let entries = ["denylist/global"];
+        let issued_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut rng = FixedProofTokenRng { byte: 0xA8 };
+        let token = ProofToken::mint(
+            &mut rng,
+            &digest_key,
+            &signing,
+            &iroha_crypto::sorafs::proof_token::ProofTokenParams {
+                moderation: ProofTokenModerationAction::Quarantine,
+                entry_ids: &entries,
+                evidence_digest: &evidence_digest,
+                issued_at,
+                expires_at: None,
+            },
+        )
+        .expect("mint proof token");
+        let request = TransparencyProofTokenVerifyRequestDto {
+            token_b64: token.encode_base64(),
+            verifying_key_hex: hex::encode(wrong_signing.verifying_key().to_bytes()),
+            evidence_digest_hex: Some(hex::encode([0x45; 32])),
+            digest_key_hex: Some(hex::encode([0x22; 32])),
+            now_unix: Some(1_700_000_120),
+        };
+
+        let app = mk_app_state_for_tests();
+        let response = handle_post_sorafs_transparency_token_verify(
+            State(app.clone()),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect invalid proof-token verification body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode invalid proof-token body");
+        assert_eq!(value.get("valid").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            value.get("signature_valid").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("digest_valid").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let request = TransparencyProofTokenVerifyRequestDto {
+            token_b64: token.encode_base64(),
+            verifying_key_hex: hex::encode(signing.verifying_key().to_bytes()),
+            evidence_digest_hex: None,
+            digest_key_hex: Some(hex::encode([0x22; 32])),
+            now_unix: Some(1_700_000_120),
+        };
+        let response = handle_post_sorafs_transparency_token_verify(
+            State(app),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.proof_rate_limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
+            state.proof_limits.retry_after = Duration::from_secs(7);
+        }
+
+        let first = handle_post_sorafs_transparency_token_verify(
+            State(app.clone()),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(valid_transparency_proof_token_verify_request(0xA9)),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = handle_post_sorafs_transparency_token_verify(
+            State(app),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(valid_transparency_proof_token_verify_request(0xAA)),
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            second
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|h| h.to_str().ok()),
+            Some("7")
+        );
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_verify_honors_api_token_enforcement() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            let mut tokens = HashSet::new();
+            tokens.insert("secret".to_string());
+            state.api_tokens_set = Arc::new(tokens);
+        }
+
+        let denied = handle_post_sorafs_transparency_token_verify(
+            State(app.clone()),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(valid_transparency_proof_token_verify_request(0xAB)),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("secret"));
+        let allowed = handle_post_sorafs_transparency_token_verify(
+            State(app),
+            headers,
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(valid_transparency_proof_token_verify_request(0xAC)),
+        )
+        .await;
+        assert_eq!(allowed.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_issuance_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let body = proof_token_issuance_body(transparency_proof_token_issuance_request(0xAD));
+
+        let response = handle_post_sorafs_transparency_token_issuance(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(TRANSPARENCY_PROOF_TOKEN_ISSUANCES_ROUTE),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let request = transparency_proof_token_issuance_request(0xAE);
+        let signer_key_hex = request.signer_key_hex.clone();
+
+        let response = post_transparency_proof_token_issuance(
+            app.clone(),
+            &auth.provider,
+            proof_token_issuance_body(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect proof-token issuance ingest body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode proof-token issuance ingest body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.proof_token_issuance.ingest.v1")
+        );
+        assert_eq!(
+            value.get("publication_status").and_then(Value::as_str),
+            Some("published_to_local_governance_dag")
+        );
+        assert_eq!(
+            value.get("signer_key_hex").and_then(Value::as_str),
+            Some(signer_key_hex.as_str())
+        );
+        assert_eq!(value.get("entry_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value
+                .get("metadata")
+                .and_then(Value::as_object)
+                .and_then(|metadata| metadata.get("feed"))
+                .and_then(Value::as_str),
+            Some("torii")
+        );
+
+        let response = handle_get_sorafs_transparency_token_issuances(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect proof-token issuance readback body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode proof-token issuance readback");
+        assert_eq!(
+            value.get("published_token_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("distinct_signer_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("labels"))
+                .and_then(Value::as_object)
+                .and_then(|labels| labels.get("signer_key_hex"))
+                .and_then(Value::as_str),
+            Some(signer_key_hex.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_issuance_endpoint_rejects_bad_signer() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let mut request = transparency_proof_token_issuance_request(0xAF);
+        let wrong_signing = SigningKey::from_bytes(&[0x48; 32]);
+        request.signer_key_hex = hex::encode(wrong_signing.verifying_key().to_bytes());
+
+        let response = post_transparency_proof_token_issuance(
+            app,
+            &auth.provider,
+            proof_token_issuance_body(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn transparency_cycle_api_reads_and_verifies_local_publication() {
+        let (app, _temp_dir, cycle_id_hex, entry_id_hex, digest_hex) =
+            sorafs_app_state_with_transparency_publication();
+
+        let response = handle_get_sorafs_transparency_cycles(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response.headers().get(ETAG).cloned().expect("cycles etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect transparency cycles body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode cycles body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.cycles.v1")
+        );
+        assert_eq!(
+            value.get("published_cycle_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("returned_cycle_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(50));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            value
+                .get("cycles")
+                .and_then(Value::as_array)
+                .and_then(|cycles| cycles.first())
+                .and_then(|cycle| cycle.get("cycle_id_hex"))
+                .and_then(Value::as_str),
+            Some(cycle_id_hex.as_str())
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag.clone());
+        let response = handle_get_sorafs_transparency_cycles(
+            State(app.clone()),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&etag));
+
+        let response = handle_get_sorafs_transparency_cycle(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(format!("hex:{cycle_id_hex}")),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect transparency cycle body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode cycle body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.cycle_publication.v1")
+        );
+        assert_eq!(
+            value.get("cycle_id_hex").and_then(Value::as_str),
+            Some(cycle_id_hex.as_str())
+        );
+        assert_eq!(
+            value.get("encoded_blake3").and_then(Value::as_str),
+            Some(digest_hex.as_str())
+        );
+        assert_eq!(
+            value
+                .get("verification")
+                .and_then(|verification| verification.get("valid"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("verification")
+                .and_then(|verification| verification.get("proof_count"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(value.get("proof_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_proof_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(50));
+        assert_eq!(
+            value.get("truncated_proofs").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let response = handle_get_sorafs_transparency_cycle(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(cycle_id_hex.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect bounded transparency cycle body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode bounded cycle body");
+        assert_eq!(value.get("proof_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_proof_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_proofs").and_then(Value::as_bool),
+            Some(true)
+        );
+        let proofs = value
+            .get("publication")
+            .and_then(|publication| publication.get("proofs"))
+            .and_then(Value::as_array)
+            .expect("bounded publication proofs");
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(
+            value
+                .get("verification")
+                .and_then(|verification| verification.get("proof_count"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+
+        let response = handle_get_sorafs_transparency_cycle_entry(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path((cycle_id_hex.clone(), entry_id_hex.clone())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect transparency entry proof body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode proof body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.entry_proof.v1")
+        );
+        assert_eq!(
+            value.get("entry_id_hex").and_then(Value::as_str),
+            Some(entry_id_hex.as_str())
+        );
+        assert!(value.get("proof").is_some());
+        assert_eq!(
+            value
+                .get("verification")
+                .and_then(|verification| verification.get("all_proofs_verified"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape() {
+        let (app, temp_dir, cycle_id_hex, _entry_id_hex, _digest_hex) =
+            sorafs_app_state_with_transparency_publication();
+
+        let response = handle_get_sorafs_transparency_cycle(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("abcd".to_string()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = handle_get_sorafs_transparency_cycle_entry(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path((cycle_id_hex.clone(), "ff".repeat(16))),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let governance_dir = temp_dir.path().join("governance");
+        let index_path = governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
+        let mut index: Value =
+            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
+                .expect("decode publish index");
+        let response = handle_get_sorafs_transparency_cycles(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .cloned()
+            .expect("transparency cycle etag");
+        let encoded_path = index
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("encoded_path"))
+            .and_then(Value::as_str)
+            .expect("encoded path")
+            .to_owned();
+        fs::write(governance_dir.join(encoded_path), b"tampered transparency")
+            .expect("tamper encoded publication");
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag);
+        let response = handle_get_sorafs_transparency_cycle(
+            State(app.clone()),
+            headers,
+            Path(cycle_id_hex.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let entries = index
+            .get_mut("entries")
+            .and_then(Value::as_array_mut)
+            .expect("entries");
+        let entry = entries[0].as_object_mut().expect("entry object");
+        entry.insert("encoded_path".into(), Value::from("../escape.to"));
+        fs::write(
+            &index_path,
+            norito::json::to_vec(&index).expect("encode escaped index"),
+        )
+        .expect("write escaped index");
+
+        let response = handle_get_sorafs_transparency_cycle(
+            State(app),
+            HeaderMap::new(),
+            Path(cycle_id_hex),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_issuance_index_reads_local_publish_index() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response = handle_get_sorafs_transparency_token_issuances(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .cloned()
+            .expect("proof-token issuance etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect proof-token issuance dashboard body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode proof-token issuance dashboard");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.proof_token_issuances.v1")
+        );
+        assert_eq!(
+            value.get("payload_kind").and_then(Value::as_str),
+            Some(PROOF_TOKEN_ISSUANCE_KIND)
+        );
+        assert_eq!(
+            value.get("published_token_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("returned_token_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            value.get("distinct_token_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("distinct_signer_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("bound_entry_count_total").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("expiring_token_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("evidence_digest_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("action_code_counts")
+                .and_then(Value::as_object)
+                .and_then(|counts| counts.get("2"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some(PROOF_TOKEN_ISSUANCE_KIND)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag.clone());
+        let response = handle_get_sorafs_transparency_token_issuances(
+            State(app),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&etag));
+    }
+
+    #[tokio::test]
+    async fn transparency_readback_limit_query_bounds_response_arrays() {
+        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+        let index_path = temp_dir
+            .path()
+            .join("governance")
+            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
+        let mut index: Value =
+            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
+                .expect("decode publish index");
+        {
+            let entries = index
+                .get_mut("entries")
+                .and_then(Value::as_array_mut)
+                .expect("entries array");
+            let mut duplicate = entries[5].clone();
+            let duplicate = duplicate.as_object_mut().expect("duplicate entry object");
+            duplicate.insert("position".into(), Value::from(6_u64));
+            duplicate.insert("published_at_unix".into(), Value::from(1_800_000_306_u64));
+            let labels = duplicate
+                .get_mut("labels")
+                .and_then(Value::as_object_mut)
+                .expect("proof-token labels");
+            labels.insert("token_id_hex".into(), Value::from("71".repeat(16)));
+            labels.insert("signer_key_hex".into(), Value::from("72".repeat(32)));
+            entries.push(Value::Object(duplicate.clone()));
+        }
+        let index_object = index.as_object_mut().expect("index object");
+        index_object.insert("entry_count".into(), Value::from(7_u64));
+        index_object
+            .get_mut("payload_kind_counts")
+            .and_then(Value::as_object_mut)
+            .expect("payload kind counts")
+            .insert(PROOF_TOKEN_ISSUANCE_KIND.into(), Value::from(2_u64));
+        index_object
+            .get_mut("by_payload_kind")
+            .and_then(Value::as_object_mut)
+            .and_then(|lookup| lookup.get_mut(PROOF_TOKEN_ISSUANCE_KIND))
+            .and_then(Value::as_array_mut)
+            .expect("proof-token lookup")
+            .push(Value::from(6_u64));
+        fs::write(
+            &index_path,
+            norito::json::to_vec(&index).expect("encode publish index"),
+        )
+        .expect("write publish index");
+
+        let response = handle_get_sorafs_transparency_token_issuances(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited token issuance body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited token issuance body");
+        assert_eq!(
+            value.get("published_token_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("returned_token_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("distinct_token_count").and_then(Value::as_u64),
+            Some(2)
+        );
+
+        let response = handle_get_sorafs_transparency_explorer(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited explorer body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited explorer body");
+        assert_eq!(
+            value
+                .get("proof_token_issuance_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("returned_proof_token_issuance_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("truncated_proof_token_issuances")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let response = handle_get_sorafs_transparency_token_issuances(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=bad".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn transparency_explorer_snapshot_reads_proof_token_publish_index() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response = handle_get_sorafs_transparency_explorer(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .cloned()
+            .expect("explorer snapshot etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect explorer snapshot body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode explorer snapshot");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.explorer_snapshot.v1")
+        );
+        assert_eq!(
+            value.get("published_cycle_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            value.get("returned_cycle_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            value
+                .get("proof_token_issuance_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("returned_proof_token_issuance_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            value.get("truncated_cycles").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("truncated_proof_token_issuances")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("payload_kind_counts")
+                .and_then(Value::as_object)
+                .and_then(|counts| counts.get(PROOF_TOKEN_ISSUANCE_KIND))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("proof_token_summary")
+                .and_then(Value::as_object)
+                .and_then(|summary| summary.get("distinct_token_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("proof_token_issuances")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some(PROOF_TOKEN_ISSUANCE_KIND)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag.clone());
+        let response = handle_get_sorafs_transparency_explorer(
+            State(app),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&etag));
+    }
+
+    #[tokio::test]
+    async fn transparency_explorer_snapshot_reads_cycle_summaries() {
+        let (app, _temp_dir, cycle_id_hex, _entry_id_hex, _digest_hex) =
+            sorafs_app_state_with_transparency_publication();
+
+        let response = handle_get_sorafs_transparency_explorer(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect explorer cycle snapshot body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode explorer cycle snapshot");
+        assert_eq!(
+            value.get("published_cycle_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("returned_cycle_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("cycles")
+                .and_then(Value::as_array)
+                .and_then(|cycles| cycles.first())
+                .and_then(|cycle| cycle.get("cycle_id_hex"))
+                .and_then(Value::as_str),
+            Some(cycle_id_hex.as_str())
+        );
+        assert_eq!(
+            value
+                .get("proof_token_summary")
+                .and_then(Value::as_object)
+                .and_then(|summary| summary.get("distinct_token_count"))
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
     async fn appeal_finance_reports_dashboard_reads_local_publish_index() {
         let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
 
-        let response =
-            handle_get_sorafs_appeal_finance_reports(State(app.clone()), HeaderMap::new()).await;
+        let response = handle_get_sorafs_appeal_finance_reports(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let etag = response.headers().get(ETAG).cloned().expect("report etag");
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
@@ -18355,6 +25403,15 @@ mod advert_tests {
             value.get("published_report_count").and_then(Value::as_u64),
             Some(1)
         );
+        assert_eq!(
+            value.get("returned_report_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
         assert_eq!(
             value.get("distinct_case_count").and_then(Value::as_u64),
             Some(1)
@@ -18419,7 +25476,12 @@ mod advert_tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, etag.clone());
-        let response = handle_get_sorafs_appeal_finance_reports(State(app), headers).await;
+        let response = handle_get_sorafs_appeal_finance_reports(
+            State(app),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&etag));
     }
@@ -18428,9 +25490,12 @@ mod advert_tests {
     async fn appeal_finance_weekly_rollups_dashboard_reads_local_publish_index() {
         let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
 
-        let response =
-            handle_get_sorafs_appeal_finance_weekly_rollups(State(app.clone()), HeaderMap::new())
-                .await;
+        let response = handle_get_sorafs_appeal_finance_weekly_rollups(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let etag = response.headers().get(ETAG).cloned().expect("rollup etag");
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
@@ -18450,6 +25515,15 @@ mod advert_tests {
             value.get("published_rollup_count").and_then(Value::as_u64),
             Some(1)
         );
+        assert_eq!(
+            value.get("returned_rollup_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
         assert_eq!(
             value
                 .get("source_report_count_total")
@@ -18489,9 +25563,252 @@ mod advert_tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, etag.clone());
-        let response = handle_get_sorafs_appeal_finance_weekly_rollups(State(app), headers).await;
+        let response = handle_get_sorafs_appeal_finance_weekly_rollups(
+            State(app),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&etag));
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_settlement_receipts_dashboard_reads_local_publish_index() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+
+        let response = handle_get_sorafs_appeal_finance_settlement_receipts(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response.headers().get(ETAG).cloned().expect("receipt etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect settlement receipt dashboard body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode settlement receipt dashboard");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.settlement_receipts.v1")
+        );
+        assert_eq!(
+            value.get("payload_kind").and_then(Value::as_str),
+            Some(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
+        );
+        assert_eq!(
+            value.get("published_receipt_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("returned_receipt_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            value.get("distinct_case_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("total_step_amount_xor").and_then(Value::as_str),
+            Some("420")
+        );
+        assert_eq!(
+            value.get("total_treasury_xor").and_then(Value::as_str),
+            Some("210")
+        );
+        assert_eq!(
+            value.get("total_held_xor").and_then(Value::as_str),
+            Some("210")
+        );
+        assert_eq!(
+            value
+                .get("steps")
+                .and_then(Value::as_object)
+                .and_then(|steps| steps.get("drawdown_non_refund"))
+                .and_then(|step| step.get("published_receipt_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("reconciliation_statuses")
+                .and_then(Value::as_object)
+                .and_then(|statuses| statuses.get("pending_client_submission"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("entries")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("payload_kind"))
+                .and_then(Value::as_str),
+            Some(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, etag.clone());
+        let response = handle_get_sorafs_appeal_finance_settlement_receipts(
+            State(app),
+            headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&etag));
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_dashboards_limit_query_bounds_response_arrays() {
+        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+        let index_path = temp_dir
+            .path()
+            .join("governance")
+            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
+        let mut index: Value =
+            norito::json::from_slice(&fs::read(&index_path).expect("read publish index"))
+                .expect("decode publish index");
+        {
+            let entries = index
+                .get_mut("entries")
+                .and_then(Value::as_array_mut)
+                .expect("entries array");
+            for (source_position, duplicate_position, published_at_unix) in [
+                (2_usize, 6_u64, 1_800_000_306_u64),
+                (3_usize, 7_u64, 1_800_000_307_u64),
+                (4_usize, 8_u64, 1_800_000_308_u64),
+            ] {
+                let mut duplicate = entries[source_position].clone();
+                let duplicate_object = duplicate.as_object_mut().expect("duplicate entry object");
+                duplicate_object.insert("position".into(), Value::from(duplicate_position));
+                duplicate_object.insert("published_at_unix".into(), Value::from(published_at_unix));
+                entries.push(duplicate);
+            }
+        }
+        let index_object = index.as_object_mut().expect("index object");
+        index_object.insert("entry_count".into(), Value::from(9_u64));
+        let payload_counts = index_object
+            .get_mut("payload_kind_counts")
+            .and_then(Value::as_object_mut)
+            .expect("payload kind counts");
+        payload_counts.insert(APPEAL_FINANCE_REPORT_KIND.into(), Value::from(2_u64));
+        payload_counts.insert(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(), Value::from(2_u64));
+        payload_counts.insert(
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND.into(),
+            Value::from(2_u64),
+        );
+        let by_payload_kind = index_object
+            .get_mut("by_payload_kind")
+            .and_then(Value::as_object_mut)
+            .expect("by_payload_kind lookup");
+        by_payload_kind
+            .get_mut(APPEAL_FINANCE_REPORT_KIND)
+            .and_then(Value::as_array_mut)
+            .expect("report lookup")
+            .push(Value::from(6_u64));
+        by_payload_kind
+            .get_mut(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
+            .and_then(Value::as_array_mut)
+            .expect("rollup lookup")
+            .push(Value::from(7_u64));
+        by_payload_kind
+            .get_mut(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
+            .and_then(Value::as_array_mut)
+            .expect("settlement receipt lookup")
+            .push(Value::from(8_u64));
+        fs::write(
+            &index_path,
+            norito::json::to_vec(&index).expect("encode publish index"),
+        )
+        .expect("write publish index");
+
+        let response = handle_get_sorafs_appeal_finance_reports(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited reports body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode limited reports");
+        assert_eq!(
+            value.get("published_report_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("returned_report_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_appeal_finance_weekly_rollups(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited weekly rollups body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited weekly rollups");
+        assert_eq!(
+            value.get("published_rollup_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("returned_rollup_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_appeal_finance_settlement_receipts(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited settlement receipts body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited settlement receipts");
+        assert_eq!(
+            value.get("published_receipt_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("returned_receipt_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -18502,6 +25819,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("abcd".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -18510,6 +25828,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("bad kind".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -18518,9 +25837,197 @@ mod advert_tests {
             State(app),
             HeaderMap::new(),
             Path("ff".repeat(32)),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn governance_dag_lookup_limit_query_bounds_matching_arrays() {
+        let (publish_app, publish_dir, _digest_hex) =
+            sorafs_app_state_with_governance_publish_index();
+        let publish_path = publish_dir
+            .path()
+            .join("governance")
+            .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE);
+        let mut publish_index: Value =
+            norito::json::from_slice(&fs::read(&publish_path).expect("read publish index fixture"))
+                .expect("decode publish index fixture");
+        let publish_map = publish_index
+            .as_object_mut()
+            .expect("publish index object fixture");
+        let entries = publish_map
+            .get_mut("entries")
+            .and_then(Value::as_array_mut)
+            .expect("publish entries");
+        let mut duplicate = entries.first().cloned().expect("repair audit entry");
+        if let Value::Object(entry) = &mut duplicate {
+            entry.insert("position".into(), Value::from(6_u64));
+            entry.insert("encoded_blake3".into(), Value::from("77".repeat(32)));
+        }
+        entries.push(duplicate);
+        publish_map.insert("entry_count".into(), Value::from(7_u64));
+        publish_map
+            .get_mut("payload_kind_counts")
+            .and_then(Value::as_object_mut)
+            .expect("payload kind counts")
+            .insert("repair_audit".into(), Value::from(2_u64));
+        publish_map
+            .get_mut("by_payload_kind")
+            .and_then(Value::as_object_mut)
+            .expect("publish by payload kind")
+            .insert(
+                "repair_audit".into(),
+                Value::Array(vec![Value::from(0_u64), Value::from(6_u64)]),
+            );
+        fs::write(
+            &publish_path,
+            norito::json::to_vec(&publish_index).expect("encode publish index fixture"),
+        )
+        .expect("write publish index fixture");
+
+        let response = handle_get_sorafs_governance_dag_publish_kind(
+            State(publish_app),
+            HeaderMap::new(),
+            Path("repair_audit".to_owned()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect publish lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode publish lookup");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+
+        let (car_app, car_dir, _digest_hex, _car_archive_hex) =
+            sorafs_app_state_with_governance_car_queue();
+        let car_path = car_dir
+            .path()
+            .join("governance")
+            .join(GOVERNANCE_DAG_CAR_QUEUE_FILE);
+        let mut car_queue: Value =
+            norito::json::from_slice(&fs::read(&car_path).expect("read CAR queue fixture"))
+                .expect("decode CAR queue fixture");
+        let car_map = car_queue.as_object_mut().expect("CAR queue object fixture");
+        let segments = car_map
+            .get_mut("segments")
+            .and_then(Value::as_array_mut)
+            .expect("CAR queue segments");
+        let mut duplicate = segments.first().cloned().expect("repair segment");
+        if let Value::Object(segment) = &mut duplicate {
+            segment.insert("queue_position".into(), Value::from(2_u64));
+            segment.insert("encoded_blake3".into(), Value::from("78".repeat(32)));
+        }
+        segments.push(duplicate);
+        car_map.insert("segment_count".into(), Value::from(3_u64));
+        car_map.insert("assembled_count".into(), Value::from(3_u64));
+        car_map
+            .get_mut("by_payload_kind")
+            .and_then(Value::as_object_mut)
+            .expect("CAR queue by payload kind")
+            .insert(
+                "repair_audit".into(),
+                Value::Array(vec![Value::from(0_u64), Value::from(2_u64)]),
+            );
+        fs::write(
+            &car_path,
+            norito::json::to_vec(&car_queue).expect("encode CAR queue fixture"),
+        )
+        .expect("write CAR queue fixture");
+
+        let response = handle_get_sorafs_governance_dag_car_queue_kind(
+            State(car_app),
+            HeaderMap::new(),
+            Path("repair_audit".to_owned()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect CAR queue lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode CAR queue lookup");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("segments")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let (runtime_app, runtime_dir, _digest_hex, _block_cid_hex, _node_cid_hex) =
+            sorafs_app_state_with_governance_runtime_index();
+        let runtime_path = runtime_dir
+            .path()
+            .join("governance")
+            .join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE);
+        let mut runtime_index: Value =
+            norito::json::from_slice(&fs::read(&runtime_path).expect("read runtime index fixture"))
+                .expect("decode runtime index fixture");
+        let runtime_map = runtime_index
+            .as_object_mut()
+            .expect("runtime index object fixture");
+        let blocks = runtime_map
+            .get_mut("blocks")
+            .and_then(Value::as_array_mut)
+            .expect("runtime blocks");
+        let mut duplicate = blocks.first().cloned().expect("deal settlement block");
+        if let Value::Object(block) = &mut duplicate {
+            block.insert("position".into(), Value::from(2_u64));
+            block.insert("sequence".into(), Value::from(2_u64));
+            block.insert("encoded_blake3".into(), Value::from("79".repeat(32)));
+            block.insert("block_cid_hex".into(), Value::from("7a".repeat(32)));
+            block.insert("node_cid_hex".into(), Value::from("7b".repeat(32)));
+        }
+        blocks.push(duplicate);
+        runtime_map.insert("block_count".into(), Value::from(3_u64));
+        runtime_map
+            .get_mut("by_payload_kind")
+            .and_then(Value::as_object_mut)
+            .expect("runtime by payload kind")
+            .insert(
+                "deal_settlement".into(),
+                Value::Array(vec![Value::from(0_u64), Value::from(2_u64)]),
+            );
+        fs::write(
+            &runtime_path,
+            norito::json::to_vec(&runtime_index).expect("encode runtime index fixture"),
+        )
+        .expect("write runtime index fixture");
+
+        let response = handle_get_sorafs_governance_dag_runtime_kind(
+            State(runtime_app),
+            HeaderMap::new(),
+            Path("deal_settlement".to_owned()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect runtime lookup body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime lookup");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("blocks").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -18565,6 +26072,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path(format!("hex:{digest_hex}")),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -18591,6 +26099,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("repair_audit".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -18645,6 +26154,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("abcd".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -18653,6 +26163,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("bad kind".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -18669,6 +26180,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("ff".repeat(32)),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -18800,6 +26312,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path(digest_hex.clone()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -18826,6 +26339,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("deal_settlement".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -18857,6 +26371,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("abcd".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -18865,6 +26380,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path("bad kind".to_string()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -19018,6 +26534,33 @@ mod advert_tests {
         (app, temp_dir, auth)
     }
 
+    fn sorafs_app_state_with_privacy_aggregate_schedule()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .privacy_aggregate_schedule(Some(sorafs_node::PrivacyAggregateScheduleConfig {
+                cycle_seconds: 100,
+                publish_delay_seconds: 10,
+            }))
+            .build();
+        let node = sorafs_node::NodeHandle::new(cfg);
+        assert!(node.has_governance_publisher());
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
     fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
         SoraFsAppealFinanceReportV1 {
             version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -19078,6 +26621,124 @@ mod advert_tests {
 
     fn appeal_finance_report_body(report: SoraFsAppealFinanceReportV1) -> Bytes {
         Bytes::from(norito::json::to_vec(&report).expect("encode appeal finance report"))
+    }
+
+    fn public_source_entry_request(
+        event_id: &str,
+        subject: &str,
+        seed: u8,
+    ) -> TransparencyPublicSourceEntryRequestDto {
+        TransparencyPublicSourceEntryRequestDto {
+            event_id: event_id.to_string(),
+            occurred_at_unix: 1_800_000_040 + u64::from(seed),
+            subject: subject.to_string(),
+            subject_digest_hex: None,
+            payload_digest_hex: hex::encode([seed; 32]),
+            summary_digest_hex: None,
+            policy_digest_hex: Some(hex::encode([seed.wrapping_add(1); 32])),
+            evidence_uris: Some(vec![format!("sora://transparency/{event_id}")]),
+            metadata: Some(vec![
+                TransparencyLedgerMetadataDto {
+                    key: "operator".to_string(),
+                    value: "sfm4c".to_string(),
+                },
+                TransparencyLedgerMetadataDto {
+                    key: "reason".to_string(),
+                    value: "public-notice".to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn public_source_entry_body(request: TransparencyPublicSourceEntryRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(&request).expect("encode public source entry request"))
+    }
+
+    fn privacy_aggregate_source_event_request(
+        event_id: &str,
+    ) -> TransparencyPrivacyAggregateSourceEventRequestDto {
+        privacy_aggregate_source_event_request_at(event_id, 1_800_000_010)
+    }
+
+    fn privacy_aggregate_source_event_request_at(
+        event_id: &str,
+        occurred_at_unix: u64,
+    ) -> TransparencyPrivacyAggregateSourceEventRequestDto {
+        TransparencyPrivacyAggregateSourceEventRequestDto {
+            event_id: event_id.to_string(),
+            occurred_at_unix,
+            population_label: "jurisdiction-a".to_string(),
+            population_digest_hex: Some(hex::encode([0xA0; 32])),
+            metrics: vec![
+                TransparencyPrivacyAggregateSourceMetricDto {
+                    key: "appeals_upheld".to_string(),
+                    value: 1,
+                    unit: "count".to_string(),
+                },
+                TransparencyPrivacyAggregateSourceMetricDto {
+                    key: "moderation_actions".to_string(),
+                    value: 3,
+                    unit: "count".to_string(),
+                },
+            ],
+            policy_digest_hex: Some(hex::encode([0xC0; 32])),
+        }
+    }
+
+    fn privacy_aggregate_source_event_body(
+        request: TransparencyPrivacyAggregateSourceEventRequestDto,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&request).expect("encode privacy aggregate source event request"),
+        )
+    }
+
+    fn privacy_aggregate_publish_due_request(
+        now_unix: u64,
+    ) -> TransparencyPrivacyAggregatePublishDueRequestDto {
+        TransparencyPrivacyAggregatePublishDueRequestDto {
+            now_unix,
+            aggregate_id_prefix: "torii-source".to_string(),
+            privacy_mode: "suppression".to_string(),
+            epsilon_micros: None,
+            delta_ppb: None,
+            noise_scale_micros: None,
+            suppression_threshold: Some(1),
+            noise_seed_hex: None,
+            policy_digest_hex: Some(hex::encode([0xC0; 32])),
+            previous_block_hash_hex: None,
+            metadata: Some(vec![TransparencyLedgerMetadataDto {
+                key: "publisher".to_string(),
+                value: "torii".to_string(),
+            }]),
+        }
+    }
+
+    fn privacy_aggregate_publish_due_body(
+        request: TransparencyPrivacyAggregatePublishDueRequestDto,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&request).expect("encode privacy aggregate publish due request"),
+        )
+    }
+
+    fn privacy_aggregate_api_cycle_config() -> sorafs_node::PrivacyAggregateCycleConfig {
+        sorafs_node::PrivacyAggregateCycleConfig {
+            aggregate_id_prefix: "torii-source".to_string(),
+            privacy: iroha_data_model::sorafs::transparency::ModerationPrivacyParametersV1 {
+                version:
+                    iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+                mode: iroha_data_model::sorafs::transparency::ModerationPrivacyModeV1::Suppression,
+                epsilon_micros: None,
+                delta_ppb: None,
+                noise_scale_micros: None,
+                suppression_threshold: Some(1),
+                suppressed_count: 0,
+            },
+            noise_seed: None,
+            policy_digest: Some([0xC0; 32]),
+            metadata: Vec::new(),
+        }
     }
 
     fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
@@ -19160,6 +26821,27 @@ mod advert_tests {
         digest
     }
 
+    fn assert_hex_32(value: &str) {
+        assert_eq!(value.len(), 64);
+        assert!(value.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    fn configure_appeal_finance_settlement_submitter(
+        app: &mut SharedAppState,
+        signer: &OrderbookAccountFixture,
+    ) {
+        let app_inner = Arc::get_mut(app).expect("unique app state");
+        app_inner.sorafs_appeal_settlement_submitter =
+            Some(crate::SoraFsAppealSettlementSubmitter {
+                signers: std::collections::BTreeMap::from([(
+                    signer.account.clone(),
+                    signer.keypair.clone(),
+                )]),
+                worker_scan_interval: Duration::from_millis(30_000),
+                worker_max_retry_attempts: 3,
+            });
+    }
+
     fn appeal_finance_deposit_status_record(
         seller: AccountId,
         buyer: Option<AccountId>,
@@ -19227,6 +26909,31 @@ mod advert_tests {
         let (node, temp_dir) = sorafs_node_with_temp_storage();
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir)
+    }
+
+    fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
+        auth: &OrderbookAuthFixture,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> (SharedAppState, TempDir) {
+        let mut app = mk_app_state_for_tests_with_world(appeal_finance_asset_lock_world(
+            auth,
+            asset_definition_id,
+        ));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let governance_dir = temp_dir.path().join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = sorafs_node::NodeHandle::new(cfg);
         #[cfg(feature = "telemetry")]
         {
             app_inner.telemetry = isolated_test_telemetry();
@@ -19442,6 +27149,26 @@ mod advert_tests {
             Some("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")
         );
         assert_eq!(
+            value
+                .get("settlement_submission_api")
+                .and_then(Value::as_str),
+            Some(
+                "enabled_canonical_auth_configured_signer_next_step_submitter_governance_receipts"
+            )
+        );
+        assert_eq!(
+            value
+                .get("settlement_receipt_publication")
+                .and_then(Value::as_str),
+            Some("enabled_local_governance_dag_on_submit")
+        );
+        assert_eq!(
+            value
+                .get("settlement_receipt_dashboard_api")
+                .and_then(Value::as_str),
+            Some("enabled_local_publish_index")
+        );
+        assert_eq!(
             value.get("disbursement_plan_api").and_then(Value::as_str),
             Some("enabled")
         );
@@ -19556,6 +27283,26 @@ mod advert_tests {
                 .get("settlement_reconciliation_api")
                 .and_then(Value::as_str),
             Some("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")
+        );
+        assert_eq!(
+            status_value
+                .get("settlement_submission_api")
+                .and_then(Value::as_str),
+            Some(
+                "enabled_canonical_auth_configured_signer_next_step_submitter_governance_receipts"
+            )
+        );
+        assert_eq!(
+            status_value
+                .get("settlement_receipt_publication")
+                .and_then(Value::as_str),
+            Some("enabled_local_governance_dag_on_submit")
+        );
+        assert_eq!(
+            status_value
+                .get("settlement_receipt_dashboard_api")
+                .and_then(Value::as_str),
+            Some("enabled_local_publish_index")
         );
         assert_eq!(
             status_value
@@ -20170,6 +27917,262 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (mut app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+
+        let response =
+            post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect settlement submission body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode settlement submission body");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(
+            value.get("configured_signer_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let tx_hash = value
+            .get("tx_hash_hex")
+            .and_then(Value::as_str)
+            .expect("queued tx hash");
+        assert_hex_32(tx_hash);
+        let step = value
+            .get("submitted_step")
+            .and_then(Value::as_object)
+            .expect("submitted step");
+        assert_eq!(
+            step.get("action").and_then(Value::as_str),
+            Some("drawdown_non_refund")
+        );
+        let provider_account = auth.provider.account.to_string();
+        assert_eq!(
+            step.get("required_authority").and_then(Value::as_str),
+            Some(provider_account.as_str())
+        );
+        let reconciliation = value
+            .get("reconciliation")
+            .expect("submission reconciliation");
+        assert_eq!(
+            reconciliation.get("status").and_then(Value::as_str),
+            Some("pending_client_submission")
+        );
+        assert_appeal_finance_reconciliation_digest_hex(reconciliation);
+    }
+
+    #[test]
+    fn appeal_finance_settlement_worker_step_key_advances_after_partial_drawdown() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let record = || {
+            app.state
+                .world_view()
+                .asset_escrows()
+                .get(&expected.escrow_id)
+                .cloned()
+                .expect("appeal deposit record")
+        };
+
+        let first_key =
+            appeal_finance_settlement_worker_step_key(&expected, &record(), "frivolous", 7)
+                .expect("initial worker step key")
+                .expect("initial settlement step");
+        assert_eq!(first_key.action, "drawdown_non_refund");
+
+        drawdown_appeal_finance_asset_lock(
+            &app,
+            &expected,
+            &auth.provider.account,
+            iroha_primitives::numeric::Numeric::from_str("210.0").expect("drawdown amount numeric"),
+            2,
+        );
+        let follow_up_key =
+            appeal_finance_settlement_worker_step_key(&expected, &record(), "frivolous", 7)
+                .expect("follow-up worker step key")
+                .expect("follow-up settlement step");
+        assert_eq!(follow_up_key.action, "cancel_refund");
+        assert_ne!(
+            first_key.reconciliation_digest_hex,
+            follow_up_key.reconciliation_digest_hex
+        );
+
+        cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
+        assert!(
+            appeal_finance_settlement_worker_step_key(&expected, &record(), "frivolous", 7)
+                .expect("settled worker step key")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_submit_settlement_endpoint_publishes_receipt() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (mut app, temp_dir) =
+            sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
+                &auth,
+                &expected.asset_definition_id,
+            );
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+
+        let response =
+            post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect settlement submission body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode settlement submission body");
+        let receipt_status = value
+            .get("settlement_receipt")
+            .and_then(Value::as_object)
+            .expect("settlement receipt response");
+        assert_eq!(
+            receipt_status
+                .get("publication_status")
+                .and_then(Value::as_str),
+            Some("published")
+        );
+        let tx_hash = receipt_status
+            .get("tx_hash_hex")
+            .and_then(Value::as_str)
+            .expect("receipt tx hash");
+        assert_hex_32(tx_hash);
+        let reconciliation_digest = receipt_status
+            .get("reconciliation_digest_hex")
+            .and_then(Value::as_str)
+            .expect("receipt reconciliation digest");
+        assert_hex_32(reconciliation_digest);
+
+        let governance_dir = temp_dir.path().join("governance");
+        let index_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE))
+            .expect("publish index");
+        let index: Value = norito::json::from_slice(&index_bytes).expect("publish index json");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let receipt_dir = governance_dir
+            .join("appeals")
+            .join("finance")
+            .join("settlement-receipts")
+            .join("case-42");
+        let mut encoded_files = fs::read_dir(&receipt_dir)
+            .expect("receipt dir")
+            .map(|entry| entry.expect("receipt entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        encoded_files.sort();
+        assert_eq!(encoded_files.len(), 1);
+        let receipt_bytes = fs::read(&encoded_files[0]).expect("read receipt payload");
+        let receipt: SoraFsAppealFinanceSettlementReceiptV1 =
+            norito::decode_from_bytes(&receipt_bytes).expect("decode receipt");
+        receipt.validate().expect("receipt validates");
+        assert_eq!(
+            receipt.version,
+            SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1
+        );
+        assert_eq!(receipt.case_id, "case-42");
+        assert_eq!(receipt.submitted_step, "drawdown_non_refund");
+        assert_eq!(receipt.tx_hash_hex, tx_hash);
+        assert_eq!(receipt.reconciliation_digest_hex, reconciliation_digest);
+    }
+
+    #[tokio::test]
+    async fn appeal_finance_deposit_submit_settlement_endpoint_reports_missing_submitter() {
+        let auth = orderbook_auth_fixture();
+        let request = appeal_finance_deposit_request(
+            &auth.provider.account,
+            &auth.buyer.account,
+            Some(&auth.provider.account),
+        );
+        let expected =
+            appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
+        let (app, _temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world(
+            &auth,
+            &expected.asset_definition_id,
+        );
+        seed_appeal_finance_asset_lock(&app, &expected);
+        let confirmation = appeal_finance_deposit_confirm_request(
+            &request,
+            expected.escrow_id.as_hash().to_string(),
+        );
+        let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+
+        let response =
+            post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect missing submitter body");
+        let value: Value = norito::json::from_slice(&body).expect("decode missing submitter body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("submitter_not_configured")
+        );
+        assert_eq!(value.get("tx_hash_hex").and_then(Value::as_str), None);
+        let step = value
+            .get("submitted_step")
+            .and_then(Value::as_object)
+            .expect("pending submitter step");
+        let provider_account = auth.provider.account.to_string();
+        assert_eq!(
+            step.get("required_authority").and_then(Value::as_str),
+            Some(provider_account.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_client_submission() {
         let auth = orderbook_auth_fixture();
         let request = appeal_finance_deposit_request(
@@ -20388,6 +28391,432 @@ mod advert_tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    #[tokio::test]
+    async fn transparency_source_entry_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, _auth) = sorafs_app_state_with_orderbook_auth();
+        let body = appeal_finance_report_body(appeal_finance_report_fixture());
+
+        let response = handle_post_sorafs_transparency_source_entry(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            format!(
+                "{TRANSPARENCY_SOURCE_ENTRIES_ROUTE}/{TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT}"
+            )
+            .parse()
+            .expect("transparency source-entry URI"),
+            Path(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT.to_owned()),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn transparency_source_entry_endpoint_records_appeal_finance_report() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let report = appeal_finance_report_fixture();
+        let body = appeal_finance_report_body(report.clone());
+
+        let response = post_transparency_source_entry(
+            app.clone(),
+            &auth.provider,
+            TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect transparency source-entry ingest body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode transparency source-entry body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.source_entry.ingest.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            value.get("source_kind").and_then(Value::as_str),
+            Some(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT)
+        );
+        assert_eq!(
+            value.get("event_id").and_then(Value::as_str),
+            Some(format!("appeal-finance-report:{}", hex::encode(report.report_id)).as_str())
+        );
+        assert_eq!(
+            value.get("ledger_kind").and_then(Value::as_str),
+            Some("appeal_outcome")
+        );
+        assert_eq!(
+            value.get("subject").and_then(Value::as_str),
+            Some(report.case_id.as_str())
+        );
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+
+        let publication = app
+            .sorafs_node
+            .publish_transparency_ledger_cycle_from_source_entries(
+                *b"cycle-src-api001",
+                1_800_000_000,
+                1_800_086_400,
+                1_800_086_401,
+                None,
+            )
+            .expect("publish transparency cycle from API source entry");
+        assert_eq!(publication.block.entry_count, 1);
+        assert_eq!(publication.proofs.len(), 1);
+        assert_eq!(publication.proofs[0].entry.subject, report.case_id);
+    }
+
+    #[tokio::test]
+    async fn transparency_source_entry_endpoint_rejects_duplicate_source_event() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = appeal_finance_report_body(appeal_finance_report_fixture());
+
+        let first = post_transparency_source_entry(
+            app.clone(),
+            &auth.provider,
+            TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
+            body.clone(),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let duplicate = post_transparency_source_entry(
+            app.clone(),
+            &auth.provider,
+            TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
+            body,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn transparency_source_entry_endpoint_records_public_notice_sources() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        for (source_kind, event_id, subject, seed) in [
+            (
+                TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE,
+                "hold-notice-1",
+                "hold-case-1",
+                0x60,
+            ),
+            (
+                TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE,
+                "redaction-notice-1",
+                "redaction-case-1",
+                0x70,
+            ),
+            (
+                TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY,
+                "evidence-access-1",
+                "evidence-view-1",
+                0x80,
+            ),
+        ] {
+            let response = post_transparency_source_entry(
+                app.clone(),
+                &auth.provider,
+                source_kind,
+                public_source_entry_body(public_source_entry_request(event_id, subject, seed)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("collect public source-entry ingest body");
+            let value: Value =
+                norito::json::from_slice(&body).expect("decode public source-entry body");
+            assert_eq!(
+                value.get("source_kind").and_then(Value::as_str),
+                Some(source_kind)
+            );
+            assert_eq!(
+                value.get("event_id").and_then(Value::as_str),
+                Some(event_id)
+            );
+            assert_eq!(value.get("subject").and_then(Value::as_str), Some(subject));
+        }
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 3);
+
+        let publication = app
+            .sorafs_node
+            .publish_transparency_ledger_cycle_from_source_entries(
+                *b"cycle-pub-api001",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+            )
+            .expect("publish transparency cycle from public source entries");
+        assert_eq!(publication.block.entry_count, 3);
+        let kinds = publication
+            .proofs
+            .iter()
+            .map(|proof| &proof.entry.kind)
+            .collect::<Vec<_>>();
+        assert!(kinds.contains(&&ModerationLedgerEntryKindV1::LegalHold));
+        assert!(kinds.contains(&&ModerationLedgerEntryKindV1::Redaction));
+        assert!(kinds.contains(&&ModerationLedgerEntryKindV1::EvidenceAccess));
+    }
+
+    #[tokio::test]
+    async fn transparency_source_entry_endpoint_rejects_invalid_public_notice() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let mut request = public_source_entry_request("hold-notice-1", "hold-case-1", 0x60);
+        request.metadata = Some(vec![
+            TransparencyLedgerMetadataDto {
+                key: "z-last".to_string(),
+                value: "bad-order".to_string(),
+            },
+            TransparencyLedgerMetadataDto {
+                key: "a-first".to_string(),
+                value: "bad-order".to_string(),
+            },
+        ]);
+
+        let response = post_transparency_source_entry(
+            app,
+            &auth.provider,
+            TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE,
+            public_source_entry_body(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_source_event_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, _auth) = sorafs_app_state_with_orderbook_auth();
+        let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
+            "privacy-event-a",
+        ));
+
+        let response = handle_post_sorafs_transparency_privacy_aggregate_source_event(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_source_event_endpoint_records_event_for_cycle_publication() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
+            "privacy-event-a",
+        ));
+
+        let response = post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect privacy aggregate source-event ingest body");
+        let value: Value = norito::json::from_slice(&body)
+            .expect("decode privacy aggregate source-event ingest body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.privacy_aggregate_source_event.ingest.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            value.get("event_id").and_then(Value::as_str),
+            Some("privacy-event-a")
+        );
+        assert_eq!(
+            value
+                .get("retained_source_event_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
+
+        let publication = app
+            .sorafs_node
+            .publish_privacy_aggregate_cycle_from_source_events(
+                *b"cycle-prv-api001",
+                1_800_000_000,
+                1_800_604_800,
+                1_800_604_801,
+                None,
+                privacy_aggregate_api_cycle_config(),
+            )
+            .expect("publish privacy aggregate cycle from API source event");
+        assert_eq!(publication.block.entry_count, 1);
+        assert_eq!(publication.proofs.len(), 1);
+        assert_eq!(
+            publication.proofs[0].entry.kind,
+            ModerationLedgerEntryKindV1::PrivacyAggregate
+        );
+        assert!(
+            publication.proofs[0]
+                .entry
+                .subject
+                .contains("jurisdiction-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_source_event_endpoint_rejects_duplicate_event() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let request = privacy_aggregate_source_event_request("privacy-event-a");
+        let body = privacy_aggregate_source_event_body(request);
+
+        let first =
+            post_privacy_aggregate_source_event(app.clone(), &auth.provider, body.clone()).await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let duplicate =
+            post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_publish_due_endpoint_requires_canonical_request_auth() {
+        let (app, _temp_dir, _auth) = sorafs_app_state_with_privacy_aggregate_schedule();
+        let body = privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211));
+
+        let response = handle_post_sorafs_transparency_privacy_aggregate_publish_due(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(TRANSPARENCY_PRIVACY_AGGREGATE_PUBLISH_DUE_ROUTE),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
+        let source_body = privacy_aggregate_source_event_body(
+            privacy_aggregate_source_event_request_at("privacy-event-a", 110),
+        );
+        let source_response =
+            post_privacy_aggregate_source_event(app.clone(), &auth.provider, source_body).await;
+        assert_eq!(source_response.status(), StatusCode::ACCEPTED);
+
+        let response = post_privacy_aggregate_publish_due(
+            app.clone(),
+            &auth.provider,
+            privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect privacy aggregate publish-due body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode privacy aggregate publish-due body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.transparency.privacy_aggregate.publish_due.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("published")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("retained_source_event_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let window = value
+            .get("window")
+            .and_then(Value::as_object)
+            .expect("window object");
+        assert_eq!(
+            window.get("cycle_start_unix").and_then(Value::as_u64),
+            Some(100)
+        );
+        assert_eq!(
+            window.get("cycle_end_unix").and_then(Value::as_u64),
+            Some(200)
+        );
+        let publication = value
+            .get("publication")
+            .and_then(Value::as_object)
+            .expect("publication summary");
+        assert_eq!(
+            publication.get("entry_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            publication.get("proof_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            publication
+                .get("block_hash_hex")
+                .and_then(Value::as_str)
+                .is_some_and(|hash| hash.len() == 64)
+        );
+
+        let repeat = post_privacy_aggregate_publish_due(
+            app,
+            &auth.provider,
+            privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
+        )
+        .await;
+        assert_eq!(repeat.status(), StatusCode::OK);
+        let body = body::to_bytes(repeat.into_body(), usize::MAX)
+            .await
+            .expect("collect repeated publish-due body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode repeated publish-due body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("already_published")
+        );
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_publish_due_endpoint_reports_no_source_events() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
+
+        let response = post_privacy_aggregate_publish_due(
+            app,
+            &auth.provider,
+            privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect no-source publish-due body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode no-source publish-due body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("no_source_events")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(false));
     }
 
     #[tokio::test]
@@ -20677,6 +29106,75 @@ mod advert_tests {
         handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
     }
 
+    async fn post_transparency_source_entry(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        source_kind: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri: Uri = format!("{TRANSPARENCY_SOURCE_ENTRIES_ROUTE}/{source_kind}")
+            .parse()
+            .expect("transparency source-entry URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_transparency_source_entry(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(source_kind.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn post_privacy_aggregate_source_event(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_transparency_privacy_aggregate_source_event(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
+    async fn post_privacy_aggregate_publish_due(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(TRANSPARENCY_PRIVACY_AGGREGATE_PUBLISH_DUE_ROUTE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_transparency_privacy_aggregate_publish_due(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
+    async fn post_transparency_proof_token_issuance(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(TRANSPARENCY_PROOF_TOKEN_ISSUANCES_ROUTE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_transparency_token_issuance(State(app), headers, method, uri, body).await
+    }
+
     async fn post_appeal_finance_deposit(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -20710,6 +29208,24 @@ mod advert_tests {
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
         handle_post_sorafs_appeal_finance_deposit_settle(State(app), headers, method, uri, body)
             .await
+    }
+
+    async fn post_appeal_finance_deposit_submit_settlement(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_SUBMIT_SETTLEMENT);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_appeal_finance_deposit_submit_settlement(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
     }
 
     async fn post_appeal_finance_deposit_reconcile(
@@ -20762,6 +29278,30 @@ mod advert_tests {
         auth: &OrderbookAuthFixture,
         deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
     ) -> ModerationBallotAnnounceRequestDto {
+        let now_unix_ms = iroha_network_time_now_ms();
+        moderation_announce_request_with_windows(
+            case_id,
+            round_id,
+            auth,
+            deposit_confirmation,
+            now_unix_ms.saturating_sub(1_000),
+            now_unix_ms.saturating_add(2_000),
+            now_unix_ms.saturating_add(2_100),
+            now_unix_ms.saturating_add(10_000),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn moderation_announce_request_with_windows(
+        case_id: &str,
+        round_id: &str,
+        auth: &OrderbookAuthFixture,
+        deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
+        announced_at_unix_ms: u64,
+        commit_deadline_unix_ms: u64,
+        challenge_deadline_unix_ms: u64,
+        reveal_deadline_unix_ms: u64,
+    ) -> ModerationBallotAnnounceRequestDto {
         ModerationBallotAnnounceRequestDto {
             case_id: case_id.to_owned(),
             deposit_confirmation,
@@ -20776,10 +29316,20 @@ mod advert_tests {
                 auth.buyer.account.to_string(),
             ],
             quorum: 2,
-            announced_at_unix_ms: 1_000,
-            commit_deadline_unix_ms: 2_000,
-            challenge_deadline_unix_ms: 3_000,
-            reveal_deadline_unix_ms: 4_000,
+            announced_at_unix_ms,
+            commit_deadline_unix_ms,
+            challenge_deadline_unix_ms,
+            reveal_deadline_unix_ms,
+        }
+    }
+
+    async fn wait_until_after_moderation_time(deadline_unix_ms: u64) {
+        let now_unix_ms = iroha_network_time_now_ms();
+        if now_unix_ms <= deadline_unix_ms {
+            tokio::time::sleep(Duration::from_millis(
+                deadline_unix_ms.saturating_sub(now_unix_ms) + 25,
+            ))
+            .await;
         }
     }
 
@@ -20822,6 +29372,131 @@ mod advert_tests {
         }
     }
 
+    fn moderation_repro_manifest_fixture(
+        manifest_id_byte: u8,
+        manifest_digest_byte: u8,
+        runner_hash_byte: u8,
+    ) -> ModerationReproManifestV1 {
+        let body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [manifest_id_byte; 16],
+            manifest_digest: [manifest_digest_byte; 32],
+            runner_hash: [runner_hash_byte; 32],
+            runtime_version: format!("sorafs-ai-runner {runner_hash_byte}.0.0"),
+            issued_at_unix: 1_800_000_000 + u64::from(runner_hash_byte),
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:calibration".to_string(),
+                seed_version: 1,
+                run_nonce: [0x44; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![ModerationModelFingerprintV1 {
+                model_id: [0x55; 16],
+                artifact_digest: [0x66; 32],
+                weights_digest: [0x77; 32],
+                opset: 17,
+                weight: Some(10_000),
+            }],
+            notes: Some("registry API fixture".to_string()),
+        };
+        let keypair = KeyPair::try_from_seed(vec![0x9C; 32], Algorithm::Ed25519)
+            .expect("moderation registry fixture keypair");
+        let signature = SignatureOf::try_new(keypair.private_key(), &body)
+            .expect("moderation registry fixture signature");
+        ModerationReproManifestV1 {
+            body,
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "council".to_string(),
+                public_key: keypair.public_key().clone(),
+                signature,
+            }],
+        }
+    }
+
+    fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
+        AdversarialCorpusManifestV1 {
+            schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
+            issued_at_unix: 1_800_000_010,
+            cohort_label: Some("sfm4a-api-2026-q1".to_string()),
+            families: vec![AdversarialPerceptualFamilyV1 {
+                family_id: [0x21; 16],
+                description: "jpeg jitter corpus".to_string(),
+                variants: vec![AdversarialPerceptualVariantV1 {
+                    variant_id: [0x31; 16],
+                    attack_vector: "jpeg_jitter".to_string(),
+                    reference_cid_b64: None,
+                    perceptual_hash: Some([0x41; 32]),
+                    hamming_radius: 8,
+                    embedding_digest: None,
+                    notes: Some("hash match".to_string()),
+                }],
+            }],
+        }
+    }
+
+    fn moderation_model_registry_body<T>(manifest: &T) -> Bytes
+    where
+        T: norito::NoritoSerialize,
+    {
+        let manifest_b64 =
+            BASE64_STANDARD.encode(norito::to_bytes(manifest).expect("encode registry manifest"));
+        Bytes::from(
+            norito::json::to_vec(&ModerationModelRegistryManifestRequestDto { manifest_b64 })
+                .expect("encode registry request"),
+        )
+    }
+
+    fn moderation_screening_result_body(
+        subject: &str,
+        subject_digest_byte: u8,
+        manifest_id_byte: u8,
+        runner_hash_byte: u8,
+        combined_score_bps: u16,
+        verdict: &str,
+        screened_at_unix: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationScreeningResultRequestDto {
+                subject: subject.to_owned(),
+                subject_digest_hex: hex::encode([subject_digest_byte; 32]),
+                manifest_id_hex: hex::encode([manifest_id_byte; 16]),
+                runner_hash_hex: hex::encode([runner_hash_byte; 32]),
+                combined_score_bps,
+                verdict: verdict.to_owned(),
+                screened_at_unix: Some(screened_at_unix),
+                evidence_digest_hex: Some(hex::encode([0xE4; 32])),
+                policy_digest_hex: Some(hex::encode([0xC7; 32])),
+                notes: Some("local screening API fixture".to_owned()),
+            })
+            .expect("encode screening result request"),
+        )
+    }
+
+    fn moderation_quarantine_review_body(reviewed_by: &str, reviewed_at_unix: u64) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineReviewRequestDto {
+                reviewed_by: reviewed_by.to_owned(),
+                reviewed_at_unix: Some(reviewed_at_unix),
+                notes: Some("review endpoint fixture".to_owned()),
+            })
+            .expect("encode quarantine review request"),
+        )
+    }
+
+    fn moderation_quarantine_release_body(release_authority: &str, released_at_unix: u64) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineReleaseRequestDto {
+                release_authority: release_authority.to_owned(),
+                released_at_unix: Some(released_at_unix),
+                notes: Some("release endpoint fixture".to_owned()),
+            })
+            .expect("encode quarantine release request"),
+        )
+    }
+
     fn moderation_commit_body(commit: SoraFsModerationBallotCommitV1, now_unix_ms: u64) -> Bytes {
         let commit_b64 =
             BASE64_STANDARD.encode(norito::to_bytes(&commit).expect("encode moderation commit"));
@@ -20853,6 +29528,12 @@ mod advert_tests {
 
     fn moderation_uri(path: &'static str) -> Uri {
         Uri::from_static(path)
+    }
+
+    fn moderation_quarantine_action_uri(quarantine_id_hex: &str, suffix: &str) -> Uri {
+        format!("{MODERATION_ROUTE_QUARANTINE}/{quarantine_id_hex}/{suffix}")
+            .parse()
+            .expect("moderation quarantine action URI")
     }
 
     async fn post_moderation_announce(
@@ -20897,6 +29578,99 @@ mod advert_tests {
         let uri = moderation_uri(MODERATION_ROUTE_TALLY);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
         handle_post_sorafs_moderation_ballot_tally(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_registry_repro_manifest(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_REPRO);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_model_registry_repro_manifest(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_registry_corpus_manifest(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_CORPORA);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_model_registry_corpus_manifest(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_screening_result(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_SCREENING_RESULTS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_screening_result(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_quarantine_review(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_review(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_quarantine_release(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_release(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
     }
 
     #[test]
@@ -20959,12 +29733,456 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn moderation_model_registry_endpoint_requires_canonical_request_auth() {
+        let (app, _dir, _auth) = sorafs_app_state_with_orderbook_auth();
+        let body =
+            moderation_model_registry_body(&moderation_repro_manifest_fixture(0x12, 0x22, 0x32));
+
+        let response = handle_post_sorafs_moderation_model_registry_repro_manifest(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            moderation_uri(MODERATION_ROUTE_MODEL_REGISTRY_REPRO),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn moderation_screening_endpoint_requires_canonical_request_auth() {
+        let (app, _dir, _auth) = sorafs_app_state_with_orderbook_auth();
+        let body = moderation_screening_result_body(
+            "bafy-auth-missing",
+            0x40,
+            0x50,
+            0x60,
+            7_250,
+            "quarantine",
+            1_800_000_100,
+        );
+
+        let response = handle_post_sorafs_moderation_screening_result(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            moderation_uri(MODERATION_ROUTE_SCREENING_RESULTS),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn moderation_model_registry_endpoints_admit_and_list_records() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+
+        let response = post_moderation_registry_repro_manifest(
+            app.clone(),
+            &auth.provider,
+            moderation_model_registry_body(&moderation_repro_manifest_fixture(0x12, 0x22, 0x32)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect registry repro admission body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode registry repro admission");
+        let expected_repro_manifest_id_hex = "12".repeat(16);
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.model_registry.repro_manifest_admission.v1")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("manifest_id_hex"))
+                .and_then(Value::as_str),
+            Some(expected_repro_manifest_id_hex.as_str())
+        );
+
+        let response = post_moderation_registry_repro_manifest(
+            app.clone(),
+            &auth.provider,
+            moderation_model_registry_body(&moderation_repro_manifest_fixture(0x13, 0x23, 0x33)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = post_moderation_registry_corpus_manifest(
+            app.clone(),
+            &auth.provider,
+            moderation_model_registry_body(&adversarial_corpus_manifest_fixture()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = handle_get_sorafs_moderation_model_registry(
+            State(app),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect registry snapshot body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode registry snapshot");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.model_registry.snapshot.v1")
+        );
+        assert_eq!(
+            value.get("repro_manifest_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("returned_repro_manifest_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("truncated_repro_manifests")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(value.get("corpus_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("returned_corpus_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("truncated_corpora").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        let repro = value
+            .get("repro_manifests")
+            .and_then(Value::as_array)
+            .expect("repro manifests array");
+        assert_eq!(repro.len(), 1);
+        assert_eq!(
+            repro[0].get("manifest_id_hex").and_then(Value::as_str),
+            Some(expected_repro_manifest_id_hex.as_str())
+        );
+        let corpora = value
+            .get("adversarial_corpora")
+            .and_then(Value::as_array)
+            .expect("corpora array");
+        assert_eq!(corpora.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn moderation_screening_endpoints_record_and_list_quarantine() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+
+        let response = post_moderation_screening_result(
+            app.clone(),
+            &auth.provider,
+            moderation_screening_result_body(
+                "bafy-quarantine",
+                0x41,
+                0x51,
+                0x61,
+                7_250,
+                "quarantine",
+                1_800_000_100,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect screening quarantine body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode screening quarantine body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.screening_result.ingest.v1")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("verdict"))
+                .and_then(Value::as_str),
+            Some("quarantine")
+        );
+        assert_eq!(
+            value
+                .get("quarantine")
+                .and_then(|record| record.get("state"))
+                .and_then(Value::as_str),
+            Some("pending_review")
+        );
+
+        let response = post_moderation_screening_result(
+            app.clone(),
+            &auth.provider,
+            moderation_screening_result_body(
+                "bafy-pass",
+                0x42,
+                0x52,
+                0x62,
+                1_250,
+                "pass",
+                1_800_000_101,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect screening pass body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode screening pass body");
+        assert_eq!(value.get("quarantine"), Some(&Value::Null));
+
+        let response = handle_get_sorafs_moderation_screening_results(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect screening snapshot body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode screening snapshot body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.screening_results.v1")
+        );
+        assert_eq!(
+            value.get("screening_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("returned_screening_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("truncated_screening").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("quarantine_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("returned_quarantine_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        let records = value
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("bounded screening records");
+        assert_eq!(records.len(), 1);
+        let quarantines = value
+            .get("quarantine_records")
+            .and_then(Value::as_array)
+            .expect("bounded quarantine records");
+        assert_eq!(quarantines.len(), 1);
+
+        let response =
+            handle_get_sorafs_moderation_quarantine(State(app), axum::extract::RawQuery(None))
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect quarantine body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode quarantine body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.v1")
+        );
+        assert_eq!(
+            value.get("quarantine_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let quarantines = value
+            .get("quarantine_records")
+            .and_then(Value::as_array)
+            .expect("quarantine records");
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            quarantines[0].get("subject").and_then(Value::as_str),
+            Some("bafy-quarantine")
+        );
+        assert_eq!(
+            quarantines[0].get("verdict").and_then(Value::as_str),
+            Some("quarantine")
+        );
+        assert_eq!(
+            quarantines[0].get("state").and_then(Value::as_str),
+            Some("pending_review")
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_quarantine_review_release_endpoints_advance_state() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+
+        let response = post_moderation_screening_result(
+            app.clone(),
+            &auth.provider,
+            moderation_screening_result_body(
+                "bafy-review-release",
+                0x43,
+                0x53,
+                0x63,
+                7_750,
+                "quarantine",
+                1_800_000_200,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect screening body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode screening body");
+        let quarantine_id_hex = value
+            .get("quarantine")
+            .and_then(|record| record.get("quarantine_id_hex"))
+            .and_then(Value::as_str)
+            .expect("quarantine id")
+            .to_owned();
+
+        let response = post_moderation_quarantine_release(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_release_body("release-authority@moderation", 1_800_000_220),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let review_body = moderation_quarantine_review_body("operator@moderation", 1_800_000_210);
+        let review_uri = moderation_quarantine_action_uri(
+            &quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX,
+        );
+        let response = handle_post_sorafs_moderation_quarantine_review(
+            State(app.clone()),
+            HeaderMap::new(),
+            Method::POST,
+            review_uri,
+            Path(quarantine_id_hex.clone()),
+            review_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = post_moderation_quarantine_review(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            review_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect review body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode review body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.review.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("reviewed")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("state"))
+                .and_then(Value::as_str),
+            Some("reviewed")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("reviewed_by"))
+                .and_then(Value::as_str),
+            Some("operator@moderation")
+        );
+
+        let response = post_moderation_quarantine_release(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_release_body("release-authority@moderation", 1_800_000_220),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect release body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode release body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.release.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("released")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("state"))
+                .and_then(Value::as_str),
+            Some("released")
+        );
+        assert_eq!(
+            value
+                .get("record")
+                .and_then(|record| record.get("release_authority"))
+                .and_then(Value::as_str),
+            Some("release-authority@moderation")
+        );
+
+        let response =
+            handle_get_sorafs_moderation_quarantine(State(app), axum::extract::RawQuery(None))
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect quarantine readback body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode quarantine readback body");
+        let quarantines = value
+            .get("quarantine_records")
+            .and_then(Value::as_array)
+            .expect("quarantine records");
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            quarantines[0].get("state").and_then(Value::as_str),
+            Some("released")
+        );
+    }
+
+    #[tokio::test]
     async fn moderation_ballot_handlers_accept_lifecycle_and_events() {
         let case_id = "case-api";
         let round_id = "round-1";
         let (app, _dir, auth, deposit_confirmation) =
             sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
         let deposit_escrow_id_hex = deposit_confirmation.escrow_id_hex.clone();
+        let expected_evidence_hashes = deposit_confirmation
+            .evidence_hashes_hex
+            .clone()
+            .unwrap_or_default();
 
         let response = post_moderation_announce(
             app.clone(),
@@ -21015,6 +30233,15 @@ mod advert_tests {
             appeal_deposit.get("deposit_xor").and_then(Value::as_str),
             Some("420")
         );
+        let evidence_hashes = appeal_deposit
+            .get("evidence_hashes_hex")
+            .and_then(Value::as_array)
+            .expect("appeal deposit evidence hashes");
+        assert_eq!(evidence_hashes.len(), expected_evidence_hashes.len());
+        assert_eq!(
+            evidence_hashes.first().and_then(Value::as_str),
+            expected_evidence_hashes.first().map(String::as_str)
+        );
         assert!(
             appeal_deposit
                 .get("custody_account")
@@ -21022,7 +30249,9 @@ mod advert_tests {
                 .is_some_and(|account| !account.is_empty())
         );
 
-        let response = handle_get_sorafs_moderation_ballots(State(app.clone())).await;
+        let response =
+            handle_get_sorafs_moderation_ballots(State(app.clone()), axum::extract::RawQuery(None))
+                .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -21030,13 +30259,17 @@ mod advert_tests {
         let value: Value =
             norito::json::from_slice(&body_bytes).expect("decode moderation list body");
         assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(50));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
 
-        let context = app
+        let announcement = app
             .sorafs_node
             .moderation_ballot(case_id, round_id)
             .expect("announced moderation ballot")
-            .announcement
-            .context;
+            .announcement;
+        let challenge_deadline_unix_ms = announcement.challenge_deadline_unix_ms;
+        let context = announcement.context;
         let provider_reveal = moderation_reveal_fixture(
             &context,
             round_id,
@@ -21068,6 +30301,8 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+
+        wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
 
         let response = post_moderation_reveal(
             app.clone(),
@@ -21105,6 +30340,7 @@ mod advert_tests {
         let response = handle_get_sorafs_moderation_ballot(
             State(app.clone()),
             Path((case_id.to_owned(), round_id.to_owned())),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -21122,6 +30358,48 @@ mod advert_tests {
                 .and_then(Value::as_str)
                 .is_some_and(|choice| choice == "uphold")
         );
+
+        let response = handle_get_sorafs_moderation_ballot(
+            State(app.clone()),
+            Path((case_id.to_owned(), round_id.to_owned())),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect bounded moderation record body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode bounded moderation record body");
+        assert_eq!(value.get("commit_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_commit_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("truncated_commits").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(value.get("reveal_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_reveal_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("truncated_reveals").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        let commits = value
+            .get("commits")
+            .and_then(Value::as_array)
+            .expect("bounded commits");
+        assert_eq!(commits.len(), 1);
+        let reveals = value
+            .get("reveals")
+            .and_then(Value::as_array)
+            .expect("bounded reveals");
+        assert_eq!(reveals.len(), 1);
 
         let response = handle_get_sorafs_moderation_ballot_events(
             State(app),
@@ -21146,6 +30424,329 @@ mod advert_tests {
                 .and_then(|event| event.get("kind"))
                 .and_then(Value::as_str),
             Some("ballot_tallied")
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_list_limit_query_bounds_response_array() {
+        let round_id = "round-1";
+        let (app, _dir, auth, _deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit("case-list-1", round_id);
+
+        for case_id in ["case-list-1", "case-list-2"] {
+            let announcement = moderation_announcement_from_request(
+                moderation_announce_request(case_id, round_id, &auth, None),
+                None,
+                None,
+            )
+            .expect("valid moderation announcement");
+            app.sorafs_node
+                .announce_moderation_ballot(announcement)
+                .expect("announce moderation ballot");
+        }
+
+        let response = handle_get_sorafs_moderation_ballots(
+            State(app),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect moderation list body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode moderation list body");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        let ballots = value
+            .get("ballots")
+            .and_then(Value::as_array)
+            .expect("bounded ballots");
+        assert_eq!(ballots.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn moderation_settlement_worker_submits_tallied_deposit() {
+        let case_id = "case-worker-settlement";
+        let round_id = "round-1";
+        let (mut app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let announcement = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement;
+        let challenge_deadline_unix_ms = announcement.challenge_deadline_unix_ms;
+        let context = announcement.context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x31,
+            3_500,
+        );
+        let buyer_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.buyer,
+            SoraFsModerationVoteChoice::Uphold,
+            0x32,
+            3_501,
+        );
+
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.buyer,
+            moderation_commit_body(moderation_commit_fixture(&buyer_reveal, 1_501), 1_501),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
+
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.provider,
+            moderation_reveal_body(provider_reveal, 3_500),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.buyer,
+            moderation_reveal_body(buyer_reveal, 3_501),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = post_moderation_tally(
+            app.clone(),
+            &auth.provider,
+            moderation_tally_body(case_id, round_id, 3_600),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = app
+            .sorafs_node
+            .moderation_ballot_events_since(Some(0), 10)
+            .into_iter()
+            .find(|event| event.kind == ModerationBallotEventKind::BallotTallied)
+            .expect("tallied moderation event");
+
+        let (status, body) = process_sorafs_appeal_finance_settlement_worker_event(&app, event)
+            .await
+            .expect("worker processes tallied event")
+            .expect("deposit-backed tally should submit settlement");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(
+            body.get("submitted_step")
+                .and_then(|step| step.get("action"))
+                .and_then(Value::as_str),
+            Some("drawdown_non_refund")
+        );
+        assert!(
+            body.get("tx_hash_hex")
+                .and_then(Value::as_str)
+                .is_some_and(|hash| hash.len() == 64)
+        );
+        let submitted_steps = load_appeal_finance_settlement_worker_submitted_steps(&app)
+            .expect("load persisted worker state");
+        assert_eq!(submitted_steps.len(), 1);
+        let state_path =
+            appeal_finance_settlement_worker_state_path(&app).expect("worker state path");
+        let state_bytes = fs::read(state_path).expect("read persisted worker state");
+        let state_json: Value =
+            norito::json::from_slice(&state_bytes).expect("decode persisted worker state");
+        assert_eq!(
+            state_json.get("schema").and_then(Value::as_str),
+            Some("sorafs.appeal_finance.settlement_worker_state.v1")
+        );
+        assert_eq!(
+            state_json
+                .get("submitted_steps")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_settlement_worker_retries_expired_submission() {
+        let case_id = "case-worker-retry";
+        let round_id = "round-1";
+        let (mut app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let announcement = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement;
+        let challenge_deadline_unix_ms = announcement.challenge_deadline_unix_ms;
+        let context = announcement.context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x41,
+            3_500,
+        );
+        let buyer_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.buyer,
+            SoraFsModerationVoteChoice::Uphold,
+            0x42,
+            3_501,
+        );
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.buyer,
+            moderation_commit_body(moderation_commit_fixture(&buyer_reveal, 1_501), 1_501),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.provider,
+            moderation_reveal_body(provider_reveal, 3_500),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.buyer,
+            moderation_reveal_body(buyer_reveal, 3_501),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_tally(
+            app.clone(),
+            &auth.provider,
+            moderation_tally_body(case_id, round_id, 3_600),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = app
+            .sorafs_node
+            .moderation_ballot_events_since(Some(0), 10)
+            .into_iter()
+            .find(|event| event.kind == ModerationBallotEventKind::BallotTallied)
+            .expect("tallied moderation event");
+        let record = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("moderation ballot record");
+        let tally = record.tally.as_ref().expect("tally");
+        let deposit = record
+            .announcement
+            .appeal_deposit
+            .as_ref()
+            .expect("appeal deposit");
+        let confirmation =
+            appeal_finance_deposit_confirm_request_from_moderation_deposit(&record, deposit);
+        let (expected, escrow_record) =
+            load_appeal_finance_deposit_record_for_worker(&app, &confirmation)
+                .expect("worker deposit record");
+        let outcome = appeal_finance_settlement_outcome_from_moderation_tally(tally);
+        let panel_size = moderation_ballot_panel_size(&record).expect("panel size");
+        let step_key = appeal_finance_settlement_worker_step_key(
+            &expected,
+            &escrow_record,
+            outcome,
+            panel_size,
+        )
+        .expect("worker step key")
+        .expect("pending worker step");
+        let fake_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0xE7; Hash::LENGTH],
+        ));
+        app.pipeline_status_cache.record_entry(
+            fake_hash.clone(),
+            crate::PipelineStatusEntry::fresh(crate::PipelineStatusKind::Expired, None, None),
+        );
+        let fake_hash_hex = fake_hash.to_string();
+        let mut submitted_steps = BTreeMap::new();
+        submitted_steps.insert(
+            step_key.clone(),
+            AppealFinanceSettlementWorkerSubmission {
+                key: step_key,
+                tx_hash_hex: Some(fake_hash_hex.clone()),
+                status: "queued".to_owned(),
+                attempts: 1,
+                updated_at_unix_ms: 3_600,
+                last_error: None,
+            },
+        );
+        persist_appeal_finance_settlement_worker_submitted_steps(&app, &submitted_steps, 3_600)
+            .expect("persist seeded worker state");
+
+        let (status, body) = process_sorafs_appeal_finance_settlement_worker_event(&app, event)
+            .await
+            .expect("worker retries expired event")
+            .expect("expired submission should retry");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body.get("status").and_then(Value::as_str), Some("queued"));
+        let persisted = load_appeal_finance_settlement_worker_submitted_steps(&app)
+            .expect("load retried worker state");
+        let submission = persisted.values().next().expect("persisted submission");
+        assert_eq!(submission.attempts, 2);
+        assert_eq!(submission.status, "queued");
+        assert_ne!(
+            submission.tx_hash_hex.as_deref(),
+            Some(fake_hash_hex.as_str())
         );
     }
 
@@ -21239,6 +30840,162 @@ mod advert_tests {
         let response = post_moderation_commit(app, &auth.buyer, body).await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_commit_ignores_client_timestamp_override() {
+        let case_id = "case-commit-time";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let now_unix_ms = iroha_network_time_now_ms();
+        let announced_at_unix_ms = now_unix_ms.saturating_sub(4_000);
+        let commit_deadline_unix_ms = now_unix_ms.saturating_sub(3_000);
+        let challenge_deadline_unix_ms = now_unix_ms.saturating_sub(2_000);
+        let reveal_deadline_unix_ms = now_unix_ms.saturating_sub(1_000);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request_with_windows(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+                announced_at_unix_ms,
+                commit_deadline_unix_ms,
+                challenge_deadline_unix_ms,
+                reveal_deadline_unix_ms,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let context = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement
+            .context;
+        let reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x44,
+            challenge_deadline_unix_ms.saturating_add(1),
+        );
+        let commit = moderation_commit_fixture(&reveal, commit_deadline_unix_ms.saturating_sub(1));
+
+        let response = post_moderation_commit(
+            app,
+            &auth.provider,
+            moderation_commit_body(commit, commit_deadline_unix_ms.saturating_sub(1)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_reveal_ignores_client_timestamp_override() {
+        let case_id = "case-reveal-time";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let now_unix_ms = iroha_network_time_now_ms();
+        let announced_at_unix_ms = now_unix_ms.saturating_sub(1_000);
+        let commit_deadline_unix_ms = now_unix_ms.saturating_add(30_000);
+        let challenge_deadline_unix_ms = now_unix_ms.saturating_add(40_000);
+        let reveal_deadline_unix_ms = now_unix_ms.saturating_add(50_000);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request_with_windows(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+                announced_at_unix_ms,
+                commit_deadline_unix_ms,
+                challenge_deadline_unix_ms,
+                reveal_deadline_unix_ms,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let context = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement
+            .context;
+        let reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x55,
+            challenge_deadline_unix_ms.saturating_add(1),
+        );
+        let commit = moderation_commit_fixture(&reveal, announced_at_unix_ms.saturating_add(1));
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(commit, announced_at_unix_ms.saturating_add(1)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = post_moderation_reveal(
+            app,
+            &auth.provider,
+            moderation_reveal_body(reveal, challenge_deadline_unix_ms.saturating_add(1)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_tally_ignores_client_timestamp_override() {
+        let case_id = "case-tally-time";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let now_unix_ms = iroha_network_time_now_ms();
+        let announced_at_unix_ms = now_unix_ms.saturating_sub(1_000);
+        let commit_deadline_unix_ms = now_unix_ms.saturating_add(30_000);
+        let challenge_deadline_unix_ms = now_unix_ms.saturating_add(40_000);
+        let reveal_deadline_unix_ms = now_unix_ms.saturating_add(60_000);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request_with_windows(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+                announced_at_unix_ms,
+                commit_deadline_unix_ms,
+                challenge_deadline_unix_ms,
+                reveal_deadline_unix_ms,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = post_moderation_tally(
+            app,
+            &auth.provider,
+            moderation_tally_body(case_id, round_id, reveal_deadline_unix_ms.saturating_add(1)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
     }
 
     #[tokio::test]
@@ -21434,7 +31191,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let response = handle_get_sorafs_orderbook_book(State(app.clone())).await;
+        let response =
+            handle_get_sorafs_orderbook_book(State(app.clone()), axum::extract::RawQuery(None))
+                .await;
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect orderbook body");
@@ -21472,7 +31231,9 @@ mod advert_tests {
             Some(1)
         );
 
-        let response = handle_get_sorafs_orderbook_trades(State(app.clone())).await;
+        let response =
+            handle_get_sorafs_orderbook_trades(State(app.clone()), axum::extract::RawQuery(None))
+                .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -21480,7 +31241,8 @@ mod advert_tests {
         let value: Value = norito::json::from_slice(&body_bytes).expect("decode trades body");
         assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
 
-        let response = handle_get_sorafs_orderbook_channels(State(app)).await;
+        let response =
+            handle_get_sorafs_orderbook_channels(State(app), axum::extract::RawQuery(None)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -21555,7 +31317,9 @@ mod advert_tests {
             Some("closed")
         );
 
-        let response = handle_get_sorafs_orderbook_receipts(State(app.clone())).await;
+        let response =
+            handle_get_sorafs_orderbook_receipts(State(app.clone()), axum::extract::RawQuery(None))
+                .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -21580,7 +31344,8 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
-        let response = handle_get_sorafs_orderbook_book(State(app)).await;
+        let response =
+            handle_get_sorafs_orderbook_book(State(app), axum::extract::RawQuery(None)).await;
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect book body");
@@ -21589,6 +31354,248 @@ mod advert_tests {
             value
                 .get("settlement_receipt_count")
                 .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn orderbook_readback_limit_bounds_snapshot_arrays() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+
+        for ask_id in [41_u8, 43_u8] {
+            let response = post_orderbook_order(
+                app.clone(),
+                &auth.provider,
+                orderbook_order_body(orderbook_order_fixture(
+                    ask_id,
+                    OrderSideV1::Ask,
+                    1_500_000,
+                    &auth.provider,
+                )),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = handle_get_sorafs_orderbook_book(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited book body with open orders");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited book with open orders");
+        assert_eq!(
+            value.get("open_order_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("returned_open_order_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_open_orders").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("open_orders")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        for bid_id in [42_u8, 44_u8] {
+            let response = post_orderbook_order(
+                app.clone(),
+                &auth.buyer,
+                orderbook_order_body(orderbook_order_fixture(
+                    bid_id,
+                    OrderSideV1::Bid,
+                    1_600_000,
+                    &auth.buyer,
+                )),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = handle_get_sorafs_orderbook_book(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited book body with trades");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited book with trades");
+        assert_eq!(value.get("trade_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_trade_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("settlement_channel_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("returned_settlement_channel_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("truncated_trades").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("truncated_settlement_channels")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("trades").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("settlement_channels")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_orderbook_trades(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited trades body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode limited trades");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value.get("trades").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_orderbook_channels(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited channels body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode limited channels");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("channels")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let channels = app
+            .sorafs_node
+            .orderbook_snapshot(unix_timestamp_now())
+            .settlement_channels;
+        assert_eq!(channels.len(), 2);
+        for (index, channel) in channels.iter().enumerate() {
+            let response = post_orderbook_receipt(
+                app.clone(),
+                &auth.provider,
+                orderbook_receipt_body(orderbook_receipt_fixture(
+                    45_u8.saturating_add(index as u8),
+                    channel,
+                    0,
+                    channel.total_bytes,
+                    unix_timestamp_now().saturating_add(index as u64 + 1),
+                    channel.xor_locked.as_micro(),
+                    &auth.provider,
+                )),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = handle_get_sorafs_orderbook_book(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited book body with receipts");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode limited book with receipts");
+        assert_eq!(
+            value
+                .get("settlement_receipt_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("returned_settlement_receipt_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("truncated_settlement_receipts")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("settlement_receipts")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let response = handle_get_sorafs_orderbook_receipts(
+            State(app),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect limited receipts body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode limited receipts");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("receipts")
+                .and_then(Value::as_array)
+                .map(Vec::len),
             Some(1)
         );
     }
@@ -21830,7 +31837,8 @@ mod advert_tests {
             Some("cancelled")
         );
 
-        let response = handle_get_sorafs_orderbook_book(State(app)).await;
+        let response =
+            handle_get_sorafs_orderbook_book(State(app), axum::extract::RawQuery(None)).await;
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect orderbook body");
@@ -21845,7 +31853,12 @@ mod advert_tests {
     async fn reputation_latest_returns_not_found_before_publish() {
         let (app, _dir) = sorafs_app_state_with_reputation_storage();
 
-        let response = handle_get_sorafs_reputation_latest(State(app), HeaderMap::new()).await;
+        let response = handle_get_sorafs_reputation_latest(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
@@ -21873,6 +31886,18 @@ mod advert_tests {
             Some("accepted")
         );
         assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_provider_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            value.get("truncated_providers").and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             value.get("snapshot_id_hex").and_then(Value::as_str),
             Some(hex::encode(snapshot.snapshot_id).as_str())
@@ -21915,8 +31940,12 @@ mod advert_tests {
             );
         }
 
-        let response =
-            handle_get_sorafs_reputation_latest(State(app.clone()), HeaderMap::new()).await;
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let latest_etag = response.headers().get(ETAG).cloned().expect("latest etag");
         assert_eq!(
@@ -21939,11 +31968,58 @@ mod advert_tests {
             .and_then(Value::as_array)
             .expect("providers array");
         assert_eq!(providers.len(), 2);
+        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_provider_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            value.get("truncated_providers").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let capped_etag = response.headers().get(ETAG).cloned().expect("capped etag");
+        assert_ne!(latest_etag, capped_etag);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect capped latest body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode capped latest JSON");
+        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_provider_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_providers").and_then(Value::as_bool),
+            Some(true)
+        );
+        let providers = value
+            .get("providers")
+            .and_then(Value::as_array)
+            .expect("capped providers array");
+        assert_eq!(providers.len(), 1);
 
         let mut conditional_headers = HeaderMap::new();
         conditional_headers.insert(IF_NONE_MATCH, latest_etag.clone());
-        let response =
-            handle_get_sorafs_reputation_latest(State(app.clone()), conditional_headers).await;
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            conditional_headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&latest_etag));
 
@@ -21988,6 +32064,7 @@ mod advert_tests {
             State(app.clone()),
             HeaderMap::new(),
             Path(hex::encode(snapshot.snapshot_id)),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -22134,6 +32211,42 @@ mod advert_tests {
         let body_text = String::from_utf8(body_bytes.to_vec()).expect("utf8");
         assert!(body_text.contains("unsupported proof_kind"));
         assert!(body_text.contains("`por` or `potr`"));
+    }
+
+    #[tokio::test]
+    async fn proof_stream_rejects_oversized_sample_count_before_manifest_lookup() {
+        let mut state = mk_app_state_for_tests();
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        Arc::get_mut(&mut state)
+            .expect("unique app state required")
+            .sorafs_node = node;
+
+        let request = ProofStreamRequestDto {
+            manifest_digest_hex: "11".repeat(32),
+            provider_id_hex: "22".repeat(32),
+            proof_kind: "por".to_string(),
+            sample_count: Some(MAX_PROOF_STREAM_SAMPLE_COUNT + 1),
+            deadline_ms: None,
+            sample_seed: None,
+            nonce_b64: BASE64_STANDARD.encode([0x33u8; 16]),
+            orchestrator_job_id_hex: None,
+            tier: None,
+        };
+
+        let response = handle_post_sorafs_proof_stream(State(state), JsonOnly(request)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("sample_count must be at most 500"),
+            "unexpected error message: {message}"
+        );
     }
 
     #[tokio::test]
@@ -22567,6 +32680,45 @@ mod advert_tests {
             providers,
             deadline_epoch,
         )
+    }
+
+    fn fresh_alias_proof_bytes_for_test(alias: &str) -> Vec<u8> {
+        let now = crate::sorafs::unix_now_secs();
+        let generated_at_unix = now.saturating_sub(30);
+        let expires_at_unix = now.saturating_add(3_600);
+        let binding = AliasBindingV1 {
+            alias: alias.to_owned(),
+            manifest_cid: vec![0x42; 32],
+            bound_at: generated_at_unix,
+            expiry_epoch: expires_at_unix,
+        };
+        let merkle_path = Vec::new();
+        let registry_root = alias_merkle_root(&binding, &merkle_path).expect("alias merkle root");
+        let mut bundle = AliasProofBundleV1 {
+            binding,
+            registry_root,
+            registry_height: 1,
+            generated_at_unix,
+            expires_at_unix,
+            merkle_path,
+            council_signatures: Vec::new(),
+        };
+        let message = alias_proof_signature_digest(&bundle);
+        let keypair = checked_test_keypair(0x28);
+        let signature = checked_test_signature(keypair.private_key(), message.as_ref());
+        let mut signer = [0_u8; 32];
+        signer.copy_from_slice(
+            keypair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid")
+                .1,
+        );
+        bundle.council_signatures.push(CouncilSignature {
+            signer,
+            signature: signature.payload().to_vec(),
+        });
+        norito::to_bytes(&bundle).expect("encode fresh alias proof bundle")
     }
 
     fn seed_registry_manifest_for_gateway(
@@ -23592,6 +33744,7 @@ mod advert_tests {
             &metering,
             None,
             None,
+            DEFAULT_LIST_LIMIT,
         )
         .expect("serialize snapshot");
         let map = json.as_object().expect("json object");
@@ -23604,9 +33757,246 @@ mod advert_tests {
             map.get("credit_ledger_count").and_then(Value::as_u64),
             Some(1)
         );
+        assert_eq!(map.get("dispute_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            map.get("returned_declaration_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("returned_ledger_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("returned_credit_ledger_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("returned_dispute_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            map.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            map.get("truncated_declarations").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            map.get("truncated_fee_ledger").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            map.get("truncated_credit_ledger").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            map.get("truncated_disputes").and_then(Value::as_bool),
+            Some(false)
+        );
         assert!(map.get("local_usage").is_some());
         assert!(map.get("disputes").is_some());
         assert!(map.get("credit_ledger").is_some());
+    }
+
+    #[test]
+    fn capacity_state_limit_bounds_snapshot_arrays() {
+        let declaration = RegistryDeclaration {
+            provider_id_hex: "aa".into(),
+            committed_capacity_gib: 10,
+            registered_epoch: 1,
+            valid_from_epoch: 2,
+            valid_until_epoch: 3,
+            declaration_json: json_object(vec![json_entry("version", 1u64)]),
+            metadata_json: Value::Object(Map::new()),
+        };
+        let ledger = RegistryFeeLedgerEntry {
+            provider_id_hex: "aa".into(),
+            total_declared_gib: 100,
+            total_utilised_gib: 80,
+            storage_fee_nano: 30,
+            egress_fee_nano: 12,
+            accrued_fee_nano: 42,
+            expected_settlement_nano: 84,
+            penalty_slashed_nano: 0,
+            penalty_events: 0,
+            last_updated_epoch: 4,
+        };
+        let credit = RegistryCreditLedgerEntry {
+            provider_id_hex: "aa".into(),
+            available_credit_nano: 1_000,
+            bonded_nano: 500,
+            required_bond_nano: 400,
+            expected_settlement_nano: 300,
+            onboarding_epoch: 1,
+            last_settlement_epoch: 2,
+            low_balance_since_epoch: None,
+            slashed_nano: 0,
+            under_delivery_strikes: 0,
+            last_penalty_epoch: None,
+            metadata_json: Value::Object(Map::new()),
+        };
+        let dispute = RegistryDispute {
+            dispute_id_hex: "01".repeat(32),
+            provider_id_hex: "aa".into(),
+            complainant_id_hex: "bb".repeat(32),
+            replication_order_id_hex: Some("cc".repeat(32)),
+            kind: "replication_shortfall".into(),
+            submitted_epoch: 9,
+            description: "provider missed ingestion window".into(),
+            requested_remedy: Some("slash stake".into()),
+            status: "pending".into(),
+            resolution_epoch: None,
+            resolution_outcome: None,
+            resolution_notes: None,
+            evidence_digest_hex: "dd".repeat(32),
+            evidence_media_type: Some("application/zip".into()),
+            evidence_uri: Some("https://example.com/evidence.zip".into()),
+            evidence_size_bytes: Some(1024),
+            dispute_b64: "ZGlzcHV0ZQ==".into(),
+        };
+        let snapshot = CapacitySnapshot {
+            declarations: vec![
+                declaration.clone(),
+                RegistryDeclaration {
+                    provider_id_hex: "ab".into(),
+                    ..declaration
+                },
+            ],
+            fee_ledger: vec![
+                ledger.clone(),
+                RegistryFeeLedgerEntry {
+                    provider_id_hex: "ab".into(),
+                    ..ledger
+                },
+            ],
+            credit_ledger: vec![
+                credit.clone(),
+                RegistryCreditLedgerEntry {
+                    provider_id_hex: "ab".into(),
+                    ..credit
+                },
+            ],
+            disputes: vec![
+                dispute.clone(),
+                RegistryDispute {
+                    dispute_id_hex: "02".repeat(32),
+                    ..dispute
+                },
+            ],
+        };
+        let metering = MeteringSnapshot::default();
+        let json = snapshot_to_json(
+            snapshot,
+            &CapacityUsageSnapshot::default(),
+            &metering,
+            None,
+            None,
+            1,
+        )
+        .expect("serialize limited snapshot");
+        let map = json.as_object().expect("json object");
+        assert_eq!(
+            map.get("declaration_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(map.get("ledger_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            map.get("credit_ledger_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(map.get("dispute_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            map.get("returned_declaration_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("returned_ledger_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("returned_credit_ledger_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("returned_dispute_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(map.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            map.get("truncated_declarations").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            map.get("truncated_fee_ledger").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            map.get("truncated_credit_ledger").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            map.get("truncated_disputes").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            map.get("declarations")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("fee_ledger")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("credit_ledger")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            map.get("disputes").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_list_limit_bounds_cached_adverts() {
+        let fixture_a =
+            make_signed_advert_with_host_and_provider("a.storage.example.test", [0x11; 32]);
+        let fixture_b =
+            make_signed_advert_with_host_and_provider("b.storage.example.test", [0x22; 32]);
+        let app = app_state_with_seeded_cache_for_fixtures(&[fixture_a, fixture_b]);
+
+        let response = handle_get_sorafs_providers(
+            State(app),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect provider list body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode provider list JSON");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("providers")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -23674,7 +34064,8 @@ mod advert_tests {
     #[tokio::test]
     async fn capacity_state_returns_not_found_when_disabled() {
         let app = mk_app_state_for_tests();
-        let response = handle_get_sorafs_capacity_state(State(app)).await;
+        let response =
+            handle_get_sorafs_capacity_state(State(app), axum::extract::RawQuery(None)).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -23714,6 +34105,147 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn pin_manifest_bounds_alias_and_replication_readback() {
+        let app = mk_app_state_for_tests();
+        let mut inner =
+            Arc::try_unwrap(app).unwrap_or_else(|_| panic!("no other references to app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let app = Arc::new(inner);
+
+        let pricing = app.state.view().world().sorafs_pricing().clone();
+        let mut block = app.state.block(default_block_header());
+        let mut tx = block.transaction();
+        let manifest_digest = ManifestDigest::new([0x61; 32]);
+        let issuer = test_account();
+        let policy = RegistryPinPolicy::default();
+        let content_length = 4096;
+        let amount_nano = pricing.public_pin_fee_nano(
+            policy.storage_class,
+            content_length,
+            policy.min_replicas,
+            5,
+            policy.retention_epoch,
+        );
+        let mut manifest_record = PinManifestRecord::new(
+            manifest_digest.clone(),
+            default_chunker_handle(),
+            [0xA1; 32],
+            policy,
+            issuer.clone(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(content_length);
+        manifest_record.record_pin_fee_payment(PinFeePayment {
+            paid_by: issuer.clone(),
+            fee_asset_id: app.state.gov.sorafs_pin_fee_asset_id.clone(),
+            treasury_account_id: app.state.gov.sorafs_pin_fee_treasury_account.clone(),
+            amount_nano,
+        });
+        manifest_record.approve(7, None);
+        tx.world_mut_for_testing()
+            .pin_manifests_mut_for_testing()
+            .insert(manifest_digest.clone(), manifest_record);
+
+        for index in 0..3 {
+            let name = format!("docs-{index}");
+            let alias_label = format!("sora/{name}");
+            let alias_record = ManifestAliasRecord::new(
+                ManifestAliasBinding {
+                    namespace: "sora".into(),
+                    name,
+                    proof: fresh_alias_proof_bytes_for_test(&alias_label),
+                },
+                manifest_digest.clone(),
+                issuer.clone(),
+                9 + index,
+                90 + index,
+            );
+            tx.world_mut_for_testing()
+                .manifest_aliases_mut_for_testing()
+                .insert(alias_record.alias_id(), alias_record);
+        }
+
+        for index in 0..3 {
+            let order_id = ReplicationOrderId::new([0x71 + index as u8; 32]);
+            tx.world_mut_for_testing()
+                .replication_orders_mut_for_testing()
+                .insert(
+                    order_id,
+                    ReplicationOrderRecord {
+                        order_id,
+                        manifest_digest: manifest_digest.clone(),
+                        issued_by: issuer.clone(),
+                        issued_epoch: 20 + index,
+                        deadline_epoch: 40 + index,
+                        canonical_order: encode_replication_order_bytes(
+                            &order_id,
+                            &manifest_digest,
+                            40 + index,
+                        ),
+                        status: ReplicationOrderStatus::Pending,
+                    },
+                );
+        }
+
+        tx.apply();
+        block.commit().expect("commit pin manifest readback seed");
+
+        let response = handle_get_sorafs_pin_manifest(
+            State(app),
+            Path(hex::encode(manifest_digest.as_bytes())),
+            axum::extract::RawQuery(Some("limit=2".to_owned())),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode JSON");
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("alias_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            value.get("returned_alias_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("replication_order_count").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            value
+                .get("returned_replication_order_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value.get("truncated_aliases").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("truncated_replication_orders")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("aliases").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("replication_orders")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
     async fn capacity_state_returns_empty_snapshot() {
         let app = mk_app_state_for_tests();
         let mut inner =
@@ -23722,7 +34254,11 @@ mod advert_tests {
         inner.sorafs_node = node;
         let app = Arc::new(inner);
 
-        let response = handle_get_sorafs_capacity_state(State(app)).await;
+        let response = handle_get_sorafs_capacity_state(
+            State(app),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -23733,6 +34269,13 @@ mod advert_tests {
             Some(0)
         );
         assert_eq!(value.get("ledger_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("returned_declaration_count")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
         assert!(value.get("local_usage").map_or(false, Value::is_null));
     }
 
@@ -23785,7 +34328,8 @@ mod advert_tests {
         inner.sorafs_node = node;
         let app = Arc::new(inner);
 
-        let response = handle_get_sorafs_capacity_state(State(app)).await;
+        let response =
+            handle_get_sorafs_capacity_state(State(app), axum::extract::RawQuery(None)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -24454,9 +34998,12 @@ mod advert_tests {
         seed_capacity_declaration(&inner.sorafs_node, [0xAA; 32], &chunker_handle);
         let state = Arc::new(inner);
 
-        let response =
-            handle_get_sorafs_storage_manifest(State(state.clone()), Path(manifest_id.clone()))
-                .await;
+        let response = handle_get_sorafs_storage_manifest(
+            State(state.clone()),
+            Path(manifest_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
 
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
@@ -24474,6 +35021,16 @@ mod advert_tests {
         assert_eq!(
             value.get("content_length").and_then(Value::as_u64),
             Some(plan.content_length)
+        );
+        assert_eq!(value.get("file_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("returned_file_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_files").and_then(Value::as_bool),
+            Some(false)
         );
         let manifest_b64 = value
             .get("manifest_b64")
@@ -24550,8 +35107,12 @@ mod advert_tests {
 
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let manifest_response =
-            handle_get_sorafs_site_manifest(State(state.clone()), manifest_headers).await;
+        let manifest_response = handle_get_sorafs_site_manifest(
+            State(state.clone()),
+            manifest_headers.clone(),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
             .await
@@ -24568,6 +35129,64 @@ mod advert_tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(2)
+        );
+        assert_eq!(
+            manifest_value.get("file_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            manifest_value
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            manifest_value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            manifest_value
+                .get("truncated_files")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let capped_manifest_response = handle_get_sorafs_site_manifest(
+            State(state.clone()),
+            manifest_headers,
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(capped_manifest_response.status(), StatusCode::OK);
+        let capped_manifest_body = body::to_bytes(capped_manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read capped manifest body");
+        let capped_manifest_value: Value =
+            norito::json::from_slice(&capped_manifest_body).expect("decode capped manifest");
+        assert_eq!(
+            capped_manifest_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            capped_manifest_value
+                .get("file_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            capped_manifest_value
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_manifest_value
+                .get("truncated_files")
+                .and_then(Value::as_bool),
+            Some(true)
         );
 
         let mut spa_headers = HeaderMap::new();
@@ -24599,8 +35218,12 @@ mod advert_tests {
             .expect("read asset body");
         assert_eq!(asset_body, &asset_bytes[..]);
 
-        let cid_lookup =
-            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        let cid_lookup = handle_get_sorafs_cid_lookup(
+            State(state.clone()),
+            Path(content_cid.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
             .await
@@ -24611,7 +35234,65 @@ mod advert_tests {
             cid_lookup_value.get("content_cid").and_then(Value::as_str),
             Some(content_cid.as_str())
         );
+        assert_eq!(
+            cid_lookup_value.get("file_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            cid_lookup_value
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            cid_lookup_value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            cid_lookup_value
+                .get("truncated_files")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
+
+        let capped_cid_lookup = handle_get_sorafs_cid_lookup(
+            State(state.clone()),
+            Path(content_cid.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(capped_cid_lookup.status(), StatusCode::OK);
+        let capped_cid_lookup_body = body::to_bytes(capped_cid_lookup.into_body(), usize::MAX)
+            .await
+            .expect("read capped cid lookup body");
+        let capped_cid_lookup_value: Value =
+            norito::json::from_slice(&capped_cid_lookup_body).expect("decode capped cid lookup");
+        assert_eq!(
+            capped_cid_lookup_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            capped_cid_lookup_value
+                .get("file_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            capped_cid_lookup_value
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_cid_lookup_value
+                .get("truncated_files")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
 
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
@@ -24787,8 +35468,12 @@ mod advert_tests {
 
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let manifest_response =
-            handle_get_sorafs_site_manifest(State(state), manifest_headers).await;
+        let manifest_response = handle_get_sorafs_site_manifest(
+            State(state),
+            manifest_headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
             .await
@@ -24909,8 +35594,12 @@ mod advert_tests {
 
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
-        let manifest_response =
-            handle_get_sorafs_site_manifest(State(state), manifest_headers).await;
+        let manifest_response = handle_get_sorafs_site_manifest(
+            State(state),
+            manifest_headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
             .await
@@ -24983,8 +35672,12 @@ mod advert_tests {
             header::HOST,
             HeaderValue::from_str(&cid_host).expect("cid host header"),
         );
-        let manifest_response =
-            handle_get_sorafs_site_manifest(State(state.clone()), manifest_headers).await;
+        let manifest_response = handle_get_sorafs_site_manifest(
+            State(state.clone()),
+            manifest_headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
         let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
             .await
@@ -25268,8 +35961,12 @@ mod advert_tests {
             .expect("read cid root body");
         assert_eq!(cid_root_body, &index_bytes[..]);
 
-        let cid_lookup =
-            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        let cid_lookup = handle_get_sorafs_cid_lookup(
+            State(state.clone()),
+            Path(content_cid.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
             .await
@@ -25351,8 +36048,12 @@ mod advert_tests {
         }
         let state = Arc::new(inner);
 
-        let cid_lookup =
-            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        let cid_lookup = handle_get_sorafs_cid_lookup(
+            State(state.clone()),
+            Path(content_cid.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
             .await
@@ -25914,6 +36615,8 @@ mod advert_tests {
 
         inner.sorafs_gateway_config.denylist.catalog_path = Some(catalog_path);
         inner.sorafs_gateway_config.denylist.opt_out_packs = vec!["global-emergency".to_owned()];
+        inner.sorafs_gateway_config.denylist.extra_packs =
+            vec!["global-override".to_owned(), "regional-override".to_owned()];
 
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
@@ -25925,13 +36628,35 @@ mod advert_tests {
         inner.sorafs_gateway_tls_state = Some(components.tls_state.clone());
         let state = Arc::new(inner);
 
-        let catalog_response = handle_get_sorafs_denylist_catalog(State(state.clone())).await;
+        let catalog_response =
+            handle_get_sorafs_denylist_catalog(State(state.clone()), axum::extract::RawQuery(None))
+                .await;
         assert_eq!(catalog_response.status(), StatusCode::OK);
         let catalog_body = body::to_bytes(catalog_response.into_body(), usize::MAX)
             .await
             .expect("read catalog body");
         let catalog_value: Value =
             norito::json::from_slice(&catalog_body).expect("decode catalog response");
+        assert_eq!(
+            catalog_value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            catalog_value.get("pack_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            catalog_value
+                .get("returned_pack_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            catalog_value
+                .get("truncated_packs")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
         let packs = catalog_value
             .get("packs")
             .and_then(Value::as_array)
@@ -25939,10 +36664,41 @@ mod advert_tests {
         assert_eq!(packs.len(), 2);
         assert_eq!(
             catalog_value
+                .get("opt_out_pack_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            catalog_value
+                .get("returned_opt_out_pack_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            catalog_value
                 .get("opt_out_packs")
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+        assert_eq!(
+            catalog_value
+                .get("extra_pack_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            catalog_value
+                .get("returned_extra_pack_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            catalog_value
+                .get("extra_packs")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
         );
         assert_eq!(
             packs[0].get("pack_id").and_then(Value::as_str),
@@ -25954,6 +36710,64 @@ mod advert_tests {
             Some("global-emergency")
         );
         assert_eq!(packs[1].get("active").and_then(Value::as_bool), Some(false));
+
+        let capped_response = handle_get_sorafs_denylist_catalog(
+            State(state.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(capped_response.status(), StatusCode::OK);
+        let capped_body = body::to_bytes(capped_response.into_body(), usize::MAX)
+            .await
+            .expect("read capped catalog body");
+        let capped_value: Value =
+            norito::json::from_slice(&capped_body).expect("decode capped catalog response");
+        assert_eq!(capped_value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            capped_value.get("pack_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            capped_value
+                .get("returned_pack_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_value.get("truncated_packs").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            capped_value
+                .get("packs")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            capped_value
+                .get("returned_opt_out_pack_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_value
+                .get("truncated_opt_out_packs")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            capped_value
+                .get("returned_extra_pack_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_value
+                .get("truncated_extra_packs")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
 
         let pack_response =
             handle_get_sorafs_denylist_pack(State(state), Path("global-core".to_owned())).await;
@@ -25982,8 +36796,22 @@ mod advert_tests {
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
 
-        let payload = b"sorafs chunk plan export payload";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let first_file = vec![0xA5; sorafs_chunker::ChunkProfile::DEFAULT.max_size + 17];
+        let second_file = b"sorafs chunk plan export tail".to_vec();
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "large.bin".to_owned()],
+                    data: first_file,
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: second_file,
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("plan");
         let manifest = ManifestBuilder::new()
             .root_cid(vec![0xCD; 16])
             .dag_codec(DagCodecId(0x71))
@@ -25992,12 +36820,16 @@ mod advert_tests {
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
+            .car_digest(blake3::hash(&payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
             .expect("manifest");
+        assert!(
+            plan.chunks.len() > 1,
+            "fixture should cover chunk truncation"
+        );
 
         let chunker_handle = format!(
             "{}.{}@{}",
@@ -26013,8 +36845,12 @@ mod advert_tests {
         inner.sorafs_node = node;
         let state = Arc::new(inner);
 
-        let response =
-            handle_get_sorafs_storage_plan(State(state.clone()), Path(manifest_id.clone())).await;
+        let response = handle_get_sorafs_storage_plan(
+            State(state.clone()),
+            Path(manifest_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
 
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
@@ -26038,6 +36874,34 @@ mod advert_tests {
             Some(plan.chunks.len() as u64)
         );
         assert_eq!(
+            plan_value
+                .get("returned_chunk_count")
+                .and_then(Value::as_u64),
+            Some(plan.chunks.len() as u64)
+        );
+        assert_eq!(
+            plan_value.get("file_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            plan_value
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            plan_value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
+        assert_eq!(
+            plan_value.get("truncated_chunks").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            plan_value.get("truncated_files").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
             plan_value.get("content_length").and_then(Value::as_u64),
             Some(plan.content_length)
         );
@@ -26046,6 +36910,78 @@ mod advert_tests {
             .and_then(Value::as_array)
             .expect("chunks array");
         assert_eq!(chunks.len(), plan.chunks.len());
+
+        let capped_response = handle_get_sorafs_storage_plan(
+            State(state.clone()),
+            Path(manifest_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(capped_response.status(), StatusCode::OK);
+        let capped_body = body::to_bytes(capped_response.into_body(), usize::MAX)
+            .await
+            .expect("collect capped body");
+        let capped_value: Value =
+            norito::json::from_slice(&capped_body).expect("decode capped plan response");
+        let capped_plan = capped_value
+            .get("plan")
+            .and_then(Value::as_object)
+            .expect("capped plan object");
+        assert_eq!(
+            capped_plan.get("chunk_count").and_then(Value::as_u64),
+            Some(plan.chunks.len() as u64)
+        );
+        assert_eq!(
+            capped_plan
+                .get("returned_chunk_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_plan.get("file_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            capped_plan
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            capped_plan.get("truncated_chunks").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            capped_plan
+                .get("truncated_chunk_digests")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            capped_plan.get("truncated_files").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            capped_plan
+                .get("chunks")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            capped_plan
+                .get("chunk_digests_blake3")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            capped_plan
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -26127,6 +37063,36 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn storage_por_sample_rejects_oversized_count_before_manifest_lookup() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let sample_request = StoragePorSampleRequestDto {
+            manifest_id_hex: "00".repeat(32),
+            count: MAX_POR_SAMPLE_COUNT as u64 + 1,
+            seed: Some(42),
+        };
+        let response =
+            handle_post_sorafs_storage_por_sample(State(state), JsonOnly(sample_request)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("count must be at most"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
     async fn storage_por_pipeline_records_success() {
         let (challenge, proof, verdict) = sample_por_artifacts();
 
@@ -26195,6 +37161,69 @@ mod advert_tests {
         let snapshot = node_view.metering_snapshot();
         assert_eq!(snapshot.por_samples_success, 1);
         assert_eq!(snapshot.por_samples_total, 1);
+    }
+
+    #[tokio::test]
+    async fn por_ingestion_readback_limit_bounds_provider_statuses() {
+        let (challenge, _, _) = sample_por_artifacts();
+        let mut second_challenge = challenge.clone();
+        second_challenge.provider_id = [0xDD; 32];
+        second_challenge.challenge_id = derive_challenge_id(
+            &second_challenge.seed,
+            &second_challenge.manifest_digest,
+            &second_challenge.provider_id,
+            second_challenge.epoch_id,
+            second_challenge.drand_round,
+        );
+
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        node.record_por_challenge(&challenge)
+            .expect("record first challenge");
+        node.record_por_challenge(&second_challenge)
+            .expect("record second challenge");
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let response = handle_get_sorafs_por_ingestion(
+            State(state),
+            Path(hex::encode(challenge.manifest_digest)),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode ingestion response");
+        assert_eq!(
+            value.get("manifest_digest_hex").and_then(Value::as_str),
+            Some(hex::encode(challenge.manifest_digest).as_str())
+        );
+        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_provider_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("truncated_providers").and_then(Value::as_bool),
+            Some(true)
+        );
+        let providers = value
+            .get("providers")
+            .and_then(Value::as_array)
+            .expect("providers array");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(
+            providers[0]
+                .get("pending_challenges")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -26287,6 +37316,7 @@ mod advert_tests {
         let response = handle_get_sorafs_storage_manifest(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
+            axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
@@ -30271,6 +41301,43 @@ mod advert_tests {
 
     fn app_state_with_seeded_cache(fixture: &ProviderFixture) -> SharedAppState {
         app_state_with_cache_inner(fixture, true)
+    }
+
+    fn app_state_with_seeded_cache_for_fixtures(fixtures: &[ProviderFixture]) -> SharedAppState {
+        assert!(
+            !fixtures.is_empty(),
+            "at least one provider fixture required"
+        );
+        let admission = AdmissionRegistry::from_envelopes(
+            fixtures.iter().map(|fixture| fixture.envelope.clone()),
+        )
+        .expect("fixture envelopes must validate");
+        let mut cache = ProviderAdvertCache::new(
+            vec![
+                CapabilityType::ToriiGateway,
+                CapabilityType::ChunkRangeFetch,
+            ],
+            Arc::new(admission),
+        );
+        for fixture in fixtures {
+            cache
+                .ingest(fixture.advert.clone(), fixture.issued_at())
+                .expect("ingest fixture advert into cache");
+        }
+
+        let mut app = Arc::try_unwrap(mk_app_state_for_tests())
+            .unwrap_or_else(|_| panic!("unique app state"));
+        app.sorafs_cache = Some(Arc::new(RwLock::new(cache)));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        for fixture in fixtures {
+            seed_capacity_declaration(
+                &node,
+                fixture.provider_id(),
+                &fixture.advert.body.profile_id,
+            );
+        }
+        app.sorafs_node = node;
+        Arc::new(app)
     }
 
     fn app_state_with_cache_inner(fixture: &ProviderFixture, seed_fixture: bool) -> SharedAppState {

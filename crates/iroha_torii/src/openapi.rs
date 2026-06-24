@@ -4102,12 +4102,16 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch PoR ingestion status.",
-            "Fetch PoR ingestion status for a manifest digest.",
+            "Fetch PoR ingestion status for a manifest digest. Provider status entries are bounded by `limit` and capped at 500 rows while total provider count remains visible.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param(
-                "manifest_digest_hex",
-                "Manifest digest (hex).",
-            )],
+            vec![
+                string_path_param("manifest_digest_hex", "Manifest digest (hex)."),
+                integer_query_param(
+                    "limit",
+                    "Maximum number of provider status entries to return (default 50, max 500).",
+                    Some("uint64"),
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -4429,6 +4433,17 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/appeals/finance/deposits/submit-settlement".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Submit an appeal deposit settlement transaction.",
+            "Recompute the expected SoraFS appeal deposit settlement from confirmed deposit parameters, select the next pending DrawdownAssetLock or CancelAssetLock step, sign it with a configured settlement submitter authority, queue the native transaction, and publish an appeal_finance_settlement_receipt to the local Governance DAG when a publisher is configured. Responses include the queued tx_hash_hex, reconciliation evidence, and receipt publication status. The endpoint requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/appeals/finance/deposits/reconcile".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -4442,9 +4457,13 @@ fn sorafs_paths() -> Map {
     let mut appeal_finance_reports = json_get_operation(
         "SoraFS",
         "List appeal finance report publications.",
-        "Summarize locally published SoraFS appeal finance reports from the Governance DAG publish-index, including outcome counts, finance totals, and source entries.",
+        "Summarize locally published SoraFS appeal finance reports from the Governance DAG publish-index, including outcome counts, finance totals, and source entries. The entries array is bounded by `limit` and capped at 500 entries while aggregate totals are computed over the full local index.",
         "#/components/schemas/JsonValue",
-        Vec::new(),
+        vec![integer_query_param(
+            "limit",
+            "Maximum number of report entries to return (default 50, max 500).",
+            Some("uint64"),
+        )],
     );
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
@@ -4465,9 +4484,13 @@ fn sorafs_paths() -> Map {
     let mut weekly_rollups = json_get_operation(
         "SoraFS",
         "List appeal finance weekly rollup publications.",
-        "Summarize locally published SoraFS appeal finance weekly rollups from the Governance DAG publish-index, including cycle counts, report totals, and source entries.",
+        "Summarize locally published SoraFS appeal finance weekly rollups from the Governance DAG publish-index, including cycle counts, report totals, and source entries. The entries array is bounded by `limit` and capped at 500 entries while aggregate totals are computed over the full local index.",
         "#/components/schemas/JsonValue",
-        Vec::new(),
+        vec![integer_query_param(
+            "limit",
+            "Maximum number of weekly rollup entries to return (default 50, max 500).",
+            Some("uint64"),
+        )],
     );
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
@@ -4485,17 +4508,174 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/appeals/finance/weekly-rollups".to_owned(),
         Value::Object(weekly_rollups),
     );
+    paths.insert(
+        "/v1/sorafs/appeals/finance/settlement-receipts".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List appeal finance settlement receipt publications.",
+            "Summarize locally published SoraFS appeal finance settlement receipts from the Governance DAG publish-index, including submitted-step counts, reconciliation-status counts, finance totals, and source entries. The entries array is bounded by `limit` and capped at 500 entries while aggregate totals are computed over the full local index.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of settlement receipt entries to return (default 50, max 500).",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/cycles".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List transparency ledger cycles.",
+            "List locally published SoraFS moderation transparency ledger cycle publications from the Governance DAG publish-index. The response reports total and returned counts; the cycles array is bounded by `limit` and capped at 500 entries.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of cycle summaries to return (default 50, max 500).",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/cycles/{cycle_id_hex}".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch a transparency ledger cycle publication.",
+            "Fetch and verify a locally published SoraFS moderation transparency ledger cycle publication by cycle id. The encoded Norito payload is read from the configured Governance DAG root, constrained to that root, checked against the publish-index BLAKE3 digest, decoded, and structurally verified before returning the publication and verification metadata. The returned publication proofs array is bounded by `limit` and capped at 500 entries while verification counts remain over the full publication.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_path_param(
+                    "cycle_id_hex",
+                    "16-byte transparency ledger cycle id encoded as hexadecimal.",
+                ),
+                integer_query_param(
+                    "limit",
+                    "Maximum number of publication proofs to return (default 50, max 500).",
+                    Some("uint64"),
+                ),
+            ],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch a transparency ledger entry proof.",
+            "Fetch and verify a single inclusion proof from a locally published SoraFS moderation transparency ledger cycle publication.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_path_param(
+                    "cycle_id_hex",
+                    "16-byte transparency ledger cycle id encoded as hexadecimal.",
+                ),
+                string_path_param(
+                    "entry_id_hex",
+                    "16-byte transparency ledger entry id encoded as hexadecimal.",
+                ),
+            ],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/explorer".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch a transparency explorer snapshot.",
+            "Return an explorer-ready snapshot from the local SoraFS Governance DAG publish-index, including published transparency cycle summaries, proof-token issuance summaries, payload-kind counts, source paths, and cache validators. The cycles and proof-token issuance arrays are bounded by `limit` and capped at 500 entries while total counts remain visible. The endpoint stays under the local /v1/sorafs/transparency namespace and does not expose private proof-token digest keys.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of cycle summaries and proof-token issuance entries to return per array (default 50, max 500).",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/source-entries/{source_kind}".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Ingest a transparency source entry.",
+            "Decode one typed SoraFS transparency source payload, derive its privacy-safe public source-entry summary, and record it in the local deterministic transparency ledger source-entry worker for later cycle publication. Supported source_kind values are gar-enforcement-receipt, moderation-ballot-governance-event, appeal-finance-report, appeal-finance-settlement-receipt, legal-hold-notice, redaction-notice, and evidence-access-summary. The request requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "source_kind",
+                "Typed transparency source payload selector.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/privacy-aggregates/source-events".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Ingest a privacy aggregate source event.",
+            "Record one SoraFS privacy aggregate source event in the local deterministic aggregate worker for later configured cycle publication. The request accepts event id, occurrence timestamp, public population label, optional population/policy digest hex values, and sorted metric contributions. The response returns only the admission summary, digests, and counts; raw metric values are not echoed. The request requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/privacy-aggregates/publish-due".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Publish a due privacy aggregate cycle.",
+            "Evaluate the configured SoraFS privacy aggregate schedule at the caller-supplied timestamp and publish the oldest due unpublished cycle with locally retained source events, so delayed scheduler ticks catch up stale event-backed windows before reporting the latest due window as empty. Privacy policy, optional noise seed, optional policy digest, previous block hash, and public aggregate metadata are supplied as runtime-only request material and are not persisted as configuration. The response reports a structured published or skipped outcome with cycle/window metadata and publication hashes when a cycle is published. The request requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/tokens".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List SoraFS proof-token issuances.",
+            "List locally published SoraFS proof-token issuance summaries from the Governance DAG publish-index, including action-code counts, distinct signer/token counts, bound entry totals, and source entries for explorer linking. The entries array is bounded by `limit` and capped at 500 entries while aggregate totals are computed over the full local index.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of proof-token issuance entries to return (default 50, max 500).",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/tokens/issuances".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Ingest a SoraFS proof-token issuance.",
+            "Decode one URL-safe base64 SFGT proof-token frame, verify it against the supplied Ed25519 signer public key, derive a privacy-safe ProofTokenIssuanceV1 summary, and publish it through the local Governance DAG publisher when configured. The request accepts optional evidence and policy digests plus sorted public metadata, does not accept blinded-digest keys, and requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/transparency/tokens/verify".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Verify a SoraFS proof token.",
+            "Decode a SoraFS gateway proof-token frame, verify its Ed25519 signature with a caller-supplied public key, optionally verify the blinded digest with caller-supplied runtime evidence material, and report expiry/not-before status without persisting the supplied digest key. The endpoint honors Torii API-token enforcement when configured and is throttled by the shared proof API limiter; throttled responses return HTTP 429 with Retry-After.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
     let mut moderation_ballots = json_get_operation(
         "SoraFS",
         "List local moderation ballots.",
-        "List locally announced SoraFS moderation ballot records, including announcement context, accepted commits, reveals, and finalized tallies.",
+        "List locally announced SoraFS moderation ballot records, including announcement context, accepted commits, reveals, and finalized tallies. The ballots array is bounded by `limit` and capped at 500 records while the full local count remains visible.",
         "#/components/schemas/JsonValue",
-        Vec::new(),
+        vec![integer_query_param(
+            "limit",
+            "Maximum number of ballot records to return (default 50, max 500).",
+            Some("uint64"),
+        )],
     );
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
         "Announce a local moderation ballot.",
-        "Announce a local SoraFS moderation ballot and derive the panel roster hash when omitted. The request requires canonical app authentication plus a deposit_confirmation object that Torii confirms against the runtime native asset-lock ledger before the ballot is admitted.",
+        "Announce a local SoraFS moderation ballot and derive the panel roster hash when omitted. The request requires canonical app authentication plus a deposit_confirmation object that Torii confirms against the runtime native asset-lock ledger before the ballot is admitted; the admitted record stores the confirmed deposit fingerprint, including evidence hashes.",
         "#/components/schemas/JsonValue",
         "#/components/schemas/JsonValue",
         Vec::new(),
@@ -4513,11 +4693,16 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch a local moderation ballot.",
-            "Fetch one locally announced SoraFS moderation ballot record by case id and round id.",
+            "Fetch one locally announced SoraFS moderation ballot record by case id and round id. Embedded commits and reveals are bounded by `limit` and capped at 500 entries while total counts remain visible.",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param("case_id", "Moderation or appeal case identifier."),
                 string_path_param("round_id", "Moderation ballot round identifier."),
+                integer_query_param(
+                    "limit",
+                    "Maximum number of embedded commits and reveals to return (default 50, max 500).",
+                    Some("uint64"),
+                ),
             ],
         )),
     );
@@ -4568,13 +4753,122 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/moderation/model-registry".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch local moderation model registry.",
+            "Fetch the local SFM-4a moderation model registry snapshot. The reproducibility manifest and adversarial corpus arrays are bounded by `limit` (default 50, max 500) while full counts remain visible. Entries are admitted only after canonical data-model validation and are persisted in the node-local Norito checkpoint when SoraFS storage is enabled.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of registry records to return from each array (default 50, max 500).",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/model-registry/repro-manifests".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Admit a moderation reproducibility manifest.",
+            "Admit one base64 canonical Norito ModerationReproManifestV1 payload into the local SFM-4a moderation model registry. The endpoint validates governance signatures with the data-model validator, rejects conflicting manifest ids, persists the local checkpoint when storage is enabled, and requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/model-registry/corpora".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Admit an adversarial corpus manifest.",
+            "Admit one base64 canonical Norito AdversarialCorpusManifestV1 payload into the local SFM-4a moderation model registry. The endpoint validates the corpus manifest, keys records by canonical Norito BLAKE3 digest, persists the local checkpoint when storage is enabled, and requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let mut screening_results = json_get_operation(
+        "SoraFS",
+        "List local moderation screening results.",
+        "List local SFM-4a moderation screening results and quarantine records. The returned arrays are bounded by `limit` (default 50, max 500) while full counts remain visible.",
+        "#/components/schemas/JsonValue",
+        vec![integer_query_param(
+            "limit",
+            "Maximum number of screening and quarantine records to return from each array (default 50, max 500).",
+            Some("uint64"),
+        )],
+    );
+    if let Some(Value::Object(post_operation)) = json_post_operation(
+        "SoraFS",
+        "Record a local moderation screening result.",
+        "Record one local SFM-4a moderation screening result with deterministic BLAKE3 record digest material. `quarantine` and `escalate` verdicts create pending local quarantine records. The endpoint requires X-Iroha canonical app authentication.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    )
+    .remove("post")
+    {
+        screening_results.insert("post".to_owned(), Value::Object(post_operation));
+    }
+    paths.insert(
+        "/v1/sorafs/moderation/screening-results".to_owned(),
+        Value::Object(screening_results),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "List local moderation quarantine records.",
+            "List local pending SFM-4a moderation quarantine records derived from `quarantine` and `escalate` screening verdicts. The returned array is bounded by `limit` (default 50, max 500) while the full queue count remains visible.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of quarantine records to return (default 50, max 500).",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Mark a local moderation quarantine record reviewed.",
+            "Advance one pending local SFM-4a moderation quarantine record to reviewed state with deterministic operator metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Release a reviewed local moderation quarantine record.",
+            "Advance one reviewed local SFM-4a moderation quarantine record to released state with deterministic release-authority metadata. The endpoint persists the local screening checkpoint when storage is enabled and requires X-Iroha canonical app authentication.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/providers".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "List providers.",
-            "List SoraFS providers.",
+            "List SoraFS providers. The providers array is bounded by `limit` and capped at 500 adverts while the full cache count remains visible.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of provider adverts to return (default 50, max 500).",
+                Some("uint64"),
+            )],
         )),
     );
     paths.insert(
@@ -4593,9 +4887,13 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch capacity state.",
-            "Fetch SoraFS capacity state.",
+            "Fetch SoraFS capacity state. Provider declarations, fee ledger entries, credit ledger entries, and disputes are bounded by `limit` and capped at 500 rows per array while total counts remain visible.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![integer_query_param(
+                "limit",
+                "Maximum number of capacity state rows to return per array (default 50, max 500).",
+                Some("uint64"),
+            )],
         )),
     );
     paths.insert(
@@ -4603,8 +4901,12 @@ fn sorafs_paths() -> Map {
         Value::Object({
             let get_op = reputation_get_operation(
                 "Fetch reputation snapshot.",
-                "Fetch the latest SoraFS reputation snapshot summary. Supports `If-None-Match` with `ETag` validators.",
-                Vec::new(),
+                "Fetch the latest SoraFS reputation snapshot summary. Provider records are bounded by `limit` and capped at 500 rows while total provider count remains visible. Supports `If-None-Match` with `ETag` validators.",
+                vec![integer_query_param(
+                    "limit",
+                    "Maximum number of provider records to return (default 50, max 500).",
+                    Some("uint64"),
+                )],
             );
             let post_op = json_post_operation(
                 "SoraFS",
@@ -4636,11 +4938,18 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}".to_owned(),
         Value::Object(reputation_get_operation(
             "Fetch historical reputation snapshot.",
-            "Fetch a SoraFS reputation snapshot summary by snapshot id. Supports `If-None-Match` with `ETag` validators.",
-            vec![string_path_param(
-                "snapshot_id_hex",
-                "Hex-encoded 16-byte reputation snapshot identifier.",
-            )],
+            "Fetch a SoraFS reputation snapshot summary by snapshot id. Provider records are bounded by `limit` and capped at 500 rows while total provider count remains visible. Supports `If-None-Match` with `ETag` validators.",
+            vec![
+                string_path_param(
+                    "snapshot_id_hex",
+                    "Hex-encoded 16-byte reputation snapshot identifier.",
+                ),
+                integer_query_param(
+                    "limit",
+                    "Maximum number of provider records to return (default 50, max 500).",
+                    Some("uint64"),
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -4781,12 +5090,16 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch a pin manifest.",
-            "Fetch a pin manifest by digest.",
+            "Fetch a pin manifest by digest. Embedded alias and replication-order arrays are bounded by `limit` (default 50, max 500) while count fields preserve the full matching totals.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param(
-                "digest_hex",
-                "Pin manifest digest (hex).",
-            )],
+            vec![
+                string_path_param("digest_hex", "Pin manifest digest (hex)."),
+                integer_query_param(
+                    "limit",
+                    "Optional alias and replication-order readback limit.",
+                    Some("uint64"),
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -4810,6 +5123,20 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/storage/peers".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch configured storage peers.",
+            "Fetch configured SoraFS gateway and pin Torii peer URLs. The returned `pin_torii_urls` array is bounded by `limit` (default 50, max 500) while `count` preserves the full configured peer count.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Optional configured peer URL list limit.",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/storage/state".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
@@ -4824,9 +5151,16 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch storage manifest.",
-            "Fetch SoraFS storage manifest.",
+            "Fetch SoraFS storage manifest. Supplying `limit` bounds the returned `files` metadata array (max 500) while `file_count` preserves the full stored file count; omitting `limit` returns the complete file list for remote cache compatibility.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("manifest_id", "Manifest identifier.")],
+            vec![
+                string_path_param("manifest_id", "Manifest identifier."),
+                integer_query_param(
+                    "limit",
+                    "Optional stored file metadata list limit.",
+                    Some("uint64"),
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -4834,9 +5168,40 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch storage plan.",
-            "Fetch SoraFS storage plan.",
+            "Fetch SoraFS storage plan. The returned `files`, `chunk_digests_blake3`, and `chunks` metadata arrays are bounded by `limit` (default 50, max 500) while count fields preserve the full plan sizes.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("manifest_id", "Manifest identifier.")],
+            vec![
+                string_path_param("manifest_id", "Manifest identifier."),
+                integer_query_param(
+                    "limit",
+                    "Optional storage plan metadata array limit.",
+                    Some("uint64"),
+                ),
+            ],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/denylist/catalog".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch gateway denylist catalog.",
+            "Fetch the configured SoraFS gateway denylist catalog. The returned `packs`, `opt_out_packs`, and `extra_packs` arrays are bounded by `limit` (default 50, max 500) while full counts remain visible.",
+            "#/components/schemas/JsonValue",
+            vec![integer_query_param(
+                "limit",
+                "Optional denylist catalog list limit.",
+                Some("uint64"),
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/denylist/packs/{pack_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch gateway denylist pack metadata.",
+            "Fetch metadata for one configured SoraFS gateway denylist pack.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param("pack_id", "Denylist pack identifier.")],
         )),
     );
     paths.insert(
@@ -4939,7 +5304,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Request a PoR sample.",
-            "Request a proof-of-replication sample.",
+            "Request a proof-of-replication sample. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4950,7 +5315,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Stream proofs.",
-            "Request a PoR or PoTR proof stream payload. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
+            "Request a PoR or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -12669,16 +13034,39 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/confirm"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/settle"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/submit-settlement"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/reconcile"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}"));
+        assert!(paths.contains_key("/v1/sorafs/appeals/finance/settlement-receipts"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/reports"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/weekly-rollups"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/cycles"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/cycles/{cycle_id_hex}"));
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}"
+            )
+        );
+        assert!(paths.contains_key("/v1/sorafs/transparency/explorer"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/source-entries/{source_kind}"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/source-events"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/publish-due"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/tokens"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/tokens/issuances"));
+        assert!(paths.contains_key("/v1/sorafs/transparency/tokens/verify"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/reveals"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/tally"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/events"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/model-registry"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/model-registry/repro-manifests"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/model-registry/corpora"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/screening-results"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));

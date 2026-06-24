@@ -43,7 +43,12 @@ following requirements are enforced at admission:
      - `capability=chunk_range_fetch` with a defined `max_span`
      - `allow_unknown_capabilities=<true|false>` when GREASE TLVs are present
    - Validate via `/v1/sorafs/providers` and `sorafs_fetch`; warnings about unknown
-     capabilities must be triaged.
+     capabilities must be triaged. Use `limit` on `/v1/sorafs/providers`
+     during large migrations; the response keeps full cache `count` plus
+     `returned_count` and `truncated` metadata so inventory scripts can detect
+     partial pages. Use the same `limit` contract on
+     `/v1/sorafs/storage/peers` when checking configured gateway/pin Torii peer
+     URLs on nodes with publish discovery enabled.
 3. **Validate multi-source readiness.**
    - Execute `sorafs_fetch` with `--provider-advert=<path>`; the CLI now fails
      when `chunk_range_fetch` is missing and prints warnings for ignored unknown

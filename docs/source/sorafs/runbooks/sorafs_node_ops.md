@@ -86,6 +86,12 @@ curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
+Add `?limit=N` to metadata-only manifest probes when a bounded `files` preview
+is enough; omit it when another gateway needs the complete directory layout.
+Storage-plan probes default to bounded `files`, `chunk_digests_blake3`, and
+`chunks` arrays (`limit` default 50, max 500) while keeping full count and
+truncation fields.
+
 Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -183,8 +189,11 @@ production.
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each
-   proof validates against the stored manifest root.
+   Manual requests must set `count` between 1 and 500; the node still caps the
+   returned `samples` array by the stored manifest leaf count.
+
+3. Verify the response contains `samples` with the expected bounded count and
+   that each proof validates against the stored manifest root.
 
 ## 7. PoR Proof Replay Helper
 

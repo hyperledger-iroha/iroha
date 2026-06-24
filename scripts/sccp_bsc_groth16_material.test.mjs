@@ -6,28 +6,35 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   BSC_FULL_SCCP_CIRCUIT_PROFILE,
   BSC_GROTH16_CIRCUIT_SECURITY_ATTESTATION_SCHEMA,
   BSC_GROTH16_ATTESTATION_REQUEST_PACKAGE_SCHEMA,
+  BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA,
   BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA,
   BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+  BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA,
   BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA,
   BSC_GROTH16_PROOF_SELF_TEST_SCHEMA,
   BSC_GROTH16_PUBLIC_SIGNAL_NAMES,
   BSC_GROTH16_REPRODUCIBLE_BUILD_ATTESTATION_SCHEMA,
+  BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA,
   BSC_GROTH16_SEMANTIC_ATTESTATION_SCHEMA,
   BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+  BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA,
   BSC_GROTH16_TRUSTED_SETUP_ATTESTATION_SCHEMA,
+  BSC_GROTH16_TRUSTED_SETUP_TRANSCRIPT_SCHEMA,
   BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
   DEFAULT_BSC_FULL_MESSAGE_CIRCUIT_SOURCE,
   auditBscGroth16AttestationStatus,
   finalizeBscGroth16Attestations,
+  fingerprintBscGroth16Toolchain,
   generateBscFullMessageCircuitSource,
   generateBscGroth16Material,
   generateBscSignalBindingCircuitSource,
@@ -36,6 +43,10 @@ import {
   preflightBscGroth16Material,
   signBscGroth16AttestationRole,
   snarkjsVerificationKeyToBscVerifierMaterial,
+  verifyBscGroth16AttestationHandoff,
+  writeBscGroth16AttestationHandoff,
+  writeBscGroth16EvidenceTemplates,
+  writeBscGroth16TranscriptTemplates,
 } from "./sccp_bsc_groth16_material.mjs";
 import {
   BSC_MAINNET_CHAIN_ID_HEX,
@@ -49,9 +60,9 @@ import {
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(bytes).digest("hex")}`;
 const TRUSTED_SETUP_TRANSCRIPT_SCHEMA =
-  "iroha-sccp-bsc-trusted-setup-transcript/v1";
+  BSC_GROTH16_TRUSTED_SETUP_TRANSCRIPT_SCHEMA;
 const REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA =
-  "iroha-sccp-bsc-reproducible-build-transcript/v1";
+  BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA;
 const BN254_BASE_FIELD_MODULUS =
   "21888242871839275222246405745257275088696311157297823662689037894645226208583";
 
@@ -576,7 +587,8 @@ async function writeBoundAttestations(root, context, overrides = {}) {
           independentRebuilders: 2,
           buildTranscriptSha256:
             context.reproducibleBuildTranscriptSha256 ?? `0x${"cd".repeat(32)}`,
-          toolchainSha256: `0x${"ef".repeat(32)}`,
+          toolchainSha256:
+            context.reproducibleBuildToolchainSha256 ?? `0x${"ef".repeat(32)}`,
           r1csInfoSource: snarkjsSelfCheck.r1csInfoSource,
           r1csPublicInputCount: snarkjsSelfCheck.r1csPublicInputCount,
           r1csConstraintCount: snarkjsSelfCheck.r1csConstraintCount,
@@ -621,7 +633,13 @@ async function writeAttestationsFromRequest(root, requestPath, overrides = {}) {
   return out;
 }
 
-async function writeMaterialInputs(root, { r1csBytes = snarkjsMaterialBytes("r1cs", 3) } = {}) {
+async function writeMaterialInputs(
+  root,
+  {
+    r1csBytes = snarkjsMaterialBytes("r1cs", 3),
+    includeToolchain = true,
+  } = {},
+) {
   const zkeyBytes = snarkjsMaterialBytes("zkey", 10, 96 * 1024);
   const ptauBytes = snarkjsMaterialBytes("ptau", 22, 96 * 1024);
   const snarkjsKey = verificationKey();
@@ -634,9 +652,35 @@ async function writeMaterialInputs(root, { r1csBytes = snarkjsMaterialBytes("r1c
   const ptau = join(root, "powersOfTau28_hez_final_22.ptau");
   const verificationKeyPath = join(root, "verification_key.json");
   const circuitSource = join(root, "full.circom");
+  const witnessWasm = join(root, "full_js", "full.wasm");
   const trustedSetupTranscript = join(root, "trusted-setup-transcript.json");
   const reproducibleBuildTranscript = join(root, "reproducible-build-transcript.json");
   const circuitSourceText = generateBscFullMessageCircuitSource();
+  const witnessWasmBytes = Buffer.from("sccp-bsc-test-witness-wasm");
+  const reproducibleBuildToolchain = includeToolchain
+    ? {
+        circom: {
+          source: "https://github.com/iden3/circom.git",
+          tag: "v2.2.2",
+          revision: "e410b0d5",
+          binary: "circom",
+          binarySha256: sha256Hex(Buffer.from("circom executable bytes")),
+        },
+        snarkjs: {
+          package: "snarkjs",
+          version: "0.7.6",
+          binary: "snarkjs",
+          binarySha256: sha256Hex(Buffer.from("snarkjs executable bytes")),
+        },
+        circomDependencies: {
+          circomlib: "2.0.5",
+          "@electron-labs/keccak-circom": "0.0.3",
+        },
+      }
+    : null;
+  const reproducibleBuildToolchainSha256 = reproducibleBuildToolchain
+    ? sha256Hex(Buffer.from(canonicalJson(reproducibleBuildToolchain), "utf8"))
+    : null;
   const trustedSetupTranscriptText = `${JSON.stringify(
     {
       schema: TRUSTED_SETUP_TRANSCRIPT_SCHEMA,
@@ -662,6 +706,9 @@ async function writeMaterialInputs(root, { r1csBytes = snarkjsMaterialBytes("r1c
       schema: REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA,
       independentRebuilders: ["independent-rebuilder-a", "independent-rebuilder-b"],
       reproducible: true,
+      ...(reproducibleBuildToolchain
+        ? { toolchain: reproducibleBuildToolchain }
+        : {}),
       r1csInfoSource: "snarkjs-cli",
       r1csPublicInputCount: 9,
       r1csConstraintCount: 8192,
@@ -676,6 +723,8 @@ async function writeMaterialInputs(root, { r1csBytes = snarkjsMaterialBytes("r1c
   await writeFile(ptau, ptauBytes);
   await writeJson(verificationKeyPath, snarkjsKey);
   await writeFile(circuitSource, circuitSourceText);
+  await mkdir(dirname(witnessWasm), { recursive: true });
+  await writeFile(witnessWasm, witnessWasmBytes);
   await writeFile(trustedSetupTranscript, trustedSetupTranscriptText);
   await writeFile(reproducibleBuildTranscript, reproducibleBuildTranscriptText);
   const snarkjsStub = await writeSnarkjsStub(root, verificationKeyPath);
@@ -687,11 +736,13 @@ async function writeMaterialInputs(root, { r1csBytes = snarkjsMaterialBytes("r1c
     snarkjsStub,
     verificationKeyPath,
     circuitSource,
+    witnessWasm,
     trustedSetupTranscript,
     reproducibleBuildTranscript,
     context: {
       verifierKeyHash: bscVerifierMaterial.verifierKeyHash,
       circuitSourceSha256: sha256Hex(Buffer.from(circuitSourceText)),
+      witnessWasmSha256: sha256Hex(witnessWasmBytes),
       r1csSha256: sha256Hex(r1csBytes),
       powersOfTauSha256: sha256Hex(ptauBytes),
       provingKeySha256: sha256Hex(zkeyBytes),
@@ -705,6 +756,8 @@ async function writeMaterialInputs(root, { r1csBytes = snarkjsMaterialBytes("r1c
       reproducibleBuildTranscriptSha256: sha256Hex(
         Buffer.from(reproducibleBuildTranscriptText),
       ),
+      reproducibleBuildToolchainSha256,
+      reproducibleBuildToolchain,
       selfChecks: withSnarkjsSelfCheckContext({
         verifierKeyHash: bscVerifierMaterial.verifierKeyHash,
       }).selfChecks,
@@ -791,20 +844,35 @@ if (${JSON.stringify(supportProofSelfTest)} && args[0] === "groth16" && args[1] 
   const witness = JSON.parse(readFileSync(args[3], "utf8"));
   const publicSignalsOverride = ${JSON.stringify(publicSignalsOverride)};
   const publicSignals = publicSignalsOverride || witness.publicSignals;
-  writeFileSync(args[4], JSON.stringify({
+  const proof = {
     pi_a: ["1", "2", "1"],
     pi_b: [["3", "4"], ["5", "6"], ["1", "0"]],
     pi_c: ["7", "8", "1"],
     protocol: "groth16",
     curve: "bn128"
-  }));
+  };
+  writeFileSync(args[4], JSON.stringify(proof));
   writeFileSync(args[5], JSON.stringify(publicSignals));
+  writeFileSync(proofSelfTestStatePath, JSON.stringify({ publicSignals, proof }));
   process.exit(0);
 }
 if (${JSON.stringify(supportProofSelfTest)} && args[0] === "groth16" && args[1] === "verify" && args[2] && args[3] && args[4]) {
   if (${JSON.stringify(failProofVerify)}) {
     process.stderr.write("forced proof verification failure\\n");
     process.exit(3);
+  }
+  if (existsSync(proofSelfTestStatePath)) {
+    const state = JSON.parse(readFileSync(proofSelfTestStatePath, "utf8"));
+    const publicSignals = JSON.parse(readFileSync(args[3], "utf8"));
+    const proof = JSON.parse(readFileSync(args[4], "utf8"));
+    if (JSON.stringify(publicSignals) !== JSON.stringify(state.publicSignals)) {
+      process.stderr.write("forced proof public signal verification failure\\n");
+      process.exit(3);
+    }
+    if (JSON.stringify(proof) !== JSON.stringify(state.proof)) {
+      process.stderr.write("forced proof object verification failure\\n");
+      process.exit(3);
+    }
   }
   process.stdout.write("OK!\\n");
   process.exit(0);
@@ -996,7 +1064,7 @@ async function writePreflightCandidate(root, options = {}) {
 }
 
 async function writeAttestationRequestCandidate(root, options = {}) {
-  const inputs = await writeMaterialInputs(root);
+  const inputs = await writeMaterialInputs(root, options.materialInputs ?? {});
   const snarkjsStub = await writeSnarkjsStub(root, inputs.verificationKeyPath);
   const result = await materializeBscGroth16Material({
     "bsc-network": "testnet",
@@ -1021,6 +1089,8 @@ async function writeAttestationRequestCandidate(root, options = {}) {
     result.semanticReviewEvidence = evidence.semanticReviewEvidence;
     result.circuitSecurityAuditEvidence = evidence.circuitSecurityAuditEvidence;
   }
+  result.reproducibleBuildToolchainSha256 =
+    inputs.context.reproducibleBuildToolchainSha256;
   return { inputs, result, manifest: result.manifest, evidence };
 }
 
@@ -1325,6 +1395,276 @@ test("generate uses checked-in canonical full-message source when source is omit
     assert.match(
       manifest.artifacts.circuitSource.path,
       /sccp-bsc-full-message-v1\.circom$/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("toolchain-fingerprint writes exact executable hashes into transcript copies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-toolchain-hash-"));
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const circomStub = await writeCircomStub(root);
+    const snarkjsStub = await writeSnarkjsStub(root, inputs.verificationKeyPath);
+    const transcript = JSON.parse(
+      await readFile(inputs.reproducibleBuildTranscript, "utf8"),
+    );
+    transcript.toolchain.circom.binary = circomStub;
+    transcript.toolchain.circom.binary_sha256 = `0x${"11".repeat(32)}`;
+    delete transcript.toolchain.circom.binarySha256;
+    transcript.toolchain.snarkjs.binary = snarkjsStub;
+    transcript.toolchain.snarkjs.binary_sha256 = `0x${"22".repeat(32)}`;
+    delete transcript.toolchain.snarkjs.binarySha256;
+    const transcriptPath = join(root, "reproducible-build-without-hashes.json");
+    const outPath = join(root, "reproducible-build-with-hashes.json");
+    await writeJson(transcriptPath, transcript);
+
+    const result = await fingerprintBscGroth16Toolchain({
+      transcript: transcriptPath,
+      "circom-bin": circomStub,
+      "snarkjs-bin": snarkjsStub,
+      out: outPath,
+    });
+
+    const updated = JSON.parse(await readFile(outPath, "utf8"));
+    assert.equal(updated.schema, REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA);
+    assert.deepEqual(
+      updated.independentRebuilders,
+      transcript.independentRebuilders,
+    );
+    assert.equal(updated.toolchain.circom.binary, circomStub);
+    assert.equal(updated.toolchain.snarkjs.binary, snarkjsStub);
+    assert.equal(
+      updated.toolchain.circom.binarySha256,
+      sha256Hex(await readFile(circomStub)),
+    );
+    assert.equal(
+      updated.toolchain.snarkjs.binarySha256,
+      sha256Hex(await readFile(snarkjsStub)),
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        updated.toolchain.circom,
+        "binary_sha256",
+      ),
+      false,
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        updated.toolchain.snarkjs,
+        "binary_sha256",
+      ),
+      false,
+    );
+    assert.equal(
+      result.toolchainSha256,
+      sha256Hex(Buffer.from(canonicalJson(updated.toolchain), "utf8")),
+    );
+
+    const material = await materializeBscGroth16Material({
+      "bsc-network": "testnet",
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "snarkjs-bin": snarkjsStub,
+      "circuit-source": inputs.circuitSource,
+      "trusted-setup-transcript": inputs.trustedSetupTranscript,
+      "reproducible-build-transcript": outPath,
+      "out-dir": join(root, "out"),
+    });
+    assert.doesNotMatch(
+      material.productionBlockers.join("\n"),
+      /binarySha256/u,
+    );
+    const manifest = JSON.parse(await readFile(material.manifest, "utf8"));
+    assert.equal(manifest.selfChecks.snarkjs.snarkjsBinary, snarkjsStub);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("toolchain-fingerprint refuses unresolved executable paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-toolchain-missing-"));
+  try {
+    await assert.rejects(
+      () =>
+        fingerprintBscGroth16Toolchain({
+          "circom-bin": join(root, "missing-circom"),
+          "snarkjs-bin": join(root, "missing-snarkjs"),
+          out: join(root, "toolchain.json"),
+        }),
+      /Circom compiler command .* could not be resolved to a readable executable/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("transcript-template writes artifact-bound drafts that remain materialization blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-transcript-template-"));
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const snarkjsBin = await copyExecutableFixture(
+      inputs.snarkjsStub,
+      join(root, "snarkjs-bin"),
+    );
+    const circomBin = await copyExecutableFixture(
+      inputs.snarkjsStub,
+      join(root, "circom-bin"),
+    );
+    const outDir = join(root, "transcripts");
+
+    const result = await writeBscGroth16TranscriptTemplates({
+      "bsc-network": "testnet",
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "circuit-source": inputs.circuitSource,
+      "witness-wasm": inputs.witnessWasm,
+      "circom-bin": circomBin,
+      "snarkjs-bin": snarkjsBin,
+      "out-dir": outDir,
+    });
+    const index = JSON.parse(await readFile(result.out, "utf8"));
+    const setup = JSON.parse(
+      await readFile(result.trustedSetupTranscript, "utf8"),
+    );
+    const reproducible = JSON.parse(
+      await readFile(result.reproducibleBuildTranscript, "utf8"),
+    );
+
+    assert.equal(index.schema, BSC_GROTH16_TRANSCRIPT_TEMPLATE_PACKAGE_SCHEMA);
+    assert.equal(index.draftsAreNotProductionReady, true);
+    assert.equal(setup.schema, BSC_GROTH16_TRUSTED_SETUP_TRANSCRIPT_SCHEMA);
+    assert.equal(setup.phase1.sha256, inputs.context.powersOfTauSha256);
+    assert.equal(setup.phase2.finalZkeySha256, inputs.context.provingKeySha256);
+    assert.equal(setup.snarkjsZkeyVerify, undefined);
+    assert.equal(setup.ceremonyResult, "pending");
+    assert.equal(reproducible.schema, BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA);
+    assert.equal(reproducible.toolchain.circom.binarySha256, sha256Hex(await readFile(circomBin)));
+    assert.equal(reproducible.toolchain.snarkjs.binarySha256, sha256Hex(await readFile(snarkjsBin)));
+    assert.equal(reproducible.r1cs.sha256, inputs.context.r1csSha256);
+    assert.equal(reproducible.r1csInfoSource, "snarkjs-cli");
+    assert.equal(reproducible.r1csPublicInputCount, 9);
+    assert.equal(reproducible.r1csConstraintCount, 8192);
+    assert.equal(reproducible.witnessWasm.sha256, inputs.context.witnessWasmSha256);
+    assert.equal(reproducible.verificationKey.snarkjsSha256, inputs.context.snarkjsVerificationKeySha256);
+    assert.equal(reproducible.verificationKey.verifierKeyHash, inputs.context.verifierKeyHash);
+    assert.match(reproducible.commands[0], /materialize .*--ptau/u);
+    assert.match(reproducible.commands[0], /--trusted-setup-transcript/u);
+    assert.match(reproducible.commands[0], /--reproducible-build-transcript/u);
+    assert.doesNotMatch(reproducible.commands[0], /--semantic-attestation/u);
+
+    const materialized = await materializeBscGroth16Material({
+      "bsc-network": "testnet",
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "snarkjs-bin": snarkjsBin,
+      "circuit-source": inputs.circuitSource,
+      "witness-wasm": inputs.witnessWasm,
+      "trusted-setup-transcript": result.trustedSetupTranscript,
+      "reproducible-build-transcript": result.reproducibleBuildTranscript,
+      "out-dir": join(root, "out"),
+    });
+    const blockers = materialized.productionBlockers.join("\n");
+    assert.equal(materialized.productionReady, false);
+    assert.match(blockers, /trusted setup transcript contributors must record at least 2/u);
+    assert.match(blockers, /trusted setup transcript toxicWasteDestroyed must be true/u);
+    assert.match(blockers, /trusted setup transcript ceremonyResult must be pass/u);
+    assert.match(blockers, /trusted setup transcript snarkjsPowersOfTauVerify\.completed must be true/u);
+    assert.match(blockers, /trusted setup transcript snarkjsZkeyVerify must be ZKey Ok!/u);
+    assert.match(blockers, /reproducible build transcript independentRebuilders must record at least 2/u);
+    assert.match(blockers, /reproducible build transcript reproducible must be true/u);
+    assert.match(blockers, /reproducible build transcript zkeyVerify must be true/u);
+    assert.doesNotMatch(blockers, /sha256 must match|toolchain object is required|binarySha256/u);
+
+    await assert.rejects(
+      () =>
+        writeBscGroth16TranscriptTemplates({
+          "bsc-network": "testnet",
+          r1cs: inputs.r1cs,
+          zkey: inputs.zkey,
+          ptau: inputs.ptau,
+          "snarkjs-verifier-key": inputs.verificationKeyPath,
+          "circuit-source": inputs.circuitSource,
+          "witness-wasm": inputs.witnessWasm,
+          "circom-bin": circomBin,
+          "snarkjs-bin": snarkjsBin,
+          "out-dir": outDir,
+        }),
+      /already exists; pass --overwrite true/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("materialize records witness WASM artifacts for reproducible transcript binding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-witness-bind-"));
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const reproducibleTranscript = JSON.parse(
+      await readFile(inputs.reproducibleBuildTranscript, "utf8"),
+    );
+    reproducibleTranscript.witnessWasm = {
+      path: "full_js/full.wasm",
+      sha256: inputs.context.witnessWasmSha256,
+    };
+    await writeJson(inputs.reproducibleBuildTranscript, reproducibleTranscript);
+
+    const result = await materializeBscGroth16Material({
+      "bsc-network": "testnet",
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "snarkjs-bin": inputs.snarkjsStub,
+      "circuit-source": inputs.circuitSource,
+      "witness-wasm": inputs.witnessWasm,
+      "trusted-setup-transcript": inputs.trustedSetupTranscript,
+      "reproducible-build-transcript": inputs.reproducibleBuildTranscript,
+      "out-dir": join(root, "out"),
+    });
+
+    const manifest = JSON.parse(await readFile(result.manifest, "utf8"));
+    assert.equal(
+      manifest.artifacts.witnessWasm.sha256,
+      inputs.context.witnessWasmSha256,
+    );
+    assert.doesNotMatch(
+      result.productionBlockers.join("\n"),
+      /witnessWasm\.sha256 expected hash is unavailable/u,
+    );
+    const evidence = await writeReviewEvidenceFiles(root, inputs.context);
+    const requestPath = join(root, "request-with-witness.json");
+    const requestResult = await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...evidence.args,
+      "--toolchain-sha256",
+      inputs.context.reproducibleBuildToolchainSha256,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    assert.equal(requestResult.readyForSignature.reproducibleBuild, true);
+    assert.equal(
+      request.artifacts.witnessWasm.sha256,
+      inputs.context.witnessWasmSha256,
+    );
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+    });
+    assert.doesNotMatch(
+      status.problems.join("\n"),
+      /witnessWasm\.sha256 expected hash is unavailable/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1988,6 +2328,51 @@ test("materialize refuses signed attestation bodies with unknown shadow fields",
   }
 });
 
+test("materialize refuses signed attestation bodies with duplicate aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-alias-fields-"));
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const attestations = await writeBoundAttestations(root, inputs.context, {
+      semantic: {
+        route_id: "taira_bsc_xor",
+      },
+      reproducible: {
+        proof_artifact_hash: inputs.context.r1csSha256,
+      },
+    });
+    const snarkjsStub = await writeSnarkjsStub(root, inputs.verificationKeyPath);
+
+    const result = await materializeBscGroth16Material({
+      "bsc-network": "testnet",
+      ...trustedSignerOption(),
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "snarkjs-bin": snarkjsStub,
+      "circuit-source": inputs.circuitSource,
+      ...transcriptOptions(inputs),
+      "semantic-attestation": attestations.semantic,
+      "circuit-security-attestation": attestations.security,
+      "trusted-setup-attestation": attestations.setup,
+      "reproducible-build-attestation": attestations.reproducible,
+      "out-dir": join(root, "out"),
+    });
+
+    const blockers = result.productionBlockers.join("\n");
+    assert.equal(result.productionReady, false);
+    assert.match(
+      blockers,
+      /semantic SCCP circuit attestation routeId must not use multiple aliases: routeId, route_id/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build attestation r1csSha256 must not use multiple aliases: r1csSha256, proof_artifact_hash/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("materialize refuses attestations whose transcript hashes drift from artifacts", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-drift-transcripts-"));
   try {
@@ -2221,7 +2606,7 @@ test("materialize refuses stale transcript materialize commands without PTAU bin
       await readFile(inputs.reproducibleBuildTranscript, "utf8"),
     );
     reproducibleTranscript.sourceBuildTranscript = {
-      path: inputs.circuitSource,
+      path: basename(inputs.circuitSource),
       sha256: `0x${"11".repeat(32)}`,
     };
     reproducibleTranscript.commands = [
@@ -2284,6 +2669,381 @@ test("materialize refuses stale transcript materialize commands without PTAU bin
     assert.match(
       blockers,
       /reproducible build transcript sourceBuildTranscript\.sha256 must match/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("materialize refuses unsafe source build transcript references", async () => {
+  const cases = [
+    {
+      name: "absolute",
+      sourcePath: ({ inputs }) => inputs.circuitSource,
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
+      name: "url",
+      sourcePath: () => "https://builds.example.invalid/source-build.json",
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
+      name: "encoded-parent",
+      sourcePath: () => "%2e%2e/source-build.json",
+      pattern: /sourceBuildTranscript path must be a safe relative path/u,
+    },
+    {
+      name: "unknown-field",
+      prepare: async ({ inputs }) => ({
+        path: basename(inputs.circuitSource),
+        sha256: sha256Hex(await readFile(inputs.circuitSource)),
+        operatorDecision: "approve anyway",
+      }),
+      pattern: /sourceBuildTranscript contains unknown field: operatorDecision/u,
+    },
+    {
+      name: "hash-alias",
+      prepare: async ({ inputs }) => {
+        const digest = sha256Hex(await readFile(inputs.circuitSource));
+        return {
+          path: basename(inputs.circuitSource),
+          sha256: digest,
+          hash: digest,
+        };
+      },
+      pattern: /sourceBuildTranscript sha256 must not use multiple aliases: sha256, hash/u,
+    },
+    {
+      name: "symlink",
+      prepare: async ({ root, inputs }) => {
+        await mkdir(join(root, "out"), { recursive: true });
+        const linkPath = join(root, "out", "source-build-link.json");
+        await symlink(inputs.circuitSource, linkPath);
+        return {
+          path: "source-build-link.json",
+          sha256: sha256Hex(await readFile(inputs.circuitSource)),
+        };
+      },
+      pattern: /sourceBuildTranscript must not be a symbolic link/u,
+    },
+    {
+      name: "oversized",
+      prepare: async ({ root }) => {
+        await mkdir(join(root, "out"), { recursive: true });
+        const largePath = join(root, "out", "source-build-large.json");
+        await writeFile(largePath, Buffer.alloc(17 * 1024 * 1024, 0x62));
+        return {
+          path: "source-build-large.json",
+          sha256: sha256Hex(await readFile(largePath)),
+        };
+      },
+      pattern: /sourceBuildTranscript is .*maximum allowed/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const root = await mkdtemp(
+      join(tmpdir(), `iroha-bsc-groth16-source-build-${testCase.name}-`),
+    );
+    try {
+      const inputs = await writeMaterialInputs(root);
+      const reproducibleTranscript = JSON.parse(
+        await readFile(inputs.reproducibleBuildTranscript, "utf8"),
+      );
+      const reference = testCase.prepare
+        ? await testCase.prepare({ root, inputs })
+        : {
+            path: testCase.sourcePath({ root, inputs }),
+            sha256: sha256Hex(await readFile(inputs.circuitSource)),
+          };
+      reproducibleTranscript.sourceBuildTranscript = reference;
+      const reproducibleTranscriptText = Buffer.from(
+        `${JSON.stringify(reproducibleTranscript, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        inputs.reproducibleBuildTranscript,
+        reproducibleTranscriptText,
+      );
+      inputs.context.reproducibleBuildTranscriptSha256 =
+        sha256Hex(reproducibleTranscriptText);
+      const attestations = await writeBoundAttestations(root, inputs.context);
+
+      const result = await materializeBscGroth16Material({
+        "bsc-network": "testnet",
+        ...trustedSignerOption(),
+        r1cs: inputs.r1cs,
+        zkey: inputs.zkey,
+        ptau: inputs.ptau,
+        "snarkjs-verifier-key": inputs.verificationKeyPath,
+        "snarkjs-bin": inputs.snarkjsStub,
+        "circuit-source": inputs.circuitSource,
+        ...transcriptOptions(inputs),
+        "semantic-attestation": attestations.semantic,
+        "circuit-security-attestation": attestations.security,
+        "trusted-setup-attestation": attestations.setup,
+        "reproducible-build-attestation": attestations.reproducible,
+        "out-dir": join(root, "out"),
+      });
+
+      assert.equal(result.productionReady, false, testCase.name);
+      assert.match(
+        result.productionBlockers.join("\n"),
+        testCase.pattern,
+        testCase.name,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("materialize refuses transcript shadow fields and duplicate aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-transcript-shape-"));
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const setupTranscript = JSON.parse(
+      await readFile(inputs.trustedSetupTranscript, "utf8"),
+    );
+    const reproducibleTranscript = JSON.parse(
+      await readFile(inputs.reproducibleBuildTranscript, "utf8"),
+    );
+    setupTranscript.operatorOverride = true;
+    setupTranscript.routeId = "taira_bsc_xor";
+    setupTranscript.route_id = "taira_bsc_xor";
+    setupTranscript.phase1.operatorDecision = "trust local ceremony";
+    setupTranscript.phase1.snarkjs_powers_of_tau_verify =
+      setupTranscript.phase1.snarkjsPowersOfTauVerify;
+    setupTranscript.phase1.snarkjsPowersOfTauVerify.verifiedAt =
+      "2026-01-01T00:00:00.000Z";
+    setupTranscript.phase1.snarkjsPowersOfTauVerify.verified_at =
+      "2026-01-01T00:00:00.000Z";
+    setupTranscript.phase2.finalZkeySha256 = `0x${"31".repeat(32)}`;
+    setupTranscript.phase2.final_zkey_sha256 = `0x${"31".repeat(32)}`;
+
+    const sourceBuildReference = {
+      path: basename(inputs.circuitSource),
+      sha256: sha256Hex(await readFile(inputs.circuitSource)),
+    };
+    reproducibleTranscript.operatorOverride = true;
+    reproducibleTranscript.routeId = "taira_bsc_xor";
+    reproducibleTranscript.route_id = "taira_bsc_xor";
+    reproducibleTranscript.sourceBuildTranscript = sourceBuildReference;
+    reproducibleTranscript.source_build_transcript = sourceBuildReference;
+    reproducibleTranscript.toolchain = {
+      circom: {
+        source: "https://github.com/iden3/circom.git",
+        tag: "v2.2.2",
+        revision: "e410b0d5",
+        binary: "circom",
+        operatorDecision: "accept unreviewed compiler",
+      },
+      snarkjs: {
+        package: "snarkjs",
+        version: "0.7.6",
+        binary: "snarkjs",
+        operatorDecision: "accept unreviewed prover",
+      },
+      circomDependencies: {
+        circomlib: "2.0.5",
+      },
+      circom_dependencies: {
+        circomlib: "2.0.5",
+      },
+    };
+    reproducibleTranscript.circuit = {
+      path: basename(inputs.circuitSource),
+      sha256: sourceBuildReference.sha256,
+      hash: sourceBuildReference.sha256,
+      fullMessageCircuit: true,
+      operatorDecision: "accept fixture circuit",
+    };
+    reproducibleTranscript.r1cs = {
+      path: basename(inputs.r1cs),
+      sha256: inputs.context.r1csSha256,
+      hash: inputs.context.r1csSha256,
+    };
+    reproducibleTranscript.witnessWasm = {
+      path: "witness.wasm",
+      sha256: `0x${"32".repeat(32)}`,
+      hash: `0x${"32".repeat(32)}`,
+    };
+    reproducibleTranscript.zkey = {
+      finalSha256: inputs.context.provingKeySha256,
+      final_sha256: inputs.context.provingKeySha256,
+    };
+    reproducibleTranscript.verificationKey = {
+      verifierKeyHash: inputs.context.verifierKeyHash,
+      verifier_key_hash: inputs.context.verifierKeyHash,
+    };
+
+    const setupTranscriptText = Buffer.from(
+      `${JSON.stringify(setupTranscript, null, 2)}\n`,
+      "utf8",
+    );
+    const reproducibleTranscriptText = Buffer.from(
+      `${JSON.stringify(reproducibleTranscript, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(inputs.trustedSetupTranscript, setupTranscriptText);
+    await writeFile(inputs.reproducibleBuildTranscript, reproducibleTranscriptText);
+    inputs.context.trustedSetupTranscriptSha256 =
+      sha256Hex(setupTranscriptText);
+    inputs.context.reproducibleBuildTranscriptSha256 =
+      sha256Hex(reproducibleTranscriptText);
+    const attestations = await writeBoundAttestations(root, inputs.context);
+
+    const result = await materializeBscGroth16Material({
+      "bsc-network": "testnet",
+      ...trustedSignerOption(),
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "snarkjs-bin": inputs.snarkjsStub,
+      "circuit-source": inputs.circuitSource,
+      ...transcriptOptions(inputs),
+      "semantic-attestation": attestations.semantic,
+      "circuit-security-attestation": attestations.security,
+      "trusted-setup-attestation": attestations.setup,
+      "reproducible-build-attestation": attestations.reproducible,
+      "out-dir": join(root, "out"),
+    });
+
+    assert.equal(result.productionReady, false);
+    const blockers = result.productionBlockers.join("\n");
+    assert.match(
+      blockers,
+      /trusted setup transcript contains unknown field: operatorOverride/u,
+    );
+    assert.match(
+      blockers,
+      /trusted setup transcript routeId must not use multiple aliases: routeId, route_id/u,
+    );
+    assert.match(
+      blockers,
+      /trusted setup transcript phase1 contains unknown field: operatorDecision/u,
+    );
+    assert.match(
+      blockers,
+      /trusted setup transcript phase1 snarkjsPowersOfTauVerify must not use multiple aliases: snarkjsPowersOfTauVerify, snarkjs_powers_of_tau_verify/u,
+    );
+    assert.match(
+      blockers,
+      /trusted setup transcript snarkjsPowersOfTauVerify verifiedAt must not use multiple aliases: verifiedAt, verified_at/u,
+    );
+    assert.match(
+      blockers,
+      /trusted setup transcript phase2 finalZkeySha256 must not use multiple aliases: finalZkeySha256, final_zkey_sha256/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript contains unknown field: operatorOverride/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript routeId must not use multiple aliases: routeId, route_id/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript sourceBuildTranscript must not use multiple aliases: sourceBuildTranscript, source_build_transcript/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript toolchain circomDependencies must not use multiple aliases: circomDependencies, circom_dependencies/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript toolchain\.circom contains unknown field: operatorDecision/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript circuit sha256 must not use multiple aliases: sha256, hash/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript verificationKey verifierKeyHash must not use multiple aliases: verifierKeyHash, verifier_key_hash/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("materialize refuses reproducible transcript artifact summary drift", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-transcript-artifacts-"));
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const reproducibleTranscript = JSON.parse(
+      await readFile(inputs.reproducibleBuildTranscript, "utf8"),
+    );
+    reproducibleTranscript.circuit = {
+      path: basename(inputs.circuitSource),
+      sha256: `0x${"41".repeat(32)}`,
+      fullMessageCircuit: true,
+      publicInputCount: 9,
+    };
+    reproducibleTranscript.r1cs = {
+      path: basename(inputs.r1cs),
+      sha256: `0x${"42".repeat(32)}`,
+      nConstraints: 8192,
+      nPublicInputs: 9,
+    };
+    reproducibleTranscript.zkey = {
+      finalPath: basename(inputs.zkey),
+      finalSha256: `0x${"43".repeat(32)}`,
+    };
+    reproducibleTranscript.verificationKey = {
+      snarkjsPath: basename(inputs.verificationKeyPath),
+      snarkjsSha256: `0x${"44".repeat(32)}`,
+      verifierKeyHash: `0x${"45".repeat(32)}`,
+    };
+    const reproducibleTranscriptText = Buffer.from(
+      `${JSON.stringify(reproducibleTranscript, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(inputs.reproducibleBuildTranscript, reproducibleTranscriptText);
+    inputs.context.reproducibleBuildTranscriptSha256 =
+      sha256Hex(reproducibleTranscriptText);
+    const attestations = await writeBoundAttestations(root, inputs.context);
+
+    const result = await materializeBscGroth16Material({
+      "bsc-network": "testnet",
+      ...trustedSignerOption(),
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "snarkjs-bin": inputs.snarkjsStub,
+      "circuit-source": inputs.circuitSource,
+      ...transcriptOptions(inputs),
+      "semantic-attestation": attestations.semantic,
+      "circuit-security-attestation": attestations.security,
+      "trusted-setup-attestation": attestations.setup,
+      "reproducible-build-attestation": attestations.reproducible,
+      "out-dir": join(root, "out"),
+    });
+
+    assert.equal(result.productionReady, false);
+    const blockers = result.productionBlockers.join("\n");
+    assert.match(
+      blockers,
+      /reproducible build transcript circuit\.sha256 must match/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript r1cs\.sha256 must match/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript zkey\.finalSha256 must match/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript verificationKey\.snarkjsSha256 must match/u,
+    );
+    assert.match(
+      blockers,
+      /reproducible build transcript verificationKey\.verifierKeyHash must match/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -2561,6 +3321,7 @@ test("materialize falls back to bounded R1CS header parsing when snarkjs info fa
             "independent-rebuilder-b",
           ],
           reproducible: true,
+          toolchain: inputs.context.reproducibleBuildToolchain,
           r1csInfoSource: "binary-header-fallback",
           r1csPublicInputCount: 9,
           r1csConstraintCount: 2_154_888,
@@ -2950,6 +3711,561 @@ test("attestation-request emits deterministic unsigned role payloads", async () 
   }
 });
 
+test("evidence-template writes manifest-bound drafts that remain unsigned blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-evidence-template-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root, {
+      evidence: false,
+    });
+    const outDir = join(root, "review-evidence");
+    const requestPath = join(root, "request-from-drafts.json");
+
+    const templateResult = await writeBscGroth16EvidenceTemplates({
+      manifest: result.manifest,
+      "out-dir": outDir,
+    });
+    const index = JSON.parse(await readFile(templateResult.out, "utf8"));
+    const semanticEvidence = JSON.parse(
+      await readFile(templateResult.semanticReviewEvidence, "utf8"),
+    );
+    const securityEvidence = JSON.parse(
+      await readFile(templateResult.circuitSecurityAuditEvidence, "utf8"),
+    );
+    const manifest = JSON.parse(await readFile(result.manifest, "utf8"));
+
+    assert.equal(index.schema, BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA);
+    assert.equal(index.manifest.sha256, sha256Hex(await readFile(result.manifest)));
+    assert.equal(index.draftsAreNotSignable, true);
+    assert.equal(
+      index.outputs.semanticReviewEvidence.sha256,
+      sha256Hex(await readFile(templateResult.semanticReviewEvidence)),
+    );
+    assert.equal(
+      index.outputs.circuitSecurityAuditEvidence.sha256,
+      sha256Hex(await readFile(templateResult.circuitSecurityAuditEvidence)),
+    );
+    assert.equal(
+      semanticEvidence.schema,
+      BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA,
+    );
+    assert.equal(semanticEvidence.reviewResult, "pending");
+    assert.equal(semanticEvidence.fullSccpMessageSemantics, false);
+    assert.equal(semanticEvidence.r1csSha256, manifest.artifacts.r1cs.sha256);
+    assert.equal(
+      semanticEvidence.provingKeySha256,
+      manifest.artifacts.provingKey.sha256,
+    );
+    assert.equal(semanticEvidence.verifierKeyHash, result.verifierKeyHash);
+    assert.equal(
+      semanticEvidence.reviewReport.sha256,
+      sha256Hex(await readFile(templateResult.semanticReviewReport)),
+    );
+    assert.equal(
+      securityEvidence.schema,
+      BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA,
+    );
+    assert.equal(securityEvidence.auditResult, "pending");
+    assert.equal(securityEvidence.approved, false);
+    assert.equal(
+      securityEvidence.auditReport.sha256,
+      sha256Hex(await readFile(templateResult.circuitSecurityAuditReport)),
+    );
+
+    const requestResult = await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      "--semantic-review-evidence",
+      templateResult.semanticReviewEvidence,
+      "--circuit-security-audit-evidence",
+      templateResult.circuitSecurityAuditEvidence,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+
+    assert.equal(requestResult.readyForSignature.semanticSccpCircuit, false);
+    assert.equal(requestResult.readyForSignature.circuitSecurity, false);
+    assert.match(
+      request.roles.semanticSccpCircuit.blockers.join("\n"),
+      /reviewResult must be pass/u,
+    );
+    assert.match(
+      request.roles.semanticSccpCircuit.blockers.join("\n"),
+      /fullSccpMessageSemantics must be true/u,
+    );
+    assert.match(
+      request.roles.circuitSecurity.blockers.join("\n"),
+      /auditResult must be pass/u,
+    );
+    assert.match(
+      request.roles.circuitSecurity.blockers.join("\n"),
+      /approved must be true/u,
+    );
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+    });
+    assert.equal(status.requestValid, true);
+    assert.equal(status.requestReadyForSignature.semanticSccpCircuit, false);
+    assert.equal(status.requestReadyForSignature.circuitSecurity, false);
+    assert.match(
+      status.roles.semanticSccpCircuit.blockers.join("\n"),
+      /reviewResult must be pass/u,
+    );
+    assert.match(
+      status.roles.circuitSecurity.blockers.join("\n"),
+      /auditResult must be pass/u,
+    );
+    assert.doesNotMatch(
+      status.problems.join("\n"),
+      /semanticReviewEvidenceSchema is required|circuitSecurityAuditEvidenceSchema is required|body evidence sha256/u,
+    );
+
+    await assert.rejects(
+      () =>
+        writeBscGroth16EvidenceTemplates({
+          manifest: result.manifest,
+          "out-dir": outDir,
+        }),
+      /already exists; pass --overwrite true/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("handoff-bundle writes a hash-bound public readiness packet", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-handoff-"));
+  try {
+    const { inputs, result } = await writeAttestationRequestCandidate(root, {
+      evidence: false,
+    });
+    const materialDir = dirname(result.manifest);
+    const snarkjsBin = await copyExecutableFixture(
+      inputs.snarkjsStub,
+      join(root, "snarkjs-bin"),
+    );
+    const circomBin = await copyExecutableFixture(
+      inputs.snarkjsStub,
+      join(root, "circom-bin"),
+    );
+    const transcriptPackage = await writeBscGroth16TranscriptTemplates({
+      "bsc-network": "testnet",
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "circuit-source": inputs.circuitSource,
+      "witness-wasm": inputs.witnessWasm,
+      "circom-bin": circomBin,
+      "snarkjs-bin": snarkjsBin,
+      "out-dir": join(materialDir, "transcripts"),
+    });
+    const evidencePackage = await writeBscGroth16EvidenceTemplates({
+      manifest: result.manifest,
+    });
+    const requestPath = join(materialDir, "testnet-bsc-groth16-attestation-request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      "--semantic-review-evidence",
+      evidencePackage.semanticReviewEvidence,
+      "--circuit-security-audit-evidence",
+      evidencePackage.circuitSecurityAuditEvidence,
+      "--out",
+      requestPath,
+    ]);
+    const out = join(root, "handoff.json");
+
+    const handoffResult = await writeBscGroth16AttestationHandoff({
+      manifest: result.manifest,
+      out,
+    });
+    const handoff = JSON.parse(await readFile(out, "utf8"));
+    const verifiedHandoff = await verifyBscGroth16AttestationHandoff({
+      handoff: out,
+    });
+
+    assert.equal(handoffResult.ok, true);
+    assert.equal(handoffResult.handoffComplete, true);
+    assert.equal(handoffResult.productionReady, false);
+    assert.equal(handoffResult.signingReady, false);
+    assert.equal(handoff.schema, BSC_GROTH16_ATTESTATION_HANDOFF_SCHEMA);
+    assert.equal(handoff.manifest.sha256, sha256Hex(await readFile(result.manifest)));
+    assert.equal(
+      handoff.packages.transcriptTemplates.sha256,
+      sha256Hex(await readFile(transcriptPackage.out)),
+    );
+    assert.equal(
+      handoff.packages.evidenceTemplates.sha256,
+      sha256Hex(await readFile(evidencePackage.out)),
+    );
+    assert.equal(
+      handoff.packages.attestationRequest.sha256,
+      sha256Hex(await readFile(requestPath)),
+    );
+    assert.equal(handoff.packages.transcriptTemplates.draftsAreNotProductionReady, true);
+    assert.equal(handoff.packages.evidenceTemplates.draftsAreNotSignable, true);
+    assert.equal(handoff.readiness.handoffComplete, true);
+    assert.equal(handoff.readiness.productionReady, false);
+    assert.equal(handoff.readiness.signingReady, false);
+    assert.equal(handoff.readiness.requestValid, true);
+    assert.equal(
+      handoff.readiness.requestReadyForSignature.semanticSccpCircuit,
+      false,
+    );
+    assert.equal(handoff.readiness.missingSignedRoles.length, 4);
+    assert.equal(verifiedHandoff.ok, true);
+    assert.equal(
+      verifiedHandoff.valid,
+      true,
+      verifiedHandoff.referenceBlockers.join("\n"),
+    );
+    assert.equal(verifiedHandoff.readiness.handoffComplete, true);
+    assert.equal(verifiedHandoff.readiness.productionReady, false);
+    assert.equal(verifiedHandoff.readiness.signingReady, false);
+    assert.equal(verifiedHandoff.problemCount, handoff.readiness.problemCount);
+    assert.equal(verifiedHandoff.referenceBlockers.length, 0);
+    assert.match(
+      handoff.readiness.attestationStatusProblems.join("\n"),
+      /semantic SCCP circuit role is not ready for signature/u,
+    );
+    assert.match(
+      handoff.readiness.attestationStatusProblems.join("\n"),
+      /circuit security role is not ready for signature/u,
+    );
+    assert.match(
+      handoff.commands.finalizeAttestations,
+      /finalize-attestations .*--trusted-attestation-signer <0x\.\.\.>/u,
+    );
+    assert.match(
+      handoff.commands.verifyHandoff,
+      /verify-handoff --handoff .*handoff\.json --trusted-attestation-signer <0x\.\.\.>/u,
+    );
+    assert.doesNotMatch(JSON.stringify(handoff), /privateKey|private_key|mnemonic/u);
+
+    await assert.rejects(
+      () =>
+        writeBscGroth16AttestationHandoff({
+          manifest: result.manifest,
+          out,
+      }),
+      /already exists; pass --overwrite true/u,
+    );
+
+    const forgedHandoffPath = join(root, "forged-handoff.json");
+    await writeJson(forgedHandoffPath, {
+      ...handoff,
+      readiness: {
+        ...handoff.readiness,
+        productionReady: true,
+      },
+    });
+    const forgedVerifiedHandoff = await verifyBscGroth16AttestationHandoff({
+      handoff: forgedHandoffPath,
+    });
+    assert.equal(forgedVerifiedHandoff.valid, false);
+    assert.match(
+      forgedVerifiedHandoff.referenceBlockers.join("\n"),
+      /readiness\.productionReady must match material manifest/u,
+    );
+
+    const forgedPackageSummaryPath = join(root, "forged-package-summary-handoff.json");
+    await writeJson(forgedPackageSummaryPath, {
+      ...handoff,
+      packages: {
+        ...handoff.packages,
+        transcriptTemplates: {
+          ...handoff.packages.transcriptTemplates,
+          draftsAreNotProductionReady: false,
+        },
+      },
+    });
+    const forgedPackageSummaryVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: forgedPackageSummaryPath,
+      });
+    assert.equal(forgedPackageSummaryVerification.valid, false);
+    assert.match(
+      forgedPackageSummaryVerification.referenceBlockers.join("\n"),
+      /transcript template package handoff draftsAreNotProductionReady must match referenced package/u,
+    );
+
+    const forgedPackageSchemaPath = join(root, "forged-package-schema-handoff.json");
+    const {
+      schema: _omittedTranscriptSummarySchema,
+      ...transcriptTemplateSummaryWithoutSchema
+    } = handoff.packages.transcriptTemplates;
+    await writeJson(forgedPackageSchemaPath, {
+      ...handoff,
+      packages: {
+        ...handoff.packages,
+        transcriptTemplates: transcriptTemplateSummaryWithoutSchema,
+      },
+    });
+    const forgedPackageSchemaVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: forgedPackageSchemaPath,
+      });
+    assert.equal(forgedPackageSchemaVerification.valid, false);
+    assert.match(
+      forgedPackageSchemaVerification.referenceBlockers.join("\n"),
+      /transcript template package handoff schema must be iroha-sccp-bsc-groth16-transcript-template-package\/v1/u,
+    );
+
+    const forgedManifestSummaryPath = join(root, "forged-manifest-summary-handoff.json");
+    await writeJson(forgedManifestSummaryPath, {
+      ...handoff,
+      manifest: {
+        ...handoff.manifest,
+        productionReady: true,
+        productionBlockers: [],
+      },
+    });
+    const forgedManifestSummaryVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: forgedManifestSummaryPath,
+      });
+    assert.equal(forgedManifestSummaryVerification.valid, false);
+    assert.match(
+      forgedManifestSummaryVerification.referenceBlockers.join("\n"),
+      /manifest\.productionReady must match material manifest/u,
+    );
+    assert.match(
+      forgedManifestSummaryVerification.referenceBlockers.join("\n"),
+      /manifest\.productionBlockers must match material manifest/u,
+    );
+
+    const forgedReadinessSummaryPath = join(root, "forged-readiness-summary-handoff.json");
+    await writeJson(forgedReadinessSummaryPath, {
+      ...handoff,
+      readiness: {
+        ...handoff.readiness,
+        requestReadyForSignature: {},
+        missingSignedRoles: [],
+        problemCount: 0,
+        attestationStatusProblems: [],
+        productionBlockers: [],
+      },
+    });
+    const forgedReadinessSummaryVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: forgedReadinessSummaryPath,
+      });
+    assert.equal(forgedReadinessSummaryVerification.valid, false);
+    assert.match(
+      forgedReadinessSummaryVerification.referenceBlockers.join("\n"),
+      /readiness\.problemCount must match verified handoff status/u,
+    );
+    assert.match(
+      forgedReadinessSummaryVerification.referenceBlockers.join("\n"),
+      /readiness\.requestReadyForSignature must match attestation status/u,
+    );
+    assert.match(
+      forgedReadinessSummaryVerification.referenceBlockers.join("\n"),
+      /readiness\.missingSignedRoles must match attestation status/u,
+    );
+    assert.match(
+      forgedReadinessSummaryVerification.referenceBlockers.join("\n"),
+      /readiness\.attestationStatusProblems must match attestation status/u,
+    );
+    assert.match(
+      forgedReadinessSummaryVerification.referenceBlockers.join("\n"),
+      /readiness\.productionBlockers must match material manifest/u,
+    );
+
+    const forgedShapeHandoffPath = join(root, "forged-shape-handoff.json");
+    await writeJson(forgedShapeHandoffPath, {
+      ...handoff,
+      production_ready: true,
+      manifest: {
+        ...handoff.manifest,
+        production_ready: true,
+      },
+      packages: {
+        ...handoff.packages,
+        transcriptTemplates: {
+          ...handoff.packages.transcriptTemplates,
+          drafts_are_not_production_ready: false,
+        },
+      },
+      readiness: {
+        ...handoff.readiness,
+        signing_ready: true,
+      },
+      commands: {
+        ...handoff.commands,
+        verify_handoff: "operator-forged command",
+        shadowFinalize: "operator-forged command",
+      },
+    });
+    const forgedShapeVerification = await verifyBscGroth16AttestationHandoff({
+      handoff: forgedShapeHandoffPath,
+    });
+    assert.equal(forgedShapeVerification.valid, false);
+    assert.match(
+      forgedShapeVerification.referenceBlockers.join("\n"),
+      /attestation handoff contains unknown field: production_ready/u,
+    );
+    assert.match(
+      forgedShapeVerification.referenceBlockers.join("\n"),
+      /manifest summary contains unknown field: production_ready/u,
+    );
+    assert.match(
+      forgedShapeVerification.referenceBlockers.join("\n"),
+      /transcript template package handoff summary contains unknown field: drafts_are_not_production_ready/u,
+    );
+    assert.match(
+      forgedShapeVerification.referenceBlockers.join("\n"),
+      /attestation handoff readiness contains unknown field: signing_ready/u,
+    );
+    assert.match(
+      forgedShapeVerification.referenceBlockers.join("\n"),
+      /attestation handoff commands contains unknown field: shadowFinalize/u,
+    );
+    assert.match(
+      forgedShapeVerification.referenceBlockers.join("\n"),
+      /attestation handoff commands verifyHandoff must not use multiple aliases: verifyHandoff, verify_handoff/u,
+    );
+
+    const forgedCommandSummaryPath = join(root, "forged-command-summary-handoff.json");
+    await writeJson(forgedCommandSummaryPath, {
+      ...handoff,
+      commands: {
+        ...handoff.commands,
+        signAttestation:
+          `node scripts/sccp_bsc_groth16_material.mjs sign-attestation --request ${handoff.packages.attestationRequest.path} --role semanticSccpCircuit --out <signed-role-attestation.json>`,
+        finalizeAttestations:
+          `node scripts/sccp_bsc_groth16_material.mjs finalize-attestations --request ${handoff.packages.attestationRequest.path} --out-dir ${materialDir}`,
+      },
+    });
+    const forgedCommandSummaryVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: forgedCommandSummaryPath,
+      });
+    assert.equal(forgedCommandSummaryVerification.valid, false);
+    assert.match(
+      forgedCommandSummaryVerification.referenceBlockers.join("\n"),
+      /commands\.signAttestation must include --role semanticSccpCircuit\|circuitSecurity\|trustedSetup\|reproducibleBuild/u,
+    );
+    assert.match(
+      forgedCommandSummaryVerification.referenceBlockers.join("\n"),
+      /commands\.signAttestation must include --private-key-pem <ed25519-private-key\.pem>/u,
+    );
+    assert.match(
+      forgedCommandSummaryVerification.referenceBlockers.join("\n"),
+      /commands\.finalizeAttestations must include --semantic-attestation <semantic-sccp-circuit-attestation\.json>/u,
+    );
+    assert.match(
+      forgedCommandSummaryVerification.referenceBlockers.join("\n"),
+      /commands\.finalizeAttestations must include --trusted-attestation-signer <0x\.\.\.>/u,
+    );
+
+    const absoluteHandoffPath = join(root, "absolute-handoff-path.json");
+    await writeJson(absoluteHandoffPath, {
+      ...handoff,
+      packages: {
+        ...handoff.packages,
+        transcriptTemplates: {
+          ...handoff.packages.transcriptTemplates,
+          path: transcriptPackage.out,
+        },
+      },
+    });
+    const absoluteHandoffVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: absoluteHandoffPath,
+      });
+    assert.equal(absoluteHandoffVerification.valid, false);
+    assert.match(
+      absoluteHandoffVerification.referenceBlockers.join("\n"),
+      /transcript template package handoff reference path must be a safe relative path/u,
+    );
+
+    const parentTraversalHandoffPath = join(root, "parent-traversal-handoff-path.json");
+    await writeJson(parentTraversalHandoffPath, {
+      ...handoff,
+      manifest: {
+        ...handoff.manifest,
+        path: "../manifest.json",
+      },
+    });
+    const parentTraversalHandoffVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: parentTraversalHandoffPath,
+      });
+    assert.equal(parentTraversalHandoffVerification.valid, false);
+    assert.match(
+      parentTraversalHandoffVerification.referenceBlockers.join("\n"),
+      /material manifest handoff reference path must be a safe relative path/u,
+    );
+
+    const staleTranscriptPackage = JSON.parse(
+      await readFile(transcriptPackage.out, "utf8"),
+    );
+    staleTranscriptPackage.generatedAt = "2026-01-01T00:00:00.000Z";
+    await writeJson(transcriptPackage.out, staleTranscriptPackage);
+    const staleVerifiedHandoff = await verifyBscGroth16AttestationHandoff({
+      handoff: out,
+    });
+    assert.equal(staleVerifiedHandoff.valid, false);
+    assert.match(
+      staleVerifiedHandoff.referenceBlockers.join("\n"),
+      /BSC Groth16 transcript template package sha256 must match handoff reference/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("handoff-bundle rejects adversarial package schema drift", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-handoff-schema-"));
+  try {
+    const { inputs, result } = await writeAttestationRequestCandidate(root, {
+      evidence: false,
+    });
+    const snarkjsBin = await copyExecutableFixture(
+      inputs.snarkjsStub,
+      join(root, "snarkjs-bin"),
+    );
+    const circomBin = await copyExecutableFixture(
+      inputs.snarkjsStub,
+      join(root, "circom-bin"),
+    );
+    const transcriptPackage = await writeBscGroth16TranscriptTemplates({
+      "bsc-network": "testnet",
+      r1cs: inputs.r1cs,
+      zkey: inputs.zkey,
+      ptau: inputs.ptau,
+      "snarkjs-verifier-key": inputs.verificationKeyPath,
+      "circuit-source": inputs.circuitSource,
+      "witness-wasm": inputs.witnessWasm,
+      "circom-bin": circomBin,
+      "snarkjs-bin": snarkjsBin,
+      "out-dir": join(root, "transcripts"),
+    });
+    const forgedPackage = JSON.parse(await readFile(transcriptPackage.out, "utf8"));
+    forgedPackage.schema = BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA;
+    await writeJson(transcriptPackage.out, forgedPackage);
+
+    await assert.rejects(
+      () =>
+        writeBscGroth16AttestationHandoff({
+          manifest: result.manifest,
+          "transcript-template-package": transcriptPackage.out,
+          out: join(root, "handoff.json"),
+        }),
+      /BSC Groth16 transcript template package schema must be iroha-sccp-bsc-groth16-transcript-template-package\/v1/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("attestation-request blocks semantic and circuit roles without review evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-no-evidence-"));
   try {
@@ -3016,6 +4332,18 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
       pattern: /r1csSha256 must match/u,
     },
     {
+      name: "semantic-route-alias-conflict",
+      role: "semanticSccpCircuit",
+      evidenceOverrides: { semantic: { route_id: "taira_bsc_xor" } },
+      pattern: /semantic SCCP circuit review evidence routeId must not use multiple aliases: routeId, route_id/u,
+    },
+    {
+      name: "semantic-shadow-field",
+      role: "semanticSccpCircuit",
+      evidenceOverrides: { semantic: { operatorOverrideApproved: true } },
+      pattern: /semantic SCCP circuit review evidence contains unknown field: operatorOverrideApproved/u,
+    },
+    {
       name: "semantic-secret",
       role: "semanticSccpCircuit",
       evidenceOverrides: { semantic: { privateKey: "not-for-public-release" } },
@@ -3030,7 +4358,7 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
           `{"schema":"${BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA}","schema":"${BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_SCHEMA}"}\n`,
         );
       },
-      pattern: /duplicate key/u,
+      pattern: /duplicate JSON object key/u,
     },
     {
       name: "semantic-report-drift",
@@ -3041,10 +4369,134 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
       pattern: /report sha256 must match/u,
     },
     {
+      name: "semantic-report-shadow-field",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.operatorNote = "approved outside signed role body";
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /semantic SCCP circuit review evidence report contains unknown field: operatorNote/u,
+    },
+    {
+      name: "semantic-report-container-alias-conflict",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.review_report = record.reviewReport;
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /semantic SCCP circuit review evidence reviewReport must not use multiple aliases: reviewReport, review_report/u,
+    },
+    {
+      name: "semantic-report-path-alias-conflict",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.reportPath = "semantic-review-report.md";
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /semantic SCCP circuit review evidence report path must not use multiple aliases: path, reportPath/u,
+    },
+    {
+      name: "semantic-report-hash-alias-conflict",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.hash = record.reviewReport.sha256;
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /semantic SCCP circuit review evidence report sha256 must not use multiple aliases: sha256, hash/u,
+    },
+    {
+      name: "semantic-absolute-report-path",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.path = evidence.semanticReport;
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /report path must be a safe relative path/u,
+    },
+    {
+      name: "semantic-url-report-path",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.path = "https://reviews.example.invalid/semantic-report.md";
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /report path must be a safe relative path/u,
+    },
+    {
+      name: "semantic-parent-report-path",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.path = "%2e%2e/semantic-review-report.md";
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /report path must be a safe relative path/u,
+    },
+    {
+      name: "semantic-placeholder-report-path",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const placeholderReport = join(
+          dirname(evidence.semanticReviewEvidence),
+          "placeholder-semantic-review-report.md",
+        );
+        await writeFile(placeholderReport, await readFile(evidence.semanticReport));
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.path = "placeholder-semantic-review-report.md";
+        record.reviewReport.sha256 = sha256Hex(await readFile(placeholderReport));
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    },
+    {
+      name: "semantic-symlink-report-path",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const linkPath = join(dirname(evidence.semanticReviewEvidence), "semantic-review-link.md");
+        await symlink(evidence.semanticReport, linkPath);
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.path = "semantic-review-link.md";
+        record.reviewReport.sha256 = sha256Hex(await readFile(evidence.semanticReport));
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /must not be a symbolic link/u,
+    },
+    {
+      name: "semantic-oversized-report-path",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const largeReport = join(dirname(evidence.semanticReviewEvidence), "semantic-review-large.md");
+        await writeFile(largeReport, Buffer.alloc(17 * 1024 * 1024, 0x61));
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        record.reviewReport.path = "semantic-review-large.md";
+        record.reviewReport.sha256 = sha256Hex(await readFile(largeReport));
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern: /maximum allowed/u,
+    },
+    {
       name: "circuit-high-finding",
       role: "circuitSecurity",
       evidenceOverrides: { security: { highFindings: 1 } },
       pattern: /highFindings must be 0/u,
+    },
+    {
+      name: "circuit-shadow-field",
+      role: "circuitSecurity",
+      evidenceOverrides: { security: { securityCommitteeOverride: true } },
+      pattern: /circuit security audit evidence contains unknown field: securityCommitteeOverride/u,
+    },
+    {
+      name: "circuit-approved-alias-conflict",
+      role: "circuitSecurity",
+      evidenceOverrides: { security: { production_approved: true } },
+      pattern: /circuit security audit evidence productionApproved must not use multiple aliases: production_approved, approved/u,
     },
     {
       name: "circuit-placeholder-label",
@@ -3059,6 +4511,62 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
         await writeFile(evidence.circuitReport, "Changed circuit audit report.\n");
       },
       pattern: /report sha256 must match/u,
+    },
+    {
+      name: "circuit-report-shadow-field",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.circuitSecurityAuditEvidence, "utf8"));
+        record.auditReport.operatorNote = "approved outside signed role body";
+        await writeJson(evidence.circuitSecurityAuditEvidence, record);
+      },
+      pattern: /circuit security audit evidence report contains unknown field: operatorNote/u,
+    },
+    {
+      name: "circuit-absolute-report-path",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.circuitSecurityAuditEvidence, "utf8"));
+        record.auditReport.path = evidence.circuitReport;
+        await writeJson(evidence.circuitSecurityAuditEvidence, record);
+      },
+      pattern: /report path must be a safe relative path/u,
+    },
+    {
+      name: "circuit-parent-report-path",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.circuitSecurityAuditEvidence, "utf8"));
+        record.auditReport.path = "%2e%2e/circuit-security-audit-report.md";
+        await writeJson(evidence.circuitSecurityAuditEvidence, record);
+      },
+      pattern: /report path must be a safe relative path/u,
+    },
+    {
+      name: "circuit-symlink-report-path",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        const linkPath = join(dirname(evidence.circuitSecurityAuditEvidence), "circuit-audit-link.md");
+        await symlink(evidence.circuitReport, linkPath);
+        const record = JSON.parse(await readFile(evidence.circuitSecurityAuditEvidence, "utf8"));
+        record.auditReport.path = "circuit-audit-link.md";
+        record.auditReport.sha256 = sha256Hex(await readFile(evidence.circuitReport));
+        await writeJson(evidence.circuitSecurityAuditEvidence, record);
+      },
+      pattern: /must not be a symbolic link/u,
+    },
+    {
+      name: "circuit-oversized-report-path",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        const largeReport = join(dirname(evidence.circuitSecurityAuditEvidence), "circuit-audit-large.md");
+        await writeFile(largeReport, Buffer.alloc(17 * 1024 * 1024, 0x63));
+        const record = JSON.parse(await readFile(evidence.circuitSecurityAuditEvidence, "utf8"));
+        record.auditReport.path = "circuit-audit-large.md";
+        record.auditReport.sha256 = sha256Hex(await readFile(largeReport));
+        await writeJson(evidence.circuitSecurityAuditEvidence, record);
+      },
+      pattern: /maximum allowed/u,
     },
   ];
 
@@ -3110,7 +4618,7 @@ test("sign-attestation refuses tampered evidence references even when role hashe
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3231,10 +4739,138 @@ test("attestation-request refuses manifest public signal drift", async () => {
   }
 });
 
+test("attestation-request refuses material manifest shadow fields and aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-shape-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const baseline = JSON.parse(await readFile(result.manifest, "utf8"));
+    await writeJson(result.manifest, {
+      ...baseline,
+      operatorShadow: true,
+      artifacts: {
+        ...baseline.artifacts,
+        r1cs: {
+          ...baseline.artifacts.r1cs,
+          shadowHash: `0x${"11".repeat(32)}`,
+        },
+      },
+      selfChecks: {
+        ...baseline.selfChecks,
+        snarkjs: {
+          ...baseline.selfChecks.snarkjs,
+          remoteProver: true,
+        },
+      },
+      attestationTrustPolicy: {
+        ...baseline.attestationTrustPolicy,
+        operatorOverride: true,
+      },
+      attestations: {
+        ...baseline.attestations,
+        shadowRole: {
+          path: "shadow-attestation.json",
+          sha256: `0x${"22".repeat(32)}`,
+        },
+      },
+    });
+
+    await assert.rejects(
+      () =>
+        main([
+          "attestation-request",
+          "--manifest",
+          result.manifest,
+          ...result.attestationRequestEvidenceArgs,
+          "--toolchain-sha256",
+          `0x${"ef".repeat(32)}`,
+          "--out",
+          join(root, "request.shadow.json"),
+        ]),
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /material manifest shape is not production-ready/u,
+        );
+        assert.match(message, /material manifest contains unknown field: operatorShadow/u);
+        assert.match(message, /material manifest artifacts\.r1cs contains unknown field: shadowHash/u);
+        assert.match(message, /material manifest selfChecks\.snarkjs contains unknown field: remoteProver/u);
+        assert.match(
+          message,
+          /material manifest attestationTrustPolicy contains unknown field: operatorOverride/u,
+        );
+        assert.match(message, /material manifest attestations contains unknown field: shadowRole/u);
+        return true;
+      },
+    );
+
+    await writeJson(result.manifest, {
+      ...baseline,
+      route_id: baseline.routeId,
+      public_signal_names: baseline.publicSignalNames,
+      production_ready: baseline.productionReady,
+      artifacts: {
+        ...baseline.artifacts,
+        powers_of_tau: baseline.artifacts.powersOfTau,
+        provingKey: {
+          ...baseline.artifacts.provingKey,
+          artifactHash: baseline.artifacts.provingKey.sha256,
+        },
+      },
+      self_checks: baseline.selfChecks,
+      attestation_trust_policy: baseline.attestationTrustPolicy,
+    });
+
+    await assert.rejects(
+      () =>
+        main([
+          "attestation-request",
+          "--manifest",
+          result.manifest,
+          ...result.attestationRequestEvidenceArgs,
+          "--toolchain-sha256",
+          `0x${"ef".repeat(32)}`,
+          "--out",
+          join(root, "request.alias.json"),
+        ]),
+      (error) => {
+        const message = String(error);
+        assert.match(message, /material manifest routeId must not use multiple aliases: routeId, route_id/u);
+        assert.match(
+          message,
+          /material manifest publicSignalNames must not use multiple aliases: publicSignalNames, public_signal_names/u,
+        );
+        assert.match(
+          message,
+          /material manifest productionReady must not use multiple aliases: productionReady, production_ready/u,
+        );
+        assert.match(
+          message,
+          /material manifest artifacts powersOfTau must not use multiple aliases: powersOfTau, powers_of_tau/u,
+        );
+        assert.match(
+          message,
+          /material manifest artifacts\.provingKey sha256 must not use multiple aliases: sha256, artifactHash/u,
+        );
+        assert.match(message, /material manifest selfChecks must not use multiple aliases: selfChecks, self_checks/u);
+        assert.match(
+          message,
+          /material manifest attestationTrustPolicy must not use multiple aliases: attestationTrustPolicy, attestation_trust_policy/u,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("attestation-request requires a reproducible-build toolchain hash source", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-toolchain-"));
   try {
-    const { result } = await writeAttestationRequestCandidate(root);
+    const { result } = await writeAttestationRequestCandidate(root, {
+      materialInputs: { includeToolchain: false },
+    });
 
     await assert.rejects(
       () =>
@@ -3266,7 +4902,7 @@ test("sign-attestation writes one request-bound Ed25519 role attestation", async
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3324,7 +4960,7 @@ test("sign-attestation refuses blocked request roles", async () => {
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3360,7 +4996,7 @@ test("sign-attestation refuses tampered request body and template hashes", async
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3410,7 +5046,7 @@ test("sign-attestation refuses request role bodies with unknown shadow fields", 
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3450,6 +5086,117 @@ test("sign-attestation refuses request role bodies with unknown shadow fields", 
   }
 });
 
+test("sign-attestation refuses request package shadow fields and duplicate aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-shape-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      result.reproducibleBuildToolchainSha256,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    request.operatorShadowDecision = true;
+    request.manifest.production_ready = request.manifest.productionReady;
+    request.artifacts.r1cs.artifactHash = request.artifacts.r1cs.sha256;
+    request.evidence.semanticReview.operatorOverride = true;
+    request.evidence.semanticReview.report.reportPath =
+      request.evidence.semanticReview.report.path;
+    request.evidenceValidation.semanticReview.hash =
+      request.evidenceValidation.semanticReview.sha256;
+    request.transcriptValidation.trustedSetup.hash =
+      request.transcriptValidation.trustedSetup.sha256;
+    request.roles.circuitSecurity.operatorOverrideApproved = true;
+    request.roles.semanticSccpCircuit.signatureTemplate.signed_payload_sha256 =
+      request.roles.semanticSccpCircuit.signatureTemplate.signedPayloadSha256;
+    request.signingInstructions.operatorPolicy = "sign anyway";
+    await writeJson(requestPath, request);
+
+    let message = "";
+    await assert.rejects(
+      async () =>
+        signBscGroth16AttestationRole({
+          request: requestPath,
+          role: "semantic",
+          "private-key-pem": privateKeyPath,
+          out: join(root, "semantic-attestation.json"),
+        }),
+      (error) => {
+        message = error instanceof Error ? error.message : String(error);
+        return /attestation request package shape is not production-ready/u.test(
+          message,
+        );
+      },
+    );
+    assert.match(
+      message,
+      /attestation request package contains unknown field: operatorShadowDecision/u,
+    );
+    assert.match(
+      message,
+      /attestation request package manifest productionReady must not use multiple aliases: productionReady, production_ready/u,
+    );
+    assert.match(
+      message,
+      /attestation request package artifacts\.r1cs sha256 must not use multiple aliases: sha256, artifactHash/u,
+    );
+    assert.match(
+      message,
+      /attestation request package evidence\.semanticReview contains unknown field: operatorOverride/u,
+    );
+    assert.match(
+      message,
+      /attestation request package evidence\.semanticReview\.report path must not use multiple aliases: path, reportPath/u,
+    );
+    assert.match(
+      message,
+      /attestation request package evidenceValidation\.semanticReview sha256 must not use multiple aliases: sha256, hash/u,
+    );
+    assert.match(
+      message,
+      /attestation request package transcriptValidation\.trustedSetup sha256 must not use multiple aliases: sha256, hash/u,
+    );
+    assert.match(
+      message,
+      /attestation request package circuit security role contains unknown field: operatorOverrideApproved/u,
+    );
+    assert.match(
+      message,
+      /attestation request package semantic SCCP circuit signatureTemplate signedPayloadSha256 must not use multiple aliases: signedPayloadSha256, signed_payload_sha256/u,
+    );
+    assert.match(
+      message,
+      /attestation request package signingInstructions contains unknown field: operatorPolicy/u,
+    );
+
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      "trusted-attestation-signer": TRUSTED_ATTESTATION_SIGNER_FINGERPRINTS.join(
+        ",",
+      ),
+    });
+    assert.equal(status.readyToFinalize, false);
+    assert.equal(status.requestValid, false);
+    assert.match(
+      status.problems.join("\n"),
+      /attestation request package shape is not production-ready/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(status),
+      /PRIVATE KEY|privateKey|private_key|mnemonic|seed phrase|password/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("sign-attestation refuses mismatched fingerprints, non-Ed25519 keys, and key overwrite outputs", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-sign-key-"));
   try {
@@ -3471,7 +5218,7 @@ test("sign-attestation refuses mismatched fingerprints, non-Ed25519 keys, and ke
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3574,7 +5321,7 @@ test("attestation-status accepts signer-produced role files as ready to finalize
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -3712,6 +5459,66 @@ test("attestation-status flags stale request bodies, forged signatures, and sign
   }
 });
 
+test("attestation-status rejects signed role files with shadow signature metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-signature-shape-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const attestations = await writeAttestationsFromRequest(root, requestPath);
+    const semantic = JSON.parse(await readFile(attestations.semantic, "utf8"));
+    semantic.signature.operatorOverride = "accept external signature out of band";
+    semantic.signature.public_key_pem = semantic.signature.publicKeyPem;
+    semantic.signature.signed_payload_sha256 =
+      semantic.signature.signedPayloadSha256;
+    semantic.signature.signatureBase64 = semantic.signature.signature;
+    await writeJson(attestations.semantic, semantic);
+
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+      "semantic-attestation": attestations.semantic,
+      "circuit-security-attestation": attestations.security,
+      "trusted-setup-attestation": attestations.setup,
+      "reproducible-build-attestation": attestations.reproducible,
+    });
+
+    assert.equal(status.readyToFinalize, false);
+    const blockers = status.materialValidationBlockers.join("\n");
+    assert.match(
+      blockers,
+      /semantic SCCP circuit attestation signature contains unknown field: operatorOverride/u,
+    );
+    assert.match(
+      blockers,
+      /semantic SCCP circuit attestation signature publicKeyPem must not use multiple aliases: publicKeyPem, public_key_pem/u,
+    );
+    assert.match(
+      blockers,
+      /semantic SCCP circuit attestation signature signedPayloadSha256 must not use multiple aliases: signedPayloadSha256, signed_payload_sha256/u,
+    );
+    assert.match(
+      blockers,
+      /semantic SCCP circuit attestation signature signature must not use multiple aliases: signature, signatureBase64/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(status),
+      /PRIVATE KEY|privateKey|private_key|mnemonic|seed phrase|password/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("attestation-status rejects untrusted signer fingerprints without leaking keys", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-status-untrusted-"));
   try {
@@ -3778,7 +5585,7 @@ test("finalize-attestations accepts role files produced by sign-attestation", as
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -4405,7 +6212,7 @@ test("finalize-attestations materializes production-ready manifests from signed 
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
       "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
+      result.reproducibleBuildToolchainSha256,
       "--out",
       requestPath,
     ]);
@@ -4884,13 +6691,21 @@ test("preflight marks a complete full-message production bundle ready", async ()
     );
     assert.match(result.commands.materialize, /--trusted-setup-transcript/u);
     assert.match(result.commands.materialize, /--reproducible-build-transcript/u);
+    assert.match(result.commands.materialize, /--witness-wasm/u);
+    assert.match(result.commands.materialize, /--snarkjs-bin/u);
     assert.doesNotMatch(
       result.commands.materialize,
       /--semantic-attestation|--trusted-attestation-signer/u,
     );
+    assert.match(result.commands.toolchainFingerprint, /toolchain-fingerprint/u);
+    assert.match(result.commands.toolchainFingerprint, /--circom-bin/u);
+    assert.match(result.commands.toolchainFingerprint, /--snarkjs-bin/u);
+    assert.match(result.commands.toolchainFingerprint, /--transcript/u);
     assert.match(result.commands.proofSelfTest, /proof-self-test --manifest/u);
     assert.match(result.commands.proofSelfTest, /--witness-wasm/u);
-    assert.match(result.commands.attestationRequest, /--toolchain-sha256 <0x\.\.\.>/u);
+    assert.match(result.commands.proofSelfTest, /--snarkjs-bin/u);
+    assert.match(result.commands.attestationRequest, /attestation-request --manifest/u);
+    assert.doesNotMatch(result.commands.attestationRequest, /--toolchain-sha256/u);
     assert.match(result.commands.attestationRequest, /--out .*attestation-request\.json/u);
     assert.match(
       result.commands.signAttestation,
@@ -4934,8 +6749,6 @@ test("preflight summarizes present attestation request readiness", async () => {
       "--manifest",
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
-      "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
       "--out",
       requestPath,
     ]);
@@ -5001,8 +6814,6 @@ test("preflight reports attestation requests with fixture-labelled manifest refe
       "--manifest",
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
-      "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
       "--out",
       requestPath,
     ]);
@@ -5060,8 +6871,6 @@ test("preflight reports stale attestation request packages", async () => {
       "--manifest",
       result.manifest,
       ...result.attestationRequestEvidenceArgs,
-      "--toolchain-sha256",
-      `0x${"ef".repeat(32)}`,
       "--out",
       requestPath,
     ]);
@@ -5137,6 +6946,59 @@ test("preflight rejects tampered proof self-test reports", async () => {
   }
 });
 
+test("preflight rejects proof self-test forged proof bodies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-forged-"));
+  try {
+    const candidate = await writePreflightCandidate(root);
+    const circomStub = await writeCircomStub(root);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+    const proofSelfTestPath = join(
+      candidate.outDir,
+      "testnet-bsc-groth16-proof-self-test.json",
+    );
+    await main([
+      "proof-self-test",
+      "--manifest",
+      candidate.manifest,
+      "--snarkjs-bin",
+      snarkjsStub,
+      "--out",
+      proofSelfTestPath,
+    ]);
+    const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
+    report.proof.pi_a[0] = "2";
+    report.proofHash = sha256Hex(
+      Buffer.from(canonicalJson(report.proof), "utf8"),
+    );
+    await writeJson(proofSelfTestPath, report);
+
+    const result = await preflightBscGroth16Material({
+      "bsc-network": "testnet",
+      "out-dir": candidate.outDir,
+      "circom-bin": circomStub,
+      "snarkjs-bin": snarkjsStub,
+    });
+
+    assert.equal(result.ready, false);
+    assert.equal(result.toolchainReady, true);
+    assert.equal(result.artifactReady, false);
+    assert.match(
+      result.problems.join("\n"),
+      /proof self-test report blocker: proof self-test embedded Groth16 proof must verify against SnarkJS verification key/u,
+    );
+    assert.match(
+      result.problems.join("\n"),
+      /forced proof object verification failure/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("preflight rejects proof self-test artifact hash drift", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-artifact-drift-"));
   try {
@@ -5182,6 +7044,63 @@ test("preflight rejects proof self-test artifact hash drift", async () => {
     assert.match(
       result.problems.join("\n"),
       /proof self-test report blocker: proof self-test witness WASM sha256 must match/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preflight rejects proof self-test path metadata drift", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-path-drift-"));
+  try {
+    const candidate = await writePreflightCandidate(root);
+    const circomStub = await writeCircomStub(root);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+    const proofSelfTestPath = join(
+      candidate.outDir,
+      "testnet-bsc-groth16-proof-self-test.json",
+    );
+    await main([
+      "proof-self-test",
+      "--manifest",
+      candidate.manifest,
+      "--snarkjs-bin",
+      snarkjsStub,
+      "--out",
+      proofSelfTestPath,
+    ]);
+    const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
+    report.manifest.path = "operator/other-manifest.json";
+    report.artifacts.r1cs.path = "operator/other.r1cs";
+    report.artifacts.witnessWasm.path = "operator/other.wasm";
+    await writeJson(proofSelfTestPath, report);
+
+    const result = await preflightBscGroth16Material({
+      "bsc-network": "testnet",
+      "out-dir": candidate.outDir,
+      "circom-bin": circomStub,
+      "snarkjs-bin": snarkjsStub,
+    });
+
+    assert.equal(result.ready, false);
+    assert.equal(result.toolchainReady, true);
+    assert.equal(result.artifactReady, false);
+    const problems = result.problems.join("\n");
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test manifest\.path must be/u,
+    );
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test R1CS path must be/u,
+    );
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test witness WASM path must be/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -5329,6 +7248,67 @@ test("preflight rejects proof self-test profile and public-signal hash drift", a
     assert.match(
       result.problems.join("\n"),
       /proof self-test report blocker: proof self-test proofHash must match proof/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preflight rejects proof self-test deterministic sample drift", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-sample-drift-"));
+  try {
+    const candidate = await writePreflightCandidate(root);
+    const circomStub = await writeCircomStub(root);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+    const proofSelfTestPath = join(
+      candidate.outDir,
+      "testnet-bsc-groth16-proof-self-test.json",
+    );
+    await main([
+      "proof-self-test",
+      "--manifest",
+      candidate.manifest,
+      "--snarkjs-bin",
+      snarkjsStub,
+      "--out",
+      proofSelfTestPath,
+    ]);
+    const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
+    report.sample.id = "operator-supplied-sample";
+    report.sample.syntheticInputWords[BSC_GROTH16_PUBLIC_SIGNAL_NAMES[0]] =
+      `0x${"88".repeat(32)}`;
+    report.sample.publicSignalWords[0] = "1";
+    report.sample.inputSha256 = `0x${"99".repeat(32)}`;
+    await writeJson(proofSelfTestPath, report);
+
+    const result = await preflightBscGroth16Material({
+      "bsc-network": "testnet",
+      "out-dir": candidate.outDir,
+      "circom-bin": circomStub,
+      "snarkjs-bin": snarkjsStub,
+    });
+
+    assert.equal(result.ready, false);
+    const problems = result.problems.join("\n");
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test sample\.id must be/u,
+    );
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test sample\.syntheticInputWords must match deterministic BSC Groth16 self-test input/u,
+    );
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test sample\.inputSha256 must match deterministic self-test input/u,
+    );
+    assert.match(
+      problems,
+      /proof self-test report blocker: proof self-test sample\.publicSignalWords mismatch/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -5577,8 +7557,14 @@ test("generate command help is exposed through the material CLI", async () => {
   assert.match(result.help, /sccp_bsc_groth16_material\.mjs generate/u);
   assert.match(
     result.help,
+    /sccp_bsc_groth16_material\.mjs toolchain-fingerprint/u,
+  );
+  assert.match(
+    result.help,
     /sccp_bsc_groth16_material\.mjs attestation-request/u,
   );
+  assert.match(result.help, /sccp_bsc_groth16_material\.mjs handoff-bundle/u);
+  assert.match(result.help, /sccp_bsc_groth16_material\.mjs verify-handoff/u);
   assert.match(
     result.help,
     /sccp_bsc_groth16_material\.mjs sign-attestation/u,
@@ -5602,6 +7588,14 @@ test("generate command help is exposed through the material CLI", async () => {
     result.help,
     new RegExp(DEFAULT_BSC_FULL_MESSAGE_CIRCUIT_SOURCE, "u"),
   );
+});
+
+test("material CLI subcommand help returns usage without operator probes", async () => {
+  const result = await main(["preflight", "--help"]);
+
+  assert.match(result.help, /sccp_bsc_groth16_material\.mjs preflight/u);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, "toolchain"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, "artifacts"), false);
 });
 
 test("materialize CLI refuses signed attestation inputs and requires finalization flow", async () => {

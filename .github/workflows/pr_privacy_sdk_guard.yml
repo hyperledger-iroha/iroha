@@ -13,6 +13,8 @@ on:
       - "ci/check_privacy_python_sdk.sh"
       - "ci/check_privacy_sdk_guard.sh"
       - "ci/check_privacy_swift_sdk.sh"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
       - "crates/connect_norito_bridge/include/NoritoBridge.h"
@@ -205,12 +207,15 @@ jobs:
           ci/check_connect_norito_bridge_header.sh --negative-control-missing-privacy-rust-export
       - name: Reject tracked Python bytecode
         run: bash ci/check_no_tracked_python_bytecode.sh
+      - name: Mobile SDK artifact readiness checker self-test
+        run: bash scripts/check_mobile_sdk_artifacts_test.sh
       - name: Privacy SDK guard negative controls
         run: |
           ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-command-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-negative-controls-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-bytecode-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-mobile-sdk-artifacts-selftest-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-workflow-command
           ci/check_privacy_sdk_guard.sh --negative-control-backend-tag-workflow-path

@@ -10,14 +10,21 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::ToHex;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
+use iroha_data_model::sorafs::transparency::{
+    MODERATION_LEDGER_PUBLICATION_VERSION_V1, ModerationLedgerCyclePublicationV1,
+    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+};
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadMetadataV1,
+    GovernanceExternalPayloadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ReputationSnapshotV1,
-    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1,
-    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
+    SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1, SettlementReceiptV1,
+    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
+    SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
     repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
@@ -101,6 +108,14 @@ impl FilesystemGovernancePublisher {
         self.root.join("settlements")
     }
 
+    fn orderbook_root(&self) -> PathBuf {
+        self.root.join("orderbook")
+    }
+
+    fn orderbook_settlement_receipts_root(&self) -> PathBuf {
+        self.orderbook_root().join("settlement-receipts")
+    }
+
     fn repairs_root(&self) -> PathBuf {
         self.root.join("repairs")
     }
@@ -131,6 +146,14 @@ impl FilesystemGovernancePublisher {
 
     fn moderation_ballot_root(&self) -> PathBuf {
         self.root.join("moderation").join("ballots")
+    }
+
+    fn transparency_ledger_root(&self) -> PathBuf {
+        self.root.join("transparency").join("ledger")
+    }
+
+    fn proof_token_issuance_root(&self) -> PathBuf {
+        self.root.join("transparency").join("proof-tokens")
     }
 
     fn appeal_finance_root(&self) -> PathBuf {
@@ -310,6 +333,82 @@ impl FilesystemGovernancePublisher {
             .join("weekly")
             .join(cycle)
             .join(base)
+    }
+
+    fn appeal_finance_settlement_receipt_path(
+        &self,
+        receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let case_id = sanitize_label(&receipt.case_id);
+        let round_id = receipt
+            .round_id
+            .as_deref()
+            .map(sanitize_label)
+            .unwrap_or_else(|| "no_round".to_string());
+        let digest_prefix = &digest_hex[..16];
+        let receipt_id = hex::encode(receipt.receipt_id);
+        let receipt_prefix = &receipt_id[..16];
+        let base = format!(
+            "{:020}_{}_{}_{}_{}",
+            receipt.generated_at_unix_ms,
+            round_id,
+            sanitize_label(&receipt.submitted_step),
+            receipt_prefix,
+            digest_prefix
+        );
+        self.appeal_finance_root()
+            .join("settlement-receipts")
+            .join(case_id)
+            .join(base)
+    }
+
+    fn orderbook_settlement_receipt_path(
+        &self,
+        receipt: &SettlementReceiptV1,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let receipt_id = hex::encode(receipt.receipt_id);
+        let receipt_prefix = &receipt_id[..16];
+        let channel_id = hex::encode(receipt.channel_id);
+        let channel_prefix = &channel_id[..16];
+        let digest_prefix = &digest_hex[..16];
+        let base = format!(
+            "{:020}_{}_{}_{}",
+            receipt.issued_at_unix, channel_prefix, receipt_prefix, digest_prefix
+        );
+        self.orderbook_settlement_receipts_root()
+            .join(channel_id)
+            .join(base)
+    }
+
+    fn transparency_ledger_publication_path(
+        &self,
+        publication: &ModerationLedgerCyclePublicationV1,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let cycle_id = hex::encode(publication.block.cycle_id);
+        let digest_prefix = &digest_hex[..16];
+        let base = format!(
+            "{:020}_entries-{:010}_{}",
+            publication.block.generated_at_unix, publication.block.entry_count, digest_prefix
+        );
+        self.transparency_ledger_root().join(cycle_id).join(base)
+    }
+
+    fn proof_token_issuance_path(
+        &self,
+        issuance: &ProofTokenIssuanceV1,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let token_id = hex::encode(issuance.token_id);
+        let token_prefix = &token_id[..16];
+        let digest_prefix = &digest_hex[..16];
+        let base = format!(
+            "{:020}_{}_{}",
+            issuance.issued_at_unix, token_prefix, digest_prefix
+        );
+        self.proof_token_issuance_root().join(token_id).join(base)
     }
 }
 
@@ -2375,6 +2474,220 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         result
     }
 
+    fn publish_transparency_ledger_publication(
+        &self,
+        publication: &ModerationLedgerCyclePublicationV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            publication.validate().map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "invalid transparency ledger publication: {err}"
+                ))
+            })?;
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self.transparency_ledger_publication_path(publication, &digest_hex);
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let json_body =
+                transparency_ledger_publication_json(publication, encoded, &digest_hex)?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let block_hash = publication.block.block_hash().map_err(|err| {
+                GovernancePublishError::other(format!("hash transparency ledger block: {err}"))
+            })?;
+            let publication_hash = publication.publication_hash().map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "hash transparency ledger publication: {err}"
+                ))
+            })?;
+            let mut labels = JsonMap::new();
+            labels.insert(
+                "cycle_id_hex".into(),
+                JsonValue::from(hex::encode(publication.block.cycle_id)),
+            );
+            labels.insert(
+                "cycle_start_unix".into(),
+                JsonValue::from(publication.block.cycle_start_unix),
+            );
+            labels.insert(
+                "cycle_end_unix".into(),
+                JsonValue::from(publication.block.cycle_end_unix),
+            );
+            labels.insert(
+                "generated_at_unix".into(),
+                JsonValue::from(publication.block.generated_at_unix),
+            );
+            labels.insert(
+                "entry_count".into(),
+                JsonValue::from(publication.block.entry_count),
+            );
+            labels.insert(
+                "entry_root_hex".into(),
+                JsonValue::from(hex::encode(publication.block.entry_root)),
+            );
+            labels.insert(
+                "block_hash_hex".into(),
+                JsonValue::from(hex::encode(block_hash)),
+            );
+            labels.insert(
+                "publication_hash_hex".into(),
+                JsonValue::from(hex::encode(publication_hash)),
+            );
+            self.record_publish_index(
+                "transparency_ledger_publication",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+            let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
+                GovernancePublishError::other(
+                    "transparency ledger publication exceeds V1 external payload length limit",
+                )
+            })?;
+            self.record_runtime_signed_payload(
+                "transparency_ledger_publication",
+                GovernanceLogPayloadV1::ExternalPayload(GovernanceExternalPayloadV1 {
+                    version: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
+                    payload_kind: "transparency_ledger_publication".to_string(),
+                    payload_version: MODERATION_LEDGER_PUBLICATION_VERSION_V1,
+                    encoded_blake3: *digest.as_bytes(),
+                    encoded_len,
+                    encoded_payload: encoded.to_vec(),
+                    metadata: vec![
+                        GovernanceExternalPayloadMetadataV1 {
+                            key: "block_hash_hex".to_string(),
+                            value: hex::encode(block_hash),
+                        },
+                        GovernanceExternalPayloadMetadataV1 {
+                            key: "cycle_id_hex".to_string(),
+                            value: hex::encode(publication.block.cycle_id),
+                        },
+                        GovernanceExternalPayloadMetadataV1 {
+                            key: "entry_count".to_string(),
+                            value: publication.block.entry_count.to_string(),
+                        },
+                        GovernanceExternalPayloadMetadataV1 {
+                            key: "entry_root_hex".to_string(),
+                            value: hex::encode(publication.block.entry_root),
+                        },
+                        GovernanceExternalPayloadMetadataV1 {
+                            key: "publication_hash_hex".to_string(),
+                            value: hex::encode(publication_hash),
+                        },
+                    ],
+                }),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
+
+            Ok(())
+        })();
+        record_governance_dag_publish_result(
+            "transparency_ledger_publication",
+            &result,
+            encoded.len(),
+        );
+        result
+    }
+
+    fn publish_proof_token_issuance(
+        &self,
+        issuance: &ProofTokenIssuanceV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            issuance.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid proof-token issuance: {err}"))
+            })?;
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self.proof_token_issuance_path(issuance, &digest_hex);
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let json_body = proof_token_issuance_json(issuance, encoded, &digest_hex)?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let mut labels = JsonMap::new();
+            labels.insert(
+                "token_id_hex".into(),
+                JsonValue::from(hex::encode(issuance.token_id)),
+            );
+            labels.insert(
+                "issued_at_unix".into(),
+                JsonValue::from(issuance.issued_at_unix),
+            );
+            if let Some(expires_at_unix) = issuance.expires_at_unix {
+                labels.insert("expires_at_unix".into(), JsonValue::from(expires_at_unix));
+            }
+            labels.insert(
+                "moderation_action_code".into(),
+                JsonValue::from(u64::from(issuance.moderation_action_code)),
+            );
+            labels.insert(
+                "signer_key_hex".into(),
+                JsonValue::from(hex::encode(issuance.signer_key)),
+            );
+            labels.insert(
+                "token_blake3_hex".into(),
+                JsonValue::from(hex::encode(issuance.token_blake3)),
+            );
+            labels.insert(
+                "blinded_digest_hex".into(),
+                JsonValue::from(hex::encode(issuance.blinded_digest)),
+            );
+            labels.insert(
+                "entry_count".into(),
+                JsonValue::from(issuance.entry_ids.len() as u64),
+            );
+            if let Some(first_entry_id) = issuance.entry_ids.first() {
+                labels.insert(
+                    "first_entry_id".into(),
+                    JsonValue::from(first_entry_id.clone()),
+                );
+            }
+            if let Some(evidence_digest) = issuance.evidence_digest {
+                labels.insert(
+                    "evidence_digest_hex".into(),
+                    JsonValue::from(hex::encode(evidence_digest)),
+                );
+            }
+            if let Some(policy_digest) = issuance.policy_digest {
+                labels.insert(
+                    "policy_digest_hex".into(),
+                    JsonValue::from(hex::encode(policy_digest)),
+                );
+            }
+            self.record_publish_index(
+                "proof_token_issuance",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+
+            Ok(())
+        })();
+        record_governance_dag_publish_result("proof_token_issuance", &result, encoded.len());
+        result
+    }
+
     fn publish_appeal_finance_report(
         &self,
         report: &SoraFsAppealFinanceReportV1,
@@ -2552,6 +2865,204 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         );
         result
     }
+
+    fn publish_appeal_finance_settlement_receipt(
+        &self,
+        receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self.appeal_finance_settlement_receipt_path(receipt, &digest_hex);
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let json_body = appeal_finance_settlement_receipt_json(receipt, encoded, &digest_hex)?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let mut labels = JsonMap::new();
+            labels.insert("case_id".into(), JsonValue::from(receipt.case_id.clone()));
+            if let Some(round_id) = &receipt.round_id {
+                labels.insert("round_id".into(), JsonValue::from(round_id.clone()));
+            }
+            labels.insert(
+                "receipt_id_hex".into(),
+                JsonValue::from(hex::encode(receipt.receipt_id)),
+            );
+            labels.insert(
+                "generated_at_unix_ms".into(),
+                JsonValue::from(receipt.generated_at_unix_ms),
+            );
+            labels.insert(
+                "appeal_finance_config_version".into(),
+                JsonValue::from(receipt.appeal_finance_config_version.clone()),
+            );
+            labels.insert("outcome".into(), JsonValue::from(receipt.outcome.as_str()));
+            labels.insert(
+                "escrow_id_hex".into(),
+                JsonValue::from(receipt.escrow_id_hex.clone()),
+            );
+            labels.insert(
+                "submitted_step".into(),
+                JsonValue::from(receipt.submitted_step.clone()),
+            );
+            labels.insert(
+                "required_authority".into(),
+                JsonValue::from(receipt.required_authority.clone()),
+            );
+            labels.insert(
+                "tx_hash_hex".into(),
+                JsonValue::from(receipt.tx_hash_hex.clone()),
+            );
+            labels.insert(
+                "reconciliation_digest_hex".into(),
+                JsonValue::from(receipt.reconciliation_digest_hex.clone()),
+            );
+            labels.insert(
+                "reconciliation_status".into(),
+                JsonValue::from(receipt.reconciliation_status.clone()),
+            );
+            labels.insert(
+                "observed_lifecycle_status".into(),
+                JsonValue::from(receipt.observed_lifecycle_status.clone()),
+            );
+            labels.insert(
+                "amount_xor".into(),
+                JsonValue::from(receipt.amount_xor.clone()),
+            );
+            labels.insert(
+                "deposit_xor".into(),
+                JsonValue::from(receipt.deposit_xor.clone()),
+            );
+            labels.insert(
+                "refund_xor".into(),
+                JsonValue::from(receipt.refund_xor.clone()),
+            );
+            labels.insert(
+                "treasury_xor".into(),
+                JsonValue::from(receipt.treasury_xor.clone()),
+            );
+            labels.insert("held_xor".into(), JsonValue::from(receipt.held_xor.clone()));
+            labels.insert(
+                "panel_size".into(),
+                JsonValue::from(u64::from(receipt.panel_size)),
+            );
+            labels.insert(
+                "configured_signer_count".into(),
+                JsonValue::from(u64::from(receipt.configured_signer_count)),
+            );
+            self.record_publish_index(
+                "appeal_finance_settlement_receipt",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+            self.record_runtime_signed_payload(
+                "appeal_finance_settlement_receipt",
+                GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(receipt.clone()),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
+
+            Ok(())
+        })();
+        record_governance_dag_publish_result(
+            "appeal_finance_settlement_receipt",
+            &result,
+            encoded.len(),
+        );
+        result
+    }
+
+    fn publish_orderbook_settlement_receipt(
+        &self,
+        receipt: &SettlementReceiptV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self.orderbook_settlement_receipt_path(receipt, &digest_hex);
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let json_body = orderbook_settlement_receipt_json(receipt, encoded, &digest_hex)?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let mut labels = JsonMap::new();
+            labels.insert(
+                "receipt_id_hex".into(),
+                JsonValue::from(hex::encode(receipt.receipt_id)),
+            );
+            labels.insert(
+                "channel_id_hex".into(),
+                JsonValue::from(hex::encode(receipt.channel_id)),
+            );
+            labels.insert(
+                "trade_id_hex".into(),
+                JsonValue::from(hex::encode(receipt.trade_id)),
+            );
+            labels.insert("range_start".into(), JsonValue::from(receipt.range.start));
+            labels.insert("range_end".into(), JsonValue::from(receipt.range.end));
+            labels.insert(
+                "bytes_delivered".into(),
+                JsonValue::from(receipt.bytes_delivered),
+            );
+            labels.insert(
+                "xor_debited_micro".into(),
+                JsonValue::from(receipt.xor_debited.as_micro().to_string()),
+            );
+            labels.insert(
+                "provider_credit_micro".into(),
+                JsonValue::from(receipt.provider_credit.as_micro().to_string()),
+            );
+            labels.insert(
+                "fee_amount_micro".into(),
+                JsonValue::from(receipt.fee_amount.as_micro().to_string()),
+            );
+            labels.insert(
+                "issued_at_unix".into(),
+                JsonValue::from(receipt.issued_at_unix),
+            );
+            self.record_publish_index(
+                "orderbook_settlement_receipt",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+            self.record_runtime_signed_payload(
+                "orderbook_settlement_receipt",
+                GovernanceLogPayloadV1::OrderbookSettlementReceipt(receipt.clone()),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
+
+            Ok(())
+        })();
+        record_governance_dag_publish_result(
+            "orderbook_settlement_receipt",
+            &result,
+            encoded.len(),
+        );
+        result
+    }
 }
 
 fn reputation_snapshot_json(
@@ -2657,6 +3168,171 @@ fn moderation_ballot_event_json(
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!("serialize moderation ballot event json: {err}"))
+    })
+}
+
+fn transparency_ledger_publication_json(
+    publication: &ModerationLedgerCyclePublicationV1,
+    encoded: &[u8],
+    digest_hex: &str,
+) -> Result<String, GovernancePublishError> {
+    let block_hash = publication.block.block_hash().map_err(|err| {
+        GovernancePublishError::other(format!("hash transparency ledger block: {err}"))
+    })?;
+    let publication_hash = publication.publication_hash().map_err(|err| {
+        GovernancePublishError::other(format!("hash transparency ledger publication: {err}"))
+    })?;
+
+    let mut payload = JsonMap::new();
+    payload.insert(
+        "publication".into(),
+        json::to_value(publication).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "serialize transparency ledger publication: {err}"
+            ))
+        })?,
+    );
+
+    let mut metadata = JsonMap::new();
+    metadata.insert(
+        "cycle_id_hex".into(),
+        JsonValue::from(hex::encode(publication.block.cycle_id)),
+    );
+    metadata.insert(
+        "cycle_start_unix".into(),
+        JsonValue::from(publication.block.cycle_start_unix),
+    );
+    metadata.insert(
+        "cycle_end_unix".into(),
+        JsonValue::from(publication.block.cycle_end_unix),
+    );
+    metadata.insert(
+        "generated_at_unix".into(),
+        JsonValue::from(publication.block.generated_at_unix),
+    );
+    metadata.insert(
+        "entry_count".into(),
+        JsonValue::from(publication.block.entry_count),
+    );
+    metadata.insert(
+        "proof_count".into(),
+        JsonValue::from(publication.proofs.len() as u64),
+    );
+    metadata.insert(
+        "entry_root_hex".into(),
+        JsonValue::from(hex::encode(publication.block.entry_root)),
+    );
+    metadata.insert(
+        "block_hash_hex".into(),
+        JsonValue::from(hex::encode(block_hash)),
+    );
+    metadata.insert(
+        "publication_hash_hex".into(),
+        JsonValue::from(hex::encode(publication_hash)),
+    );
+    metadata.insert(
+        "encoded_blake3".into(),
+        JsonValue::from(digest_hex.to_string()),
+    );
+    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+    metadata.insert(
+        "encoded_base64".into(),
+        JsonValue::from(BASE64_STANDARD.encode(encoded)),
+    );
+    payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+    json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+        GovernancePublishError::other(format!(
+            "serialize transparency ledger publication json: {err}"
+        ))
+    })
+}
+
+fn proof_token_issuance_json(
+    issuance: &ProofTokenIssuanceV1,
+    encoded: &[u8],
+    digest_hex: &str,
+) -> Result<String, GovernancePublishError> {
+    let mut payload = JsonMap::new();
+    payload.insert(
+        "issuance".into(),
+        json::to_value(issuance).map_err(|err| {
+            GovernancePublishError::other(format!("serialize proof-token issuance: {err}"))
+        })?,
+    );
+
+    let mut metadata = JsonMap::new();
+    metadata.insert(
+        "payload_version".into(),
+        JsonValue::from(u64::from(PROOF_TOKEN_ISSUANCE_VERSION_V1)),
+    );
+    metadata.insert(
+        "token_id_hex".into(),
+        JsonValue::from(hex::encode(issuance.token_id)),
+    );
+    metadata.insert(
+        "issued_at_unix".into(),
+        JsonValue::from(issuance.issued_at_unix),
+    );
+    if let Some(expires_at_unix) = issuance.expires_at_unix {
+        metadata.insert("expires_at_unix".into(), JsonValue::from(expires_at_unix));
+    }
+    metadata.insert(
+        "moderation_action_code".into(),
+        JsonValue::from(u64::from(issuance.moderation_action_code)),
+    );
+    metadata.insert(
+        "signer_key_hex".into(),
+        JsonValue::from(hex::encode(issuance.signer_key)),
+    );
+    metadata.insert(
+        "token_blake3_hex".into(),
+        JsonValue::from(hex::encode(issuance.token_blake3)),
+    );
+    metadata.insert(
+        "blinded_digest_hex".into(),
+        JsonValue::from(hex::encode(issuance.blinded_digest)),
+    );
+    metadata.insert(
+        "entry_count".into(),
+        JsonValue::from(issuance.entry_ids.len() as u64),
+    );
+    metadata.insert(
+        "entry_ids".into(),
+        JsonValue::Array(
+            issuance
+                .entry_ids
+                .iter()
+                .cloned()
+                .map(JsonValue::from)
+                .collect(),
+        ),
+    );
+    if let Some(evidence_digest) = issuance.evidence_digest {
+        metadata.insert(
+            "evidence_digest_hex".into(),
+            JsonValue::from(hex::encode(evidence_digest)),
+        );
+    }
+    if let Some(policy_digest) = issuance.policy_digest {
+        metadata.insert(
+            "policy_digest_hex".into(),
+            JsonValue::from(hex::encode(policy_digest)),
+        );
+    }
+    metadata.insert(
+        "encoded_blake3".into(),
+        JsonValue::from(digest_hex.to_string()),
+    );
+    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+    metadata.insert(
+        "encoded_base64".into(),
+        JsonValue::from(BASE64_STANDARD.encode(encoded)),
+    );
+    payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+    json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+        GovernancePublishError::other(format!("serialize proof-token issuance json: {err}"))
     })
 }
 
@@ -2813,12 +3489,219 @@ fn appeal_finance_weekly_rollup_json(
     })
 }
 
+fn appeal_finance_settlement_receipt_json(
+    receipt: &SoraFsAppealFinanceSettlementReceiptV1,
+    encoded: &[u8],
+    digest_hex: &str,
+) -> Result<String, GovernancePublishError> {
+    let mut payload = JsonMap::new();
+    payload.insert(
+        "receipt".into(),
+        json::to_value(receipt).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "serialize appeal finance settlement receipt: {err}"
+            ))
+        })?,
+    );
+
+    let mut metadata = JsonMap::new();
+    metadata.insert(
+        "receipt_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.receipt_id)),
+    );
+    metadata.insert("case_id".into(), JsonValue::from(receipt.case_id.clone()));
+    if let Some(round_id) = &receipt.round_id {
+        metadata.insert("round_id".into(), JsonValue::from(round_id.clone()));
+    }
+    metadata.insert(
+        "generated_at_unix_ms".into(),
+        JsonValue::from(receipt.generated_at_unix_ms),
+    );
+    metadata.insert(
+        "appeal_finance_config_version".into(),
+        JsonValue::from(receipt.appeal_finance_config_version.clone()),
+    );
+    metadata.insert("outcome".into(), JsonValue::from(receipt.outcome.as_str()));
+    metadata.insert(
+        "escrow_id_hex".into(),
+        JsonValue::from(receipt.escrow_id_hex.clone()),
+    );
+    metadata.insert(
+        "submitted_step".into(),
+        JsonValue::from(receipt.submitted_step.clone()),
+    );
+    metadata.insert(
+        "required_authority".into(),
+        JsonValue::from(receipt.required_authority.clone()),
+    );
+    metadata.insert(
+        "tx_hash_hex".into(),
+        JsonValue::from(receipt.tx_hash_hex.clone()),
+    );
+    metadata.insert(
+        "reconciliation_digest_hex".into(),
+        JsonValue::from(receipt.reconciliation_digest_hex.clone()),
+    );
+    metadata.insert(
+        "reconciliation_status".into(),
+        JsonValue::from(receipt.reconciliation_status.clone()),
+    );
+    metadata.insert(
+        "observed_lifecycle_status".into(),
+        JsonValue::from(receipt.observed_lifecycle_status.clone()),
+    );
+    metadata.insert(
+        "encoded_blake3".into(),
+        JsonValue::from(digest_hex.to_string()),
+    );
+    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+    metadata.insert(
+        "encoded_base64".into(),
+        JsonValue::from(BASE64_STANDARD.encode(encoded)),
+    );
+    payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+    json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+        GovernancePublishError::other(format!(
+            "serialize appeal finance settlement receipt json: {err}"
+        ))
+    })
+}
+
+fn orderbook_settlement_receipt_json(
+    receipt: &SettlementReceiptV1,
+    encoded: &[u8],
+    digest_hex: &str,
+) -> Result<String, GovernancePublishError> {
+    let mut receipt_obj = JsonMap::new();
+    receipt_obj.insert("version".into(), JsonValue::from(receipt.version as u64));
+    receipt_obj.insert(
+        "receipt_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.receipt_id)),
+    );
+    receipt_obj.insert(
+        "channel_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.channel_id)),
+    );
+    receipt_obj.insert(
+        "trade_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.trade_id)),
+    );
+    let mut range = JsonMap::new();
+    range.insert("start".into(), JsonValue::from(receipt.range.start));
+    range.insert("end".into(), JsonValue::from(receipt.range.end));
+    receipt_obj.insert("range".into(), JsonValue::Object(range));
+    receipt_obj.insert(
+        "chunk_hash_hex".into(),
+        JsonValue::from(hex::encode(receipt.chunk_hash)),
+    );
+    receipt_obj.insert(
+        "bytes_delivered".into(),
+        JsonValue::from(receipt.bytes_delivered),
+    );
+    receipt_obj.insert(
+        "xor_debited_micro".into(),
+        JsonValue::from(receipt.xor_debited.as_micro().to_string()),
+    );
+    receipt_obj.insert(
+        "provider_credit_micro".into(),
+        JsonValue::from(receipt.provider_credit.as_micro().to_string()),
+    );
+    receipt_obj.insert(
+        "fee_amount_micro".into(),
+        JsonValue::from(receipt.fee_amount.as_micro().to_string()),
+    );
+    receipt_obj.insert(
+        "issued_at_unix".into(),
+        JsonValue::from(receipt.issued_at_unix),
+    );
+    let mut signature = JsonMap::new();
+    signature.insert(
+        "algorithm".into(),
+        JsonValue::from(orderbook_signature_algorithm_label(
+            receipt.settlement_signature.algorithm,
+        )),
+    );
+    signature.insert(
+        "public_key_hex".into(),
+        JsonValue::from(hex::encode(&receipt.settlement_signature.public_key)),
+    );
+    signature.insert(
+        "signature_hex".into(),
+        JsonValue::from(hex::encode(&receipt.settlement_signature.signature)),
+    );
+    receipt_obj.insert("settlement_signature".into(), JsonValue::Object(signature));
+
+    let mut payload = JsonMap::new();
+    payload.insert("receipt".into(), JsonValue::Object(receipt_obj));
+
+    let mut metadata = JsonMap::new();
+    metadata.insert(
+        "receipt_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.receipt_id)),
+    );
+    metadata.insert(
+        "channel_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.channel_id)),
+    );
+    metadata.insert(
+        "trade_id_hex".into(),
+        JsonValue::from(hex::encode(receipt.trade_id)),
+    );
+    metadata.insert("range_start".into(), JsonValue::from(receipt.range.start));
+    metadata.insert("range_end".into(), JsonValue::from(receipt.range.end));
+    metadata.insert(
+        "bytes_delivered".into(),
+        JsonValue::from(receipt.bytes_delivered),
+    );
+    metadata.insert(
+        "xor_debited_micro".into(),
+        JsonValue::from(receipt.xor_debited.as_micro().to_string()),
+    );
+    metadata.insert(
+        "provider_credit_micro".into(),
+        JsonValue::from(receipt.provider_credit.as_micro().to_string()),
+    );
+    metadata.insert(
+        "fee_amount_micro".into(),
+        JsonValue::from(receipt.fee_amount.as_micro().to_string()),
+    );
+    metadata.insert(
+        "issued_at_unix".into(),
+        JsonValue::from(receipt.issued_at_unix),
+    );
+    metadata.insert(
+        "encoded_blake3".into(),
+        JsonValue::from(digest_hex.to_string()),
+    );
+    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+    metadata.insert(
+        "encoded_base64".into(),
+        JsonValue::from(BASE64_STANDARD.encode(encoded)),
+    );
+    payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+    json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+        GovernancePublishError::other(format!(
+            "serialize orderbook settlement receipt json: {err}"
+        ))
+    })
+}
+
+fn orderbook_signature_algorithm_label(
+    algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm,
+) -> &'static str {
+    match algorithm {
+        sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519 => "ed25519",
+        sorafs_manifest::provider_advert::SignatureAlgorithm::MultiSig => "multi-sig",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
 
     use norito::codec::Encode;
-    use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
     };
@@ -2828,15 +3711,19 @@ mod tests {
         REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
         RepairTicketId, SorafsAuditHeaderV1,
     };
+    use sorafs_manifest::{BYTES_PER_GIB, PorReportIsoWeek};
     use sorafs_manifest::{
-        GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
-        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-        ReputationWeightsV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        ByteRangeV1, GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
+        OrderbookSignatureV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1,
+        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
+        SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
-        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
-        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementReceiptV1,
+        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+        SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
         SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
         SoraFsModerationBallotGovernanceTallyV1, SoraFsModerationVoteChoiceV1,
         SoraFsModerationVoteCountsV1, SorafsReconciliationReportV1, build_reputation_snapshot,
@@ -2936,6 +3823,84 @@ mod tests {
         (event, encoded)
     }
 
+    fn sample_transparency_ledger_publication() -> (ModerationLedgerCyclePublicationV1, Vec<u8>) {
+        use iroha_data_model::sorafs::transparency::{
+            MODERATION_LEDGER_ENTRY_VERSION_V1, ModerationLedgerEntryKindV1,
+            ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
+        };
+
+        let cycle_id = *b"cycle-2026-wk-03";
+        let entries = [
+            ModerationLedgerEntryV1 {
+                version: MODERATION_LEDGER_ENTRY_VERSION_V1,
+                cycle_id,
+                entry_id: [0x32; 16],
+                sequence: 2,
+                occurred_at_unix: 1_800_000_032,
+                kind: ModerationLedgerEntryKindV1::GarEnforcementReceipt,
+                subject: "gar-receipt-32".to_string(),
+                subject_digest: [0x32; 32],
+                payload_digest: [0x33; 32],
+                summary_digest: [0x34; 32],
+                policy_digest: Some([0x35; 32]),
+                evidence_uris: vec!["sora://transparency/32".to_string()],
+                metadata: vec![ModerationLedgerMetadataV1 {
+                    key: "source".to_string(),
+                    value: "gar".to_string(),
+                }],
+            },
+            ModerationLedgerEntryV1 {
+                version: MODERATION_LEDGER_ENTRY_VERSION_V1,
+                cycle_id,
+                entry_id: [0x31; 16],
+                sequence: 1,
+                occurred_at_unix: 1_800_000_031,
+                kind: ModerationLedgerEntryKindV1::ModerationAction,
+                subject: "moderation-case-31".to_string(),
+                subject_digest: [0x31; 32],
+                payload_digest: [0x32; 32],
+                summary_digest: [0x33; 32],
+                policy_digest: Some([0x34; 32]),
+                evidence_uris: vec!["sora://transparency/31".to_string()],
+                metadata: vec![ModerationLedgerMetadataV1 {
+                    key: "source".to_string(),
+                    value: "moderation".to_string(),
+                }],
+            },
+        ];
+        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id,
+            1_800_000_000,
+            1_800_604_800,
+            1_800_604_801,
+            None,
+            &entries,
+        )
+        .expect("transparency ledger publication");
+        let encoded =
+            norito::to_bytes(&publication).expect("encode transparency ledger publication");
+        (publication, encoded)
+    }
+
+    fn sample_proof_token_issuance() -> (ProofTokenIssuanceV1, Vec<u8>) {
+        let issuance = ProofTokenIssuanceV1 {
+            version: PROOF_TOKEN_ISSUANCE_VERSION_V1,
+            token_id: [0x61; 16],
+            issued_at_unix: 1_800_000_030,
+            expires_at_unix: Some(1_800_086_430),
+            moderation_action_code: 2,
+            signer_key: [0x62; 32],
+            token_blake3: [0x63; 32],
+            blinded_digest: [0x64; 32],
+            entry_ids: vec!["denylist/global".to_string(), "gar/policy/42".to_string()],
+            evidence_digest: Some([0x65; 32]),
+            policy_digest: Some([0x66; 32]),
+            metadata: Vec::new(),
+        };
+        let encoded = norito::to_bytes(&issuance).expect("encode proof-token issuance");
+        (issuance, encoded)
+    }
+
     fn sample_appeal_finance_report() -> (SoraFsAppealFinanceReportV1, Vec<u8>) {
         let report = SoraFsAppealFinanceReportV1 {
             version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -2996,6 +3961,65 @@ mod tests {
         .expect("appeal finance weekly rollup");
         let encoded = norito::to_bytes(&rollup).expect("encode appeal finance weekly rollup");
         (rollup, encoded)
+    }
+
+    fn sample_appeal_finance_settlement_receipt()
+    -> (SoraFsAppealFinanceSettlementReceiptV1, Vec<u8>) {
+        let receipt = SoraFsAppealFinanceSettlementReceiptV1 {
+            version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: [0x52; 16],
+            case_id: "case-42".to_string(),
+            round_id: Some("round-1".to_string()),
+            generated_at_unix_ms: 1_800_000_032_000,
+            appeal_finance_config_version: "baseline-v1".to_string(),
+            outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
+            escrow_id_hex: "11".repeat(32),
+            payer_account: "payer-account".to_string(),
+            destination_account: "escrow-account".to_string(),
+            release_authority_account: Some("release-authority".to_string()),
+            submitted_step: "drawdown_non_refund".to_string(),
+            required_authority: "release-authority".to_string(),
+            amount_xor: "420".to_string(),
+            tx_hash_hex: "22".repeat(32),
+            reconciliation_digest_hex: "33".repeat(32),
+            reconciliation_status: "pending_client_submission".to_string(),
+            observed_lifecycle_status: "locked".to_string(),
+            observed_remaining_xor: "420".to_string(),
+            deposit_xor: "420".to_string(),
+            refund_xor: "0".to_string(),
+            treasury_xor: "210".to_string(),
+            held_xor: "210".to_string(),
+            panel_size: 7,
+            configured_signer_count: 1,
+        };
+        let encoded = norito::to_bytes(&receipt).expect("encode appeal finance settlement receipt");
+        (receipt, encoded)
+    }
+
+    fn sample_orderbook_settlement_receipt() -> (SettlementReceiptV1, Vec<u8>) {
+        let receipt = SettlementReceiptV1 {
+            version: SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: [0x62; 32],
+            channel_id: [0x63; 32],
+            trade_id: [0x64; 32],
+            range: ByteRangeV1 {
+                start: 0,
+                end: BYTES_PER_GIB,
+            },
+            chunk_hash: [0x65; 32],
+            bytes_delivered: BYTES_PER_GIB,
+            xor_debited: sorafs_manifest::deal::XorAmount::from_micro(500),
+            provider_credit: sorafs_manifest::deal::XorAmount::from_micro(450),
+            fee_amount: sorafs_manifest::deal::XorAmount::from_micro(50),
+            issued_at_unix: 1_800_000_033,
+            settlement_signature: OrderbookSignatureV1 {
+                algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519,
+                public_key: vec![0x66; 32],
+                signature: vec![0x67; 64],
+            },
+        };
+        let encoded = norito::to_bytes(&receipt).expect("encode orderbook settlement receipt");
+        (receipt, encoded)
     }
 
     #[test]
@@ -3123,10 +4147,28 @@ mod tests {
             .publish_appeal_finance_weekly_rollup(&finance_rollup, &rollup_encoded)
             .expect("publish appeal finance weekly rollup into runtime DAG");
 
+        let (finance_receipt, receipt_encoded) = sample_appeal_finance_settlement_receipt();
+        publisher
+            .publish_appeal_finance_settlement_receipt(&finance_receipt, &receipt_encoded)
+            .expect("publish appeal finance settlement receipt into runtime DAG");
+
+        let (orderbook_receipt, orderbook_receipt_encoded) = sample_orderbook_settlement_receipt();
+        publisher
+            .publish_orderbook_settlement_receipt(&orderbook_receipt, &orderbook_receipt_encoded)
+            .expect("publish orderbook settlement receipt into runtime DAG");
+        let (transparency_publication, transparency_encoded) =
+            sample_transparency_ledger_publication();
+        publisher
+            .publish_transparency_ledger_publication(
+                &transparency_publication,
+                &transparency_encoded,
+            )
+            .expect("publish transparency ledger publication into runtime DAG");
+
         let index = runtime_index(temp.path());
         assert_eq!(
             index.get("block_count").and_then(JsonValue::as_u64),
-            Some(4)
+            Some(7)
         );
         assert_eq!(
             index
@@ -3152,6 +4194,30 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("orderbook_settlement_receipt"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("transparency_ledger_publication"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
 
         let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
         let head: GovernanceDagHeadV1 =
@@ -3159,14 +4225,20 @@ mod tests {
         let blocks = runtime_blocks_from_index(temp.path(), &index);
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
             .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks.len(), 7);
         assert_eq!(blocks[0].sequence, 0);
         assert_eq!(blocks[1].sequence, 1);
         assert_eq!(blocks[2].sequence, 2);
         assert_eq!(blocks[3].sequence, 3);
+        assert_eq!(blocks[4].sequence, 4);
+        assert_eq!(blocks[5].sequence, 5);
+        assert_eq!(blocks[6].sequence, 6);
         assert_eq!(blocks[1].prev_block_cid, Some(blocks[0].block_cid.clone()));
         assert_eq!(blocks[2].prev_block_cid, Some(blocks[1].block_cid.clone()));
         assert_eq!(blocks[3].prev_block_cid, Some(blocks[2].block_cid.clone()));
+        assert_eq!(blocks[4].prev_block_cid, Some(blocks[3].block_cid.clone()));
+        assert_eq!(blocks[5].prev_block_cid, Some(blocks[4].block_cid.clone()));
+        assert_eq!(blocks[6].prev_block_cid, Some(blocks[5].block_cid.clone()));
         assert_eq!(
             blocks[1].node.prev_cid,
             Some(blocks[0].node.node_cid.clone())
@@ -3178,6 +4250,18 @@ mod tests {
         assert_eq!(
             blocks[3].node.prev_cid,
             Some(blocks[2].node.node_cid.clone())
+        );
+        assert_eq!(
+            blocks[4].node.prev_cid,
+            Some(blocks[3].node.node_cid.clone())
+        );
+        assert_eq!(
+            blocks[5].node.prev_cid,
+            Some(blocks[4].node.node_cid.clone())
+        );
+        assert_eq!(
+            blocks[6].node.prev_cid,
+            Some(blocks[5].node.node_cid.clone())
         );
         match &blocks[0].node.payload {
             GovernanceLogPayloadV1::DealSettlement(value) => {
@@ -3205,6 +4289,55 @@ mod tests {
                 assert_eq!(value.total_deposit_xor, finance_rollup.total_deposit_xor);
             }
             other => panic!("unexpected fourth runtime DAG payload: {other:?}"),
+        }
+        match &blocks[4].node.payload {
+            GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(value) => {
+                assert_eq!(value.receipt_id, finance_receipt.receipt_id);
+                assert_eq!(value.tx_hash_hex, finance_receipt.tx_hash_hex);
+                assert_eq!(
+                    value.reconciliation_digest_hex,
+                    finance_receipt.reconciliation_digest_hex
+                );
+            }
+            other => panic!("unexpected fifth runtime DAG payload: {other:?}"),
+        }
+        match &blocks[5].node.payload {
+            GovernanceLogPayloadV1::OrderbookSettlementReceipt(value) => {
+                assert_eq!(value.receipt_id, orderbook_receipt.receipt_id);
+                assert_eq!(value.channel_id, orderbook_receipt.channel_id);
+                assert_eq!(value.trade_id, orderbook_receipt.trade_id);
+            }
+            other => panic!("unexpected sixth runtime DAG payload: {other:?}"),
+        }
+        match &blocks[6].node.payload {
+            GovernanceLogPayloadV1::ExternalPayload(value) => {
+                assert_eq!(value.payload_kind, "transparency_ledger_publication");
+                assert_eq!(
+                    value.payload_version,
+                    MODERATION_LEDGER_PUBLICATION_VERSION_V1
+                );
+                assert_eq!(
+                    value.encoded_blake3,
+                    *blake3::hash(&transparency_encoded).as_bytes()
+                );
+                assert_eq!(value.encoded_len, transparency_encoded.len() as u64);
+                assert_eq!(value.encoded_payload, transparency_encoded);
+                assert_eq!(
+                    value
+                        .metadata
+                        .iter()
+                        .map(|item| item.key.as_str())
+                        .collect::<Vec<_>>(),
+                    vec![
+                        "block_hash_hex",
+                        "cycle_id_hex",
+                        "entry_count",
+                        "entry_root_hex",
+                        "publication_hash_hex"
+                    ]
+                );
+            }
+            other => panic!("unexpected seventh runtime DAG payload: {other:?}"),
         }
     }
 
@@ -3274,6 +4407,171 @@ mod tests {
             }
             other => panic!("unexpected runtime DAG payload: {other:?}"),
         }
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_transparency_ledger_publication_files_and_car_queue() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (publication, encoded) = sample_transparency_ledger_publication();
+
+        publisher
+            .publish_transparency_ledger_publication(&publication, &encoded)
+            .expect("publish transparency ledger publication");
+
+        let publication_dir = temp
+            .path()
+            .join("transparency")
+            .join("ledger")
+            .join(hex::encode(publication.block.cycle_id));
+        let mut encoded_files = fs::read_dir(&publication_dir)
+            .expect("read transparency ledger dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        encoded_files.sort();
+        assert_eq!(encoded_files.len(), 1);
+        let bytes = fs::read(&encoded_files[0]).expect("read transparency ledger payload");
+        assert_eq!(bytes, encoded);
+        let decoded: ModerationLedgerCyclePublicationV1 =
+            norito::decode_from_bytes(&bytes).expect("decode transparency ledger publication");
+        assert_eq!(decoded, publication);
+        assert!(encoded_files[0].with_extension("json").exists());
+
+        let index_bytes =
+            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
+        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("transparency_ledger_publication"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        let entry = index
+            .get("entries")
+            .and_then(JsonValue::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(JsonValue::as_object)
+            .expect("publish index entry");
+        let labels = entry
+            .get("labels")
+            .and_then(JsonValue::as_object)
+            .expect("publish labels");
+        let expected_cycle_id = hex::encode(publication.block.cycle_id);
+        assert_eq!(
+            labels.get("cycle_id_hex").and_then(JsonValue::as_str),
+            Some(expected_cycle_id.as_str())
+        );
+        assert_eq!(
+            labels.get("entry_count").and_then(JsonValue::as_u64),
+            Some(u64::from(publication.block.entry_count))
+        );
+
+        let queue_bytes = fs::read(temp.path().join(GOVERNANCE_CAR_QUEUE_FILE)).expect("car queue");
+        let queue: JsonValue = json::from_slice(&queue_bytes).expect("car queue json");
+        assert_eq!(
+            queue
+                .get("by_payload_kind")
+                .and_then(|value| value.get("transparency_ledger_publication"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            queue.get("assembled_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (issuance, encoded) = sample_proof_token_issuance();
+
+        publisher
+            .publish_proof_token_issuance(&issuance, &encoded)
+            .expect("publish proof-token issuance");
+
+        let token_id_hex = hex::encode(issuance.token_id);
+        let issuance_dir = temp
+            .path()
+            .join("transparency")
+            .join("proof-tokens")
+            .join(&token_id_hex);
+        let mut encoded_files = fs::read_dir(&issuance_dir)
+            .expect("read proof-token issuance dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        encoded_files.sort();
+        assert_eq!(encoded_files.len(), 1);
+        let bytes = fs::read(&encoded_files[0]).expect("read proof-token issuance payload");
+        assert_eq!(bytes, encoded);
+        let decoded: ProofTokenIssuanceV1 =
+            norito::decode_from_bytes(&bytes).expect("decode proof-token issuance");
+        assert_eq!(decoded, issuance);
+
+        let json_path = encoded_files[0].with_extension("json");
+        assert!(json_path.exists());
+        let json_body = fs::read(&json_path).expect("read proof-token issuance json");
+        let json_value: JsonValue = json::from_slice(&json_body).expect("issuance json");
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("token_id_hex"))
+                .and_then(JsonValue::as_str),
+            Some(token_id_hex.as_str())
+        );
+
+        let index_bytes =
+            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
+        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("proof_token_issuance"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        let entry = index
+            .get("entries")
+            .and_then(JsonValue::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(JsonValue::as_object)
+            .expect("publish index entry");
+        let labels = entry
+            .get("labels")
+            .and_then(JsonValue::as_object)
+            .expect("publish labels");
+        assert_eq!(
+            labels.get("token_id_hex").and_then(JsonValue::as_str),
+            Some(token_id_hex.as_str())
+        );
+        assert_eq!(
+            labels.get("entry_count").and_then(JsonValue::as_u64),
+            Some(2)
+        );
+
+        let queue_bytes = fs::read(temp.path().join(GOVERNANCE_CAR_QUEUE_FILE)).expect("car queue");
+        let queue: JsonValue = json::from_slice(&queue_bytes).expect("car queue json");
+        assert_eq!(
+            queue
+                .get("by_payload_kind")
+                .and_then(|value| value.get("proof_token_issuance"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            queue.get("assembled_count").and_then(JsonValue::as_u64),
+            Some(1)
+        );
     }
 
     #[test]
@@ -3412,6 +4710,168 @@ mod tests {
                 assert_eq!(value.cycle, rollup.cycle);
                 assert_eq!(value.report_count, rollup.report_count);
                 assert_eq!(value.total_deposit_xor, rollup.total_deposit_xor);
+            }
+            other => panic!("unexpected runtime DAG payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_appeal_finance_settlement_receipt_files_and_runtime_dag() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (receipt, encoded) = sample_appeal_finance_settlement_receipt();
+
+        publisher
+            .publish_appeal_finance_settlement_receipt(&receipt, &encoded)
+            .expect("publish appeal finance settlement receipt");
+
+        let receipt_dir = temp
+            .path()
+            .join("appeals")
+            .join("finance")
+            .join("settlement-receipts")
+            .join("case-42");
+        let mut encoded_files = fs::read_dir(&receipt_dir)
+            .expect("read appeal finance settlement receipt dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        encoded_files.sort();
+        assert_eq!(encoded_files.len(), 1);
+        let bytes = fs::read(&encoded_files[0]).expect("read settlement receipt payload");
+        assert_eq!(bytes, encoded);
+        let decoded: SoraFsAppealFinanceSettlementReceiptV1 =
+            norito::decode_from_bytes(&bytes).expect("decode settlement receipt");
+        assert_eq!(decoded, receipt);
+        let json_path = encoded_files[0].with_extension("json");
+        assert!(json_path.exists());
+        let json_body = fs::read(&json_path).expect("read settlement receipt json");
+        let json_value: JsonValue = json::from_slice(&json_body).expect("receipt json");
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("tx_hash_hex"))
+                .and_then(JsonValue::as_str),
+            Some(receipt.tx_hash_hex.as_str())
+        );
+
+        let index_bytes =
+            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
+        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let runtime_index = runtime_index(temp.path());
+        assert_eq!(
+            runtime_index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
+        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
+        validate_governance_dag_head_against_chain_v1(&head, &blocks)
+            .expect("runtime head validates against signed blocks");
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0].node.payload {
+            GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(value) => {
+                assert_eq!(value.receipt_id, receipt.receipt_id);
+                assert_eq!(value.case_id, receipt.case_id);
+                assert_eq!(value.submitted_step, receipt.submitted_step);
+            }
+            other => panic!("unexpected runtime DAG payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_orderbook_settlement_receipt_files_and_runtime_dag() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (receipt, encoded) = sample_orderbook_settlement_receipt();
+
+        publisher
+            .publish_orderbook_settlement_receipt(&receipt, &encoded)
+            .expect("publish orderbook settlement receipt");
+
+        let receipt_dir = temp
+            .path()
+            .join("orderbook")
+            .join("settlement-receipts")
+            .join(hex::encode(receipt.channel_id));
+        let mut encoded_files = fs::read_dir(&receipt_dir)
+            .expect("read orderbook settlement receipt dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
+            .collect::<Vec<_>>();
+        encoded_files.sort();
+        assert_eq!(encoded_files.len(), 1);
+        let bytes = fs::read(&encoded_files[0]).expect("read orderbook settlement receipt payload");
+        assert_eq!(bytes, encoded);
+        let decoded: SettlementReceiptV1 =
+            norito::decode_from_bytes(&bytes).expect("decode orderbook settlement receipt");
+        assert_eq!(decoded, receipt);
+        let json_path = encoded_files[0].with_extension("json");
+        assert!(json_path.exists());
+        let json_body = fs::read(&json_path).expect("read orderbook settlement receipt json");
+        let json_value: JsonValue = json::from_slice(&json_body).expect("orderbook receipt json");
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("channel_id_hex"))
+                .and_then(JsonValue::as_str),
+            Some(hex::encode(receipt.channel_id).as_str())
+        );
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("bytes_delivered"))
+                .and_then(JsonValue::as_u64),
+            Some(receipt.bytes_delivered)
+        );
+
+        let index_bytes =
+            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
+        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
+        assert_eq!(
+            index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("orderbook_settlement_receipt"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let runtime_index = runtime_index(temp.path());
+        assert_eq!(
+            runtime_index
+                .get("by_payload_kind")
+                .and_then(|value| value.get("orderbook_settlement_receipt"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
+        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
+        validate_governance_dag_head_against_chain_v1(&head, &blocks)
+            .expect("runtime head validates against signed blocks");
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0].node.payload {
+            GovernanceLogPayloadV1::OrderbookSettlementReceipt(value) => {
+                assert_eq!(value.receipt_id, receipt.receipt_id);
+                assert_eq!(value.channel_id, receipt.channel_id);
+                assert_eq!(value.trade_id, receipt.trade_id);
             }
             other => panic!("unexpected runtime DAG payload: {other:?}"),
         }

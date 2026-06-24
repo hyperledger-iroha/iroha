@@ -225,6 +225,315 @@ class RecordingSession(requests.Session):
         return self._responses.pop(0)
 
 
+def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
+    order_id_hex = "11" * 32
+    trade_id_hex = "22" * 32
+    channel_id_hex = "33" * 32
+    receipt_id_hex = "44" * 32
+    provider_id_hex = "55" * 32
+    chunk_hash_hex = "66" * 32
+    signature = {
+        "algorithm": "Ed25519",
+        "public_key_hex": "AA" * 32,
+        "signature_hex": "BB" * 64,
+    }
+    order = {
+        "version": 1,
+        "order_id_hex": f"0x{order_id_hex.upper()}",
+        "side": "bid",
+        "tier": "hot",
+        "price_per_gib_micro_xor": "1500000",
+        "quantity_gib": 4,
+        "remaining_gib": 2,
+        "owner_account_hex": "CAFE",
+        "expiry_unix": 1_800_000_000,
+        "nonce": 7,
+        "maker_fee_bps": 25,
+        "taker_fee_bps": 35,
+        "signature": signature,
+    }
+    trade = {
+        "version": 1,
+        "trade_id_hex": trade_id_hex,
+        "maker_order_id_hex": order_id_hex,
+        "taker_order_id_hex": "77" * 32,
+        "tier": "hot",
+        "price_per_gib_micro_xor": "1500000",
+        "filled_gib": 2,
+        "maker_fee_micro_xor": "75000",
+        "taker_fee_micro_xor": "105000",
+        "timestamp_unix": 1_700_000_100,
+    }
+    channel = {
+        "version": 1,
+        "channel_id_hex": channel_id_hex,
+        "trade_id_hex": trade_id_hex,
+        "buyer_account_hex": "FACE",
+        "provider_id_hex": provider_id_hex,
+        "total_bytes": 2_147_483_648,
+        "remaining_bytes": 1_073_741_824,
+        "xor_locked_micro": "3000000",
+        "status": "open",
+        "opened_at_unix": 1_700_000_101,
+        "updated_at_unix": 1_700_000_102,
+    }
+    receipt = {
+        "version": 1,
+        "receipt_id_hex": receipt_id_hex,
+        "channel_id_hex": channel_id_hex,
+        "trade_id_hex": trade_id_hex,
+        "range": {"start": 0, "end": 1024},
+        "chunk_hash_hex": chunk_hash_hex,
+        "bytes_delivered": 1024,
+        "xor_debited_micro": "1500",
+        "provider_credit_micro": "1400",
+        "fee_amount_micro": "100",
+        "issued_at_unix": 1_700_000_103,
+        "settlement_signature": signature,
+    }
+    event = {
+        "sequence": 9,
+        "kind": "settlement_receipt_accepted",
+        "generated_at_unix": 1_700_000_104,
+        "order_id_hex": None,
+        "trade_ids_hex": [trade_id_hex],
+        "settlement_channel_ids_hex": [channel_id_hex],
+        "receipt_id_hex": receipt_id_hex,
+        "expired_order_ids_hex": [order_id_hex],
+        "open_order_count": 1,
+        "open_settlement_channel_count": 1,
+        "settlement_receipt_count": 1,
+    }
+    return {
+        "order_id_hex": order_id_hex,
+        "trade_id_hex": trade_id_hex,
+        "channel_id_hex": channel_id_hex,
+        "receipt_id_hex": receipt_id_hex,
+        "provider_id_hex": provider_id_hex,
+        "order": order,
+        "trade": trade,
+        "channel": channel,
+        "receipt": receipt,
+        "event": event,
+    }
+
+
+def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> None:
+    payloads = _sample_sorafs_orderbook_payloads()
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "schema": "sorafs.orderbook.local.v1",
+                "source": "local",
+                "generated_at_unix": 1_700_000_000,
+                "next_sequence": 10,
+                "open_order_count": 1,
+                "trade_count": 1,
+                "settlement_channel_count": 1,
+                "settlement_receipt_count": 1,
+                "depth": {
+                    "hot_bid_gib": 2,
+                    "hot_ask_gib": 0,
+                    "warm_bid_gib": 0,
+                    "warm_ask_gib": 0,
+                    "archive_bid_gib": 0,
+                    "archive_ask_gib": 0,
+                },
+                "open_orders": [{"sequence": 1, "order": payloads["order"]}],
+                "trades": [payloads["trade"]],
+                "settlement_channels": [payloads["channel"]],
+                "settlement_receipts": [payloads["receipt"]],
+                "expired_order_ids_hex": [payloads["order_id_hex"]],
+            }
+        )
+    )
+    session.queue(StubResponse(payload={"count": 1, "trades": [payloads["trade"]]}))
+    session.queue(StubResponse(payload={"count": 1, "channels": [payloads["channel"]]}))
+    session.queue(StubResponse(payload={"count": 1, "receipts": [payloads["receipt"]]}))
+    session.queue(
+        StubResponse(
+            payload={
+                "since": 0,
+                "limit": 10,
+                "count": 1,
+                "next_since": 9,
+                "events": [payloads["event"]],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    book = client.get_sorafs_orderbook(headers={"X-Trace": "book"})
+    assert book["open_orders"][0]["order"]["order_id_hex"] == payloads["order_id_hex"]
+    assert book["open_orders"][0]["order"]["owner_account_hex"] == "cafe"
+    assert book["open_orders"][0]["order"]["signature"]["public_key_hex"] == "aa" * 32
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"].endswith("/v1/sorafs/orderbook/book")
+    assert session.calls[0]["headers"]["X-Trace"] == "book"
+
+    trades = client.list_sorafs_orderbook_trades()
+    assert trades["trades"][0]["trade_id_hex"] == payloads["trade_id_hex"]
+    assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/trades")
+
+    channels = client.list_sorafs_orderbook_channels()
+    assert channels["channels"][0]["provider_id_hex"] == payloads["provider_id_hex"]
+    assert channels["channels"][0]["status"] == "open"
+    assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/channels")
+
+    receipts = client.list_sorafs_orderbook_receipts()
+    assert receipts["receipts"][0]["range"]["end"] == 1024
+    assert receipts["receipts"][0]["settlement_signature"]["signature_hex"] == "bb" * 64
+    assert session.calls[3]["url"].endswith("/v1/sorafs/orderbook/receipts")
+
+    events = client.list_sorafs_orderbook_events(
+        since=0,
+        limit="10",
+        if_none_match='"old-events"',
+    )
+    assert events is not None
+    assert events["events"][0]["kind"] == "settlement_receipt_accepted"
+    assert events["events"][0]["receipt_id_hex"] == payloads["receipt_id_hex"]
+    assert session.calls[4]["url"].endswith("/v1/sorafs/orderbook/events")
+    assert session.calls[4]["params"] == {"since": 0, "limit": 10}
+    assert session.calls[4]["headers"]["If-None-Match"] == '"old-events"'
+
+
+def test_sorafs_orderbook_read_helpers_validate_options_and_cache_status() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="positive"):
+        client.list_sorafs_orderbook_events(limit=0)
+    with pytest.raises(ValueError, match="one of if_none_match or etag"):
+        client.list_sorafs_orderbook_events(if_none_match='"a"', etag='"b"')
+    with pytest.raises(TypeError, match="headers must be a mapping"):
+        client.get_sorafs_orderbook(headers="not-a-mapping")  # type: ignore[arg-type]
+
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=304))
+    cached_client = ToriiClient("http://node.test", session=session)
+
+    assert cached_client.list_sorafs_orderbook_events(etag='"same"') is None
+    assert session.calls[0]["headers"]["If-None-Match"] == '"same"'
+
+
+def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
+    payloads = _sample_sorafs_orderbook_payloads()
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "status": "accepted",
+                "sequence": 12,
+                "open_order_count": 1,
+                "accepted_order": payloads["order"],
+                "fills": [
+                    {
+                        "trade": payloads["trade"],
+                        "maker_remaining_gib": 0,
+                        "taker_remaining_gib": 2,
+                        "gross_value_micro_xor": "3000000",
+                    }
+                ],
+                "settlement_channels_opened": [payloads["channel"]],
+                "expired_order_ids_hex": [payloads["order_id_hex"]],
+            }
+        )
+    )
+    session.queue(
+        StubResponse(
+            payload={
+                "status": "cancelled",
+                "reason": "owner_requested",
+                "open_order_count": 0,
+                "cancelled_order": payloads["order"],
+            }
+        )
+    )
+    session.queue(
+        StubResponse(
+            payload={
+                "status": "accepted",
+                "settlement_receipt_count": 1,
+                "open_settlement_channel_count": 1,
+                "accepted_receipt": payloads["receipt"],
+                "updated_channel": payloads["channel"],
+            }
+        )
+    )
+    signed_messages: List[bytes] = []
+
+    def signer(message: bytes) -> bytes:
+        signed_messages.append(message)
+        return b"signed-request"
+
+    auth = ToriiCanonicalRequestAuth(
+        account_id="alice@wonderland",
+        signer=signer,
+        timestamp_ms=1234,
+        nonce="nonce-1",
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    order_result = client.submit_sorafs_orderbook_order(
+        b"\x01\x02\x03",
+        canonical_auth=auth,
+        headers={"X-Trace": "order-submit"},
+    )
+    assert order_result["status"] == "accepted"
+    assert order_result["sequence"] == 12
+    assert order_result["fills"][0]["gross_value_micro_xor"] == "3000000"
+    order_call = session.calls[0]
+    assert order_call["method"] == "POST"
+    assert order_call["url"].endswith("/v1/sorafs/orderbook/orders")
+    assert order_call["data"] == b"\x01\x02\x03"
+    assert order_call["headers"]["Accept"] == "application/json"
+    assert order_call["headers"]["Content-Type"] == "application/octet-stream"
+    assert order_call["headers"]["X-Trace"] == "order-submit"
+    assert order_call["headers"]["X-Iroha-Account"] == "alice@wonderland"
+    assert order_call["headers"]["X-Iroha-Signature"] == base64.b64encode(
+        b"signed-request"
+    ).decode("ascii")
+    assert signed_messages[0] == canonical_request_signature_message(
+        "POST",
+        "/v1/sorafs/orderbook/orders",
+        b"\x01\x02\x03",
+        timestamp_ms=1234,
+        nonce="nonce-1",
+    )
+
+    cancel_result = client.submit_sorafs_orderbook_cancel([4, 5], canonical_auth=auth)
+    assert cancel_result["status"] == "cancelled"
+    assert cancel_result["cancelled_order"]["order_id_hex"] == payloads["order_id_hex"]
+    assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/cancel")
+    assert session.calls[1]["data"] == b"\x04\x05"
+
+    receipt_result = client.submit_sorafs_orderbook_receipt(bytearray([6]), canonical_auth=auth)
+    assert receipt_result["status"] == "accepted"
+    assert receipt_result["accepted_receipt"]["receipt_id_hex"] == payloads["receipt_id_hex"]
+    assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/receipts")
+    assert session.calls[2]["data"] == b"\x06"
+
+
+def test_sorafs_orderbook_submit_helpers_validate_inputs() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    auth = ToriiCanonicalRequestAuth(
+        account_id="alice@wonderland",
+        signer=lambda _message: b"signed-request",
+    )
+
+    with pytest.raises(ValueError, match="canonical_auth is required"):
+        client.submit_sorafs_orderbook_order(b"\x01", canonical_auth=None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="must not be empty"):
+        client.submit_sorafs_orderbook_receipt(b"", canonical_auth=auth)
+    with pytest.raises(TypeError, match="headers must be a mapping"):
+        client.submit_sorafs_orderbook_cancel(
+            b"\x01",
+            canonical_auth=auth,
+            headers="not-a-mapping",  # type: ignore[arg-type]
+        )
+
+
 def test_expect_status_surfaces_error_envelope_details() -> None:
     response = StubResponse(
         429,

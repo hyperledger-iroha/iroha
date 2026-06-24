@@ -8,7 +8,8 @@
 //! while the pricing module captures governance-controlled tariffs and credit
 //! policy so ISI definitions can coordinate incentives deterministically. The
 //! repair module models audit-driven repair queues that tie proof failures to
-//! remediation workflows.
+//! remediation workflows, and the transparency module defines canonical
+//! moderation ledger payloads/proofs for public SFM-4c verifiers.
 
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
@@ -30,6 +31,9 @@ pub mod pricing;
 
 /// Reserve + rent policy and lifecycle quoting.
 pub mod reserve;
+
+/// Transparency ledger entries, cycle headers, and inclusion proofs.
+pub mod transparency;
 
 /// Re-export commonly used `SoraFS` types.
 pub mod prelude {
@@ -69,6 +73,18 @@ pub mod prelude {
         reserve::{
             ClassRentRate, ReserveDuration, ReserveLedgerProjection, ReservePolicyError,
             ReservePolicyV1, ReserveQuote, ReserveTier, ReserveTierConfig,
+        },
+        transparency::{
+            MODERATION_LEDGER_BLOCK_VERSION_V1, MODERATION_LEDGER_ENTRY_VERSION_V1,
+            MODERATION_LEDGER_PROOF_VERSION_V1, MODERATION_LEDGER_PUBLICATION_VERSION_V1,
+            MODERATION_PRIVACY_AGGREGATE_VERSION_V1, MODERATION_PRIVACY_DELTA_PPB_MAX,
+            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerBlockV1,
+            ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
+            ModerationLedgerEntryV1, ModerationLedgerMetadataV1, ModerationLedgerProofNodeV1,
+            ModerationLedgerProofSideV1, ModerationLedgerProofV1,
+            ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1,
+            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
+            PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, TransparencyLedgerError,
         },
     };
 }

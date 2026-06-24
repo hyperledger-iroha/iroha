@@ -56,6 +56,10 @@
       "import": "./dist/sccp.js",
       "types": "./index.d.ts"
     },
+    "./sorafs": {
+      "import": "./dist/sorafs.js",
+      "types": "./index.d.ts"
+    },
     "./crypto": {
       "browser": "./dist/crypto.browser.js",
       "import": "./dist/crypto.js",
@@ -108,6 +112,9 @@
         "./index.d.ts"
       ],
       "sccp": [
+        "./index.d.ts"
+      ],
+      "sorafs": [
         "./index.d.ts"
       ],
       "crypto": [

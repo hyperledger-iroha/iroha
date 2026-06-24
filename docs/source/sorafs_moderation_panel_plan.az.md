@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c09b8303ff3c6f45be06dfa07bed74cb535e09d5962fbb19f434cf73be75aa5f
-source_last_modified: "2025-12-29T18:16:36.168535+00:00"
+source_hash: b6f5f6a4fad906e35d140daa391deba56cece043d34cc762d3f24df7f3b7d7bc
+source_last_modified: 2026-06-24T08:22:33.535741Z
 translation_last_reviewed: 2026-02-07
 title: Moderation Appeals & Sortition Panels
 summary: SFM-4b implementation status for appeal finance, policy-jury data foundations, and remaining moderation panel services.
@@ -18,9 +18,15 @@ summary: SFM-4b implementation status for appeal finance, policy-jury data found
 SFM-4b is partially implemented. The repository contains appeal finance helpers,
 moderation reproducibility tooling, honey-audit gateway probes, and reusable
 policy-jury sortition / commit-reveal data structures plus SoraFS-specific
-moderation ballot wrappers. It does not yet ship the full moderation appeal
-service, SoraFS juror panel engine, secure evidence viewer, voting orchestrator,
-or portal workflow described in the original plan.
+moderation ballot wrappers and a local `sorafs_node` ballot lifecycle runtime
+exposed through Torii JSON endpoints and the local Governance DAG publisher.
+The local ballot list readback now keeps the full local total visible while
+bounding the returned `ballots` array through a `limit` query parameter
+(default 50, max 500), matching the production dashboard-readiness pattern used
+by adjacent SoraFS event/readback APIs.
+It does not yet ship the full moderation appeal service, SoraFS juror panel
+engine, secure evidence viewer, durable voting orchestrator, or portal workflow
+described in the original plan.
 
 ## Shipped Foundations
 
@@ -40,6 +46,21 @@ or portal workflow described in the original plan.
   cases can bind case ids, evidence bundle digests, appeal finance versions,
   panel roster hashes, policy references, and `uphold`/`overturn`/`modify`/
   `escalate` choices before a runtime service exists.
+- `sorafs_node::ModerationBallotRuntime` is wired through `NodeHandle` as a
+  deterministic local lifecycle store for ballot announcement, eligible-juror
+  commit acceptance, challenge-buffered reveal acceptance, quorum tallying,
+  contested tie detection, and replayable/broadcast local events.
+- Torii exposes local moderation ballot announcement, list/get, commit, reveal,
+  tally, and event backlog endpoints under
+  `/v1/sorafs/moderation/ballots*`. The list endpoint reports full local
+  ballot totals while bounding returned ballot records with `limit` (default
+  50, max 500). Mutating requests require canonical app authentication, and
+  commit/reveal requests bind the signer to the canonical juror id.
+  Deposit-backed announcements persist the confirmed native asset-lock
+  fingerprint, including the evidence hashes used to derive the escrow id, and
+  Torii's configured-signer moderation settlement worker replays and subscribes
+  to tallied local ballot events to queue retry-aware native settlement steps
+  from that fingerprint.
 - `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
   `sorafs_node::FilesystemGovernancePublisher` publish local moderation ballot
   announcement, commit-accepted, reveal-accepted, and tally evidence into the
@@ -68,8 +89,9 @@ The production service still targets this lifecycle:
 5. The decision updates the moderation cache, appeal finance settlement,
    transparency ledger, and any provider reputation penalties.
 
-Only steps that can be represented by the shipped helper crates and CLI commands
-are available today.
+Only steps that can be represented by the shipped helper crates, CLI commands,
+local `sorafs_node` runtime, and local Torii moderation ballot API are
+available today.
 
 ## Data Boundaries
 
@@ -84,9 +106,10 @@ bind:
 - settlement manifest version;
 - moderation vote choices;
 
-The runtime still needs service-level state that binds:
+The local runtime and Torii API now bind panel-size/quorum policy,
+commit/reveal windows, and eligible jurors for deterministic node-local tests.
+The production service still needs durable state that binds:
 
-- panel-size and quorum policy;
 - evidence access attestation;
 - decision publication and appeal cache updates.
 
@@ -103,8 +126,8 @@ corresponding service and CLI handlers exist.
   `docs/source/sorafs_evidence_viewer_plan.md`.
 - Ship the SoraFS commit-reveal voting service described by
   `docs/source/sorafs_commit_reveal_plan.md`.
-- Connect panel outcomes to gateway compliance caches, appeal finance
-  settlement, transparency publication, and reputation scoring.
+- Connect panel outcomes to gateway compliance caches, transparency
+  publication, settlement reconciliation, and reputation scoring.
 - Promote local Governance DAG moderation event publication into the durable
   contract-backed and public IPFS/IPNS decision trail.
 - Add end-to-end tests for appeal submission, juror selection, evidence access,
@@ -118,6 +141,11 @@ Focused checks for the currently shipped foundations are:
 cargo test -p sorafs_orchestrator appeal
 cargo test -p iroha_data_model policy_jury
 cargo test -p iroha_data_model sorafs_moderation_ballot
+cargo test -p sorafs_node moderation_ballot
+cargo test -p sorafs_manifest moderation_ballot_event
+cargo test -p iroha_torii moderation_ballot --features app_api
+cargo test -p iroha_torii moderation_ballot_list_limit --features app_api
+cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
 ```
 
 Run the broader SoraFS moderation and gateway suites when the panel service

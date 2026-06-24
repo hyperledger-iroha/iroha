@@ -45,7 +45,9 @@ to run appeal-panel ballots end to end.
   authentication, announcement requests require a `deposit_confirmation` object
   that Torii confirms against the runtime native asset-lock ledger before local
   ballot admission, and commit/reveal requests require the authenticated account
-  to match the canonical juror id in the payload.
+  to match the canonical juror id in the payload. Ballot list/detail readbacks
+  bound embedded commit and reveal arrays with `limit` (default 50, max 500)
+  while preserving full counts and truncation metadata.
 - `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
   `sorafs_node::FilesystemGovernancePublisher` publish local announcement,
   commit-accepted, reveal-accepted, and tally events into the local

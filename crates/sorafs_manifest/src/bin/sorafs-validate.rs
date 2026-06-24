@@ -17,16 +17,19 @@ use ed25519_dalek::{Signer, SigningKey};
 use norito::json;
 use sorafs_manifest::{
     AdvertSignature, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, GovernanceLogNodeV1,
-    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, OrderbookValidationPayloadKindV1,
-    ProofStreamTier, ProviderAdvertV1, RepairValidationPayloadKindV1, ReplicationOrderSignatureV1,
-    ReplicationOrderV1, SIGNED_REPLICATION_ORDER_VERSION_V1, SignatureAlgorithm,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, OrderCancelV1, OrderRequestV1,
+    OrderbookValidationPayloadKindV1, ProofStreamTier, ProviderAdvertV1,
+    RepairValidationPayloadKindV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
+    SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1, SignatureAlgorithm,
     SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
-    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
-    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
-    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
-    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
-    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
-    validate_pdp_proof_bytes, validate_por_challenge_proof_bytes, validate_potr_receipt_bytes,
+    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    sign_settlement_receipt_ed25519_v1, validate_fixture_bundle_payloads,
+    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
+    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
+    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
+    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
+    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+    validate_por_challenge_proof_bytes, validate_potr_receipt_bytes,
     validate_provider_admission_envelope_bytes, validate_provider_admission_renewal_bytes,
     validate_provider_admission_revocation_bytes, validate_provider_advert_bytes,
     validate_repair_payload_bytes, validate_replication_order_bytes,
@@ -547,9 +550,11 @@ fn run_sign(args: SignArgs) -> Result<ExitCode, CliError> {
     match args.kind {
         Some(SignKind::Advert) => run_sign_advert(args),
         Some(SignKind::Order) => run_sign_order(args),
+        Some(SignKind::Orderbook) => run_sign_orderbook(args),
         Some(SignKind::Governance) => run_sign_governance(args),
         None => Err(CliError::Config(
-            "sign requires --kind advert, --kind order, or --kind governance".to_owned(),
+            "sign requires --kind advert, --kind order, --kind orderbook, or --kind governance"
+                .to_owned(),
         )),
     }
 }
@@ -688,6 +693,99 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
     ));
     outcome.inputs.push(ValidationInputV1::new(
         "signed_replication_order",
+        output.display().to_string(),
+    ));
+
+    if outcome.is_ok() {
+        fs::write(&output, signed_bytes)
+            .map_err(|err| CliError::Io(format!("failed to write {}: {err}", output.display())))?;
+    }
+    if let Some(path) = args.telemetry_out {
+        write_json_outcome(&path, &outcome)?;
+    }
+    print_outcome(&outcome, format)?;
+
+    if outcome.is_ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(2))
+    }
+}
+
+fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
+    let input = args.input.clone().ok_or(CliError::Config(
+        "sign --kind orderbook requires --input <path>".to_owned(),
+    ))?;
+    let output = args.out.clone().ok_or(CliError::Config(
+        "sign --kind orderbook requires --out <path>".to_owned(),
+    ))?;
+    let payload_kind = args.payload_kind.ok_or(CliError::Config(
+        "sign --kind orderbook requires --payload-kind order-request, order-cancel, or settlement-receipt".to_owned(),
+    ))?;
+    let format = args.format.unwrap_or(OutputFormat::Table);
+    let generated_at = match args.generated_at {
+        Some(generated_at) => generated_at,
+        None => unix_time_now()
+            .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
+    };
+
+    let seed = read_signing_seed(&args)?;
+    let input_bytes = fs::read(&input)
+        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let signed_bytes = match sign_orderbook_payload_bytes(payload_kind, &input_bytes, &seed) {
+        Ok(bytes) => bytes,
+        Err(SignOrderbookPayloadError::Decode) => {
+            let outcome = validate_orderbook_payload_bytes(
+                payload_kind,
+                &input_bytes,
+                input.display().to_string(),
+                generated_at,
+            );
+            if let Some(path) = args.telemetry_out {
+                write_json_outcome(&path, &outcome)?;
+            }
+            print_outcome(&outcome, format)?;
+            return Ok(ExitCode::from(2));
+        }
+        Err(SignOrderbookPayloadError::UnsupportedKind(kind)) => {
+            return Err(CliError::Config(format!(
+                "sign --kind orderbook does not support payload kind `{}`; expected order-request, order-cancel, or settlement-receipt",
+                orderbook_kind_label(kind)
+            )));
+        }
+        Err(SignOrderbookPayloadError::Sign(reason)) => {
+            return Err(CliError::Internal(format!(
+                "failed to sign orderbook payload: {reason}"
+            )));
+        }
+        Err(SignOrderbookPayloadError::Encode(reason)) => {
+            return Err(CliError::Internal(format!(
+                "failed to encode signed orderbook payload: {reason}"
+            )));
+        }
+    };
+    let mut outcome = validate_orderbook_payload_bytes(
+        payload_kind,
+        &signed_bytes,
+        output.display().to_string(),
+        generated_at,
+    );
+    outcome
+        .telemetry_tags
+        .push("sorafs.reference.sign.orderbook".to_owned());
+    outcome
+        .context
+        .push(ValidationContextFieldV1::new("operation", "sign"));
+    outcome.context.push(ValidationContextFieldV1::new(
+        "payload_kind",
+        orderbook_kind_label(payload_kind),
+    ));
+    outcome.context.push(ValidationContextFieldV1::new(
+        "public_key_hex",
+        hex::encode(orderbook_payload_public_key(payload_kind, &signed_bytes)?),
+    ));
+    outcome.inputs.push(ValidationInputV1::new(
+        signed_orderbook_input_kind(payload_kind),
         output.display().to_string(),
     ));
 
@@ -1386,6 +1484,25 @@ impl OrderbookArgs {
                     PathBuf::from(require_value(args, index, arg)?),
                     arg,
                 )?;
+            } else if let Some(value) = arg.strip_prefix("--snapshot=") {
+                parsed.set_payload(
+                    OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+                    PathBuf::from(value),
+                    "--snapshot",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--runtime-snapshot=") {
+                parsed.set_payload(
+                    OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+                    PathBuf::from(value),
+                    "--runtime-snapshot",
+                )?;
+            } else if arg == "--snapshot" || arg == "--runtime-snapshot" {
+                index += 1;
+                parsed.set_payload(
+                    OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
             } else if let Some(value) = arg.strip_prefix("--format=") {
                 parsed.format = Some(OutputFormat::parse(value)?);
             } else if arg == "--format" {
@@ -1600,6 +1717,7 @@ impl GovernanceArgs {
 #[derive(Debug, Default)]
 struct SignArgs {
     kind: Option<SignKind>,
+    payload_kind: Option<OrderbookValidationPayloadKindV1>,
     input: Option<PathBuf>,
     out: Option<PathBuf>,
     key_hex: Option<String>,
@@ -1621,6 +1739,15 @@ impl SignArgs {
             } else if arg == "--kind" {
                 index += 1;
                 parsed.kind = Some(parse_sign_kind(require_value(args, index, "--kind")?)?);
+            } else if let Some(value) = arg.strip_prefix("--payload-kind=") {
+                parsed.payload_kind = Some(parse_orderbook_sign_kind(value)?);
+            } else if arg == "--payload-kind" {
+                index += 1;
+                parsed.payload_kind = Some(parse_orderbook_sign_kind(require_value(
+                    args,
+                    index,
+                    "--payload-kind",
+                )?)?);
             } else if let Some(value) = arg.strip_prefix("--input=") {
                 parsed.input = Some(PathBuf::from(value));
             } else if arg == "--input" {
@@ -1688,6 +1815,7 @@ impl SignArgs {
 enum SignKind {
     Advert,
     Order,
+    Orderbook,
     Governance,
 }
 
@@ -1968,9 +2096,28 @@ fn parse_orderbook_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1,
         "trade" | "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
         "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
         "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
+        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        }
         other => Err(CliError::Config(format!(
-            "unsupported orderbook --kind `{other}`; expected order-request, order-cancel, trade-event, settlement-channel, or settlement-receipt"
+            "unsupported orderbook --kind `{other}`; expected order-request, order-cancel, trade-event, settlement-channel, settlement-receipt, or runtime-snapshot"
         ))),
+    }
+}
+
+fn parse_orderbook_sign_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1, CliError> {
+    let kind = parse_orderbook_kind(value)?;
+    if matches!(
+        kind,
+        OrderbookValidationPayloadKindV1::OrderRequest
+            | OrderbookValidationPayloadKindV1::OrderCancel
+            | OrderbookValidationPayloadKindV1::SettlementReceipt
+    ) {
+        Ok(kind)
+    } else {
+        Err(CliError::Config(format!(
+            "unsupported sign --kind orderbook --payload-kind `{value}`; expected order-request, order-cancel, or settlement-receipt"
+        )))
     }
 }
 
@@ -1978,9 +2125,10 @@ fn parse_sign_kind(value: &str) -> Result<SignKind, CliError> {
     match value {
         "advert" | "provider-advert" => Ok(SignKind::Advert),
         "order" | "replication-order" => Ok(SignKind::Order),
+        "orderbook" | "orderbook-payload" => Ok(SignKind::Orderbook),
         "governance" | "governance-log-node" => Ok(SignKind::Governance),
         other => Err(CliError::Config(format!(
-            "unsupported sign --kind `{other}`; expected advert, order, or governance"
+            "unsupported sign --kind `{other}`; expected advert, order, orderbook, or governance"
         ))),
     }
 }
@@ -2063,6 +2211,104 @@ fn sign_replication_order(
     let signature = signing_key.sign(&payload_bytes);
     signed_order.signature.signature = signature.to_bytes().to_vec();
     Ok(signed_order)
+}
+
+#[derive(Debug)]
+enum SignOrderbookPayloadError {
+    Decode,
+    UnsupportedKind(OrderbookValidationPayloadKindV1),
+    Sign(String),
+    Encode(String),
+}
+
+fn sign_orderbook_payload_bytes(
+    kind: OrderbookValidationPayloadKindV1,
+    input_bytes: &[u8],
+    seed: &[u8; 32],
+) -> Result<Vec<u8>, SignOrderbookPayloadError> {
+    let signing_key = SigningKey::from_bytes(seed);
+    match kind {
+        OrderbookValidationPayloadKindV1::OrderRequest => {
+            let order: OrderRequestV1 = norito::decode_from_bytes(input_bytes)
+                .map_err(|_| SignOrderbookPayloadError::Decode)?;
+            let signed = sign_order_request_ed25519_v1(order, &signing_key)
+                .map_err(|err| SignOrderbookPayloadError::Sign(err.to_string()))?;
+            norito::to_bytes(&signed)
+                .map_err(|err| SignOrderbookPayloadError::Encode(err.to_string()))
+        }
+        OrderbookValidationPayloadKindV1::OrderCancel => {
+            let cancel: OrderCancelV1 = norito::decode_from_bytes(input_bytes)
+                .map_err(|_| SignOrderbookPayloadError::Decode)?;
+            let signed = sign_order_cancel_ed25519_v1(cancel, &signing_key)
+                .map_err(|err| SignOrderbookPayloadError::Sign(err.to_string()))?;
+            norito::to_bytes(&signed)
+                .map_err(|err| SignOrderbookPayloadError::Encode(err.to_string()))
+        }
+        OrderbookValidationPayloadKindV1::SettlementReceipt => {
+            let receipt: SettlementReceiptV1 = norito::decode_from_bytes(input_bytes)
+                .map_err(|_| SignOrderbookPayloadError::Decode)?;
+            let signed = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
+                .map_err(|err| SignOrderbookPayloadError::Sign(err.to_string()))?;
+            norito::to_bytes(&signed)
+                .map_err(|err| SignOrderbookPayloadError::Encode(err.to_string()))
+        }
+        other => Err(SignOrderbookPayloadError::UnsupportedKind(other)),
+    }
+}
+
+fn orderbook_payload_public_key(
+    kind: OrderbookValidationPayloadKindV1,
+    input_bytes: &[u8],
+) -> Result<Vec<u8>, CliError> {
+    match kind {
+        OrderbookValidationPayloadKindV1::OrderRequest => {
+            let order: OrderRequestV1 = norito::decode_from_bytes(input_bytes).map_err(|err| {
+                CliError::Internal(format!("failed to decode signed orderbook order: {err}"))
+            })?;
+            Ok(order.signature.public_key)
+        }
+        OrderbookValidationPayloadKindV1::OrderCancel => {
+            let cancel: OrderCancelV1 = norito::decode_from_bytes(input_bytes).map_err(|err| {
+                CliError::Internal(format!("failed to decode signed orderbook cancel: {err}"))
+            })?;
+            Ok(cancel.signature.public_key)
+        }
+        OrderbookValidationPayloadKindV1::SettlementReceipt => {
+            let receipt: SettlementReceiptV1 =
+                norito::decode_from_bytes(input_bytes).map_err(|err| {
+                    CliError::Internal(format!(
+                        "failed to decode signed orderbook settlement receipt: {err}"
+                    ))
+                })?;
+            Ok(receipt.settlement_signature.public_key)
+        }
+        other => Err(CliError::Config(format!(
+            "sign --kind orderbook does not support payload kind `{}`",
+            orderbook_kind_label(other)
+        ))),
+    }
+}
+
+fn orderbook_kind_label(kind: OrderbookValidationPayloadKindV1) -> &'static str {
+    match kind {
+        OrderbookValidationPayloadKindV1::OrderRequest => "order-request",
+        OrderbookValidationPayloadKindV1::OrderCancel => "order-cancel",
+        OrderbookValidationPayloadKindV1::TradeEvent => "trade-event",
+        OrderbookValidationPayloadKindV1::SettlementChannel => "settlement-channel",
+        OrderbookValidationPayloadKindV1::SettlementReceipt => "settlement-receipt",
+        OrderbookValidationPayloadKindV1::RuntimeSnapshot => "runtime-snapshot",
+    }
+}
+
+fn signed_orderbook_input_kind(kind: OrderbookValidationPayloadKindV1) -> &'static str {
+    match kind {
+        OrderbookValidationPayloadKindV1::OrderRequest => "signed_orderbook_order_request",
+        OrderbookValidationPayloadKindV1::OrderCancel => "signed_orderbook_order_cancel",
+        OrderbookValidationPayloadKindV1::SettlementReceipt => {
+            "signed_orderbook_settlement_receipt"
+        }
+        _ => "signed_orderbook_payload",
+    }
 }
 
 fn sign_governance_log_node(
@@ -2213,6 +2459,14 @@ const BUNDLE_PAYLOAD_CANDIDATES: &[(FixtureBundlePayloadKindV1, &[&str])] = &[
             "orderbook_settlement_receipt_v1.to",
         ],
     ),
+    (
+        FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot,
+        &[
+            "orderbook/runtime_snapshot_v1.to",
+            "runtime_snapshot_v1.to",
+            "orderbook_runtime_snapshot_v1.to",
+        ],
+    ),
 ];
 
 fn read_bundle_payloads(bundle: &Path) -> Result<Vec<OwnedBundlePayload>, CliError> {
@@ -2341,7 +2595,7 @@ Usage:
   sorafs-validate admission --input <path> [--renewal <path> | --revocation <path>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate order (--order <path> | --signed-order <path>) [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate orderbook --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
-  sorafs-validate orderbook --order <path> | --cancel <path> | --trade <path> | --channel <path> | --receipt <path>
+  sorafs-validate orderbook --order <path> | --cancel <path> | --trade <path> | --channel <path> | --receipt <path> | --snapshot <path>
   sorafs-validate pdp [--commitment <path>] [--challenge <path>] [--proof <path>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate por --challenge <path> --proof <path> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate potr --receipt <path> [--profile hot|warm|archive|cold] [--format table|json|yaml] [--telemetry-out <path>]
@@ -2353,6 +2607,7 @@ Usage:
   sorafs-validate governance --head <path> --block <path> [--block <path>...] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate sign --kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml] [--now <unix-seconds>]
   sorafs-validate sign --kind order --input <order.to> --out <signed-order.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]
+  sorafs-validate sign --kind orderbook --payload-kind order-request|order-cancel|settlement-receipt --input <payload.to> --out <signed-payload.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]
   sorafs-validate sign --kind governance --input <node.to> --out <signed-node.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]
 
 Exit codes:
@@ -2602,6 +2857,7 @@ mod tests {
     fn sign_args_parse_reads_advert_signing_flags() {
         let args = [
             "--kind=advert".to_owned(),
+            "--payload-kind=order-request".to_owned(),
             "--input=advert.to".to_owned(),
             "--out=signed-advert.to".to_owned(),
             "--key-hex=ed25519:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -2613,6 +2869,10 @@ mod tests {
         ];
         let parsed = SignArgs::parse(&args).expect("parse args");
         assert!(matches!(parsed.kind, Some(SignKind::Advert)));
+        assert_eq!(
+            parsed.payload_kind,
+            Some(OrderbookValidationPayloadKindV1::OrderRequest)
+        );
         assert_eq!(parsed.input, Some(PathBuf::from("advert.to")));
         assert_eq!(parsed.out, Some(PathBuf::from("signed-advert.to")));
         assert_eq!(
@@ -2632,10 +2892,31 @@ mod tests {
             parse_sign_kind("replication-order").unwrap(),
             SignKind::Order
         );
+        assert_eq!(parse_sign_kind("orderbook").unwrap(), SignKind::Orderbook);
         assert_eq!(
             parse_sign_kind("governance-log-node").unwrap(),
             SignKind::Governance
         );
+    }
+
+    #[test]
+    fn parse_orderbook_sign_kind_accepts_only_signable_payloads() {
+        assert_eq!(
+            parse_orderbook_sign_kind("order-request").unwrap(),
+            OrderbookValidationPayloadKindV1::OrderRequest
+        );
+        assert_eq!(
+            parse_orderbook_sign_kind("order-cancel").unwrap(),
+            OrderbookValidationPayloadKindV1::OrderCancel
+        );
+        assert_eq!(
+            parse_orderbook_sign_kind("settlement-receipt").unwrap(),
+            OrderbookValidationPayloadKindV1::SettlementReceipt
+        );
+        assert!(matches!(
+            parse_orderbook_sign_kind("trade-event"),
+            Err(CliError::Config(message)) if message.contains("expected order-request")
+        ));
     }
 
     #[test]
@@ -2718,6 +2999,40 @@ mod tests {
         signed_order
             .verify_signature()
             .expect("signed replication order verifies");
+    }
+
+    #[test]
+    fn sign_orderbook_payload_bytes_returns_verified_signed_payloads() {
+        let seed = [0xB7; 32];
+        let expected_key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        let cases = [
+            (
+                OrderbookValidationPayloadKindV1::OrderRequest,
+                "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
+            ),
+            (
+                OrderbookValidationPayloadKindV1::OrderCancel,
+                "fixtures/sorafs_manifest/orderbook/order_cancel_v1.to",
+            ),
+            (
+                OrderbookValidationPayloadKindV1::SettlementReceipt,
+                "fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to",
+            ),
+        ];
+
+        for (kind, fixture_path) in cases {
+            let fixture = workspace_fixture(fixture_path);
+            let bytes = fs::read(fixture).expect("read orderbook fixture");
+            let signed =
+                sign_orderbook_payload_bytes(kind, &bytes, &seed).expect("sign orderbook payload");
+            let outcome =
+                validate_orderbook_payload_bytes(kind, &signed, "signed.to".to_owned(), 123);
+            assert!(outcome.is_ok(), "{kind:?} failed: {outcome:?}");
+            assert_eq!(
+                orderbook_payload_public_key(kind, &signed).expect("signed public key"),
+                expected_key.to_vec()
+            );
+        }
     }
 
     #[test]
@@ -2843,6 +3158,17 @@ mod tests {
     }
 
     #[test]
+    fn orderbook_args_parse_accepts_runtime_snapshot_alias() {
+        let args = ["--runtime-snapshot=snapshot.to".to_owned()];
+        let parsed = OrderbookArgs::parse(&args).expect("parse args");
+        assert_eq!(parsed.input, Some(PathBuf::from("snapshot.to")));
+        assert!(matches!(
+            parsed.kind,
+            Some(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
+        ));
+    }
+
+    #[test]
     fn orderbook_args_parse_rejects_multiple_payload_aliases() {
         let args = [
             "--order=order.to".to_owned(),
@@ -2875,6 +3201,10 @@ mod tests {
         assert!(matches!(
             parse_orderbook_kind("settlement-receipt"),
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
+        ));
+        assert!(matches!(
+            parse_orderbook_kind("runtime-snapshot"),
+            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
         ));
     }
 

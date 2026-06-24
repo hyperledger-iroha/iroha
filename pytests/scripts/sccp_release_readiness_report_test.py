@@ -2406,6 +2406,50 @@ def test_release_readiness_report_guards_bsc_groth16_material_documentation_gate
         assert checked_markers > 0
 
 
+def test_release_readiness_report_guards_bsc_groth16_material_evidence_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin BSC Groth16 material evidence guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._bsc_groth16_material_evidence_guard_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-groth16-evidence-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = (
+                report._bsc_groth16_material_evidence_guard_gate_inventory_errors(
+                    ((sparse_source, required_markers),),
+                )
+            )
+
+            assert any(
+                "BSC Groth16 material evidence guard source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
 def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -8868,6 +8912,50 @@ def test_release_readiness_report_blocks_missing_bsc_groth16_material_documentat
     assert readiness["source_inventory"][
         "ethereum_launch_policy_documentation_gate"
     ] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    assert readiness["source_inventory"]["proof_request_bundle_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_bsc_groth16_material_evidence_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when BSC Groth16 evidence guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "BSC Groth16 material evidence guard source inventory "
+        "scripts/sccp_bsc_groth16_material.mjs missing marker: "
+        "function evidenceReportPathBlockers"
+    )
+    monkeypatch.setattr(
+        report,
+        "_bsc_groth16_material_evidence_guard_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["bsc_groth16_material_evidence_guard_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["bsc_groth16_material_documentation_gate"] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }

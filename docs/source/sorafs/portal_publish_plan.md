@@ -184,6 +184,11 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      show `torii_sorafs_gateway_refusals_total` spikes if anything drifts).
    - The self-cert harness mirrors the production fetch path with `sorafs_fetch`,
      storing CAR replay logs under `artifacts/sorafs_gateway_self_cert/`.
+   - Metadata-only checks against `/.well-known/sorafs/manifest` and
+     `/v1/sorafs/cid/{cid}` may append `?limit=N` (default 50, max 500) to bound
+     the embedded `files` listing. The response still carries full
+     `file_count`, `returned_file_count`, and `truncated_files` values, and the
+     `manifest_b64` payload remains complete.
 
 # 5. DNS & Monitoring Guardrails
 

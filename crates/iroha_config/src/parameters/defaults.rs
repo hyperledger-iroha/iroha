@@ -1170,6 +1170,24 @@ pub mod sorafs {
             None
         }
 
+        /// SoraFS orderbook admission defaults.
+        pub mod orderbook {
+            /// Minimum accepted order quantity in GiB.
+            pub const MIN_ORDER_GIB: u64 = 1;
+            /// Accepted price tick in micro-XOR per GiB.
+            pub const PRICE_TICK_MICRO_XOR: u64 = 1_000;
+        }
+
+        /// Privacy aggregate scheduler defaults.
+        pub mod privacy_aggregates {
+            /// Enable config-backed SFM-4c privacy aggregate scheduling.
+            pub const ENABLED: bool = false;
+            /// Default privacy aggregate cycle width (seconds).
+            pub const CYCLE_SECONDS: u64 = 7 * 24 * 60 * 60;
+            /// Default delay after a cycle closes before publication (seconds).
+            pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
+        }
+
         /// Stream token issuance defaults.
         pub mod tokens {
             use std::path::PathBuf;
@@ -2106,6 +2124,10 @@ pub mod torii {
     pub const SORAFS_QUOTA_POR_MAX_EVENTS: Option<u32> = Some(60);
     /// Rolling window (seconds) for SoraFS PoR submissions.
     pub const SORAFS_QUOTA_POR_WINDOW_SECS: u64 = 60 * 60;
+    /// Default appeal-finance settlement worker reconciliation scan interval (milliseconds).
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS: u64 = 30_000;
+    /// Default maximum appeal-finance settlement worker queue attempts per unchanged ledger state.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS: u32 = 3;
 
     /// Alias cache positive TTL (seconds) applied by Torii gateways and SDK helpers.
     pub const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;

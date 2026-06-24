@@ -198723,6 +198723,91 @@ async fn qc_conflict_check_finds_identity_vote_at_stored_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn qc_conflict_check_maps_incoming_signers_with_rotated_topology() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
+    let incoming_view = (1..64_u64)
+        .find(|view| {
+            let rotated = super::topology_for_view(&topology, height, *view, mode_tag, prf_seed);
+            rotated.as_ref().first() != topology.as_ref().first()
+        })
+        .expect("test topology should rotate for a non-zero view");
+    let signature_topology =
+        super::topology_for_view(&topology, height, incoming_view, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("rotated topology should have a signer")
+        .clone();
+    assert_ne!(
+        topology
+            .as_ref()
+            .first()
+            .expect("canonical topology should have a signer")
+            .public_key(),
+        signer_peer.public_key(),
+        "test requires signer index 0 to differ after view rotation"
+    );
+
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; Hash::LENGTH]));
+    let incoming_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; Hash::LENGTH]));
+    let chain_order_hash = crate::sumeragi::consensus::default_chain_order_hash();
+    let rechain_seq = 0;
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: conflicting_hash,
+        parent_state_root: Hash::prehashed([0x93; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x94; Hash::LENGTH]),
+        height,
+        view: incoming_view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log_identities.insert(
+        vote_identity_key_for_vote(&vote, signer_peer.public_key()),
+        vote.clone(),
+    );
+    let signer_set = BTreeSet::from([0]);
+
+    let (conflict_peer, conflict_vote) = actor
+        .qc_conflicts_with_vote_history(
+            Phase::Commit,
+            incoming_hash,
+            height,
+            incoming_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            &signer_set,
+            &signature_topology,
+            None,
+        )
+        .expect("rotated signer index should identify the conflicting validator");
+    assert_eq!(conflict_peer.public_key(), signer_peer.public_key());
+    assert_eq!(conflict_vote, vote);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn qc_conflict_check_bounds_raw_votes_to_recorded_views() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;

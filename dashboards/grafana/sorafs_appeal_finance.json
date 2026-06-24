@@ -57,6 +57,40 @@
         "x": 6,
         "y": 0
       },
+      "id": 10,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sorafs_governance_dag_publish_total{payload_kind=\"appeal_finance_settlement_receipt\",result=\"success\",sink=~\"$sink\"}[1h]))",
+          "legendFormat": "receipts",
+          "refId": "A"
+        }
+      ],
+      "title": "Settlement Receipts 1h",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
       "id": 2,
       "options": {
         "reduceOptions": {
@@ -88,7 +122,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 12,
+        "x": 18,
         "y": 0
       },
       "id": 3,
@@ -103,7 +137,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (payload_kind) (increase(sorafs_governance_dag_publish_total{payload_kind=~\"appeal_finance_report|appeal_finance_weekly_rollup\",result=\"failure\",sink=~\"$sink\"}[1h]))",
+          "expr": "sum by (payload_kind) (increase(sorafs_governance_dag_publish_total{payload_kind=~\"appeal_finance_report|appeal_finance_weekly_rollup|appeal_finance_settlement_receipt\",result=\"failure\",sink=~\"$sink\"}[1h]))",
           "legendFormat": "{{payload_kind}}",
           "refId": "A"
         }
@@ -121,9 +155,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
+        "w": 24,
+        "x": 0,
+        "y": 4
       },
       "id": 4,
       "options": {
@@ -157,7 +191,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 4
+        "y": 8
       },
       "id": 5,
       "options": {
@@ -192,7 +226,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 4
+        "y": 8
       },
       "id": 6,
       "options": {
@@ -227,7 +261,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 12
+        "y": 16
       },
       "id": 7,
       "options": {
@@ -262,7 +296,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 16
       },
       "id": 8,
       "options": {
@@ -297,7 +331,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 24
       },
       "id": 9,
       "options": {
@@ -346,21 +380,21 @@
         "includeAll": true,
         "label": "Sink",
         "name": "sink",
-        "query": "label_values(sorafs_governance_dag_publish_total{payload_kind=~\"appeal_finance_report|appeal_finance_weekly_rollup|reconciliation\"}, sink)",
+        "query": "label_values(sorafs_governance_dag_publish_total{payload_kind=~\"appeal_finance_report|appeal_finance_weekly_rollup|appeal_finance_settlement_receipt|reconciliation\"}, sink)",
         "refresh": 1,
         "type": "query"
       },
       {
-        "allValue": "appeal_finance_report|appeal_finance_weekly_rollup|reconciliation",
+        "allValue": "appeal_finance_report|appeal_finance_weekly_rollup|appeal_finance_settlement_receipt|reconciliation",
         "current": {
           "text": "All",
-          "value": "appeal_finance_report|appeal_finance_weekly_rollup|reconciliation"
+          "value": "appeal_finance_report|appeal_finance_weekly_rollup|appeal_finance_settlement_receipt|reconciliation"
         },
         "includeAll": true,
         "label": "Payload Kind",
         "multi": true,
         "name": "payload_kind",
-        "query": "appeal_finance_report,appeal_finance_weekly_rollup,reconciliation",
+        "query": "appeal_finance_report,appeal_finance_weekly_rollup,appeal_finance_settlement_receipt,reconciliation",
         "type": "custom"
       }
     ]

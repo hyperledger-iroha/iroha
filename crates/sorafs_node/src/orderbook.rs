@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use blake3::Hasher;
 use sorafs_manifest::{
     OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
-    OrderSideV1, OrderbookValidationError, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
-    apply_settlement_receipt_v1, match_order_book_v1, open_settlement_channel_for_trade_v1,
-    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
-    verify_settlement_receipt_signature_v1,
+    OrderSideV1, OrderbookRuntimeSnapshotV1, OrderbookValidationError, SettlementChannelV1,
+    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1, match_order_book_v1,
+    open_settlement_channel_for_trade_v1, verify_order_cancel_signature_v1,
+    verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
 use thiserror::Error;
 
@@ -79,6 +79,24 @@ pub enum OrderbookRuntimeError {
     /// A matched pair did not contain exactly one bid and one ask.
     #[error("matcher output did not contain one bid and one ask")]
     InvalidMatchedSides,
+    /// The order quantity is below the configured minimum.
+    #[error("order quantity {quantity_gib} GiB is below configured minimum {min_order_gib} GiB")]
+    OrderBelowMinimum {
+        /// Submitted order quantity.
+        quantity_gib: u64,
+        /// Configured minimum order quantity.
+        min_order_gib: u64,
+    },
+    /// The order price is not aligned to the configured tick.
+    #[error(
+        "order price {price_micro_xor} micro-XOR/GiB is not aligned to configured tick {tick_micro_xor} micro-XOR"
+    )]
+    OrderPriceTickMismatch {
+        /// Submitted order price in micro-XOR per GiB.
+        price_micro_xor: u128,
+        /// Configured price tick in micro-XOR per GiB.
+        tick_micro_xor: u64,
+    },
     /// The local orderbook lock was poisoned.
     #[error("orderbook state lock poisoned")]
     StateLockPoisoned,
@@ -318,6 +336,50 @@ impl OrderbookRuntime {
             settlement_receipts: self.settlement_receipts.values().cloned().collect(),
             expired_order_ids: self.expired_order_ids.clone(),
         }
+    }
+
+    pub(crate) fn runtime_snapshot(&self, generated_at_unix: u64) -> OrderbookRuntimeSnapshotV1 {
+        let snapshot = self.snapshot(generated_at_unix);
+        OrderbookRuntimeSnapshotV1 {
+            version: sorafs_manifest::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+            next_sequence: snapshot.next_sequence,
+            generated_at_unix: snapshot.generated_at_unix,
+            open_orders: snapshot.open_orders,
+            trades: snapshot.trades,
+            settlement_channels: snapshot.settlement_channels,
+            settlement_receipts: snapshot.settlement_receipts,
+            expired_order_ids: snapshot.expired_order_ids,
+        }
+    }
+
+    pub(crate) fn restore_runtime_snapshot(
+        &mut self,
+        snapshot: OrderbookRuntimeSnapshotV1,
+    ) -> Result<(), OrderbookRuntimeError> {
+        snapshot.validate()?;
+        let mut open_orders = BTreeMap::new();
+        for entry in snapshot.open_orders {
+            open_orders.insert(entry.order.order_id, entry);
+        }
+        let settlement_channels = snapshot
+            .settlement_channels
+            .into_iter()
+            .map(|channel| (channel.channel_id, channel))
+            .collect::<BTreeMap<_, _>>();
+        let settlement_receipts = snapshot
+            .settlement_receipts
+            .into_iter()
+            .map(|receipt| (receipt.receipt_id, receipt))
+            .collect::<BTreeMap<_, _>>();
+        *self = Self {
+            next_sequence: snapshot.next_sequence,
+            open_orders,
+            trades: snapshot.trades,
+            settlement_channels,
+            settlement_receipts,
+            expired_order_ids: snapshot.expired_order_ids,
+        };
+        Ok(())
     }
 
     fn match_open_orders(

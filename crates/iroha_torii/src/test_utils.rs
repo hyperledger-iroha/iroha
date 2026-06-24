@@ -772,6 +772,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 ..Default::default()
             },
             sorafs_por: Default::default(),
+            sorafs_appeal_finance_settlement: Default::default(),
             onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
